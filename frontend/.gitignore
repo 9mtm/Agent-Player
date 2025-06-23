@@ -1,0 +1,350 @@
+# Dependencies
+node_modules/
+/.pnp
+.pnp.js
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Production build
+dist/
+build/
+out/
+/.next/
+.nuxt/
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+.nyc_output
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional stylelint cache
+.stylelintcache
+
+# Microbundle cache
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.backup
+
+# Parcel-bundler cache (https://parceljs.org/)
+.cache
+.parcel-cache
+
+# Next.js build output
+.next
+out
+
+# Nuxt.js build / generate output
+.nuxt
+dist
+
+# Gatsby files
+.cache/
+public
+
+# Vite
+.vite
+dist-ssr
+*.local
+
+# Rollup
+.rollup.cache
+
+# Serverless directories
+.serverless/
+
+# FuseBox cache
+.fusebox/
+
+# DynamoDB Local files
+.dynamodb/
+
+# TernJS port file
+.tern-port
+
+# Stores VSCode versions used for testing VSCode extensions
+.vscode-test
+
+# yarn v2
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Log files
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory
+coverage/
+*.lcov
+
+# Compiled binary addons
+build/Release
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# TypeScript v1 declaration files
+typings/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variables file
+.env
+.env.test
+
+# parcel-bundler cache (https://parceljs.org/)
+.cache
+.parcel-cache
+
+# Next.js build output
+.next
+
+# Nuxt.js build / generate output
+.nuxt
+dist
+
+# Storybook build outputs
+.out
+.storybook-out
+storybook-static
+
+# Temporary folders
+tmp/
+temp/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+
+# Archive files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# React build files
+build/
+dist/
+
+# Vite specific
+.vite/
+dist-ssr/
+*.local
+
+# Testing
+coverage/
+.nyc_output
+junit.xml
+test-results/
+
+# Cypress
+cypress/videos/
+cypress/screenshots/
+
+# Playwright
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Local development
+local/
+dev/
+More/
+
+# Webpack
+.webpack/
+
+# ESLint
+.eslintcache
+
+# Prettier
+.prettierignore
+
+# Husky
+.husky/_
+
+# Package lock backups
+package-lock.json.bak
+yarn.lock.bak
+
+# React specific
+.react/
+
+# Babel
+.babelrc.local
+babel.config.local.js
+
+# PostCSS
+postcss.config.local.js
+
+# Tailwind
+tailwind.config.local.js
+
+# Development scripts
+start_dev.*
+run_local.*
+
+# Local configuration
+config.local.js
+config.local.json
+
+# Source maps (if not needed in repo)
+*.map
+
+# Service worker
+sw.js
+workbox-*.js
+
+# PWA
+manifest.json.bak
+
+# Hot reload
+.hot-update.*
+
+# Bundle analyzer
+bundle-analyzer-report.html
+
+# TypeScript incremental compilation
+*.tsbuildinfo
+
+# Jest
+jest.config.local.js
+__tests__/coverage/
+
+# Vitest
+.vitest/
+
+# Mock data
+mock/
+mocks/
+__mocks__/coverage/
+
+# API mocks
+api-mocks/
+
+# Design tokens
+tokens/build/
+
+# Style guide
+styleguide/
+
+# Icons generated
+icons/generated/
+
+# Fonts downloaded
+fonts/downloaded/
+
+# Assets optimization
+assets/optimized/

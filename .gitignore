@@ -1,0 +1,264 @@
+# =======================
+# Dpro AI Agent - Global .gitignore
+# =======================
+
+# Node.js (Frontend)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+*.tgz
+package-lock.json.bak
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+.nuxt/
+
+# Frontend environment
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Frontend cache
+.cache/
+.parcel-cache/
+.vite/
+
+# Python (Backend)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+dpro_agent.db
+dpro_agent.db-journal
+dpro_agent.db-wal
+dpro_agent.db-shm
+
+# Log files
+logs/
+*.log
+log/
+*.log.*
+
+# Rust (Launcher)
+target/
+Cargo.lock
+*.rs.bk
+*.pdb
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-*
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Backup files
+backups/
+*.bak
+*.backup
+backup_*
+
+# Archive files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Configuration files with secrets
+config.ini
+config.json
+settings.json
+secrets.json
+.secrets
+
+# API Keys (Security Critical)
+openai_key.txt
+anthropic_key.txt
+api_keys.txt
+*.key
+.env.production
+
+# Data directories
+data/
+uploads/
+files/
+media/
+
+# Test files
+coverage/
+.nyc_output
+.coverage
+htmlcov/
+test-results/
+junit.xml
+
+# Cache directories
+.cache/
+cache/
+
+# Runtime files
+*.pid
+*.sock
+
+# SSL certificates
+*.pem
+*.crt
+*.p12
+*.pfx
+
+# Docker
+Dockerfile.local
+docker-compose.override.yml
+.dockerignore
+
+# Package managers
+yarn.lock
+package-lock.json.backup
+Pipfile.lock
+
+# Development tools
+.pre-commit-config.yaml
+.eslintcache
+
+# Project specific
+local/
+dev/
+development/
+
+# Monitoring
+metrics/
+monitoring/
+
+# Documentation build
+docs/build/
+site/
+
+# Session files
+sessions/
+*.session
+
+# Lock files
+*.lock
+
+# Windows specific
+*.bat.bak
+*.sh.bak
+*.cmd.bak
+
+# Environment backup files
+.env.backup
+.env.sample
+.env.example
+
+# AI model files (if any)
+*.model
+*.weights
+models/
+
+# Large files (GitHub limit)
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wmv
+*.flv
+
+# Binary files
+*.exe
+*.dll
+*.dmg
+*.app
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# MacOS
+__MACOSX/
+
+# Rust compiled
+*.rlib
+*.rmeta
+
+# Test coverage
+lcov.info
+
+# Profiling
+*.prof
+
+# Terraform (if used)
+*.tfstate
+*.tfstate.backup
+.terraform/
+
+# Kubernetes (if used)
+*.kubeconfig
+
+# Local development scripts
+start_dev.sh
+start_dev.bat
+run_local.*
+
+# Personal notes
+notes.txt
+todo.txt
+README.local.md
+
+# Sensitive configuration
+production.json
+staging.json
+local.json 

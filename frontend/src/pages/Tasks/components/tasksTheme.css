@@ -1,0 +1,13 @@
+/* Tasks theme styles */
+.tasks-container {
+  background: #f8f9fa;
+  color: #333;
+}
+
+.task-item {
+  background: white;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 8px 0;
+} 

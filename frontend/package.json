@@ -1,0 +1,82 @@
+{
+  "name": "dpro-agent-player-frontend",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "description": "Dpro Agent Player - Complete Frontend Application",
+  "scripts": {
+    "dev": "vite --port 3000 --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview --port 3000",
+    "type-check": "tsc --noEmit",
+    "format": "prettier --write .",
+    "start": "npm run dev"
+  },
+  "dependencies": {
+    "@fortawesome/fontawesome-free": "^6.7.2",
+    "@monaco-editor/react": "^4.6.0",
+    "@tauri-apps/api": "^2.5.0",
+    "axios": "^1.10.0",
+    "date-fns": "^3.6.0",
+    "framer-motion": "^11.0.0",
+    "js-yaml": "^4.1.0",
+    "lodash": "^4.17.21",
+    "lucide-react": "^0.517.0",
+    "moment": "^2.30.0",
+    "monaco-editor": "^0.47.0",
+    "react": "^19.1.0",
+    "react-datepicker": "^6.9.0",
+    "react-dom": "^19.1.0",
+    "react-error-boundary": "^4.0.0",
+    "react-helmet-async": "^2.0.0",
+    "react-hook-form": "^7.48.0",
+    "react-hot-toast": "^2.4.0",
+    "react-icons": "^5.5.0",
+    "react-markdown": "^10.1.0",
+    "react-query": "^3.39.0",
+    "react-router-dom": "^6.23.0",
+    "react-select": "^5.8.0",
+    "reactflow": "^11.11.0",
+    "recharts": "^2.12.0",
+    "simple-icons": "^15.3.0",
+    "socket.io-client": "^4.7.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.25.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/lodash": "^4.17.0",
+    "@types/node": "^20.11.0",
+    "@types/react": "^19.1.2",
+    "@types/react-datepicker": "^6.2.0",
+    "@types/react-dom": "^19.1.2",
+    "@types/uuid": "^9.0.8",
+    "@vitejs/plugin-react": "^4.4.1",
+    "@vitejs/plugin-react-swc": "^3.10.2",
+    "eslint": "^9.25.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.19",
+    "globals": "^16.0.0",
+    "prettier": "^3.2.0",
+    "typescript": "~5.8.3",
+    "typescript-eslint": "^8.30.1",
+    "vite": "^6.3.5"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}
