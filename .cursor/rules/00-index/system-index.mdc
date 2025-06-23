@@ -1,0 +1,148 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# AGENT PLAYER RULES SYSTEM INDEX
+
+## Rules Directory Structure
+
+This is the comprehensive rules system for Agent Player development. All rules are organized by category and functionality.
+
+## Directory Structure
+
+### 01-CORE (Core Standards)
+- `project-standards.mdc` - Project-wide standards and conventions
+- `development-workflow.mdc` - Development process and Git workflow
+- `error-handling.mdc` - Error handling and exception management
+- `logging-standards.mdc` - Logging requirements and formats
+- `code-quality.mdc` - Code quality and best practices
+
+### 02-BACKEND (Backend Development)
+- `architecture.mdc` - Clean architecture patterns
+- `services.mdc` - Service layer implementation
+- `repositories.mdc` - Repository pattern implementation
+- `security.mdc` - Backend security requirements
+- `testing.mdc` - Backend testing strategies
+
+### 03-FRONTEND (Frontend Development)
+- `react-standards.mdc` - React TypeScript standards
+- `component-patterns.mdc` - Component design patterns
+- `state-management.mdc` - State management rules
+- `ui-ux.mdc` - UI/UX requirements
+- `testing.mdc` - Frontend testing requirements
+
+### 04-DATABASE (Database Design)
+- `schema-design.mdc` - Database schema design rules
+- `performance.mdc` - Database performance optimization
+- `migrations.mdc` - Migration management
+- `security.mdc` - Database security requirements
+- `backup.mdc` - Backup and recovery procedures
+
+### 05-API (API Development)
+- `rest-standards.mdc` - REST API design standards
+- `authentication.mdc` - Authentication and authorization
+- `validation.mdc` - Input validation and sanitization
+- `documentation.mdc` - API documentation requirements
+- `versioning.mdc` - API versioning strategies
+
+### 06-SECURITY (Security Requirements)
+- `authentication.mdc` - Authentication mechanisms
+- `authorization.mdc` - Authorization and permissions
+- `data-protection.mdc` - Data protection and encryption
+- `audit.mdc` - Security auditing and logging
+- `compliance.mdc` - Compliance requirements
+
+### 07-PERFORMANCE (Performance Optimization)
+- `backend-performance.mdc` - Backend performance rules
+- `frontend-performance.mdc` - Frontend performance rules
+- `database-performance.mdc` - Database performance rules
+- `caching.mdc` - Caching strategies
+- `monitoring.mdc` - Performance monitoring
+
+### 08-TESTING (Testing Standards)
+- `unit-testing.mdc` - Unit testing requirements
+- `integration-testing.mdc` - Integration testing standards
+- `e2e-testing.mdc` - End-to-end testing rules
+- `test-automation.mdc` - Test automation requirements
+- `coverage.mdc` - Test coverage requirements
+
+### 09-DEPLOYMENT (Deployment Rules)
+- `environment-management.mdc` - Environment configuration
+- `ci-cd.mdc` - CI/CD pipeline requirements
+- `docker.mdc` - Docker containerization rules
+- `monitoring.mdc` - Production monitoring
+- `rollback.mdc` - Rollback procedures
+
+### 10-MAINTENANCE (Maintenance Rules)
+- `dependency-management.mdc` - Dependency update procedures
+- `log-management.mdc` - Log cleanup and rotation
+- `backup-procedures.mdc` - Backup management
+- `security-updates.mdc` - Security update procedures
+- `performance-monitoring.mdc` - Ongoing performance monitoring
+
+### 11-AGENT-PLAYER-SPECIFIC (Agent Player Specific Rules)
+- `ai-agent-management.mdc` - AI agent lifecycle rules
+- `training-lab.mdc` - Training lab workflow rules
+- `licensing.mdc` - License validation rules
+- `real-time-communication.mdc` - WebSocket and real-time rules
+- `workflow-management.mdc` - Workflow and coordination rules
+
+### 12-TASKS (Task Management)
+- `current-tasks.mdc` - Current active development tasks
+- `completed-tasks.mdc` - Completed tasks history
+- `rollback-procedures.mdc` - Rollback instructions
+- `progress-tracking.mdc` - Development progress tracking
+- `task-templates.mdc` - Templates for new tasks
+
+### 13-GIT-MANAGEMENT (Git Repository Management)
+- `repository-rules.mdc` - Git repository rules and restrictions
+- `commit-standards.mdc` - Commit message standards
+- `branch-strategy.mdc` - Branching strategy
+- `hooks.mdc` - Git hooks configuration
+
+## Usage Instructions
+
+1. **Before Starting Development**: Read 01-CORE rules first
+2. **Backend Development**: Follow 02-BACKEND rules
+3. **Frontend Development**: Follow 03-FRONTEND rules
+4. **Database Changes**: Follow 04-DATABASE rules
+5. **API Development**: Follow 05-API rules
+6. **Security Implementation**: Follow 06-SECURITY rules
+7. **Performance Optimization**: Follow 07-PERFORMANCE rules
+8. **Testing**: Follow 08-TESTING rules
+9. **Deployment**: Follow 09-DEPLOYMENT rules
+10. **Maintenance**: Follow 10-MAINTENANCE rules
+11. **Agent Player Features**: Follow 11-AGENT-PLAYER-SPECIFIC rules
+12. **Task Management**: Follow 12-TASKS rules
+13. **Git Operations**: Follow 13-GIT-MANAGEMENT rules
+
+## Rules Priority
+
+1. **MANDATORY** - Must be followed without exception
+2. **RECOMMENDED** - Should be followed unless there's a compelling reason not to
+3. **OPTIONAL** - Can be followed for additional quality improvements
+
+## Rules Updates
+
+- Rules are automatically tracked and updated when code changes
+- Run rules tracker to manually update rules
+- Validate compliance through automated checking
+- Update current-tasks.mdc when rules change
+
+## Enforcement
+
+All rules are enforced through:
+- Cursor IDE integration (.mdc files auto-recognized)
+- Git hooks (pre-commit, pre-push)
+- Rules tracker system
+- Task management system
+- Manual code review requirements
+
+## CRITICAL REQUIREMENTS
+- NO GITHUB PUSH until rules system 100% complete
+- English only in all code and comments
+- Task documentation for all changes
+- Rules updates when adding new files/endpoints
+- Testing required before completion
+

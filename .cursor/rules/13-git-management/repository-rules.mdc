@@ -1,0 +1,215 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# GIT REPOSITORY MANAGEMENT RULES - MANDATORY
+
+## 🚫 CRITICAL RESTRICTION - NO GITHUB PUSH
+
+### **ABSOLUTE PROHIBITION - MANDATORY**
+```bash
+# ❌ FORBIDDEN - DO NOT EXECUTE
+git push origin main
+git push origin develop  
+git push origin any-branch
+git push --force
+git push --all
+
+# ✅ ALLOWED - Local operations only
+git add .
+git commit -m "message"
+git branch new-branch
+git checkout branch-name
+git merge branch-name
+```
+
+### **WHY NO GITHUB PUSH?**
+1. **Rules System Incomplete** - Must finish rules organization first
+2. **Code Quality Unverified** - No validation system in place yet
+3. **Documentation Missing** - API docs and database docs not ready
+4. **Testing Incomplete** - No comprehensive testing completed
+5. **Security Unvalidated** - Security rules not fully implemented
+
+---
+
+## 📋 PERMITTED GIT OPERATIONS
+
+### **Local Development Operations - ALLOWED**
+```bash
+# File management
+git add specific-file.ext
+git add .
+git reset HEAD~1
+
+# Commit operations  
+git commit -m "English only commit message"
+git commit --amend
+
+# Branch operations
+git branch feature/new-feature
+git checkout main
+git checkout -b feature/rules-system
+git merge feature-branch
+
+# History and status
+git status
+git log
+git diff
+git show
+```
+
+### **Repository Information - ALLOWED**
+```bash
+# Check repository status
+git remote -v
+git branch -a
+git log --oneline
+git status --porcelain
+```
+
+---
+
+## ⚠️ MANDATORY PRE-PUSH REQUIREMENTS
+
+Before ANY GitHub push is allowed, these must be completed:
+
+### **1. Rules System Completion - MANDATORY**
+- [❌] Complete rules directory organization (11+ folders)
+- [❌] Migrate all existing rules to new structure  
+- [❌] Update rules tracker for new organization
+- [❌] Test all rules validation systems
+- [❌] Document all rules changes
+
+### **2. Code Quality Validation - MANDATORY**
+- [❌] All code follows English-only policy
+- [❌] No Arabic text in any files
+- [❌] All functions and variables properly named
+- [❌] All APIs documented and tested
+- [❌] Database schema validated
+
+### **3. Testing Completion - MANDATORY**  
+- [❌] Backend API tests passing
+- [❌] Frontend component tests passing
+- [❌] Database integration tests passing
+- [❌] Rules tracker validation working
+- [❌] End-to-end testing completed
+
+### **4. Documentation Ready - MANDATORY**
+- [❌] API documentation auto-generated
+- [❌] Database schema documented
+- [❌] Rules system documented
+- [❌] Development workflow documented
+- [❌] Deployment procedures documented
+
+---
+
+## 🔒 GITHUB PUSH AUTHORIZATION PROCESS
+
+### **Step 1: Complete Development Checklist**
+Before requesting GitHub push authorization:
+1. Complete all items in pre-push requirements
+2. Update current-tasks.mdc with completion status
+3. Run full validation suite
+4. Document all changes made
+5. Create deployment checklist
+
+### **Step 2: Authorization Request**
+Only project owner can authorize GitHub push:
+1. Review all completed requirements
+2. Validate code quality standards
+3. Confirm testing completion
+4. Approve documentation quality
+5. Authorize push operations
+
+### **Step 3: Controlled Push Process**
+When authorized:
+1. Create detailed commit messages in English
+2. Push to feature branch first (not main)
+3. Create pull request for review
+4. Merge to main only after final review
+5. Tag release with version number
+
+---
+
+## 🛡️ ENFORCEMENT MECHANISMS
+
+### **Pre-commit Hooks - MANDATORY**
+```bash
+# .git/hooks/pre-commit - MANDATORY
+#!/bin/bash
+echo "Checking repository rules compliance..."
+
+# Check for rules system completion
+if [ ! -f ".cursor/rules/12-tasks/current-tasks.mdc" ]; then
+    echo "ERROR: Task management system not found"
+    echo "Complete rules system before committing"
+    exit 1
+fi
+
+# Check for Arabic text in code
+if git diff --cached --name-only | xargs grep -l '[ا-ي]' 2>/dev/null; then
+    echo "ERROR: Arabic text found in code"
+    echo "English only policy violation"
+    exit 1
+fi
+
+echo "Pre-commit checks passed"
+exit 0
+```
+
+### **Pre-push Hooks - MANDATORY**
+```bash
+# .git/hooks/pre-push - MANDATORY
+#!/bin/bash
+echo "CRITICAL: GitHub push is currently PROHIBITED"
+echo "Rules system must be completed first"
+echo "Contact project owner for authorization"
+exit 1
+```
+
+---
+
+## 📊 CURRENT REPOSITORY STATUS
+
+### **Local Repository State**
+- **Branch:** main
+- **Status:** Development in progress
+- **Rules System:** In progress (60% complete)
+- **Push Authorization:** DENIED
+- **Last Authorized Push:** Never
+
+### **Pending Requirements for GitHub Push**
+1. Complete rules system organization
+2. Finish rules migration
+3. Validate all code quality
+4. Complete testing suite
+5. Generate documentation
+6. Get project owner approval
+
+---
+
+## 🚨 VIOLATION CONSEQUENCES
+
+### **If GitHub Push Attempted Without Authorization:**
+1. **Immediate Rollback Required** - Revert all changes
+2. **Development Halt** - Stop all work until resolved
+3. **Rules Review** - Complete review of all rules
+4. **Additional Restrictions** - More stringent controls added
+5. **Documentation Required** - Document incident and prevention
+
+### **Emergency Procedures**
+If accidental push occurs:
+1. Immediately contact project owner
+2. Document what was pushed
+3. Prepare rollback plan
+4. Wait for authorization to proceed
+5. Implement additional safeguards
+
+---
+
+**REMEMBER: NO GITHUB PUSH until rules system is 100% complete!**  
+**REMEMBER: Local development only - all changes stay local!**  
+**REMEMBER: Project owner approval required for any GitHub operations!**  
+**REMEMBER: Violation of these rules stops all development immediately!**
+

@@ -1,0 +1,244 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# PROJECT STANDARDS - MANDATORY
+
+## LANGUAGE AND COMMUNICATION RULES - MANDATORY
+
+### **English Only Rule - STRICTLY ENFORCED**
+```javascript
+// ✅ CORRECT - English only
+const userAuthentication = async (credentials) => {
+  // Validate user credentials
+  if (!credentials.email || !credentials.password) {
+    throw new Error('Email and password are required');
+  }
+  return await authenticateUser(credentials);
+};
+
+// ❌ WRONG - No Arabic text allowed
+const userAuthentication = async (credentials) => {
+  // تحقق من بيانات المستخدم
+  if (!credentials.email || !credentials.password) {
+    throw new Error('البريد الإلكتروني وكلمة المرور مطلوبان');
+  }
+  return await authenticateUser(credentials);
+};
+```
+
+### **Code Documentation Standards - MANDATORY**
+- All code comments MUST be in English
+- All variable names MUST be in English
+- All function names MUST be in English
+- All error messages MUST be in English
+- All log messages MUST be in English
+- All commit messages MUST be in English
+
+### **File and Directory Naming - MANDATORY**
+```bash
+# ✅ CORRECT - English naming
+backend/services/auth_service.py
+frontend/components/UserProfile.tsx
+docs/api/authentication.md
+
+# ❌ WRONG - No Arabic naming
+backend/services/خدمة_المصادقة.py
+frontend/components/ملف_المستخدم.tsx
+docs/api/المصادقة.md
+```
+
+## DEVELOPMENT WORKFLOW STANDARDS - MANDATORY
+
+### **Git Workflow Rules - MANDATORY**
+```bash
+# ✅ CORRECT - English commit messages
+git commit -m "Add user authentication endpoint"
+git commit -m "Fix database connection issue"
+git commit -m "Update agent performance metrics"
+
+# ❌ WRONG - No Arabic commit messages
+git commit -m "إضافة نهاية مصادقة المستخدم"
+git commit -m "إصلاح مشكلة اتصال قاعدة البيانات"
+```
+
+### **Branch Naming Convention - MANDATORY**
+```bash
+# Feature branches
+feature/user-authentication
+feature/agent-training-lab
+feature/real-time-chat
+
+# Bug fix branches
+bugfix/database-connection
+bugfix/agent-performance
+
+# Hotfix branches
+hotfix/security-patch
+hotfix/critical-bug
+```
+
+### **Code Review Requirements - MANDATORY**
+1. All pull requests MUST be reviewed by at least one other developer
+2. All tests MUST pass before merging
+3. Code coverage MUST be at least 80%
+4. No Arabic text allowed in any form
+5. All new features MUST have documentation
+
+## PROJECT STRUCTURE STANDARDS - MANDATORY
+
+### **Directory Structure Rules - MANDATORY**
+```
+dpro_aI_agent/
+├── backend/           # Python FastAPI backend
+│   ├── api/          # API endpoints
+│   ├── core/         # Core framework
+│   ├── models/       # Database models
+│   ├── services/     # Business logic
+│   └── tests/        # Backend tests
+├── frontend/         # React TypeScript frontend
+│   ├── src/
+│   │   ├── components/  # Reusable components
+│   │   ├── pages/      # Page components
+│   │   ├── services/   # API services
+│   │   └── types/      # TypeScript types
+└── docs/            # Documentation
+    ├── api/         # API documentation
+    ├── database/    # Database documentation
+    └── deployment/ # Deployment guides
+```
+
+### **File Naming Conventions - MANDATORY**
+```bash
+# Backend Python files - snake_case
+user_service.py
+auth_controller.py
+database_models.py
+
+# Frontend TypeScript files - PascalCase for components, camelCase for utilities
+UserProfile.tsx
+AuthService.ts
+apiUtils.ts
+
+# Configuration files - kebab-case
+docker-compose.yml
+webpack.config.js
+tsconfig.json
+```
+
+## CODING STANDARDS - MANDATORY
+
+### **Code Quality Rules - MANDATORY**
+1. **No Duplicate Code** - Use functions, classes, or modules
+2. **Function Length** - Maximum 50 lines per function
+3. **Class Length** - Maximum 300 lines per class
+4. **File Length** - Maximum 500 lines per file
+5. **Meaningful Names** - Use descriptive variable and function names
+6. **Type Annotations** - All Python functions must have type hints
+7. **Interface Definitions** - All TypeScript components must have interfaces
+
+### **Error Handling Standards - MANDATORY**
+```python
+# ✅ CORRECT - Comprehensive error handling
+async def create_agent(agent_data: AgentCreate, user_id: int) -> Agent:
+    try:
+        # Validate input
+        if not agent_data.name:
+            raise ValidationError("Agent name is required")
+        
+        # Business logic
+        agent = await agent_service.create_agent(agent_data, user_id)
+        
+        # Log success
+        logger.info(f"Agent created: {agent.id} for user {user_id}")
+        
+        return agent
+        
+    except ValidationError as e:
+        logger.warning(f"Validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except DatabaseError as e:
+        logger.error(f"Database error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+# ❌ WRONG - Poor error handling
+async def create_agent(agent_data, user_id):
+    agent = Agent(**agent_data.dict())
+    agent.user_id = user_id
+    db.add(agent)
+    db.commit()
+    return agent
+```
+
+### **Logging Standards - MANDATORY**
+```python
+# ✅ CORRECT - Structured logging
+logger.info(
+    "User action performed",
+    user_id=user_id,
+    action="create_agent",
+    agent_name=agent_data.name,
+    timestamp=datetime.utcnow().isoformat()
+)
+
+# ❌ WRONG - Poor logging
+print("User created agent")
+```
+
+## SECURITY STANDARDS - MANDATORY
+
+### **Input Validation - MANDATORY**
+```python
+# ✅ CORRECT - Validate all inputs
+from pydantic import BaseModel, validator
+
+class AgentCreate(BaseModel):
+    name: str
+    model_provider: str
+    temperature: float
+    
+    @validator('name')
+    def validate_name(cls, v):
+        if not v or len(v.strip()) < 3:
+            raise ValueError('Name must be at least 3 characters')
+        return v.strip()
+    
+    @validator('temperature')
+    def validate_temperature(cls, v):
+        if v < 0 or v > 2:
+            raise ValueError('Temperature must be between 0 and 2')
+        return v
+```
+
+### **Authentication Requirements - MANDATORY**
+- All API endpoints MUST require authentication (except public endpoints)
+- JWT tokens MUST expire within 30 minutes
+- Refresh tokens MUST expire within 7 days
+- All passwords MUST be hashed with bcrypt
+- All API calls MUST be logged with user ID
+
+## PERFORMANCE STANDARDS - MANDATORY
+
+### **Response Time Requirements - MANDATORY**
+- API endpoints MUST respond within 200ms (95th percentile)
+- Database queries MUST complete within 100ms
+- Frontend page loads MUST complete within 2 seconds
+- Real-time features MUST have <100ms latency
+
+### **Resource Usage Limits - MANDATORY**
+- Backend memory usage MUST not exceed 512MB per instance
+- Frontend bundle size MUST not exceed 2MB
+- Database connections MUST not exceed 100 per instance
+- WebSocket connections MUST not exceed 1000 per instance
+
+---
+
+**REMEMBER: English only - no exceptions!**  
+**REMEMBER: All code must be readable and maintainable!**  
+**REMEMBER: Security first - validate everything!**  
+**REMEMBER: Performance matters - optimize continuously!**
+

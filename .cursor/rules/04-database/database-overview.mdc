@@ -1,0 +1,48 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# 04-DATABASE - Database Design Rules
+
+## Database Rules Directory
+
+This directory contains all database design and management rules for Agent Player.
+
+## Files Structure
+
+### Core Database Files
+- `schema-design.mdc` - Database schema design rules
+- `performance.mdc` - Database performance optimization
+- `migrations.mdc` - Migration management strategies
+- `security.mdc` - Database security requirements
+- `backup.mdc` - Backup and recovery procedures
+
+## Purpose
+
+Define database standards for:
+- PostgreSQL schema design
+- Performance optimization
+- Data integrity
+- Security measures
+- Backup procedures
+
+## Rules Coverage
+- 37 tables across 11 domains
+- Index strategies
+- Constraint management
+- Migration procedures
+- Security measures
+
+## MANDATORY Database Standards
+- All tables must have primary keys
+- Foreign key constraints required for relationships
+- Indexes on all frequently queried columns
+- NOT NULL constraints where appropriate
+- Check constraints for data validation
+- Audit fields (created_at, updated_at) on all tables
+- Soft delete with deleted_at timestamp
+- Database transactions for consistency
+- Connection pooling for performance
+- Regular backup and recovery testing
+

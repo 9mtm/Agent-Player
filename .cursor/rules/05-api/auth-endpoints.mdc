@@ -1,0 +1,309 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# AUTH API ENDPOINTS - IMPLEMENTATION RULES
+
+## Auth API Overview
+- **Base Path:** `/api/auth/`
+- **Total Endpoints:** 8 endpoints
+- **Authentication:** JWT Bearer Tokens
+- **Rate Limiting:** 10 requests/minute per IP
+
+## MANDATORY Auth Endpoints Implementation
+
+### **1. POST /api/auth/login - User Login**
+```python
+@router.post("/login", response_model=LoginResponse)
+async def login(
+    credentials: LoginRequest,
+    db: AsyncSession = Depends(get_db)
+) -> LoginResponse:
+    """
+    User login with email/username and password.
+    
+    MANDATORY Requirements:
+    - Email/username validation
+    - Password hash verification
+    - JWT token generation
+    - Session creation
+    - Login attempt logging
+    - Rate limiting (5 attempts per 15 minutes)
+    
+    Request Body:
+    {
+        "email_or_username": "user@example.com",
+        "password": "secure_password",
+        "remember_me": false
+    }
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "access_token": "jwt_token_here",
+            "refresh_token": "refresh_token_here",
+            "token_type": "bearer",
+            "expires_in": 3600,
+            "user": {
+                "id": 1,
+                "email": "user@example.com",
+                "username": "username",
+                "role": "user"
+            }
+        }
+    }
+    """
+    # MANDATORY: Validate input
+    # MANDATORY: Check user exists and is active
+    # MANDATORY: Verify password
+    # MANDATORY: Generate JWT tokens
+    # MANDATORY: Create session record
+    # MANDATORY: Log login attempt
+    # MANDATORY: Return tokens and user info
+```
+
+### **2. POST /api/auth/register - User Registration**
+```python
+@router.post("/register", response_model=RegisterResponse, status_code=201)
+async def register(
+    user_data: RegisterRequest,
+    db: AsyncSession = Depends(get_db)
+) -> RegisterResponse:
+    """
+    User registration with email verification.
+    
+    MANDATORY Requirements:
+    - Email uniqueness validation
+    - Username uniqueness validation
+    - Password strength validation (8+ chars, mixed case, numbers)
+    - Email verification token generation
+    - User profile creation
+    - Welcome email sending
+    
+    Request Body:
+    {
+        "email": "user@example.com",
+        "username": "username",
+        "password": "SecurePass123!",
+        "first_name": "John",
+        "last_name": "Doe",
+        "agree_terms": true
+    }
+    """
+    # MANDATORY: Validate email format and uniqueness
+    # MANDATORY: Validate username uniqueness
+    # MANDATORY: Validate password strength
+    # MANDATORY: Hash password with bcrypt
+    # MANDATORY: Create user record
+    # MANDATORY: Create user profile
+    # MANDATORY: Generate email verification token
+    # MANDATORY: Send verification email
+    # MANDATORY: Log registration attempt
+```
+
+### **3. POST /api/auth/refresh - Token Refresh**
+```python
+@router.post("/refresh", response_model=RefreshResponse)
+async def refresh_token(
+    refresh_data: RefreshRequest,
+    db: AsyncSession = Depends(get_db)
+) -> RefreshResponse:
+    """
+    Refresh JWT access token using refresh token.
+    
+    MANDATORY Requirements:
+    - Refresh token validation
+    - Session verification
+    - New access token generation
+    - Token rotation (new refresh token)
+    - Session update
+    """
+    # MANDATORY: Validate refresh token
+    # MANDATORY: Check session is active
+    # MANDATORY: Generate new access token
+    # MANDATORY: Generate new refresh token
+    # MANDATORY: Update session record
+    # MANDATORY: Return new tokens
+```
+
+### **4. POST /api/auth/logout - User Logout**
+```python
+@router.post("/logout", response_model=LogoutResponse)
+async def logout(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> LogoutResponse:
+    """
+    User logout - invalidate session and tokens.
+    
+    MANDATORY Requirements:
+    - Session invalidation
+    - Token blacklisting
+    - Logout logging
+    """
+    # MANDATORY: Invalidate current session
+    # MANDATORY: Add tokens to blacklist
+    # MANDATORY: Log logout event
+    # MANDATORY: Clear user cache
+```
+
+### **5. GET /api/auth/me - Current User Info**
+```python
+@router.get("/me", response_model=UserResponse)
+async def get_current_user_info(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> UserResponse:
+    """
+    Get current authenticated user information.
+    
+    MANDATORY Requirements:
+    - JWT token validation
+    - User data retrieval
+    - Profile data inclusion
+    - Preferences inclusion
+    """
+    # MANDATORY: Validate JWT token
+    # MANDATORY: Get user with profile and preferences
+    # MANDATORY: Return complete user data
+    # MANDATORY: Update last activity
+```
+
+### **6. POST /api/auth/verify-email - Email Verification**
+```python
+@router.post("/verify-email", response_model=VerificationResponse)
+async def verify_email(
+    verification_data: VerificationRequest,
+    db: AsyncSession = Depends(get_db)
+) -> VerificationResponse:
+    """
+    Verify user email with verification token.
+    
+    MANDATORY Requirements:
+    - Token validation
+    - Email verification update
+    - Account activation
+    """
+    # MANDATORY: Validate verification token
+    # MANDATORY: Check token expiration
+    # MANDATORY: Update email_verified status
+    # MANDATORY: Activate user account
+    # MANDATORY: Log verification event
+```
+
+### **7. POST /api/auth/forgot-password - Password Reset Request**
+```python
+@router.post("/forgot-password", response_model=ForgotPasswordResponse)
+async def forgot_password(
+    request_data: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db)
+) -> ForgotPasswordResponse:
+    """
+    Request password reset - send reset email.
+    
+    MANDATORY Requirements:
+    - Email validation
+    - Reset token generation
+    - Reset email sending
+    - Rate limiting (3 requests per hour)
+    """
+    # MANDATORY: Validate email exists
+    # MANDATORY: Generate reset token (expires in 1 hour)
+    # MANDATORY: Send password reset email
+    # MANDATORY: Log reset request
+    # MANDATORY: Apply rate limiting
+```
+
+### **8. POST /api/auth/reset-password - Password Reset Confirmation**
+```python
+@router.post("/reset-password", response_model=ResetPasswordResponse)
+async def reset_password(
+    reset_data: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db)
+) -> ResetPasswordResponse:
+    """
+    Reset user password with reset token.
+    
+    MANDATORY Requirements:
+    - Reset token validation
+    - Password strength validation
+    - Password update
+    - Session invalidation
+    """
+    # MANDATORY: Validate reset token
+    # MANDATORY: Check token expiration
+    # MANDATORY: Validate new password strength
+    # MANDATORY: Hash and update password
+    # MANDATORY: Invalidate all user sessions
+    # MANDATORY: Log password reset
+```
+
+## MANDATORY Security Requirements
+
+### **Password Security**
+- Minimum 8 characters
+- At least 1 uppercase letter
+- At least 1 lowercase letter  
+- At least 1 number
+- At least 1 special character
+- bcrypt hashing with salt rounds 12
+
+### **JWT Token Security**
+- Access token expires in 1 hour
+- Refresh token expires in 30 days
+- Token rotation on refresh
+- Secure token storage
+- Token blacklisting on logout
+
+### **Rate Limiting**
+- Login: 5 attempts per 15 minutes per IP
+- Registration: 3 attempts per hour per IP
+- Password reset: 3 requests per hour per email
+- General auth endpoints: 10 requests per minute per IP
+
+### **Session Management**
+- Session timeout after 24 hours of inactivity
+- Maximum 5 concurrent sessions per user
+- Session tracking with device info and IP
+- Automatic cleanup of expired sessions
+
+## MANDATORY Error Handling
+
+### **Common Error Responses**
+```python
+# 400 Bad Request
+{
+    "success": false,
+    "message": "Validation error",
+    "errors": ["Email is required", "Password too weak"]
+}
+
+# 401 Unauthorized
+{
+    "success": false,
+    "message": "Invalid credentials",
+    "errors": ["Email or password is incorrect"]
+}
+
+# 429 Too Many Requests
+{
+    "success": false,
+    "message": "Rate limit exceeded",
+    "errors": ["Too many login attempts. Try again in 15 minutes."]
+}
+```
+
+## MANDATORY Testing Requirements
+- Unit tests for all endpoints
+- Integration tests with database
+- Security tests for vulnerabilities
+- Rate limiting tests
+- Token validation tests
+- Session management tests
+
+**REMEMBER: All auth endpoints must implement proper security, validation, and error handling!**
+**REMEMBER: JWT tokens must be properly validated and secured!**
+**REMEMBER: Rate limiting is mandatory for all auth endpoints!**
+

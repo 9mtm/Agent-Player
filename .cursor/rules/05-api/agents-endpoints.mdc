@@ -1,0 +1,430 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# AGENTS API ENDPOINTS - IMPLEMENTATION RULES
+
+## Agents API Overview
+- **Base Path:** `/api/agents/`
+- **Total Endpoints:** 10 endpoints
+- **Authentication:** JWT Bearer Token Required
+- **Rate Limiting:** 20 requests/minute per user
+
+## MANDATORY Agents Endpoints Implementation
+
+### **1. GET /api/agents/ - List User Agents**
+```python
+@router.get("/", response_model=AgentsListResponse)
+async def list_agents(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    agent_type: Optional[str] = Query(None),
+    model_provider: Optional[str] = Query(None),
+    is_active: Optional[bool] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> AgentsListResponse:
+    """
+    List user's AI agents with pagination and filtering.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - User-specific data only
+    - Pagination support
+    - Search functionality
+    - Type and provider filtering
+    - Performance metrics inclusion
+    
+    Query Parameters:
+    - skip: Number of records to skip (default: 0)
+    - limit: Maximum records to return (default: 20, max: 100)
+    - search: Search term for agent name/description
+    - agent_type: Filter by agent type
+    - model_provider: Filter by model provider
+    - is_active: Filter by active status
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "agents": [
+                {
+                    "id": 1,
+                    "name": "Customer Service Agent",
+                    "description": "Handles customer inquiries professionally",
+                    "agent_type": "conversational",
+                    "model_provider": "openai",
+                    "model_name": "gpt-4",
+                    "is_active": true,
+                    "is_public": false,
+                    "usage_count": 156,
+                    "rating_average": 4.7,
+                    "last_used": "2024-01-16T14:30:00Z",
+                    "created_at": "2024-01-15T10:30:00Z"
+                }
+            ],
+            "total": 15,
+            "page": 1,
+            "pages": 1,
+            "has_next": false
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Apply user-specific filtering
+    # MANDATORY: Implement pagination
+    # MANDATORY: Apply search filtering
+    # MANDATORY: Apply type/provider filtering
+    # MANDATORY: Include performance metrics
+    # MANDATORY: Return formatted response
+```
+
+### **2. POST /api/agents/ - Create New Agent**
+```python
+@router.post("/", response_model=AgentResponse, status_code=201)
+async def create_agent(
+    agent_data: AgentCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> AgentResponse:
+    """
+    Create a new AI agent for the user.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - License validation
+    - Agent limit check (max 20 per user)
+    - Model validation
+    - System prompt validation
+    - Performance initialization
+    
+    Request Body:
+    {
+        "name": "Customer Service Agent",
+        "description": "Handles customer inquiries professionally",
+        "agent_type": "conversational",
+        "model_provider": "openai",
+        "model_name": "gpt-4",
+        "system_prompt": "You are a professional customer service agent...",
+        "temperature": 0.7,
+        "max_tokens": 2048,
+        "top_p": 1.0,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "tags": ["customer-service", "support"],
+        "category": "Business",
+        "is_public": false
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check license permissions
+    # MANDATORY: Validate agent limit (max 20)
+    # MANDATORY: Validate model availability
+    # MANDATORY: Validate system prompt length
+    # MANDATORY: Create agent record
+    # MANDATORY: Initialize performance tracking
+    # MANDATORY: Log agent creation
+```
+
+### **3. GET /api/agents/{id} - Get Agent Details**
+```python
+@router.get("/{agent_id}", response_model=AgentDetailResponse)
+async def get_agent(
+    agent_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> AgentDetailResponse:
+    """
+    Get detailed agent information including capabilities and performance.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Agent ownership validation
+    - Complete data retrieval
+    - Capabilities inclusion
+    - Performance metrics inclusion
+    
+    Response includes:
+    - Complete agent configuration
+    - Capabilities list
+    - Performance metrics
+    - Usage statistics
+    - Recent conversations
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check agent ownership or public access
+    # MANDATORY: Retrieve complete agent data
+    # MANDATORY: Include capabilities
+    # MANDATORY: Include performance metrics
+    # MANDATORY: Calculate usage statistics
+```
+
+### **4. PUT /api/agents/{id} - Update Agent**
+```python
+@router.put("/{agent_id}", response_model=AgentResponse)
+async def update_agent(
+    agent_id: int,
+    agent_data: AgentUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> AgentResponse:
+    """
+    Update existing agent configuration and settings.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Agent ownership validation
+    - Model validation
+    - Configuration validation
+    - Change logging
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check agent ownership
+    # MANDATORY: Validate model changes
+    # MANDATORY: Validate configuration parameters
+    # MANDATORY: Update agent record
+    # MANDATORY: Log changes made
+```
+
+### **5. DELETE /api/agents/{id} - Delete Agent**
+```python
+@router.delete("/{agent_id}", response_model=DeleteResponse)
+async def delete_agent(
+    agent_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> DeleteResponse:
+    """
+    Delete agent and all related data (soft delete).
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Agent ownership validation
+    - Soft delete implementation
+    - Related data handling
+    - Deletion logging
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check agent ownership
+    # MANDATORY: Check for active conversations
+    # MANDATORY: Soft delete agent (deleted_at)
+    # MANDATORY: Archive related conversations
+    # MANDATORY: Log deletion event
+```
+
+### **6. POST /api/agents/{id}/test - Test Agent**
+```python
+@router.post("/{agent_id}/test", response_model=TestResponse)
+async def test_agent(
+    agent_id: int,
+    test_data: AgentTestRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> TestResponse:
+    """
+    Test agent with sample input and evaluate response.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Agent access validation
+    - LLM API integration
+    - Response evaluation
+    - Performance tracking
+    
+    Request Body:
+    {
+        "input_message": "Hello, I need help with my order",
+        "context": {
+            "user_info": "Premium customer",
+            "order_id": "12345"
+        },
+        "evaluation_criteria": ["response_quality", "helpfulness", "professionalism"]
+    }
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "input": "Hello, I need help with my order",
+            "output": "Hello! I'd be happy to help you with your order...",
+            "response_time": 1.2,
+            "tokens_used": 45,
+            "cost": 0.0023,
+            "evaluation_scores": {
+                "response_quality": 0.89,
+                "helpfulness": 0.92,
+                "professionalism": 0.95
+            },
+            "overall_score": 0.92
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check agent access
+    # MANDATORY: Execute LLM call
+    # MANDATORY: Evaluate response quality
+    # MANDATORY: Track performance metrics
+    # MANDATORY: Store test results
+```
+
+### **7. GET /api/agents/{id}/performance - Get Performance Metrics**
+```python
+@router.get("/{agent_id}/performance", response_model=PerformanceResponse)
+async def get_agent_performance(
+    agent_id: int,
+    days: int = Query(30, ge=1, le=365),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> PerformanceResponse:
+    """
+    Get agent performance metrics for specified time period.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Agent access validation
+    - Time period filtering
+    - Comprehensive metrics
+    - Trend analysis
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check agent access
+    # MANDATORY: Retrieve performance data
+    # MANDATORY: Calculate trend metrics
+    # MANDATORY: Format response data
+```
+
+### **8. GET /api/agents/{id}/capabilities - Get Agent Capabilities**
+```python
+@router.get("/{agent_id}/capabilities", response_model=CapabilitiesResponse)
+async def get_agent_capabilities(
+    agent_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> CapabilitiesResponse:
+    """
+    Get agent capabilities and proficiency levels.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Agent access validation
+    - Capabilities listing
+    - Proficiency scores
+    - Benchmark data
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check agent access
+    # MANDATORY: Retrieve capabilities
+    # MANDATORY: Include proficiency levels
+    # MANDATORY: Include benchmark scores
+```
+
+### **9. PUT /api/agents/{id}/capabilities - Update Capabilities**
+```python
+@router.put("/{agent_id}/capabilities", response_model=CapabilitiesResponse)
+async def update_agent_capabilities(
+    agent_id: int,
+    capabilities_data: CapabilitiesUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> CapabilitiesResponse:
+    """
+    Update agent capabilities and configurations.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Agent ownership validation
+    - Capabilities validation
+    - Proficiency validation
+    - Change tracking
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check agent ownership
+    # MANDATORY: Validate capability types
+    # MANDATORY: Validate proficiency levels
+    # MANDATORY: Update capabilities
+    # MANDATORY: Log capability changes
+```
+
+### **10. POST /api/agents/{id}/duplicate - Duplicate Agent**
+```python
+@router.post("/{agent_id}/duplicate", response_model=AgentResponse, status_code=201)
+async def duplicate_agent(
+    agent_id: int,
+    duplicate_data: AgentDuplicateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> AgentResponse:
+    """
+    Create a copy of existing agent with modifications.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Agent access validation
+    - Agent limit check
+    - Configuration copying
+    - Name uniqueness
+    
+    Request Body:
+    {
+        "new_name": "Customer Service Agent - Copy",
+        "copy_capabilities": true,
+        "copy_performance_data": false,
+        "modifications": {
+            "temperature": 0.8,
+            "system_prompt": "Modified system prompt..."
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check agent access
+    # MANDATORY: Validate agent limit
+    # MANDATORY: Copy agent configuration
+    # MANDATORY: Apply modifications
+    # MANDATORY: Ensure name uniqueness
+    # MANDATORY: Create new agent record
+```
+
+## MANDATORY Security Requirements
+- All endpoints require JWT authentication
+- Agent ownership validation for modifications
+- Rate limiting: 20 requests per minute per user
+- Input sanitization and validation
+- Model parameter validation
+
+## MANDATORY Performance Requirements
+- Response time < 1 second for list operations
+- Response time < 3 seconds for creation operations
+- Response time < 5 seconds for test operations
+- Pagination for all list endpoints
+- Efficient database queries with proper indexing
+
+## MANDATORY Error Handling
+```python
+# 404 Not Found - Agent
+{
+    "success": false,
+    "message": "Agent not found",
+    "errors": ["Agent with ID 123 not found or access denied"]
+}
+
+# 403 Forbidden - Ownership
+{
+    "success": false,
+    "message": "Access denied",
+    "errors": ["You don't have permission to modify this agent"]
+}
+
+# 422 Validation Error
+{
+    "success": false,
+    "message": "Validation error",
+    "errors": ["Invalid model configuration", "Temperature must be between 0 and 2"]
+}
+```
+
+**REMEMBER: Agent endpoints must validate model configurations and parameters!**
+**REMEMBER: Agent ownership must be validated for all modification operations!**
+**REMEMBER: Performance tracking is mandatory for all agent operations!**
+

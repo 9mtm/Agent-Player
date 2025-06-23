@@ -1,0 +1,48 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# 02-BACKEND - Backend Development Rules
+
+## Backend Rules Directory
+
+This directory contains all backend development rules for Agent Player.
+
+## Files Structure
+
+### Core Backend Files
+- `architecture.mdc` - Clean architecture patterns
+- `services.mdc` - Service layer implementation
+- `repositories.mdc` - Repository pattern implementation  
+- `security.mdc` - Backend security requirements
+- `testing.mdc` - Backend testing strategies
+
+## Purpose
+
+Define backend development standards for:
+- FastAPI implementation
+- SQLAlchemy models
+- Clean architecture
+- Error handling
+- Performance optimization
+
+## Rules Coverage
+- Backend architecture patterns
+- Database integration
+- API implementation
+- Security measures
+- Testing requirements
+
+## MANDATORY Backend Standards
+- All backend code must follow clean architecture
+- Repository pattern required for data access
+- Service layer for business logic
+- Dependency injection for testability
+- Async/await for all I/O operations
+- Type hints required for all functions
+- Error handling with proper logging
+- Input validation on all endpoints
+- Authentication/authorization where needed
+- Database transactions for data consistency
+

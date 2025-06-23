@@ -1,0 +1,48 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# 05-API - API Development Rules
+
+## API Rules Directory
+
+This directory contains all API development rules for Agent Player.
+
+## Files Structure
+
+### Core API Files
+- `rest-standards.mdc` - REST API implementation standards
+- `authentication.mdc` - Authentication and authorization
+- `validation.mdc` - Input validation rules
+- `documentation.mdc` - API documentation standards
+- `versioning.mdc` - API versioning strategies
+
+## Purpose
+
+Define API development standards for:
+- RESTful API design
+- Authentication mechanisms
+- Input validation
+- Error handling
+- Documentation
+
+## Rules Coverage
+- 84+ API endpoints
+- Authentication patterns
+- Validation strategies
+- Error handling
+- Documentation requirements
+
+## MANDATORY API Standards
+- All endpoints must follow REST conventions
+- Input validation required on all endpoints
+- Proper HTTP status codes for responses
+- JSON format for request/response bodies
+- Authentication required for protected endpoints
+- Rate limiting for all public endpoints
+- Error handling with consistent error format
+- API versioning in URL path (/api/v1/)
+- Comprehensive API documentation
+- Unit and integration tests for all endpoints
+

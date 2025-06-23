@@ -1,0 +1,514 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# LICENSING API ENDPOINTS - IMPLEMENTATION RULES
+
+## Licensing API Overview
+- **Base Path:** `/api/licensing/`
+- **Total Endpoints:** 8 endpoints
+- **Authentication:** JWT Bearer Token Required
+- **Security:** Hardware fingerprinting and device validation
+- **Rate Limiting:** 10 requests/minute per IP
+
+## MANDATORY Licensing Endpoints Implementation
+
+### **1. POST /api/licensing/validate - Validate License Key**
+```python
+@router.post("/validate", response_model=LicenseValidationResponse)
+async def validate_license(
+    license_data: LicenseValidationRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> LicenseValidationResponse:
+    """
+    Validate license key and check activation status.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - License key validation
+    - Hardware fingerprint verification
+    - Activation limit checking
+    - Feature validation
+    - Expiration checking
+    
+    Request Body:
+    {
+        "license_key": "XXXX-XXXX-XXXX-XXXX",
+        "hardware_fingerprint": "abc123def456...",
+        "device_info": {
+            "os": "Windows 10",
+            "cpu": "Intel i7-9700K",
+            "ram": "16GB",
+            "mac_address": "00:1B:44:11:3A:B7"
+        }
+    }
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "is_valid": true,
+            "license_type": "premium",
+            "expires_at": "2025-01-16T23:59:59Z",
+            "features": [
+                "training_lab",
+                "unlimited_agents",
+                "premium_models",
+                "priority_support"
+            ],
+            "activation_count": 2,
+            "max_activations": 5,
+            "device_registered": true,
+            "days_remaining": 365
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Validate license key format
+    # MANDATORY: Check license exists and is active
+    # MANDATORY: Verify hardware fingerprint
+    # MANDATORY: Check activation limits
+    # MANDATORY: Validate license expiration
+    # MANDATORY: Return feature permissions
+    # MANDATORY: Log validation attempt
+```
+
+### **2. GET /api/licensing/status - Get License Status**
+```python
+@router.get("/status", response_model=LicenseStatusResponse)
+async def get_license_status(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> LicenseStatusResponse:
+    """
+    Get current user's license status and details.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - License retrieval
+    - Status calculation
+    - Feature listing
+    - Usage statistics
+    - Expiration warnings
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "license_key": "XXXX-XXXX-XXXX-****",
+            "license_type": "premium",
+            "status": "active",
+            "expires_at": "2025-01-16T23:59:59Z",
+            "days_remaining": 365,
+            "features": [
+                {
+                    "name": "training_lab",
+                    "enabled": true,
+                    "usage_limit": null,
+                    "usage_current": 0
+                },
+                {
+                    "name": "agent_limit",
+                    "enabled": true,
+                    "usage_limit": null,
+                    "usage_current": 15
+                }
+            ],
+            "activations": [
+                {
+                    "device_name": "John's Laptop",
+                    "activated_at": "2024-01-16T10:00:00Z",
+                    "last_used": "2024-01-16T14:30:00Z",
+                    "is_current": true
+                }
+            ],
+            "warnings": []
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Retrieve user license
+    # MANDATORY: Calculate license status
+    # MANDATORY: Get feature permissions
+    # MANDATORY: Calculate usage statistics
+    # MANDATORY: Check for warnings (expiration, limits)
+    # MANDATORY: Return comprehensive status
+```
+
+### **3. POST /api/licensing/activate - Activate License**
+```python
+@router.post("/activate", response_model=LicenseActivationResponse)
+async def activate_license(
+    activation_data: LicenseActivationRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> LicenseActivationResponse:
+    """
+    Activate license on current device.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - License key validation
+    - Hardware fingerprint generation
+    - Activation limit checking
+    - Device registration
+    - Feature activation
+    
+    Request Body:
+    {
+        "license_key": "XXXX-XXXX-XXXX-XXXX",
+        "device_name": "John's Laptop",
+        "device_info": {
+            "os": "Windows 10",
+            "cpu": "Intel i7-9700K",
+            "ram": "16GB",
+            "mac_address": "00:1B:44:11:3A:B7"
+        }
+    }
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "activation_id": "act_123456789",
+            "device_fingerprint": "abc123def456...",
+            "activated_at": "2024-01-16T15:00:00Z",
+            "features_activated": [
+                "training_lab",
+                "unlimited_agents",
+                "premium_models"
+            ],
+            "activation_count": 3,
+            "max_activations": 5
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Validate license key
+    # MANDATORY: Generate hardware fingerprint
+    # MANDATORY: Check activation limits
+    # MANDATORY: Register device activation
+    # MANDATORY: Activate license features
+    # MANDATORY: Log activation event
+    # MANDATORY: Send activation email
+```
+
+### **4. GET /api/licensing/hardware-info - Get Hardware Fingerprint**
+```python
+@router.get("/hardware-info", response_model=HardwareInfoResponse)
+async def get_hardware_info(
+    request: Request,
+    current_user: User = Depends(get_current_user)
+) -> HardwareInfoResponse:
+    """
+    Generate hardware fingerprint for current device.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Hardware detection
+    - Fingerprint generation
+    - Device info collection
+    - Security validation
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "hardware_fingerprint": "abc123def456...",
+            "device_info": {
+                "os": "Windows 10 Pro",
+                "os_version": "10.0.19044",
+                "cpu": "Intel(R) Core(TM) i7-9700K CPU @ 3.60GHz",
+                "cpu_cores": 8,
+                "ram_total": "16384MB",
+                "disk_serial": "WD-WCC4N5XXXXXX",
+                "mac_addresses": ["00:1B:44:11:3A:B7"],
+                "screen_resolution": "1920x1080",
+                "timezone": "UTC+02:00"
+            },
+            "fingerprint_components": [
+                "cpu_id",
+                "disk_serial",
+                "mac_address",
+                "motherboard_serial"
+            ]
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Collect hardware information
+    # MANDATORY: Generate unique fingerprint
+    # MANDATORY: Validate fingerprint security
+    # MANDATORY: Return device details
+    # MANDATORY: Log fingerprint generation
+```
+
+### **5. GET /api/licensing/activations - List Activations**
+```python
+@router.get("/activations", response_model=ActivationsListResponse)
+async def list_activations(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> ActivationsListResponse:
+    """
+    List all license activations for current user.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Activation retrieval
+    - Device information
+    - Usage statistics
+    - Status validation
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "activations": [
+                {
+                    "id": "act_123456789",
+                    "device_name": "John's Laptop",
+                    "device_fingerprint": "abc123...***",
+                    "device_info": {
+                        "os": "Windows 10",
+                        "cpu": "Intel i7-9700K"
+                    },
+                    "activated_at": "2024-01-16T10:00:00Z",
+                    "last_used": "2024-01-16T14:30:00Z",
+                    "is_current": true,
+                    "status": "active"
+                }
+            ],
+            "total_activations": 3,
+            "max_activations": 5,
+            "available_activations": 2
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Retrieve user activations
+    # MANDATORY: Include device information
+    # MANDATORY: Calculate usage statistics
+    # MANDATORY: Validate activation status
+    # MANDATORY: Return formatted list
+```
+
+### **6. DELETE /api/licensing/activations/{id} - Deactivate License**
+```python
+@router.delete("/activations/{activation_id}", response_model=DeactivationResponse)
+async def deactivate_license(
+    activation_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> DeactivationResponse:
+    """
+    Deactivate license on specific device.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Activation ownership validation
+    - Deactivation processing
+    - Feature disabling
+    - Cleanup tasks
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "activation_id": "act_123456789",
+            "deactivated_at": "2024-01-16T15:30:00Z",
+            "device_name": "John's Old Laptop",
+            "features_disabled": [
+                "training_lab",
+                "unlimited_agents"
+            ],
+            "remaining_activations": 4
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check activation ownership
+    # MANDATORY: Deactivate license
+    # MANDATORY: Disable features on device
+    # MANDATORY: Clean up device data
+    # MANDATORY: Log deactivation event
+    # MANDATORY: Send deactivation email
+```
+
+### **7. POST /api/licensing/check-updates - Check License Updates**
+```python
+@router.post("/check-updates", response_model=LicenseUpdatesResponse)
+async def check_license_updates(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> LicenseUpdatesResponse:
+    """
+    Check for license updates and renewals.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - License validation
+    - Update checking
+    - Renewal notifications
+    - Feature updates
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "has_updates": true,
+            "current_version": "1.0.0",
+            "latest_version": "1.1.0",
+            "updates_available": [
+                {
+                    "type": "feature",
+                    "name": "Advanced Analytics",
+                    "description": "New analytics dashboard for agents",
+                    "available_since": "2024-01-15T00:00:00Z"
+                }
+            ],
+            "renewal_required": false,
+            "renewal_date": "2025-01-16T23:59:59Z",
+            "days_until_renewal": 365
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check license version
+    # MANDATORY: Query available updates
+    # MANDATORY: Check renewal status
+    # MANDATORY: Return update information
+```
+
+### **8. GET /api/licensing/features - Get Available Features**
+```python
+@router.get("/features", response_model=FeaturesResponse)
+async def get_available_features(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> FeaturesResponse:
+    """
+    Get all available features and their status.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Feature enumeration
+    - Permission checking
+    - Usage limits
+    - Feature descriptions
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "features": [
+                {
+                    "name": "training_lab",
+                    "display_name": "Training Lab",
+                    "description": "Advanced agent training workspace",
+                    "enabled": true,
+                    "required_license": "premium",
+                    "usage_limit": null,
+                    "usage_current": 0,
+                    "limits": {
+                        "workspaces": null,
+                        "sessions_per_day": null
+                    }
+                },
+                {
+                    "name": "agent_limit",
+                    "display_name": "Agent Limit",
+                    "description": "Maximum number of agents",
+                    "enabled": true,
+                    "required_license": "basic",
+                    "usage_limit": null,
+                    "usage_current": 15,
+                    "limits": {
+                        "max_agents": null
+                    }
+                }
+            ],
+            "license_type": "premium",
+            "total_features": 12,
+            "enabled_features": 12
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Get user license type
+    # MANDATORY: List all available features
+    # MANDATORY: Check feature permissions
+    # MANDATORY: Calculate usage statistics
+    # MANDATORY: Return feature details
+```
+
+## MANDATORY Security Requirements
+
+### **Hardware Fingerprinting**
+- CPU ID and serial number
+- Disk drive serial numbers
+- MAC addresses (primary network adapter)
+- Motherboard serial number
+- BIOS/UEFI information
+- Operating system installation ID
+
+### **License Key Security**
+- 128-bit encryption for license keys
+- Digital signature validation
+- Tamper detection mechanisms
+- Secure key storage
+- Regular validation checks
+
+### **Anti-Piracy Measures**
+- Hardware binding validation
+- Activation limit enforcement
+- License sharing detection
+- Suspicious activity monitoring
+- Automatic deactivation on violations
+
+## MANDATORY Performance Requirements
+- License validation < 500ms
+- Hardware fingerprinting < 1 second
+- Activation process < 2 seconds
+- Status checks < 300ms
+- Offline validation support (7 days)
+
+## MANDATORY Error Handling
+```python
+# 403 Forbidden - License Expired
+{
+    "success": false,
+    "message": "License expired",
+    "errors": ["Your license expired on 2024-01-15. Please renew to continue using premium features."]
+}
+
+# 429 Too Many Requests - Activation Limit
+{
+    "success": false,
+    "message": "Activation limit exceeded",
+    "errors": ["Maximum activations (5) reached. Deactivate unused devices to activate on this device."]
+}
+
+# 422 Validation Error - Invalid License
+{
+    "success": false,
+    "message": "Invalid license key",
+    "errors": ["License key format is invalid or key does not exist"]
+}
+```
+
+## MANDATORY Compliance Requirements
+- GDPR compliance for device data
+- Hardware information encryption
+- User consent for fingerprinting
+- Data retention policies
+- Audit trail maintenance
+
+**REMEMBER: Licensing system is critical for business operations!**
+**REMEMBER: Hardware fingerprinting must be secure and privacy-compliant!**
+**REMEMBER: All license validations must be logged for audit purposes!**
+

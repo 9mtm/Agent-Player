@@ -1,0 +1,48 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# 03-FRONTEND - Frontend Development Rules
+
+## Frontend Rules Directory
+
+This directory contains all frontend development rules for Agent Player.
+
+## Files Structure
+
+### Core Frontend Files
+- `react-standards.mdc` - React TypeScript standards
+- `component-patterns.mdc` - Component design patterns
+- `state-management.mdc` - State management rules
+- `ui-ux.mdc` - UI/UX requirements
+- `testing.mdc` - Frontend testing strategies
+
+## Purpose
+
+Define frontend development standards for:
+- React TypeScript development
+- Component architecture
+- State management
+- UI/UX consistency
+- Performance optimization
+
+## Rules Coverage
+- React component patterns
+- TypeScript implementation
+- State management
+- Responsive design
+- Testing requirements
+
+## MANDATORY Frontend Standards
+- All components must be TypeScript with strict types
+- Functional components with hooks only (no class components)
+- Props interfaces required for all components
+- CSS modules or styled-components for styling
+- Responsive design for all screen sizes
+- Accessibility standards (WCAG 2.1) compliance
+- Error boundaries for error handling
+- Loading states for async operations
+- Proper state management (Context API or Redux)
+- Component testing with React Testing Library
+

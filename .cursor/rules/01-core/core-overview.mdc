@@ -1,0 +1,67 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# 01-CORE - Core Rules Directory
+
+## Core Rules Directory
+
+This directory contains fundamental rules and standards that apply to all parts of the Agent Player project.
+
+## Files Structure
+
+### 1. project-standards.mdc
+- General project standards
+- Core development standards
+- Language and formatting rules
+
+### 2. development-workflow.mdc
+- Development workflow
+- Git workflow
+- Code review process
+
+### 3. error-handling.mdc
+- Error handling standards
+- Exception handling
+- Error recovery
+
+### 4. logging-standards.mdc
+- Logging standards
+- Log levels
+- Structured logging
+
+### 5. code-quality.mdc
+- Code quality standards
+- Best practices
+- Code standards
+
+## Purpose
+
+Define core standards that must be followed across all Agent Player project components to ensure:
+- Development consistency
+- High code quality
+- Easy maintenance
+- Optimized performance
+
+## Usage
+
+These rules apply to:
+- Backend development
+- Frontend development  
+- Database design
+- API development
+- Testing
+- Deployment
+- Documentation
+
+## MANDATORY Core Standards
+- English only in all code and comments
+- Consistent naming conventions across all files
+- Proper error handling in all components
+- Structured logging for all operations
+- Code quality checks before commits
+- Documentation for all major features
+- Testing requirements for all functionality
+- Security considerations in all implementations
+

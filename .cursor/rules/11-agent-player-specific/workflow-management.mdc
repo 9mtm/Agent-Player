@@ -1,0 +1,300 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# AGENT PLAYER WORKFLOW MANAGEMENT RULES - MANDATORY
+
+## WORKFLOW SYSTEM RULES
+
+### **Agent Lifecycle Management - MANDATORY**
+```typescript
+// Agent lifecycle must be tracked from creation to deletion
+enum AgentLifecycleState {
+  CREATED = 'created',
+  CONFIGURING = 'configuring',
+  TESTING = 'testing',
+  ACTIVE = 'active',
+  PAUSED = 'paused',
+  TRAINING = 'training',
+  ERROR = 'error',
+  ARCHIVED = 'archived'
+}
+
+class AgentLifecycleManager {
+  // MANDATORY: Track state transitions
+  async transitionState(agentId: number, newState: AgentLifecycleState): Promise<void> {
+    const currentState = await this.getCurrentState(agentId);
+    
+    // MANDATORY: Validate state transitions
+    if (!this.isValidTransition(currentState, newState)) {
+      throw new Error(`Invalid state transition from ${currentState} to ${newState}`);
+    }
+    
+    // MANDATORY: Log state change
+    await this.logStateChange(agentId, currentState, newState);
+    
+    // MANDATORY: Update agent state in database
+    await this.updateAgentState(agentId, newState);
+    
+    // MANDATORY: Trigger state-specific actions
+    await this.executeStateActions(agentId, newState);
+  }
+  
+  private isValidTransition(from: AgentLifecycleState, to: AgentLifecycleState): boolean {
+    const validTransitions = {
+      [AgentLifecycleState.CREATED]: [AgentLifecycleState.CONFIGURING],
+      [AgentLifecycleState.CONFIGURING]: [AgentLifecycleState.TESTING, AgentLifecycleState.ERROR],
+      [AgentLifecycleState.TESTING]: [AgentLifecycleState.ACTIVE, AgentLifecycleState.ERROR],
+      [AgentLifecycleState.ACTIVE]: [AgentLifecycleState.PAUSED, AgentLifecycleState.TRAINING, AgentLifecycleState.ARCHIVED],
+      [AgentLifecycleState.PAUSED]: [AgentLifecycleState.ACTIVE, AgentLifecycleState.ARCHIVED],
+      [AgentLifecycleState.TRAINING]: [AgentLifecycleState.ACTIVE, AgentLifecycleState.ERROR],
+      [AgentLifecycleState.ERROR]: [AgentLifecycleState.CONFIGURING, AgentLifecycleState.ARCHIVED]
+    };
+    
+    return validTransitions[from]?.includes(to) || false;
+  }
+}
+```
+
+### **Training Workflow Rules - MANDATORY**
+```python
+# Training workflow must handle complex multi-step processes
+class TrainingWorkflow:
+    def __init__(self, workspace_id: int):
+        self.workspace_id = workspace_id
+        self.current_step = 0
+        self.total_steps = 0
+        self.status = "initializing"
+    
+    async def execute_training_workflow(self):
+        """Execute complete training workflow with checkpoints"""
+        try:
+            # MANDATORY: Initialize training environment
+            await self.initialize_training_environment()
+            
+            # MANDATORY: Validate training data
+            await self.validate_training_data()
+            
+            # MANDATORY: Setup LLM configurations
+            await self.setup_llm_configurations()
+            
+            # MANDATORY: Execute training steps
+            await self.execute_training_steps()
+            
+            # MANDATORY: Validate training results
+            await self.validate_training_results()
+            
+            # MANDATORY: Deploy trained agent
+            await self.deploy_trained_agent()
+            
+            # MANDATORY: Cleanup training resources
+            await self.cleanup_training_resources()
+            
+            self.status = "completed"
+            
+        except Exception as e:
+            # MANDATORY: Handle training failures
+            await self.handle_training_failure(e)
+            self.status = "failed"
+    
+    async def create_training_checkpoint(self):
+        """Create checkpoint for recovery"""
+        checkpoint_data = {
+            "workspace_id": self.workspace_id,
+            "current_step": self.current_step,
+            "training_state": await self.get_training_state(),
+            "timestamp": datetime.utcnow()
+        }
+        
+        await self.save_checkpoint(checkpoint_data)
+    
+    async def recover_from_checkpoint(self, checkpoint_id: str):
+        """Recover training from checkpoint"""
+        checkpoint = await self.load_checkpoint(checkpoint_id)
+        
+        self.current_step = checkpoint["current_step"]
+        await self.restore_training_state(checkpoint["training_state"])
+        
+        # MANDATORY: Resume from checkpoint
+        await self.resume_training_from_step(self.current_step)
+```
+
+### **Multi-Agent Communication Workflow - MANDATORY**
+```typescript
+// Multi-agent communication and coordination
+class AgentCommunicationWorkflow {
+  private agents: Map<number, Agent> = new Map();
+  private communicationChannels: Map<string, WebSocket> = new Map();
+  
+  // MANDATORY: Setup agent communication
+  async setupAgentCommunication(agentIds: number[]): Promise<void> {
+    for (const agentId of agentIds) {
+      const agent = await this.loadAgent(agentId);
+      this.agents.set(agentId, agent);
+      
+      // MANDATORY: Create communication channel for each agent
+      const channel = new WebSocket(`ws://localhost:8000/ws/agent/${agentId}`);
+      this.communicationChannels.set(`agent_${agentId}`, channel);
+      
+      // MANDATORY: Setup message routing
+      channel.onmessage = (event) => {
+        this.routeAgentMessage(agentId, JSON.parse(event.data));
+      };
+    }
+  }
+  
+  // MANDATORY: Route messages between agents
+  private async routeAgentMessage(fromAgentId: number, message: AgentMessage): Promise<void> {
+    // MANDATORY: Validate message format
+    if (!this.validateMessage(message)) {
+      throw new Error('Invalid agent message format');
+    }
+    
+    // MANDATORY: Check agent permissions
+    if (!await this.checkAgentPermissions(fromAgentId, message.action)) {
+      throw new Error('Agent lacks permissions for this action');
+    }
+    
+    // MANDATORY: Route to target agents
+    if (message.targetAgents) {
+      for (const targetAgentId of message.targetAgents) {
+        await this.sendMessageToAgent(targetAgentId, message);
+      }
+    }
+    
+    // MANDATORY: Log communication
+    await this.logAgentCommunication(fromAgentId, message);
+  }
+  
+  // MANDATORY: Coordinate multi-agent tasks
+  async coordinateMultiAgentTask(taskId: string, agentIds: number[]): Promise<void> {
+    const task = await this.loadTask(taskId);
+    
+    // MANDATORY: Assign subtasks to agents
+    const subtasks = await this.splitTaskIntoSubtasks(task, agentIds.length);
+    
+    for (let i = 0; i < agentIds.length; i++) {
+      const agentId = agentIds[i];
+      const subtask = subtasks[i];
+      
+      // MANDATORY: Send subtask to agent
+      await this.assignSubtaskToAgent(agentId, subtask);
+    }
+    
+    // MANDATORY: Monitor task progress
+    await this.monitorMultiAgentTaskProgress(taskId, agentIds);
+  }
+}
+```
+
+### **User Permission Workflow - MANDATORY**
+```python
+# Complex permission and license validation workflow
+class UserPermissionWorkflow:
+    def __init__(self, user_id: int):
+        self.user_id = user_id
+        self.permissions_cache = {}
+        self.license_cache = {}
+    
+    async def validate_user_action(self, action: str, resource_type: str, resource_id: str = None) -> bool:
+        """Comprehensive permission validation"""
+        
+        # MANDATORY: Check user status
+        user = await self.get_user(self.user_id)
+        if not user.is_active:
+            return False
+        
+        # MANDATORY: Check license permissions
+        license_valid = await self.validate_license_permissions(action, resource_type)
+        if not license_valid:
+            return False
+        
+        # MANDATORY: Check role-based permissions
+        role_permissions = await self.get_user_role_permissions(self.user_id)
+        if action not in role_permissions:
+            return False
+        
+        # MANDATORY: Check resource-specific permissions
+        if resource_id:
+            resource_permissions = await self.get_resource_permissions(resource_type, resource_id)
+            if self.user_id not in resource_permissions.allowed_users:
+                return False
+        
+        return True
+    
+    async def validate_license_permissions(self, action: str, resource_type: str) -> bool:
+        """Validate license allows this action"""
+        license_info = await self.get_user_license(self.user_id)
+        
+        if not license_info or license_info.is_expired:
+            return False
+        
+        # MANDATORY: Check feature permissions
+        required_features = self.get_required_features(action, resource_type)
+        for feature in required_features:
+            if feature not in license_info.enabled_features:
+                return False
+        
+        return True
+```
+
+### **Board Workflow Management - MANDATORY**
+```typescript
+// Workflow board state management
+class BoardWorkflowManager {
+  private boardState: Map<string, BoardState> = new Map();
+  private executionQueue: ExecutionQueue = new ExecutionQueue();
+  
+  // MANDATORY: Execute board workflow
+  async executeWorkflow(boardId: string, triggerData: any): Promise<WorkflowResult> {
+    const board = await this.loadBoard(boardId);
+    
+    // MANDATORY: Validate board configuration
+    await this.validateBoardConfiguration(board);
+    
+    // MANDATORY: Initialize execution context
+    const context = await this.initializeExecutionContext(board, triggerData);
+    
+    // MANDATORY: Execute nodes in sequence
+    const result = await this.executeNodesInSequence(board, context);
+    
+    // MANDATORY: Save execution results
+    await this.saveExecutionResults(boardId, result);
+    
+    return result;
+  }
+  
+  // MANDATORY: Handle node execution
+  private async executeNode(node: WorkflowNode, context: ExecutionContext): Promise<NodeResult> {
+    try {
+      // MANDATORY: Pre-execution validation
+      await this.validateNodeInput(node, context);
+      
+      // MANDATORY: Execute node logic
+      const result = await this.runNodeLogic(node, context);
+      
+      // MANDATORY: Post-execution validation
+      await this.validateNodeOutput(node, result);
+      
+      // MANDATORY: Update context with results
+      context.updateWithNodeResult(node.id, result);
+      
+      return result;
+      
+    } catch (error) {
+      // MANDATORY: Handle node execution errors
+      await this.handleNodeError(node, error, context);
+      throw error;
+    }
+  }
+}
+```
+
+---
+
+**REMEMBER: All workflows must be fault-tolerant and recoverable!**  
+**REMEMBER: Agent coordination requires proper state management!**  
+**REMEMBER: Training workflows must support checkpoints and recovery!**  
+**REMEMBER: Multi-agent communication must be secure and logged!**
+

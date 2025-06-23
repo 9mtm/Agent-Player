@@ -1,9 +1,11 @@
 {
-  "name": "dpro-agent-player-frontend",
+  "name": "agent-player-frontend",
   "private": true,
   "version": "2.0.0",
   "type": "module",
-  "description": "Dpro Agent Player - Complete Frontend Application",
+  "description": "Agent Player - AI Agent Management & Training Platform",
+  "homepage": "https://agent-player.net ",
+  "author": "Dpro GmbH",
   "scripts": {
     "dev": "vite --port 3000 --host 0.0.0.0",
     "build": "tsc -b && vite build",

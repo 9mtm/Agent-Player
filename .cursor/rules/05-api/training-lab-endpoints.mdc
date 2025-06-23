@@ -1,0 +1,528 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# TRAINING LAB API ENDPOINTS - IMPLEMENTATION RULES
+
+## Training Lab API Overview
+- **Base Path:** `/api/training-lab/`
+- **Total Endpoints:** 12 endpoints
+- **Authentication:** JWT Bearer Token Required
+- **License Check:** Premium license required
+
+## MANDATORY Training Lab Endpoints Implementation
+
+### **1. GET /api/training-lab/workspaces - List User Workspaces**
+```python
+@router.get("/workspaces", response_model=WorkspacesListResponse)
+async def list_workspaces(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> WorkspacesListResponse:
+    """
+    List user's training workspaces with pagination and filtering.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - License validation (Premium required)
+    - Pagination support
+    - Search functionality
+    - Status filtering
+    - User-specific data only
+    
+    Query Parameters:
+    - skip: Number of records to skip (default: 0)
+    - limit: Maximum records to return (default: 20, max: 100)
+    - search: Search term for workspace name/description
+    - status: Filter by status (draft, active, completed, archived)
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "workspaces": [
+                {
+                    "id": 1,
+                    "name": "Customer Service Agent Training",
+                    "description": "Training workspace for customer service scenarios",
+                    "training_status": "active",
+                    "agent_id": 5,
+                    "version": 2,
+                    "is_public": false,
+                    "tags": ["customer-service", "beginner"],
+                    "created_at": "2024-01-15T10:30:00Z",
+                    "updated_at": "2024-01-16T14:45:00Z"
+                }
+            ],
+            "total": 15,
+            "page": 1,
+            "pages": 1,
+            "has_next": false
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check premium license
+    # MANDATORY: Apply user-specific filtering
+    # MANDATORY: Implement pagination
+    # MANDATORY: Apply search filtering
+    # MANDATORY: Apply status filtering
+    # MANDATORY: Return formatted response
+```
+
+### **2. POST /api/training-lab/workspaces - Create New Workspace**
+```python
+@router.post("/workspaces", response_model=WorkspaceResponse, status_code=201)
+async def create_workspace(
+    workspace_data: WorkspaceCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> WorkspaceResponse:
+    """
+    Create a new training workspace.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - License validation (Premium required)
+    - Workspace limit check (max 10 per user)
+    - Data validation
+    - Initial LLM configuration
+    - Default workflow setup
+    
+    Request Body:
+    {
+        "name": "Customer Service Agent Training",
+        "description": "Training workspace for customer service scenarios",
+        "agent_id": 5,
+        "workspace_data_json": {
+            "training_scenarios": [
+                {
+                    "name": "Complaint Handling",
+                    "description": "Handle customer complaints professionally",
+                    "example_inputs": ["I'm unhappy with my order"],
+                    "expected_outputs": ["I understand your frustration..."]
+                }
+            ],
+            "evaluation_criteria": {
+                "response_quality": 0.8,
+                "professionalism": 0.9,
+                "helpfulness": 0.85
+            }
+        },
+        "tags": ["customer-service", "beginner"],
+        "is_public": false
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check premium license
+    # MANDATORY: Validate workspace limit (max 10)
+    # MANDATORY: Validate workspace data structure
+    # MANDATORY: Create workspace record
+    # MANDATORY: Setup default LLM configuration
+    # MANDATORY: Create initial workflow
+    # MANDATORY: Log workspace creation
+```
+
+### **3. GET /api/training-lab/workspaces/{id} - Get Workspace Details**
+```python
+@router.get("/workspaces/{workspace_id}", response_model=WorkspaceDetailResponse)
+async def get_workspace(
+    workspace_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> WorkspaceDetailResponse:
+    """
+    Get detailed workspace information including training data and configurations.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Workspace ownership validation
+    - Complete data retrieval
+    - Training sessions inclusion
+    - LLM configurations inclusion
+    
+    Response includes:
+    - Complete workspace details
+    - Training scenarios and data
+    - LLM configurations
+    - Recent training sessions
+    - Performance metrics
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check workspace ownership or public access
+    # MANDATORY: Retrieve complete workspace data
+    # MANDATORY: Include related LLM configs
+    # MANDATORY: Include recent training sessions
+    # MANDATORY: Calculate performance metrics
+```
+
+### **4. PUT /api/training-lab/workspaces/{id} - Update Workspace**
+```python
+@router.put("/workspaces/{workspace_id}", response_model=WorkspaceResponse)
+async def update_workspace(
+    workspace_id: int,
+    workspace_data: WorkspaceUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> WorkspaceResponse:
+    """
+    Update existing workspace data and configurations.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Workspace ownership validation
+    - Version increment
+    - Data validation
+    - Change logging
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check workspace ownership
+    # MANDATORY: Validate update data
+    # MANDATORY: Increment version number
+    # MANDATORY: Update workspace record
+    # MANDATORY: Log changes made
+```
+
+### **5. DELETE /api/training-lab/workspaces/{id} - Delete Workspace**
+```python
+@router.delete("/workspaces/{workspace_id}", response_model=DeleteResponse)
+async def delete_workspace(
+    workspace_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> DeleteResponse:
+    """
+    Delete workspace and all related data.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Workspace ownership validation
+    - Cascade deletion of related data
+    - Backup before deletion
+    - Deletion logging
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check workspace ownership
+    # MANDATORY: Create backup of workspace data
+    # MANDATORY: Delete related training sessions
+    # MANDATORY: Delete related LLM configs
+    # MANDATORY: Delete workspace record
+    # MANDATORY: Log deletion event
+```
+
+### **6. POST /api/training-lab/workspaces/{id}/test - Test Workspace**
+```python
+@router.post("/workspaces/{workspace_id}/test", response_model=TestResponse)
+async def test_workspace(
+    workspace_id: int,
+    test_data: WorkspaceTestRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> TestResponse:
+    """
+    Test workspace with sample inputs and evaluate responses.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Workspace access validation
+    - LLM API integration
+    - Response evaluation
+    - Results storage
+    - Performance metrics calculation
+    
+    Request Body:
+    {
+        "test_scenarios": [
+            {
+                "input": "I want to return my order",
+                "expected_output": "Professional return assistance"
+            }
+        ],
+        "llm_config_id": 1,
+        "evaluation_mode": "automatic"
+    }
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "test_results": [
+                {
+                    "scenario_id": 1,
+                    "input": "I want to return my order",
+                    "actual_output": "I'd be happy to help you with your return...",
+                    "evaluation_score": 0.87,
+                    "response_time": 1.2,
+                    "tokens_used": 45
+                }
+            ],
+            "overall_score": 0.87,
+            "total_tokens": 45,
+            "total_cost": 0.0023
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check workspace access
+    # MANDATORY: Validate test scenarios
+    # MANDATORY: Execute LLM calls
+    # MANDATORY: Evaluate responses
+    # MANDATORY: Calculate performance metrics
+    # MANDATORY: Store test results
+```
+
+### **7. GET /api/training-lab/workspaces/{id}/sessions - Get Training Sessions**
+```python
+@router.get("/workspaces/{workspace_id}/sessions", response_model=SessionsListResponse)
+async def get_training_sessions(
+    workspace_id: int,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> SessionsListResponse:
+    """
+    Get training sessions for a workspace with pagination.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Workspace access validation
+    - Pagination support
+    - Session details inclusion
+    - Performance metrics
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check workspace access
+    # MANDATORY: Apply pagination
+    # MANDATORY: Retrieve session details
+    # MANDATORY: Include performance metrics
+```
+
+### **8. POST /api/training-lab/workspaces/{id}/sessions - Create Training Session**
+```python
+@router.post("/workspaces/{workspace_id}/sessions", response_model=SessionResponse, status_code=201)
+async def create_training_session(
+    workspace_id: int,
+    session_data: SessionCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> SessionResponse:
+    """
+    Create a new training session for the workspace.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Workspace access validation
+    - Session data validation
+    - Initial state setup
+    - Progress tracking initialization
+    
+    Request Body:
+    {
+        "session_name": "Customer Service Training - Session 1",
+        "llm_config_id": 1,
+        "training_mode": "interactive",
+        "session_config": {
+            "max_iterations": 50,
+            "evaluation_threshold": 0.8,
+            "auto_save": true
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check workspace access
+    # MANDATORY: Validate session configuration
+    # MANDATORY: Create session record
+    # MANDATORY: Initialize progress tracking
+    # MANDATORY: Setup session state
+```
+
+### **9. GET /api/training-lab/llm-configs - List LLM Configurations**
+```python
+@router.get("/llm-configs", response_model=LLMConfigsListResponse)
+async def list_llm_configs(
+    workspace_id: Optional[int] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> LLMConfigsListResponse:
+    """
+    List available LLM configurations for training.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Workspace filtering (if provided)
+    - Configuration details
+    - Model availability check
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Apply workspace filtering if provided
+    # MANDATORY: Check model availability
+    # MANDATORY: Return configuration details
+```
+
+### **10. POST /api/training-lab/llm-configs - Create LLM Configuration**
+```python
+@router.post("/llm-configs", response_model=LLMConfigResponse, status_code=201)
+async def create_llm_config(
+    config_data: LLMConfigCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> LLMConfigResponse:
+    """
+    Create a new LLM configuration for training.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Model validation
+    - Configuration validation
+    - API key validation
+    - Cost estimation
+    
+    Request Body:
+    {
+        "workspace_id": 1,
+        "config_name": "GPT-4 Customer Service Config",
+        "model_provider": "openai",
+        "model_name": "gpt-4",
+        "temperature": 0.7,
+        "max_tokens": 2048,
+        "top_p": 1.0,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "system_prompt": "You are a professional customer service agent..."
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check workspace ownership
+    # MANDATORY: Validate model availability
+    # MANDATORY: Validate configuration parameters
+    # MANDATORY: Test API connectivity
+    # MANDATORY: Create configuration record
+```
+
+### **11. GET /api/training-lab/workflows - List Workflows**
+```python
+@router.get("/workflows", response_model=WorkflowsListResponse)
+async def list_workflows(
+    workspace_id: Optional[int] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> WorkflowsListResponse:
+    """
+    List available training workflows.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Workspace filtering
+    - Workflow templates inclusion
+    - Custom workflows inclusion
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Apply workspace filtering
+    # MANDATORY: Include system templates
+    # MANDATORY: Include user custom workflows
+```
+
+### **12. POST /api/training-lab/workflows - Create Workflow**
+```python
+@router.post("/workflows", response_model=WorkflowResponse, status_code=201)
+async def create_workflow(
+    workflow_data: WorkflowCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> WorkflowResponse:
+    """
+    Create a custom training workflow.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Workflow validation
+    - Step validation
+    - Logic validation
+    - Template creation
+    
+    Request Body:
+    {
+        "name": "Customer Escalation Training",
+        "description": "Training workflow for handling escalated customers",
+        "steps": [
+            {
+                "step_type": "scenario_presentation",
+                "config": {
+                    "scenario": "Angry customer demanding refund"
+                }
+            },
+            {
+                "step_type": "response_generation",
+                "config": {
+                    "max_attempts": 3,
+                    "evaluation_criteria": ["empathy", "solution_oriented"]
+                }
+            }
+        ],
+        "evaluation_config": {
+            "scoring_method": "weighted",
+            "pass_threshold": 0.8
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Validate workflow structure
+    # MANDATORY: Validate step configurations
+    # MANDATORY: Create workflow record
+    # MANDATORY: Setup workflow template
+```
+
+## MANDATORY License Requirements
+- **Premium License Required** for all Training Lab features
+- License validation on every endpoint
+- Feature limitation based on license tier
+- Usage tracking and limits enforcement
+
+## MANDATORY Security Requirements
+- All endpoints require JWT authentication
+- Workspace ownership validation
+- Rate limiting: 30 requests per minute per user
+- Input sanitization and validation
+- Secure LLM API key handling
+
+## MANDATORY Performance Requirements
+- Response time < 2 seconds for list operations
+- Response time < 5 seconds for creation operations
+- Response time < 10 seconds for test operations
+- Pagination for all list endpoints
+- Efficient database queries with proper indexing
+
+## MANDATORY Error Handling
+```python
+# 403 Forbidden - License Required
+{
+    "success": false,
+    "message": "Premium license required",
+    "errors": ["Training Lab features require premium license"]
+}
+
+# 404 Not Found - Workspace
+{
+    "success": false,
+    "message": "Workspace not found",
+    "errors": ["Workspace with ID 123 not found or access denied"]
+}
+
+# 422 Validation Error
+{
+    "success": false,
+    "message": "Validation error",
+    "errors": ["Invalid LLM configuration", "Temperature must be between 0 and 2"]
+}
+```
+
+**REMEMBER: Training Lab requires premium license validation on all endpoints!**
+**REMEMBER: Workspace ownership must be validated for all operations!**
+**REMEMBER: LLM API calls must be properly secured and rate limited!**
+

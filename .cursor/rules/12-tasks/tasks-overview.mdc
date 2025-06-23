@@ -1,0 +1,61 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# 12-TASKS - Development Tasks Management
+
+## Tasks Directory
+
+This directory contains all development tasks, progress tracking, and rollback procedures for Agent Player.
+
+## Files Structure
+
+### Core Task Files
+- `current-tasks.mdc` - Current active development tasks
+- `completed-tasks.mdc` - Completed tasks history
+- `rollback-procedures.mdc` - Rollback instructions for issues
+- `progress-tracking.mdc` - Development progress tracking
+- `task-templates.mdc` - Templates for new tasks
+
+## Purpose
+
+Manage development workflow through:
+- Task assignment and tracking
+- Progress monitoring
+- Issue resolution
+- Rollback procedures
+- Documentation updates
+
+## Task Management Rules
+
+### MANDATORY Task Documentation
+- Every task must be documented before starting
+- Progress updates required daily
+- Completion confirmation with testing
+- Rollback plan for every major change
+- Rules updates when adding new files/endpoints
+
+### Task Priority Levels
+- **CRITICAL** - Blocks development, must fix immediately
+- **HIGH** - Important features, complete within 1-2 days  
+- **MEDIUM** - Regular development, complete within 1 week
+- **LOW** - Nice to have, complete when time permits
+
+### Task Status Tracking
+- `TODO` - Not started yet
+- `IN_PROGRESS` - Currently being worked on
+- `TESTING` - Implementation complete, testing in progress
+- `COMPLETED` - Task finished and tested
+- `BLOCKED` - Cannot proceed, waiting for dependency
+- `ROLLBACK_NEEDED` - Issues found, need to revert changes
+
+## MANDATORY Task Standards
+- All tasks must have clear acceptance criteria
+- Estimated completion time required
+- Dependencies must be identified
+- Testing requirements defined
+- Rollback plan documented
+- Progress updates in current-tasks.mdc
+- Completion documented in completed-tasks.mdc
+

@@ -938,3 +938,103 @@ For commercial licensing inquiries, please contact: [opensource@dpro.dev](mailto
 [⭐ Star this repository](https://github.com/Dpro-at/Dpro-AI-Agent) • [🐛 Report Bug](https://github.com/Dpro-at/Dpro-AI-Agent/issues) • [💡 Request Feature](https://github.com/Dpro-at/Dpro-AI-Agent/issues) • [🦀 Try Rust Launcher](RUST_LAUNCHER_GUIDE.md)
 
 </div>
+
+# 📚 Agent Player - Documentation
+
+**Agent Player** - Professional AI Agent Management & Training Platform  
+**Company:** Dpro GmbH | **Domain:** agent-player.net
+
+---
+
+## 📁 Documentation Structure
+
+### 🗄️ [01-database/](./01-database/)
+- Complete database schema (37 tables, 11 domains)
+- SQL script for implementation
+- Performance optimization (500% improvement expected)
+
+### 🔗 [02-api/](./02-api/)
+- API endpoints documentation (84+ endpoints)
+- Current: 39 endpoints (4 groups)  
+- Planned: 45+ new endpoints (6 groups)
+
+### 🔧 [03-backend-code/](./03-backend-code/)
+- Backend architecture and organization
+- FastAPI implementation guidelines
+- Models, services, and security standards
+
+### 🎨 [04-frontend-code/](./04-frontend-code/)
+- React TypeScript components structure
+- UI component library (20+ components)
+- Training Lab unified implementation
+
+### 🎨 [05-design-system/](./05-design-system/)
+- Complete design system documentation
+- Color palette, typography, spacing
+- Component guidelines and accessibility
+
+---
+
+## 🎯 Key Features
+
+### **Training Lab** (Unified Environment)
+Merge Board + WorkFlow + ChildAgent into one powerful training environment
+
+### **Enhanced Database** 
+- **Current:** 13 tables, 8.3% utilization
+- **New:** 37 tables, 85%+ utilization, 500% performance boost
+
+### **Advanced Features**
+- Licensing system with hardware fingerprinting
+- Theme marketplace and customization
+- AI trainer with course generation
+- Form builder with drag-drop interface
+
+---
+
+## 🚀 Quick Start
+
+1. **Database Setup**
+   ```bash
+   psql -d your_database -f 01-database/FINAL_DATABASE_SQL_SCRIPT.sql
+   ```
+
+2. **Review Implementation**
+   - Check `01-database/README.md` for database details
+   - Review `03-backend-code/README.md` for backend tasks
+   - See `04-frontend-code/README.md` for frontend implementation
+
+3. **Follow Priority Order**
+   - **Week 1-2:** Database & Backend foundation
+   - **Week 3-4:** Frontend & Training Lab
+   - **Week 5-6:** Advanced features
+   - **Week 7-8:** Integration & testing
+
+---
+
+## 📊 Project Status
+
+### ✅ **Current State**
+- Excellent frontend component architecture
+- Good backend API structure (39 endpoints)
+- Professional configuration setup
+
+### 🎯 **Target State**
+- 37-table professional database
+- 84+ comprehensive API endpoints
+- Unified Training Lab interface
+- Advanced licensing & theme systems
+
+---
+
+## 🛠️ Implementation Guidelines
+
+- All code and comments in **English**
+- Component-based architecture
+- TypeScript for type safety
+- Responsive design principles
+- Performance optimization focus
+
+---
+
+**Ready to build the future of AI agent management! 🚀**

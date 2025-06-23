@@ -1,0 +1,500 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# CHAT API ENDPOINTS - IMPLEMENTATION RULES
+
+## Chat API Overview
+- **Base Path:** `/api/chat/`
+- **Total Endpoints:** 9 endpoints
+- **Authentication:** JWT Bearer Token Required
+- **Real-time:** WebSocket support for live messaging
+- **Rate Limiting:** 50 requests/minute per user
+
+## MANDATORY Chat Endpoints Implementation
+
+### **1. GET /api/chat/conversations - List Conversations**
+```python
+@router.get("/conversations", response_model=ConversationsListResponse)
+async def list_conversations(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    conversation_type: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    is_archived: Optional[bool] = Query(False),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> ConversationsListResponse:
+    """
+    List user's conversations with pagination and filtering.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - User-specific data only
+    - Pagination support
+    - Search functionality
+    - Type and status filtering
+    - Last message preview
+    - Unread count
+    
+    Query Parameters:
+    - skip: Number of records to skip (default: 0)
+    - limit: Maximum records to return (default: 20, max: 100)
+    - search: Search term for conversation title/content
+    - conversation_type: Filter by type (chat, support, training, analysis)
+    - status: Filter by status (active, paused, completed, archived)
+    - is_archived: Include archived conversations
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "conversations": [
+                {
+                    "id": 1,
+                    "title": "Customer Service Inquiry",
+                    "conversation_type": "chat",
+                    "status": "active",
+                    "agent_id": 5,
+                    "agent_name": "Customer Service Agent",
+                    "is_pinned": false,
+                    "unread_count": 2,
+                    "total_messages": 15,
+                    "last_message": {
+                        "content": "Thank you for your help!",
+                        "sender_type": "user",
+                        "created_at": "2024-01-16T14:30:00Z"
+                    },
+                    "last_message_at": "2024-01-16T14:30:00Z",
+                    "created_at": "2024-01-16T10:00:00Z"
+                }
+            ],
+            "total": 25,
+            "unread_total": 5,
+            "page": 1,
+            "pages": 2,
+            "has_next": true
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Apply user-specific filtering
+    # MANDATORY: Implement pagination
+    # MANDATORY: Apply search filtering
+    # MANDATORY: Apply type/status filtering
+    # MANDATORY: Include last message preview
+    # MANDATORY: Calculate unread counts
+    # MANDATORY: Order by last_message_at DESC
+```
+
+### **2. POST /api/chat/conversations - Create Conversation**
+```python
+@router.post("/conversations", response_model=ConversationResponse, status_code=201)
+async def create_conversation(
+    conversation_data: ConversationCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> ConversationResponse:
+    """
+    Create a new conversation with an agent.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Agent validation
+    - Agent availability check
+    - Initial message handling
+    - Context initialization
+    
+    Request Body:
+    {
+        "agent_id": 5,
+        "title": "Customer Service Inquiry",
+        "conversation_type": "chat",
+        "initial_message": "Hello, I need help with my order",
+        "context": {
+            "user_info": "Premium customer",
+            "order_id": "12345"
+        },
+        "language": "en"
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Validate agent exists and is active
+    # MANDATORY: Check agent access permissions
+    # MANDATORY: Create conversation record
+    # MANDATORY: Send initial message if provided
+    # MANDATORY: Initialize context data
+    # MANDATORY: Set up real-time connection
+```
+
+### **3. GET /api/chat/conversations/{id} - Get Conversation Details**
+```python
+@router.get("/conversations/{conversation_id}", response_model=ConversationDetailResponse)
+async def get_conversation(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> ConversationDetailResponse:
+    """
+    Get detailed conversation information including metadata.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Conversation ownership validation
+    - Complete data retrieval
+    - Agent information inclusion
+    - Statistics calculation
+    
+    Response includes:
+    - Complete conversation details
+    - Agent information
+    - Message statistics
+    - Context data
+    - Performance metrics
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check conversation ownership
+    # MANDATORY: Retrieve complete conversation data
+    # MANDATORY: Include agent information
+    # MANDATORY: Calculate message statistics
+    # MANDATORY: Include context data
+```
+
+### **4. DELETE /api/chat/conversations/{id} - Delete Conversation**
+```python
+@router.delete("/conversations/{conversation_id}", response_model=DeleteResponse)
+async def delete_conversation(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> DeleteResponse:
+    """
+    Delete conversation and all related messages (soft delete).
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Conversation ownership validation
+    - Soft delete implementation
+    - Message archiving
+    - Real-time notification
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check conversation ownership
+    # MANDATORY: Soft delete conversation (archived_at)
+    # MANDATORY: Archive related messages
+    # MANDATORY: Close real-time connections
+    # MANDATORY: Log deletion event
+```
+
+### **5. GET /api/chat/conversations/{id}/messages - Get Messages**
+```python
+@router.get("/conversations/{conversation_id}/messages", response_model=MessagesListResponse)
+async def get_conversation_messages(
+    conversation_id: int,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    before_id: Optional[int] = Query(None),
+    after_id: Optional[int] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> MessagesListResponse:
+    """
+    Get conversation messages with pagination and cursor support.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Conversation access validation
+    - Pagination support
+    - Cursor-based pagination
+    - Message threading support
+    - Read status tracking
+    
+    Query Parameters:
+    - skip: Number of records to skip (default: 0)
+    - limit: Maximum records to return (default: 50, max: 100)
+    - before_id: Get messages before this message ID
+    - after_id: Get messages after this message ID
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "messages": [
+                {
+                    "id": 1,
+                    "content": "Hello, I need help with my order",
+                    "content_type": "text",
+                    "sender_type": "user",
+                    "sender_name": "John Doe",
+                    "message_type": "text",
+                    "status": "read",
+                    "tokens_used": 12,
+                    "processing_time": 0.8,
+                    "attachments": [],
+                    "is_edited": false,
+                    "created_at": "2024-01-16T10:00:00Z",
+                    "read_at": "2024-01-16T10:00:05Z"
+                }
+            ],
+            "total": 15,
+            "has_more": true,
+            "next_cursor": "eyJpZCI6MX0="
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check conversation access
+    # MANDATORY: Implement cursor pagination
+    # MANDATORY: Mark messages as read
+    # MANDATORY: Include attachment information
+    # MANDATORY: Support message threading
+    # MANDATORY: Return formatted response
+```
+
+### **6. POST /api/chat/conversations/{id}/messages - Send Message**
+```python
+@router.post("/conversations/{conversation_id}/messages", response_model=MessageResponse, status_code=201)
+async def send_message(
+    conversation_id: int,
+    message_data: MessageCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> MessageResponse:
+    """
+    Send a new message in the conversation.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Conversation access validation
+    - Message validation
+    - Agent response generation
+    - Real-time broadcasting
+    - Token tracking
+    
+    Request Body:
+    {
+        "content": "Hello, I need help with my order",
+        "content_type": "text",
+        "message_type": "text",
+        "parent_message_id": null,
+        "context": {
+            "order_id": "12345"
+        }
+    }
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "user_message": {
+                "id": 1,
+                "content": "Hello, I need help with my order",
+                "sender_type": "user",
+                "created_at": "2024-01-16T10:00:00Z"
+            },
+            "agent_response": {
+                "id": 2,
+                "content": "Hello! I'd be happy to help you with your order...",
+                "sender_type": "agent",
+                "tokens_used": 45,
+                "processing_time": 1.2,
+                "cost": 0.0023,
+                "created_at": "2024-01-16T10:00:02Z"
+            }
+        }
+    }
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check conversation access
+    # MANDATORY: Validate message content
+    # MANDATORY: Create user message record
+    # MANDATORY: Generate agent response
+    # MANDATORY: Track tokens and cost
+    # MANDATORY: Broadcast via WebSocket
+    # MANDATORY: Update conversation stats
+```
+
+### **7. DELETE /api/chat/messages/{id} - Delete Message**
+```python
+@router.delete("/messages/{message_id}", response_model=DeleteResponse)
+async def delete_message(
+    message_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> DeleteResponse:
+    """
+    Delete a specific message (soft delete).
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Message ownership validation
+    - Soft delete implementation
+    - Real-time notification
+    - Conversation stats update
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check message ownership
+    # MANDATORY: Soft delete message (deleted_at)
+    # MANDATORY: Update conversation stats
+    # MANDATORY: Broadcast deletion via WebSocket
+    # MANDATORY: Log deletion event
+```
+
+### **8. POST /api/chat/messages/{id}/attachments - Upload Attachment**
+```python
+@router.post("/messages/{message_id}/attachments", response_model=AttachmentResponse, status_code=201)
+async def upload_message_attachment(
+    message_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> AttachmentResponse:
+    """
+    Upload file attachment to a message.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Message access validation
+    - File validation and security
+    - Virus scanning
+    - File processing
+    - Storage management
+    
+    Supported file types:
+    - Images: jpg, jpeg, png, gif, webp (max 10MB)
+    - Documents: pdf, doc, docx, txt, md (max 50MB)
+    - Code files: py, js, ts, html, css, json (max 5MB)
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check message access
+    # MANDATORY: Validate file type and size
+    # MANDATORY: Scan for viruses
+    # MANDATORY: Process file (thumbnails for images)
+    # MANDATORY: Store file securely
+    # MANDATORY: Create attachment record
+    # MANDATORY: Update message with attachment
+```
+
+### **9. GET /api/chat/conversations/{id}/export - Export Conversation**
+```python
+@router.get("/conversations/{conversation_id}/export", response_model=ExportResponse)
+async def export_conversation(
+    conversation_id: int,
+    format: str = Query("json", regex="^(json|pdf|txt|csv)$"),
+    include_attachments: bool = Query(False),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> ExportResponse:
+    """
+    Export conversation in various formats.
+    
+    MANDATORY Requirements:
+    - User authentication
+    - Conversation access validation
+    - Format validation
+    - Data sanitization
+    - File generation
+    - Secure download link
+    
+    Supported formats:
+    - json: Complete data with metadata
+    - pdf: Formatted conversation document
+    - txt: Plain text conversation
+    - csv: Structured data for analysis
+    """
+    # MANDATORY: Validate user authentication
+    # MANDATORY: Check conversation access
+    # MANDATORY: Validate export format
+    # MANDATORY: Generate export file
+    # MANDATORY: Include attachments if requested
+    # MANDATORY: Create secure download link
+    # MANDATORY: Set expiration time
+    # MANDATORY: Log export activity
+```
+
+## MANDATORY WebSocket Implementation
+
+### **WebSocket Connection: /ws/chat/{conversation_id}**
+```python
+@router.websocket("/ws/chat/{conversation_id}")
+async def websocket_chat(
+    websocket: WebSocket,
+    conversation_id: int,
+    token: str = Query(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Real-time chat WebSocket connection.
+    
+    MANDATORY Requirements:
+    - JWT token validation
+    - Conversation access validation
+    - Connection management
+    - Message broadcasting
+    - Typing indicators
+    - Connection cleanup
+    
+    WebSocket Events:
+    - message_sent: New message received
+    - message_read: Message read status
+    - typing_start: User started typing
+    - typing_stop: User stopped typing
+    - agent_thinking: Agent processing response
+    - connection_status: Connection state changes
+    """
+    # MANDATORY: Validate JWT token
+    # MANDATORY: Check conversation access
+    # MANDATORY: Accept WebSocket connection
+    # MANDATORY: Add to active connections
+    # MANDATORY: Handle incoming messages
+    # MANDATORY: Broadcast to other connections
+    # MANDATORY: Handle typing indicators
+    # MANDATORY: Clean up on disconnect
+```
+
+## MANDATORY Security Requirements
+- All endpoints require JWT authentication
+- Conversation ownership validation
+- File upload security (virus scanning, type validation)
+- Rate limiting: 50 requests per minute per user
+- WebSocket authentication and authorization
+- Message content sanitization
+
+## MANDATORY Performance Requirements
+- Response time < 1 second for message operations
+- Response time < 2 seconds for conversation operations
+- WebSocket message latency < 100ms
+- File upload progress tracking
+- Efficient pagination with cursor support
+- Database query optimization
+
+## MANDATORY Error Handling
+```python
+# 404 Not Found - Conversation
+{
+    "success": false,
+    "message": "Conversation not found",
+    "errors": ["Conversation with ID 123 not found or access denied"]
+}
+
+# 413 Payload Too Large - File Upload
+{
+    "success": false,
+    "message": "File too large",
+    "errors": ["File size exceeds 50MB limit"]
+}
+
+# 422 Validation Error
+{
+    "success": false,
+    "message": "Validation error",
+    "errors": ["Message content is required", "Invalid file type"]
+}
+```
+
+**REMEMBER: Chat endpoints must support real-time communication via WebSocket!**
+**REMEMBER: File uploads must be properly validated and secured!**
+**REMEMBER: Message delivery and read receipts are mandatory features!**
+

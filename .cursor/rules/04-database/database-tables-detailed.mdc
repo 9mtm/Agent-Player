@@ -1,0 +1,244 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# DATABASE TABLES DETAILED DOCUMENTATION
+
+## Database Overview
+- **Database System:** PostgreSQL 15+
+- **Total Tables:** 37 tables across 11 business domains
+- **ORM:** SQLAlchemy 2.0+ (Async)
+- **Migration Tool:** Alembic
+
+## DOMAIN 1: IAM (Identity & Access Management) - 4 Tables
+
+### **Table: iam_users**
+```sql
+CREATE TABLE iam_users (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    username VARCHAR(100) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(50) DEFAULT 'user' CHECK (role IN ('admin', 'user', 'viewer')),
+    is_active BOOLEAN DEFAULT true,
+    is_verified BOOLEAN DEFAULT false,
+    email_verified BOOLEAN DEFAULT false,
+    phone_verified BOOLEAN DEFAULT false,
+    two_factor_enabled BOOLEAN DEFAULT false,
+    last_login TIMESTAMP,
+    failed_login_attempts INTEGER DEFAULT 0,
+    locked_until TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP
+);
+
+-- Indexes
+CREATE INDEX idx_iam_users_email ON iam_users(email);
+CREATE INDEX idx_iam_users_username ON iam_users(username);
+CREATE INDEX idx_iam_users_role ON iam_users(role);
+CREATE INDEX idx_iam_users_active ON iam_users(is_active);
+CREATE INDEX idx_iam_users_created_at ON iam_users(created_at);
+
+-- Business Rules:
+-- - Email must be unique and valid format
+-- - Username must be 3-30 characters, alphanumeric and underscore only
+-- - Password must be hashed with bcrypt (min 12 salt rounds)
+-- - Account locked after 5 failed login attempts for 30 minutes
+-- - Soft delete with deleted_at timestamp
+-- - Role-based access control (admin, user, viewer)
+```
+
+### **Table: iam_user_profiles**
+```sql
+CREATE TABLE iam_user_profiles (
+    user_id INTEGER REFERENCES iam_users(id) ON DELETE CASCADE,
+    first_name VARCHAR(100),
+    last_name VARCHAR(100),
+    display_name VARCHAR(200),
+    avatar_url TEXT,
+    bio TEXT CHECK (LENGTH(bio) <= 1000),
+    company VARCHAR(200),
+    job_title VARCHAR(150),
+    website_url TEXT,
+    location VARCHAR(200),
+    timezone VARCHAR(50) DEFAULT 'UTC',
+    language VARCHAR(10) DEFAULT 'en',
+    country VARCHAR(2),
+    phone VARCHAR(20),
+    birth_date DATE,
+    gender VARCHAR(20),
+    social_links JSONB DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id)
+);
+
+-- Business Rules:
+-- - One profile per user (1:1 relationship)
+-- - Avatar images must be validated for size and type
+-- - Bio limited to 1000 characters
+-- - Social links stored as JSONB for flexibility
+-- - Timezone must be valid IANA timezone
+-- - Country code must be ISO 3166-1 alpha-2
+```
+
+### **Table: iam_user_preferences**
+```sql
+CREATE TABLE iam_user_preferences (
+    user_id INTEGER REFERENCES iam_users(id) ON DELETE CASCADE,
+    theme VARCHAR(20) DEFAULT 'light' CHECK (theme IN ('light', 'dark', 'auto')),
+    sidebar_collapsed BOOLEAN DEFAULT false,
+    default_model VARCHAR(50) DEFAULT 'gpt-4',
+    notifications_enabled BOOLEAN DEFAULT true,
+    email_notifications BOOLEAN DEFAULT true,
+    push_notifications BOOLEAN DEFAULT false,
+    auto_save BOOLEAN DEFAULT true,
+    auto_save_interval INTEGER DEFAULT 30 CHECK (auto_save_interval BETWEEN 10 AND 300),
+    display_density VARCHAR(20) DEFAULT 'comfortable' CHECK (display_density IN ('compact', 'comfortable', 'spacious')),
+    date_format VARCHAR(20) DEFAULT 'YYYY-MM-DD',
+    time_format VARCHAR(10) DEFAULT '24h' CHECK (time_format IN ('12h', '24h')),
+    currency VARCHAR(3) DEFAULT 'USD',
+    number_format VARCHAR(10) DEFAULT 'en-US',
+    dashboard_layout JSONB DEFAULT '{}',
+    quick_actions JSONB DEFAULT '[]',
+    keyboard_shortcuts JSONB DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id)
+);
+
+-- Business Rules:
+-- - One preference set per user (1:1 relationship)
+-- - Auto-save interval between 10-300 seconds
+-- - Dashboard layout stored as JSONB for flexibility
+-- - Quick actions array for customizable shortcuts
+-- - Keyboard shortcuts customization support
+```
+
+### **Table: iam_user_sessions**
+```sql
+CREATE TABLE iam_user_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id INTEGER REFERENCES iam_users(id) ON DELETE CASCADE,
+    session_token VARCHAR(255) UNIQUE NOT NULL,
+    refresh_token VARCHAR(255) UNIQUE,
+    device_info JSONB,
+    ip_address INET,
+    user_agent TEXT,
+    browser_name VARCHAR(100),
+    browser_version VARCHAR(50),
+    os_name VARCHAR(100),
+    os_version VARCHAR(50),
+    device_type VARCHAR(50),
+    is_active BOOLEAN DEFAULT true,
+    is_mobile BOOLEAN DEFAULT false,
+    last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Business Rules:
+-- - Maximum 5 active sessions per user
+-- - Session expires after 24 hours of inactivity
+-- - Automatic cleanup of expired sessions (daily job)
+-- - Device fingerprinting for security
+-- - IP address tracking for suspicious activity detection
+```
+
+## DOMAIN 2: AI_AGENTS (Agent Management) - 3 Tables
+
+### **Table: ai_agents**
+```sql
+CREATE TABLE ai_agents (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    user_id INTEGER REFERENCES iam_users(id) ON DELETE CASCADE,
+    agent_type VARCHAR(50) NOT NULL CHECK (agent_type IN ('conversational', 'task_specific', 'analytical', 'creative')),
+    model_provider VARCHAR(50) NOT NULL CHECK (model_provider IN ('openai', 'anthropic', 'google', 'cohere', 'local')),
+    model_name VARCHAR(100) NOT NULL,
+    model_version VARCHAR(50),
+    system_prompt TEXT CHECK (LENGTH(system_prompt) <= 10000),
+    temperature DECIMAL(3,2) DEFAULT 0.7 CHECK (temperature >= 0 AND temperature <= 2),
+    max_tokens INTEGER DEFAULT 2048 CHECK (max_tokens > 0 AND max_tokens <= 32000),
+    top_p DECIMAL(3,2) DEFAULT 1.0 CHECK (top_p >= 0 AND top_p <= 1),
+    frequency_penalty DECIMAL(3,2) DEFAULT 0.0 CHECK (frequency_penalty >= -2 AND frequency_penalty <= 2),
+    presence_penalty DECIMAL(3,2) DEFAULT 0.0 CHECK (presence_penalty >= -2 AND presence_penalty <= 2),
+    stop_sequences TEXT[],
+    custom_parameters JSONB DEFAULT '{}',
+    is_active BOOLEAN DEFAULT true,
+    is_public BOOLEAN DEFAULT false,
+    is_featured BOOLEAN DEFAULT false,
+    usage_count INTEGER DEFAULT 0,
+    rating_average DECIMAL(3,2) DEFAULT 0.0,
+    rating_count INTEGER DEFAULT 0,
+    tags TEXT[],
+    category VARCHAR(100),
+    subcategory VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP
+);
+
+-- Business Rules:
+-- - Agent name must be unique per user
+-- - System prompt limited to 10,000 characters
+-- - Model parameters must be within valid ranges
+-- - Public agents can be used by other users
+-- - Featured agents promoted in marketplace
+-- - Usage tracking for analytics
+-- - Rating system for quality assessment
+-- - Soft delete with deleted_at timestamp
+```
+
+## DOMAIN 3: COMMUNICATION (Chat System) - 3 Tables
+
+### **Table: communication_conversations**
+```sql
+CREATE TABLE communication_conversations (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES iam_users(id) ON DELETE CASCADE,
+    agent_id INTEGER REFERENCES ai_agents(id) ON DELETE SET NULL,
+    title VARCHAR(300),
+    conversation_type VARCHAR(50) DEFAULT 'chat' CHECK (conversation_type IN ('chat', 'support', 'training', 'analysis')),
+    status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'paused', 'completed', 'archived')),
+    priority VARCHAR(20) DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+    language VARCHAR(10) DEFAULT 'en',
+    is_active BOOLEAN DEFAULT true,
+    is_archived BOOLEAN DEFAULT false,
+    is_pinned BOOLEAN DEFAULT false,
+    is_shared BOOLEAN DEFAULT false,
+    share_token UUID,
+    context_data JSONB DEFAULT '{}',
+    metadata JSONB DEFAULT '{}',
+    summary TEXT,
+    sentiment_score DECIMAL(3,2),
+    satisfaction_rating INTEGER CHECK (satisfaction_rating BETWEEN 1 AND 5),
+    total_messages INTEGER DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    total_cost DECIMAL(10,4) DEFAULT 0,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ended_at TIMESTAMP,
+    last_message_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    archived_at TIMESTAMP
+);
+
+-- Business Rules:
+-- - Auto-generated title from first message
+-- - Conversation types for categorization
+-- - Status workflow management
+-- - Sharing capability with secure tokens
+-- - Context preservation across sessions
+-- - Sentiment analysis integration
+-- - Automatic archiving after 90 days inactivity
+-- - Token and cost tracking
+```
+
+**REMEMBER: Database is the foundation - every table must be properly designed!**
+**REMEMBER: All constraints must be enforced at database level!**
+**REMEMBER: Performance indexes are mandatory for all foreign keys!**
+

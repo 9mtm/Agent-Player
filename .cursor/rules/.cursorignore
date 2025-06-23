@@ -1,0 +1,16 @@
+# Don't apply rules to documentation files in docs folder
+docs/**/*.md
+docs/**/*.txt
+docs/**/*.sql
+
+# Don't apply rules to test files  
+**/*test*.py
+**/*spec*.ts
+**/*test*.ts
+
+# Don't apply rules to migration files
+backend/migrations/**/*
+
+# Don't apply rules to logs
+backend/logs/**/*
+*.log 
