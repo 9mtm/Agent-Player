@@ -1,6 +1,35 @@
 import api from "./api";
 import type { CreateAgentData } from "../types";
 
+// Specialized Roles for Child Agents
+export const SpecializedRoles = {
+  RESEARCHER: "researcher",
+  ANALYZER: "analyzer",
+  CREATOR: "creator",
+  MODERATOR: "moderator",
+  ASSISTANT: "assistant",
+  SPECIALIST: "specialist",
+  COORDINATOR: "coordinator",
+  VALIDATOR: "validator",
+} as const;
+
+export type SpecializedRole =
+  (typeof SpecializedRoles)[keyof typeof SpecializedRoles];
+
+// Task Types for Child Agents
+export const TaskTypes = {
+  RESEARCH: "research",
+  ANALYSIS: "analysis",
+  CREATION: "creation",
+  MODERATION: "moderation",
+  ASSISTANCE: "assistance",
+  COORDINATION: "coordination",
+  VALIDATION: "validation",
+  MONITORING: "monitoring",
+} as const;
+
+export type TaskType = (typeof TaskTypes)[keyof typeof TaskTypes];
+
 // Child Agent Types
 export interface ChildAgent {
   id: number;
@@ -18,6 +47,75 @@ export interface ChildAgent {
   autonomy_level: string;
   created_at: string;
   updated_at?: string;
+}
+
+// Additional Child Agent Types
+export interface ChildAgentTask {
+  id: number;
+  title: string;
+  description?: string;
+  type: TaskType;
+  status: "pending" | "running" | "completed" | "failed";
+  priority: "low" | "medium" | "high";
+  progress: number;
+  agent_id: number;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface ChildAgentLearning {
+  id: number;
+  agent_id: number;
+  learning_type: string;
+  progress: number;
+  accuracy: number;
+  created_at: string;
+}
+
+export interface ChildAgentPerformance {
+  id: number;
+  agent_id: number;
+  metric_name: string;
+  metric_value: number;
+  period: string;
+  created_at: string;
+}
+
+export interface ChildAgentTemplate {
+  id: number;
+  name: string;
+  description?: string;
+  specialization: SpecializedRole;
+  default_capabilities: string[];
+  template_config: Record<string, any>;
+}
+
+export interface CreateChildAgentRequest {
+  name: string;
+  description?: string;
+  parent_agent_id: number;
+  specialization: SpecializedRole;
+  capabilities: string[];
+  learning_enabled?: boolean;
+  autonomy_level?: string;
+}
+
+export interface UpdateChildAgentRequest {
+  name?: string;
+  description?: string;
+  specialization?: SpecializedRole;
+  capabilities?: string[];
+  status?: "active" | "inactive" | "training";
+  learning_enabled?: boolean;
+  autonomy_level?: string;
+}
+
+export interface ChildAgentAnalytics {
+  total_agents: number;
+  active_agents: number;
+  tasks_completed: number;
+  average_performance: number;
+  specialization_distribution: Record<SpecializedRole, number>;
 }
 
 // Child Agent Endpoints - Updated to use new unified structure

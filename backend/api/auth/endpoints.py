@@ -5,8 +5,7 @@ All authentication related routes
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Dict, Any
-from models.shared import LoginRequest, RegisterRequest, TokenRefreshRequest, SuccessResponse
-from models.shared import UserResponse, SystemStatus
+from models.shared import LoginRequest, RegisterRequest, TokenRefreshRequest, SuccessResponse, UserResponse, SystemStatus
 from core.dependencies import get_current_user, get_current_admin
 from services.auth_service import AuthService
 

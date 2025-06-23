@@ -15,9 +15,27 @@ FastAPI-based backend server for the Dpro AI Agent system.
 ```
 
 ### Manual Run (Advanced)
+
+#### Using python/python3
 ```bash
 .venv\Scripts\activate
 python main.py
+```
+Or
+```bash
+.venv\Scripts\activate
+python3 main.py
+```
+
+#### Using py/py -3
+```bash
+.venv\Scripts\activate
+py main.py
+```
+Or
+```bash
+.venv\Scripts\activate
+py -3 main.py
 ```
 
 ## 🔗 URLs
@@ -44,8 +62,22 @@ Edit `.env` file to configure:
 
 ## 🧪 Testing
 
+#### Using python/python3
 ```bash
 python -c "import fastapi; print('FastAPI works!')"
+```
+Or
+```bash
+python3 -c "import fastapi; print('FastAPI works!')"
+```
+
+#### Using py/py -3
+```bash
+py -c "import fastapi; print('FastAPI works!')"
+```
+Or
+```bash
+py -3 -c "import fastapi; print('FastAPI works!')"
 ```
 
 ## 📋 Requirements
