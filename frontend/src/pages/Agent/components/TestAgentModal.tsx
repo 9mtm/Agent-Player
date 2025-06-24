@@ -51,7 +51,7 @@ const TestAgentModal: React.FC<TestAgentModalProps> = ({
     }
 
     setIsLoading(true);
-    setTestResult(null);
+    setTestResult(null); // Clear previous result
 
     try {
       const requestBody: { message: string; openai_api_key?: string } = {
@@ -73,7 +73,29 @@ const TestAgentModal: React.FC<TestAgentModalProps> = ({
         body: JSON.stringify(requestBody)
       });
 
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
       const result: TestResponse = await response.json();
+      
+      // Debug: Enhanced logging
+      console.log('🔍 Test Agent Response (Full):', JSON.stringify(result, null, 2));
+      console.log('🔍 Response Success:', result.success);
+      console.log('🔍 Response Data Exists:', !!result.data);
+      console.log('🔍 Response Data Fields:', result.data ? Object.keys(result.data) : 'No data');
+      
+      // Validate the response structure
+      if (result.success && result.data) {
+        console.log('✅ Valid success response with data');
+        console.log('🔍 Data fields check:', {
+          agent_name: !!result.data.agent_name,
+          model: !!result.data.model,
+          user_message: !!result.data.user_message,
+          ai_response: !!result.data.ai_response,
+          response_time: !!result.data.response_time
+        });
+      }
       
       // If failed due to missing API key, show the API key input for manual override
       if (!result.success && result.message?.includes('API key')) {
@@ -84,14 +106,18 @@ const TestAgentModal: React.FC<TestAgentModalProps> = ({
           message: 'No API key found for this agent. Please enter your OpenAI API key below to test the agent.'
         });
       } else {
-        setTestResult(result);
+        // Force state update with small delay to ensure re-render
+        setTimeout(() => {
+          console.log('🔄 Setting test result:', result);
+          setTestResult(result);
+        }, 50);
       }
 
     } catch (error) {
       console.error('Test error:', error);
       setTestResult({
         success: false,
-        message: 'Connection error with server'
+        message: `Connection error: ${error instanceof Error ? error.message : 'Unknown error'}`
       });
     } finally {
       setIsLoading(false);
@@ -346,25 +372,35 @@ const TestAgentModal: React.FC<TestAgentModalProps> = ({
             </div>
             
             <div style={styles.resultContent}>
+              {(() => {
+                console.log('🎨 Rendering results. Success:', testResult.success, 'Data exists:', !!testResult.data);
+                if (testResult.data) {
+                  console.log('🎨 Data fields:', Object.keys(testResult.data));
+                  console.log('🎨 Agent name:', testResult.data.agent_name);
+                  console.log('🎨 Model:', testResult.data.model);
+                }
+                return null;
+              })()}
+              
               {testResult.success && testResult.data ? (
                 <>
-                  <div><strong>🤖 Agent:</strong> {testResult.data.agent_name}</div>
-                  <div><strong>🧠 Model:</strong> {testResult.data.model}</div>
-                  <div><strong>⏱️ Response Time:</strong> {testResult.data.response_time}</div>
+                  <div><strong>🤖 Agent:</strong> {testResult.data.agent_name || 'Unknown'}</div>
+                  <div><strong>🧠 Model:</strong> {testResult.data.model || 'Unknown'}</div>
+                  <div><strong>⏱️ Response Time:</strong> {testResult.data.response_time || 'Unknown'}</div>
                   
                   <div style={styles.messageBox}>
                     <strong>👤 Your Message:</strong><br />
-                    {testResult.data.user_message}
+                    {testResult.data.user_message || 'No message'}
                   </div>
                   
                   <div style={styles.responseBox}>
                     <strong>🤖 Agent Response:</strong><br />
-                    {testResult.data.ai_response}
+                    {testResult.data.ai_response || 'No response'}
                   </div>
 
                   {testResult.data.usage && (
                     <div style={{ fontSize: '12px', color: '#666', marginTop: '8px' }}>
-                      📊 Usage: {testResult.data.usage.total_tokens} tokens
+                      📊 Usage: {testResult.data.usage.total_tokens || 0} tokens
                     </div>
                   )}
                 </>

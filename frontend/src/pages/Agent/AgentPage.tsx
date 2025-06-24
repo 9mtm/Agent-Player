@@ -52,6 +52,33 @@ interface AgentFormData {
   };
 }
 
+type MainAgentRequest = {
+  name: string;
+  description: string;
+  model_provider: string;
+  model_name: string;
+  api_key: string;
+  system_prompt: string;
+  capabilities: string[];
+  tools_enabled: string[];
+  temperature: string;
+  max_tokens: number;
+  timeout_seconds: number;
+  is_public: boolean;
+  is_system: boolean;
+};
+
+type ChildAgentRequest = {
+  name: string;
+  description: string;
+  parent_agent_id?: number;
+  specialization: string;
+  training_data: Record<string, unknown>;
+  capabilities: string[];
+  learning_enabled: boolean;
+  autonomy_level: string;
+};
+
 const AgentPage: React.FC = () => {
   const agent = useAgent();
   const { showSuccess, showError, confirm } = useNotificationContext();
@@ -401,8 +428,8 @@ const AgentPage: React.FC = () => {
     
     try {
       // Prepare data for backend based on agent type
-      let agentRequest: Record<string, any>;
-      
+      let agentRequest: MainAgentRequest | ChildAgentRequest;
+
       if (builderType === 'main') {
         agentRequest = {
           name: agentData.name,
@@ -457,11 +484,13 @@ const AgentPage: React.FC = () => {
         // Create new agent
         if (builderType === 'child') {
           // Create child agent using child agents API
-          const createUrl = configUtils.getApiUrl('/api/v1/child-agents');
+          const token = localStorage.getItem('access_token');
+          const createUrl = configUtils.getApiUrl('/agents/child');
           const response = await fetch(createUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
             },
             body: JSON.stringify(agentRequest),
           });

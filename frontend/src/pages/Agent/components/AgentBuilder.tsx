@@ -119,13 +119,34 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
     if (agentType === 'child' && isOpen) {
       const loadMainAgents = async () => {
         try {
-          const response = await fetch('http://localhost:8000/api/v1/main-agents-list');
+          const response = await fetch('http://localhost:8000/api/v1/agents/main');
           const result = await response.json();
-          if (result.success) {
-            setMainAgents(result.data);
+          console.log('🔍 Main agents response:', result);
+          
+          if (result.success && result.data && result.data.agents) {
+            // result.data.agents is the array we need
+            const agentsArray = result.data.agents.map((agent: {
+              id: number;
+              name: string;
+              description?: string;
+              model_provider?: string;
+              is_active?: boolean;
+            }) => ({
+              id: agent.id,
+              name: agent.name,
+              description: agent.description || '',
+              model_provider: agent.model_provider || 'openai',
+              status: agent.is_active ? 'active' : 'inactive'
+            }));
+            setMainAgents(agentsArray);
+            console.log('✅ Main agents loaded:', agentsArray);
+          } else {
+            console.warn('⚠️ Invalid response structure or no agents found');
+            setMainAgents([]);
           }
         } catch (error) {
-          console.error('Error loading main agents:', error);
+          console.error('❌ Error loading main agents:', error);
+          setMainAgents([]);
         }
       };
       loadMainAgents();
@@ -1404,18 +1425,18 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
                   required
                 >
                   <option value="">Select a Parent Agent...</option>
-                  {mainAgents.map((agent) => (
+                  {Array.isArray(mainAgents) && mainAgents.map((agent) => (
                     <option key={agent.id} value={agent.id}>
                       🚀 {agent.name} ({agent.model_provider})
                     </option>
                   ))}
                 </select>
-                {mainAgents.length === 0 && (
+                {(!Array.isArray(mainAgents) || mainAgents.length === 0) && (
                   <div style={{ fontSize: '12px', color: '#dc3545', marginTop: '8px' }}>
                     ⚠️ No main agents available. Please create a main agent first.
                   </div>
                 )}
-                {selectedParentAgent && (
+                {selectedParentAgent && Array.isArray(mainAgents) && (
                   <div style={{ fontSize: '11px', color: '#28a745', marginTop: '8px' }}>
                     ✅ Parent agent selected! This child agent will report to {mainAgents.find(a => a.id === selectedParentAgent)?.name}.
                   </div>

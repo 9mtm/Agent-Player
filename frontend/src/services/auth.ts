@@ -253,9 +253,25 @@ class AuthService {
       const payload = JSON.parse(atob(token.split(".")[1]));
       const now = Date.now() / 1000;
 
-      return payload.exp < now;
+      const isExpired = payload.exp < now;
+
+      // If token is expired, clear auth data automatically
+      if (isExpired) {
+        console.warn(
+          "🔒 Token expired in isTokenExpired check, clearing auth data"
+        );
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("refresh_token");
+        localStorage.removeItem("user");
+      }
+
+      return isExpired;
     } catch (error) {
       console.error("Error checking token expiration:", error);
+      // If we can't parse the token, consider it expired
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("refresh_token");
+      localStorage.removeItem("user");
       return true;
     }
   }
@@ -263,7 +279,10 @@ class AuthService {
   // Check if user is authenticated
   isAuthenticated(): boolean {
     const token = localStorage.getItem("access_token");
-    return !!token && !this.isTokenExpired();
+    if (!token) return false;
+
+    // Use the updated isTokenExpired method which auto-clears expired tokens
+    return !this.isTokenExpired();
   }
 
   // Check system status for admin setup

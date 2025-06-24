@@ -192,12 +192,44 @@ async def test_agent(
     """Test agent with a message"""
     try:
         result = agent_service.test_agent(agent_id, request.message)
+        
+        # Check if there was an error
+        if result.get("status") == "error":
+            return SuccessResponse(
+                success=False,
+                message=result.get("message", "Agent test failed"),
+                data=None
+            )
+        
+        # Transform the result to match frontend expectations
+        test_data = result.get("test_results", {})
+        agent_info = result.get("agent_info", {})
+        performance = result.get("performance", {})
+        
+        formatted_data = {
+            "agent_name": agent_info.get("name", "Unknown Agent"),
+            "model": f"{agent_info.get('model_provider', 'unknown')}/{agent_info.get('model_name', 'unknown')}",
+            "user_message": test_data.get("user_message", request.message),
+            "ai_response": test_data.get("agent_response", "No response generated"),
+            "response_time": test_data.get("response_time", "0s"),
+            "usage": {
+                "total_tokens": performance.get("estimated_tokens", 0),
+                "prompt_tokens": len(request.message.split()) if request.message else 0,
+                "completion_tokens": performance.get("estimated_tokens", 0) - (len(request.message.split()) if request.message else 0)
+            }
+        }
+        
         return SuccessResponse(
-            message="Agent test completed",
-            data=result
+            success=True,
+            message="Agent test completed successfully",
+            data=formatted_data
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return SuccessResponse(
+            success=False,
+            message=f"Agent test failed: {str(e)}",
+            data=None
+        )
 
 @router.get("/{agent_id}/children", response_model=SuccessResponse)
 async def get_agent_children(agent_id: int):

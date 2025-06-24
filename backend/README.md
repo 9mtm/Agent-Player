@@ -29,8 +29,14 @@ python3 main.py
 
 #### Using py/py -3
 ```bash
+
+
 .venv\Scripts\activate
+
+
 py main.py
+
+
 ```
 Or
 ```bash
