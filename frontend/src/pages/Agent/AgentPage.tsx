@@ -223,8 +223,8 @@ const AgentPage: React.FC = () => {
       console.log('🤖 Final Child Agents:', childAgents);
 
       setAgents({
-        main: mainAgents.filter(agent => agent.type === 'main'),  // Extra safety check
-        child: childAgents.filter(agent => agent.type === 'child') // Extra safety check
+        main: mainAgents.filter((agent: AgentData) => agent.type === 'main'),  // Extra safety check
+        child: childAgents.filter((agent: AgentData) => agent.type === 'child') // Extra safety check
       });
 
     } catch (error) {
@@ -527,24 +527,11 @@ const AgentPage: React.FC = () => {
         
         agentRequest = {
           name: agentData.name,
-<<<<<<< Updated upstream
-          description: agentData.description || 'Child agent',
-          model_provider: agentData.llmConfig?.provider || 'openai',
-          model_name: agentData.llmConfig?.model || 'gpt-3.5-turbo',
-          api_key: isLocalDeployment ? '' : (agentData.llmConfig?.apiKey || ''),
-          system_prompt: 'You are a helpful child agent.',
-=======
           description: agentData.description || `Child agent for ${agentData.type || 'general'}`,
           model_provider: agentData.llmConfig?.provider || 'openai',
           model_name: agentData.llmConfig?.model || 'gpt-3.5-turbo',
+          api_key: isLocalDeployment ? '' : (agentData.llmConfig?.apiKey || ''),
           system_prompt: `You are a helpful child agent specialized in ${agentData.type || 'general'} tasks.`,
-          temperature: agentData.settings?.temperature?.toString() || '0.7',
-          max_tokens: agentData.settings?.maxTokens || 1000,
-          api_key: agentData.llmConfig?.apiKey || '',
-          parent_agent_id: agentData.parent_agent_id,
-          specialization: agentData.type || 'general',
-          training_data: {},
->>>>>>> Stashed changes
           capabilities: agentData.capabilities || [],
           tools_enabled: ['chat', 'analysis'],
           temperature: (agentData.settings?.temperature || 0.7).toString(),
