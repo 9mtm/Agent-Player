@@ -1,0 +1,619 @@
+/* OpenAI Style Chat Interface - Professional Design */
+
+/* Main Layout */
+.openai-chat-layout {
+  display: flex;
+  height: 100vh;
+  background: #f7f7f8;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  overflow: hidden;
+}
+
+/* Loading State */
+.openai-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: #f7f7f8;
+  color: #6b7280;
+  gap: 16px;
+}
+
+.openai-loading .loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #e5e7eb;
+  border-top: 3px solid #10a37f;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Sidebar */
+.openai-sidebar {
+  width: 280px;
+  background: #171717;
+  color: white;
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.3s ease;
+  z-index: 100;
+}
+
+.openai-sidebar.closed {
+  transform: translateX(-100%);
+}
+
+.openai-sidebar-header {
+  padding: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.openai-new-chat-btn {
+  width: 100%;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  padding: 12px 16px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 14px;
+}
+
+.openai-new-chat-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.openai-search {
+  margin: 16px;
+  position: relative;
+}
+
+.openai-search input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  padding: 8px 12px 8px 36px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.openai-search input::placeholder {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.openai-search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.openai-conversations {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.openai-conversation-item {
+  padding: 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 4px;
+  transition: all 0.2s ease;
+  position: relative;
+  group: hover;
+}
+
+.openai-conversation-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.openai-conversation-item.active {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.openai-conversation-title {
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.openai-conversation-meta {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.openai-conversation-actions {
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.openai-conversation-item:hover .openai-conversation-actions {
+  opacity: 1;
+}
+
+.openai-delete-btn {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.openai-delete-btn:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* Main Content */
+.openai-main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: white;
+  position: relative;
+}
+
+/* Toolbar */
+.openai-toolbar {
+  height: 60px;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: white;
+  z-index: 10;
+}
+
+.openai-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.openai-sidebar-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #6b7280;
+  padding: 8px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.openai-sidebar-toggle:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.openai-model-selector {
+  position: relative;
+}
+
+.openai-model-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+  transition: all 0.2s ease;
+}
+
+.openai-model-btn:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.openai-model-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  z-index: 50;
+  min-width: 280px;
+  overflow: hidden;
+}
+
+.openai-model-option {
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.openai-model-option:last-child {
+  border-bottom: none;
+}
+
+.openai-model-option:hover {
+  background: #f9fafb;
+}
+
+.openai-model-option.active {
+  background: #eff6ff;
+  border-left: 3px solid #3b82f6;
+}
+
+.openai-model-name {
+  font-weight: 500;
+  color: #111827;
+  margin-bottom: 2px;
+}
+
+.openai-model-info {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* Chat Content */
+.openai-chat-content {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+}
+
+/* Welcome Screen */
+.openai-welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.openai-welcome-header {
+  margin-bottom: 48px;
+}
+
+.openai-welcome-title {
+  font-size: 32px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 8px;
+}
+
+.openai-welcome-subtitle {
+  font-size: 16px;
+  color: #6b7280;
+  margin-bottom: 16px;
+}
+
+.openai-welcome-agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #f0f9ff;
+  border: 1px solid #0ea5e9;
+  border-radius: 20px;
+  font-size: 14px;
+  color: #0369a1;
+  font-weight: 500;
+}
+
+.openai-starters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  max-width: 800px;
+  width: 100%;
+}
+
+.openai-starter-card {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: left;
+}
+
+.openai-starter-card:hover {
+  border-color: #3b82f6;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+  transform: translateY(-2px);
+}
+
+.openai-starter-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.openai-starter-icon {
+  font-size: 24px;
+}
+
+.openai-starter-title {
+  font-weight: 600;
+  color: #111827;
+  font-size: 16px;
+}
+
+.openai-starter-description {
+  color: #6b7280;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+/* Messages Area */
+.openai-messages {
+  padding: 24px;
+  max-width: 800px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.openai-message {
+  margin-bottom: 24px;
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.openai-message.user {
+  flex-direction: row-reverse;
+}
+
+.openai-message-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #f3f4f6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.openai-message.user .openai-message-avatar {
+  background: #3b82f6;
+  color: white;
+}
+
+.openai-message.assistant .openai-message-avatar {
+  background: #10a37f;
+  color: white;
+}
+
+.openai-message-content {
+  flex: 1;
+  background: #f9fafb;
+  padding: 16px 20px;
+  border-radius: 18px;
+  line-height: 1.6;
+  font-size: 15px;
+  color: #374151;
+}
+
+.openai-message.user .openai-message-content {
+  background: #3b82f6;
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
+.openai-message.assistant .openai-message-content {
+  border-bottom-left-radius: 4px;
+}
+
+.openai-message-time {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-top: 4px;
+}
+
+/* Input Area */
+.openai-input-area {
+  padding: 24px;
+  border-top: 1px solid #e5e7eb;
+  background: white;
+}
+
+.openai-input-container {
+  max-width: 800px;
+  margin: 0 auto;
+  position: relative;
+}
+
+.openai-input-wrapper {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.openai-input-wrapper:focus-within {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.openai-input-top {
+  padding: 16px 16px 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.openai-input-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.openai-input-btn {
+  background: none;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.openai-input-btn:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.openai-input-btn.active {
+  background: #eff6ff;
+  color: #3b82f6;
+}
+
+.openai-textarea {
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 16px;
+  font-size: 16px;
+  line-height: 1.5;
+  font-family: inherit;
+  min-height: 24px;
+  max-height: 200px;
+}
+
+.openai-textarea::placeholder {
+  color: #9ca3af;
+}
+
+.openai-input-bottom {
+  padding: 0 16px 16px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.openai-send-btn {
+  background: #10a37f;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.openai-send-btn:hover:not(:disabled) {
+  background: #0d8568;
+}
+
+.openai-send-btn:disabled {
+  background: #d1d5db;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
+.openai-input-hint {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .openai-sidebar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    z-index: 200;
+  }
+  
+  .openai-sidebar.closed {
+    transform: translateX(-100%);
+  }
+  
+  .openai-toolbar {
+    padding: 0 16px;
+  }
+  
+  .openai-starters {
+    grid-template-columns: 1fr;
+  }
+  
+  .openai-input-area {
+    padding: 16px;
+  }
+  
+  .openai-messages {
+    padding: 16px;
+  }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .openai-main-content {
+    background: #1f2937;
+    color: #f9fafb;
+  }
+  
+  .openai-toolbar {
+    background: #1f2937;
+    border-color: #374151;
+  }
+  
+  .openai-message-content {
+    background: #374151;
+    color: #f9fafb;
+  }
+  
+  .openai-input-area {
+    background: #1f2937;
+    border-color: #374151;
+  }
+  
+  .openai-input-wrapper {
+    background: #374151;
+    border-color: #4b5563;
+  }
+} 

@@ -8,7 +8,7 @@ from models.database import Base, User
 
 def get_sqlite_schema():
     """Get schema from SQLite database"""
-    conn = sqlite3.connect("data/database.db")
+    conn = sqlite3.connect("backend/data/database.db")
     cursor = conn.cursor()
     
     # Get users table schema

@@ -1,0 +1,241 @@
+/* TypingIndicator.css - ChatGPT Style Animations */
+
+.typing-indicator {
+  margin: 12px 0;
+  opacity: 0;
+  transform: translateY(10px);
+  animation: slideIn 0.3s ease-out forwards;
+}
+
+.typing-indicator.animate {
+  animation: slideIn 0.3s ease-out forwards, pulse 2s ease-in-out infinite;
+}
+
+.typing-bubble {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 80%;
+  background: linear-gradient(135deg, #f7f7f8 0%, #ffffff 100%);
+  border: 1px solid #e5e5e7;
+  border-radius: 18px;
+  padding: 12px 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Progress bar removed - user feedback: too distracting */
+
+.typing-avatar {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+  animation: iconBounce 2s ease-in-out infinite;
+}
+
+.typing-icon {
+  font-size: 16px;
+  animation: iconRotate 3s ease-in-out infinite;
+}
+
+.typing-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.typing-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.typing-agent-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  opacity: 0.8;
+}
+
+.typing-timestamp {
+  font-size: 11px;
+  color: #9ca3af;
+  opacity: 0.7;
+}
+
+.typing-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.typing-text {
+  font-size: 14px;
+  color: #4b5563;
+  font-weight: 500;
+  animation: textFade 2s ease-in-out infinite;
+}
+
+.typing-dots {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  animation: dotBounce 1.4s ease-in-out infinite both;
+}
+
+.dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+.dot:nth-child(3) {
+  animation-delay: 0s;
+}
+
+/* Animations */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.02);
+  }
+}
+
+/* shimmer animation removed with progress bar */
+
+@keyframes iconBounce {
+  0%, 20%, 50%, 80%, 100% {
+    transform: translateY(0) scale(1);
+  }
+  40% {
+    transform: translateY(-3px) scale(1.1);
+  }
+  60% {
+    transform: translateY(-2px) scale(1.05);
+  }
+}
+
+@keyframes iconRotate {
+  0% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(5deg);
+  }
+  50% {
+    transform: rotate(0deg);
+  }
+  75% {
+    transform: rotate(-5deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes textFade {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+@keyframes dotBounce {
+  0%, 80%, 100% {
+    transform: scale(0);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .typing-bubble {
+    background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+    border-color: #374151;
+    color: #f9fafb;
+  }
+  
+  .typing-agent-name {
+    color: #f3f4f6;
+  }
+  
+  .typing-text {
+    color: #d1d5db;
+  }
+  
+  .typing-timestamp {
+    color: #6b7280;
+  }
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .typing-bubble {
+    padding: 10px 14px;
+    gap: 10px;
+  }
+  
+  .typing-avatar {
+    width: 28px;
+    height: 28px;
+  }
+  
+  .typing-icon {
+    font-size: 14px;
+  }
+  
+  .typing-text {
+    font-size: 13px;
+  }
+}
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .typing-indicator,
+  .typing-bubble,
+  .typing-avatar,
+  .typing-icon,
+  .typing-text,
+  .dot {
+    animation: none;
+  }
+  
+  .typing-indicator.animate {
+    animation: none;
+  }
+} 

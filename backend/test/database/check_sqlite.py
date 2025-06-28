@@ -6,7 +6,7 @@ import sqlite3
 import os
 
 # Database path
-db_path = "data/database.db"
+db_path = "backend/data/database.db"
 
 try:
     # Check if database exists

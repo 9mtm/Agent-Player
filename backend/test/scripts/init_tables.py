@@ -8,7 +8,7 @@ import bcrypt
 from datetime import datetime
 
 # Database path
-db_path = "data/database.db"
+db_path = "backend/data/database.db"
 
 # Create the directory if it doesn't exist
 os.makedirs("data", exist_ok=True)

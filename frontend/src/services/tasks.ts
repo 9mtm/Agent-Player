@@ -46,9 +46,9 @@ export interface Task {
   completed_at?: string;
 
   // Task data
-  task_data?: Record<string, any>;
-  requirements?: Record<string, any>;
-  deliverables?: Record<string, any>;
+  task_data?: Record<string, unknown>;
+  requirements?: Record<string, unknown>;
+  deliverables?: Record<string, unknown>;
 
   // Relationships
   parent_task_id?: number;
@@ -68,14 +68,14 @@ export interface CreateTaskRequest {
   priority?: TaskPriority;
   agent_id?: number;
   board_id?: number;
-  task_metadata?: Record<string, any>;
+  task_metadata?: Record<string, unknown>;
   estimated_duration?: number;
 }
 
 export interface UpdateTaskRequest extends Partial<CreateTaskRequest> {
   status?: TaskStatus;
   progress?: number;
-  execution_details?: Record<string, any>;
+  execution_details?: Record<string, unknown>;
   error_message?: string;
 }
 
@@ -102,7 +102,7 @@ export interface TaskExecution {
   execution_id: string;
   status: TaskStatus;
   progress: number;
-  result?: any;
+  result?: unknown;
   error?: string;
 }
 
@@ -164,7 +164,7 @@ class TasksService {
   }
 
   // Get task execution history
-  async getTaskHistory(id: number): Promise<any[]> {
+  async getTaskHistory(id: number): Promise<unknown[]> {
     const response = await api.get(`/tasks/${id}/history`);
     return response.data;
   }
@@ -187,13 +187,13 @@ class TasksService {
   }
 
   // Task statistics
-  async getTasksStats(): Promise<any> {
+  async getTasksStats(): Promise<unknown> {
     const response = await api.get("/tasks/stats");
     return response.data;
   }
 
   // Export tasks
-  async exportTasks(format: "json" | "csv" = "json"): Promise<any> {
+  async exportTasks(format: "json" | "csv" = "json"): Promise<unknown> {
     const response = await api.get(`/tasks/export?format=${format}`);
     return response.data;
   }
@@ -221,7 +221,7 @@ class TasksService {
   // NEW ENDPOINTS - Updated to match backend API
 
   // Comments
-  async addComment(taskId: number, comment: string): Promise<any> {
+  async addComment(taskId: number, comment: string): Promise<unknown> {
     const response = await api.post(`/tasks/${taskId}/comments`, { comment });
     return response.data;
   }
@@ -229,7 +229,7 @@ class TasksService {
   async getComments(
     taskId: number,
     params?: { skip?: number; limit?: number }
-  ): Promise<any> {
+  ): Promise<unknown> {
     const response = await api.get(`/tasks/${taskId}/comments`, { params });
     return response.data;
   }
@@ -256,7 +256,7 @@ class TasksService {
       description?: string;
       log_date?: string;
     }
-  ): Promise<any> {
+  ): Promise<unknown> {
     const response = await api.post(`/tasks/${taskId}/time-logs`, timeData);
     return response.data;
   }
@@ -264,7 +264,7 @@ class TasksService {
   async getTimeLogs(
     taskId: number,
     params?: { skip?: number; limit?: number }
-  ): Promise<any> {
+  ): Promise<unknown> {
     const response = await api.get(`/tasks/${taskId}/time-logs`, { params });
     return response.data;
   }
@@ -272,8 +272,8 @@ class TasksService {
   // Analytics
   async getAnalytics(
     timeframe?: string,
-    filters?: Record<string, any>
-  ): Promise<any> {
+    filters?: Record<string, unknown>
+  ): Promise<unknown> {
     const params = { timeframe, ...filters };
     const response = await api.get("/tasks/analytics", { params });
     return response.data;
@@ -286,7 +286,7 @@ class TasksService {
     due_date_filter?: "overdue" | "today" | "this_week" | "this_month";
     skip?: number;
     limit?: number;
-  }): Promise<any> {
+  }): Promise<unknown> {
     const response = await api.get("/tasks/my-tasks", { params });
     return response.data;
   }
@@ -310,12 +310,12 @@ class TasksService {
       description?: string;
       category?: string;
     }
-  ): Promise<any> {
+  ): Promise<unknown> {
     const response = await api.post(`/tasks/${taskId}/template`, templateData);
     return response.data;
   }
 
-  async getTemplates(category?: string): Promise<any> {
+  async getTemplates(category?: string): Promise<unknown> {
     const params = category ? { category } : {};
     const response = await api.get("/tasks/templates", { params });
     return response.data;
@@ -338,4 +338,9 @@ class TasksService {
   }
 }
 
-export default new TasksService();
+// Create and export a single instance
+const tasksService = new TasksService();
+export default tasksService;
+
+// Also export the class for type checking if needed
+export { TasksService as TasksServiceClass };

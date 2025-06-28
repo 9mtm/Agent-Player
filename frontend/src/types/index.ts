@@ -4,11 +4,11 @@
 export * from "./license";
 
 // Common API types
-export interface ApiResponse<T = any> {
+export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
-  error?: string;
   message?: string;
+  errors?: string[];
 }
 
 // User types (basic - extend as needed)
@@ -28,15 +28,54 @@ export interface User {
 export interface Agent {
   id: number;
   name: string;
-  description?: string;
-  provider: AIProvider;
-  providerConfig: ProviderConfig;
-  model_provider: string;
-  model_name: string;
+  description: string;
+  agent_type: string;
+  model_provider?: string;
+  model_name?: string;
   is_active: boolean;
+  usage_count?: number;
   created_at: string;
   updated_at?: string;
-  config?: Record<string, any>;
+}
+
+export interface CreateAgentData {
+  name: string;
+  description: string;
+  type: string;
+  llmConfig: Record<string, unknown>;
+  settings: Record<string, unknown>;
+  agent_type: string;
+  configuration: Record<string, unknown>;
+  is_active: boolean;
+}
+
+export interface AgentConfig {
+  model_provider: string;
+  model_name: string;
+  temperature: number;
+  max_tokens: number;
+}
+
+export type AgentStatus = "active" | "inactive" | "error";
+export type AgentType = "main" | "child";
+
+export interface CreateAgentRequest {
+  name: string;
+  description: string;
+  agent_type: string;
+  model_provider: string;
+  model_name: string;
+  temperature?: number;
+  max_tokens?: number;
+}
+
+export interface UpdateAgentRequest extends Partial<CreateAgentRequest> {
+  id: number;
+}
+
+export interface AgentListResponse {
+  agents: Agent[];
+  total: number;
 }
 
 // Chat types
@@ -64,15 +103,24 @@ export interface Message {
 export interface Task {
   id: number;
   title: string;
-  description?: string;
-  status: "pending" | "in_progress" | "completed" | "cancelled";
-  priority: "low" | "medium" | "high" | "urgent";
-  progress: number;
-  assigned_to?: string;
-  due_date?: string;
+  description: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  assigned_to?: number;
   created_at: string;
-  updated_at?: string;
-  tags?: string[];
+  updated_at: string;
+  due_date?: string;
+}
+
+export type TaskStatus = "todo" | "in-progress" | "done";
+export type TaskPriority = "low" | "medium" | "high";
+
+export interface CreateTaskRequest {
+  title: string;
+  description: string;
+  priority: TaskPriority;
+  due_date?: string;
+  assigned_to?: number;
 }
 
 // Board/Workflow types
@@ -80,40 +128,35 @@ export interface BoardNode {
   id: string;
   type: string;
   position: { x: number; y: number };
-  data: Record<string, any>;
+  data: Record<string, unknown>;
 }
 
 export interface BoardEdge {
   id: string;
   source: string;
   target: string;
-  type?: string;
+  type: string;
 }
 
 // Settings types
 export interface UserSettings {
-  theme: "light" | "dark" | "auto";
+  theme: string;
   language: string;
-  notifications: {
-    email: boolean;
-    push: boolean;
-    browser: boolean;
-  };
-  privacy: {
-    profile_visibility: "public" | "private";
-    data_sharing: boolean;
-  };
+  notifications: boolean;
 }
 
 // Generic utility types
-export type LoadingState = "idle" | "loading" | "success" | "error";
+export interface LoadingState {
+  isLoading: boolean;
+  error?: string;
+}
 
 export interface PaginatedResponse<T> {
-  items: T[];
+  data: T[];
   total: number;
   page: number;
-  per_page: number;
-  total_pages: number;
+  pages: number;
+  has_next: boolean;
 }
 
 export type DeepPartial<T> = {

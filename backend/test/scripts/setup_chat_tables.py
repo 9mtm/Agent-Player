@@ -9,6 +9,8 @@ from sqlalchemy.orm import sessionmaker
 from models.database import Base, Conversation, Message
 from config.database import ASYNC_DATABASE_URL
 
+db_path = "backend/data/database.db"
+
 async def setup_chat_tables():
     try:
         # Create async engine

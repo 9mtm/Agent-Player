@@ -11,6 +11,8 @@ from models.database import Base, User
 from core.security import security
 from config.database import ASYNC_DATABASE_URL
 
+db_path = "backend/data/database.db"
+
 async def create_admin_user():
     try:
         # Create async engine

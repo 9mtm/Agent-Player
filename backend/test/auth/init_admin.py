@@ -6,8 +6,8 @@ import bcrypt
 from datetime import datetime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from models.database import Base
-from models.user import User
+from backend.models.database import Base
+from backend.models.user import User
 
 # Database path
 SQLALCHEMY_DATABASE_URL = "sqlite:///backend/data/database.db"
@@ -50,7 +50,6 @@ def create_admin(engine):
             print("\n✅ Admin user already exists:")
             print(f"ID: {existing_admin.id}")
             print(f"Email: {existing_admin.email}")
-            print(f"Role: {existing_admin.role}")
             session.close()
             return
         
@@ -60,7 +59,6 @@ def create_admin(engine):
             username="admin",
             full_name="Admin User",
             password_hash=hash_password_bcrypt("admin123456"),
-            role="admin",
             is_active=True,
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow()
@@ -79,7 +77,6 @@ def create_admin(engine):
             print("\nVerifying user:")
             print(f"ID: {user.id}")
             print(f"Email: {user.email}")
-            print(f"Role: {user.role}")
         
         session.close()
         print("\n✅ Admin user creation completed!")

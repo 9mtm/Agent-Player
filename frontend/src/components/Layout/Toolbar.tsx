@@ -46,14 +46,6 @@ const MOCK_NOTIFICATIONS: Notification[] = [
   }
 ];
 
-const QUICK_TOOLS = [
-  { id: 'new-agent', icon: '🤖', label: 'New Agent', action: () => console.log('New Agent') },
-  { id: 'new-chat', icon: '💬', label: 'New Chat', action: () => console.log('New Chat') },
-  { id: 'new-task', icon: '✅', label: 'New Task', action: () => console.log('New Task') },
-  { id: 'training', icon: '🧪', label: 'Training Lab', action: () => console.log('Training Lab') },
-  { id: 'marketplace', icon: '🛒', label: 'Marketplace', action: () => console.log('Marketplace') }
-];
-
 export const Toolbar: React.FC<ToolbarProps> = ({
   user,
   onToggleSidebar,
@@ -63,10 +55,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const navigate = useNavigate();
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
-  const [isQuickToolsOpen, setIsQuickToolsOpen] = useState(false);
   
   const notificationsRef = useRef<HTMLDivElement>(null);
-  const quickToolsRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
 
   // Close dropdowns when clicking outside
@@ -74,9 +64,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     const handleClickOutside = (event: MouseEvent) => {
       if (notificationsRef.current && !notificationsRef.current.contains(event.target as Node)) {
         setIsNotificationsOpen(false);
-      }
-      if (quickToolsRef.current && !quickToolsRef.current.contains(event.target as Node)) {
-        setIsQuickToolsOpen(false);
       }
       if (profileRef.current && !profileRef.current.contains(event.target as Node)) {
         setIsProfileOpen(false);
@@ -204,71 +191,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
       {/* Right Section - Quick Tools, Notifications & Profile */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-        {/* Quick Tools */}
-        <div ref={quickToolsRef} style={{ position: 'relative' }}>
-          <button
-            onClick={() => setIsQuickToolsOpen(!isQuickToolsOpen)}
-            style={{
-              background: 'none',
-              border: 'none',
-              fontSize: '20px',
-              cursor: 'pointer',
-              padding: '8px',
-              borderRadius: '8px',
-              transition: 'background-color 0.2s'
-            }}
-            onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(0, 0, 0, 0.05)'}
-            onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
-          >
-            ⚡
-          </button>
-
-          {/* Quick Tools Dropdown */}
-          {isQuickToolsOpen && (
-            <div style={{
-              position: 'absolute',
-              top: '100%',
-              right: 0,
-              width: '220px',
-              backgroundColor: 'white',
-              borderRadius: '12px',
-              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
-              padding: '8px',
-              marginTop: '8px'
-            }}>
-              {QUICK_TOOLS.map(tool => (
-                <button
-                  key={tool.id}
-                  onClick={() => {
-                    tool.action();
-                    setIsQuickToolsOpen(false);
-                  }}
-                  style={{
-                    width: '100%',
-                    padding: '10px 16px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px',
-                    background: 'none',
-                    border: 'none',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    fontSize: '14px',
-                    color: '#1F2937',
-                    textAlign: 'left'
-                  }}
-                  onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(0, 0, 0, 0.05)'}
-                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
-                >
-                  <span style={{ fontSize: '18px' }}>{tool.icon}</span>
-                  {tool.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
         {/* Notifications */}
         <div ref={notificationsRef} style={{ position: 'relative' }}>
           <button

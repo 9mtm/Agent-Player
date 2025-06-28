@@ -8,8 +8,8 @@ from datetime import datetime, timedelta
 from core.security import security
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, insert, func, and_
-from models.user import User
-from models.database import Session as UserSession, ActivityLog
+from models import User
+from models import UserSession, ChatSessionHistory
 import logging
 
 # Create logger
@@ -69,8 +69,8 @@ class AuthService:
             access_token = self.security.create_access_token(token_data)
             refresh_token = self.security.create_refresh_token(token_data)
             
-            # Update last login
-            user.updated_at = func.now()
+            # Update last update time
+            user.updated_at = datetime.utcnow()
             await db.commit()
             
             # Log activity
@@ -137,7 +137,7 @@ class AuthService:
                 username=username,
                 full_name=full_name,
                 password_hash=password_hash,
-                role='admin',
+                is_superuser=True,
                 is_active=True
             )
             db.add(new_user)
@@ -248,11 +248,11 @@ class AuthService:
             active_users = await db.scalar(select(func.count()).select_from(User).where(User.is_active == True))
             admin_users = await db.scalar(select(func.count()).select_from(User).where(User.is_superuser == True))
             
-            # Get recent activity
+            # Get recent activity (using ChatSessionHistory as proxy)
             recent_activity = await db.scalar(
                 select(func.count())
-                .select_from(ActivityLog)
-                .where(ActivityLog.created_at > func.datetime('now', '-24 hours'))
+                .select_from(ChatSessionHistory)
+                .where(ChatSessionHistory.timestamp > func.datetime('now', '-24 hours'))
             )
             
             return {
@@ -349,12 +349,13 @@ class AuthService:
             return False
     
     async def _log_activity(self, db: AsyncSession, user_id: int, action: str, details: str):
-        """Log user activity"""
+        """Log user activity using ChatSessionHistory"""
         try:
-            log = ActivityLog(
+            log = ChatSessionHistory(
                 user_id=user_id,
-                action=action,
-                details=details
+                session_id=f"auth_{action}_{datetime.utcnow().timestamp()}",
+                event_type=action,
+                event_data={"details": details, "action": action}
             )
             db.add(log)
             await db.commit()

@@ -11,7 +11,7 @@ import hashlib
 def check_database():
     """Check database content"""
     
-    db_path = os.path.join("data", "dpro_agent.db")
+    db_path = os.path.join("backend", "data", "database.db")
     
     if not os.path.exists(db_path):
         print(f"❌ Database not found at: {db_path}")

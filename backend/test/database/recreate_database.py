@@ -9,6 +9,7 @@ from datetime import datetime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models.database import Base, User
+import sqlite3
 
 # Database path
 db_path = "data/database.db"
@@ -73,4 +74,6 @@ try:
     print("\n✅ Database recreation completed!")
     
 except Exception as e:
-    print(f"❌ Database error: {e}") 
+    print(f"❌ Database error: {e}")
+
+conn = sqlite3.connect("backend/data/database.db") 

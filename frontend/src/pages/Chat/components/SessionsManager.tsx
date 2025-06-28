@@ -12,7 +12,7 @@ interface SessionsManagerProps {
   className?: string;
 }
 
-const SessionsManager: React.FC<SessionsManagerProps> = ({
+export const SessionsManager: React.FC<SessionsManagerProps> = ({
   conversationId,
   agentId,
   onSessionSelected,
@@ -126,7 +126,7 @@ const SessionsManager: React.FC<SessionsManagerProps> = ({
   useEffect(() => {
     loadSessions();
     loadAnalytics();
-  }, [statusFilter]);
+  }, [statusFilter, loadSessions, loadAnalytics]);
 
   // Search on query change (debounced)
   useEffect(() => {
@@ -135,7 +135,7 @@ const SessionsManager: React.FC<SessionsManagerProps> = ({
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, searchSessions]);
 
   return (
     <div className={`sessions-manager ${className}`}>
@@ -308,6 +308,4 @@ const SessionsManager: React.FC<SessionsManagerProps> = ({
       </div>
     </div>
   );
-};
-
-export default SessionsManager; 
+}; 

@@ -54,26 +54,45 @@ interface CreateAgentData {
 }
 
 // Helper function to handle both old and new response formats
-function extractData<T>(response: any): T[] {
+function extractData<T>(response: unknown): T[] {
   // If response has 'success' and 'data' properties (new format)
-  if (response && response.success && response.data) {
-    if (Array.isArray(response.data)) return response.data;
-    if (response.data.agents && Array.isArray(response.data.agents))
-      return response.data.agents;
+  if (
+    response &&
+    typeof response === "object" &&
+    "success" in response &&
+    "data" in response
+  ) {
+    const resp = response as { data: unknown; success: boolean };
+    if (Array.isArray(resp.data)) return resp.data as T[];
+    if (
+      typeof resp.data === "object" &&
+      resp.data !== null &&
+      "agents" in resp.data &&
+      Array.isArray((resp.data as { agents: unknown }).agents)
+    ) {
+      return (resp.data as { agents: T[] }).agents;
+    }
     return [];
   }
 
   // If response has 'data' property (standard format)
   if (response && typeof response === "object" && "data" in response) {
-    if (Array.isArray(response.data)) return response.data;
-    if (response.data.agents && Array.isArray(response.data.agents))
-      return response.data.agents;
+    const resp = response as { data: unknown };
+    if (Array.isArray(resp.data)) return resp.data as T[];
+    if (
+      typeof resp.data === "object" &&
+      resp.data !== null &&
+      "agents" in resp.data &&
+      Array.isArray((resp.data as { agents: unknown }).agents)
+    ) {
+      return (resp.data as { agents: T[] }).agents;
+    }
     return [];
   }
 
   // If response is directly an array (old format)
   if (Array.isArray(response)) {
-    return response;
+    return response as T[];
   }
 
   // Fallback: empty array
@@ -84,13 +103,14 @@ function extractData<T>(response: any): T[] {
 // Basic CRUD Operations - Updated for new API structure
 export const agentsService = {
   // List all agents
-  async getAgents(): Promise<Agent[]> {
+  async getAgents(filters?: { is_active?: boolean }): Promise<Agent[]> {
     try {
-      console.log(
-        "🔗 Loading agents from:",
-        `${api.defaults.baseURL}${AGENTS_ENDPOINTS.list}`
-      );
-      const response = await api.get(AGENTS_ENDPOINTS.list);
+      let url = AGENTS_ENDPOINTS.list;
+      if (filters && typeof filters.is_active !== "undefined") {
+        url += `?is_active=${filters.is_active ? "true" : "false"}`;
+      }
+      console.log("🔗 Loading agents from:", `${api.defaults.baseURL}${url}`);
+      const response = await api.get(url);
 
       console.log("📊 Raw API Response:", response.data);
       const agents = extractData<Agent>(response.data);

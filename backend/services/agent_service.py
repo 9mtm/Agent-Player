@@ -6,7 +6,7 @@ Simplified agent management service using SQLAlchemy
 from typing import Dict, Any, Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, and_, func
-from models.agent import Agent
+from models import Agent
 import requests
 import time
 import asyncio
@@ -94,29 +94,38 @@ class AgentService:
     async def _call_local_model(self, local_config: Dict[str, Any], user_message: str, system_prompt: str = "") -> str:
         """Call local model (Ollama) and get REAL response"""
         try:
+            print(f"🚀 [AGENT SERVICE] _call_local_model called")
+            print(f"🔍 [AGENT SERVICE] local_config: {local_config}")
+            print(f"🔍 [AGENT SERVICE] user_message: {user_message}")
+            print(f"🔍 [AGENT SERVICE] system_prompt: {system_prompt[:100] if system_prompt else 'None'}...")
+            
             # Extract configuration
             host = local_config.get("host", "localhost")
             port = local_config.get("port", 11434)
             endpoint = local_config.get("endpoint", "/v1/chat/completions")
+            
+            print(f"🔍 [AGENT SERVICE] host: {host}, port: {port}, endpoint: {endpoint}")
             
             # Get model name - prioritize local_config, then auto-detect
             model_name = local_config.get("model_name")
             
             # ALWAYS auto-detect available model for safety
             available_model = await self._get_available_ollama_model(host, port)
+            print(f"🔍 [AGENT SERVICE] available_model from Ollama: {available_model}")
             
             # If no model_name in config OR it's a cloud model, use available model
             if not model_name or model_name in ["gpt-4", "gpt-3.5-turbo", "claude-3", "claude-2"]:
-                print(f"DEBUG: Using auto-detected model '{available_model}' instead of '{model_name}'")
+                print(f"🔄 [AGENT SERVICE] Using auto-detected model '{available_model}' instead of '{model_name}'")
                 model_name = available_model
             else:
-                print(f"DEBUG: Using configured model '{model_name}'")
+                print(f"✅ [AGENT SERVICE] Using configured model '{model_name}'")
             
-            print(f"DEBUG: Using model '{model_name}' for Ollama call")
+            print(f"🎯 [AGENT SERVICE] Final model_name: {model_name}")
             
             # Build URL
             base_url = f"http://{host}:{port}"
             url = f"{base_url}{endpoint}"
+            print(f"🌐 [AGENT SERVICE] Request URL: {url}")
             
             # Prepare request based on endpoint type
             if "/v1/chat/completions" in endpoint:
@@ -133,6 +142,7 @@ class AgentService:
                     "temperature": 0.7,
                     "max_tokens": 500
                 }
+                print(f"📤 [AGENT SERVICE] OpenAI format payload: {payload}")
             else:
                 # Ollama native format (/api/generate)
                 prompt = system_prompt + "\n\n" + user_message if system_prompt else user_message
@@ -141,37 +151,243 @@ class AgentService:
                     "prompt": prompt,
                     "stream": False
                 }
+                print(f"📤 [AGENT SERVICE] Ollama native format payload: {payload}")
             
             # Make request
             headers = {"Content-Type": "application/json"}
+            print(f"⏱️ [AGENT SERVICE] Making HTTP request...")
             response = requests.post(url, json=payload, headers=headers, timeout=30)
+            print(f"📥 [AGENT SERVICE] Response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
+                print(f"📥 [AGENT SERVICE] Response data keys: {list(data.keys())}")
                 
                 # Extract response based on format
                 if "/v1/chat/completions" in endpoint:
                     # OpenAI format response
                     if "choices" in data and len(data["choices"]) > 0:
                         agent_response = data["choices"][0]["message"]["content"]
+                        print(f"✅ [AGENT SERVICE] OpenAI format response extracted")
                     else:
                         agent_response = "No response received from local model."
+                        print(f"⚠️ [AGENT SERVICE] No choices in OpenAI response")
                 else:
                     # Ollama native format response
                     agent_response = data.get("response", "No response received from local model.")
+                    print(f"✅ [AGENT SERVICE] Ollama native format response extracted")
                 
                 # Add indicator this is real response
-                return f"🤖 [REAL OLLAMA RESPONSE] {agent_response}"
+                final_response = f"🤖 [REAL OLLAMA RESPONSE] {agent_response}"
+                print(f"🎉 [AGENT SERVICE] Final response: {final_response[:100]}...")
+                return final_response
                 
             else:
-                return f"❌ Local model error (HTTP {response.status_code}): {response.text[:200]}"
+                error_msg = f"❌ Local model error (HTTP {response.status_code}): {response.text[:200]}"
+                print(f"❌ [AGENT SERVICE] {error_msg}")
+                return error_msg
                 
         except requests.exceptions.ConnectionError:
-            return f"❌ Cannot connect to Ollama at {host}:{port}. Is Ollama running? Try: ollama serve"
+            error_msg = f"❌ Cannot connect to Ollama at {host}:{port}. Is Ollama running? Try: ollama serve"
+            print(f"❌ [AGENT SERVICE] Connection error: {error_msg}")
+            return error_msg
         except requests.exceptions.Timeout:
-            return f"⏱️ Ollama request timed out. Model might be loading or server is slow."
+            error_msg = f"⏱️ Ollama request timed out. Model might be loading or server is slow."
+            print(f"❌ [AGENT SERVICE] Timeout error: {error_msg}")
+            return error_msg
         except Exception as e:
-            return f"❌ Local model error: {str(e)}"
+            error_msg = f"❌ Local model error: {str(e)}"
+            print(f"❌ [AGENT SERVICE] General error: {error_msg}")
+            return error_msg
+    
+    async def _call_openai_model(self, agent: Dict[str, Any], user_message: str) -> str:
+        """Call real OpenAI API and get response"""
+        try:
+            print(f"🚀 [AGENT SERVICE] _call_openai_model called")
+            print(f"🔍 [AGENT SERVICE] agent: {agent.get('name')} (ID: {agent.get('id')})")
+            print(f"🔍 [AGENT SERVICE] user_message: {user_message}")
+            
+            api_key = agent.get("api_key")
+            model_name = agent.get("model_name", "gpt-3.5-turbo")
+            system_prompt = agent.get("system_prompt", "")
+            temperature = agent.get("temperature", 0.7)
+            max_tokens = agent.get("max_tokens", 500)
+            
+            print(f"🔍 [AGENT SERVICE] model_name: {model_name}")
+            print(f"🔍 [AGENT SERVICE] temperature: {temperature}")
+            print(f"🔍 [AGENT SERVICE] max_tokens: {max_tokens}")
+            print(f"🔍 [AGENT SERVICE] api_key: {api_key[:20] if api_key else 'None'}...")
+            
+            if not api_key:
+                return "❌ No OpenAI API key provided. Please add your API key in agent settings."
+            
+            # Prepare messages
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": user_message})
+            
+            # Prepare request
+            url = "https://api.openai.com/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": model_name,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": False
+            }
+            
+            print(f"📤 [AGENT SERVICE] OpenAI request URL: {url}")
+            print(f"📤 [AGENT SERVICE] OpenAI payload: {payload}")
+            
+            # Make API call
+            print(f"⏱️ [AGENT SERVICE] Making OpenAI API request...")
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            print(f"📥 [AGENT SERVICE] OpenAI response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                print(f"📥 [AGENT SERVICE] OpenAI response data keys: {list(data.keys())}")
+                
+                if "choices" in data and len(data["choices"]) > 0:
+                    agent_response = data["choices"][0]["message"]["content"]
+                    tokens_used = data.get("usage", {}).get("total_tokens", 0)
+                    print(f"✅ [AGENT SERVICE] OpenAI response received, tokens: {tokens_used}")
+                    
+                    # Add indicator this is real response
+                    final_response = f"🤖 [REAL OPENAI RESPONSE] {agent_response}"
+                    print(f"🎉 [AGENT SERVICE] Final OpenAI response: {final_response[:100]}...")
+                    return final_response
+                else:
+                    error_msg = "❌ No response received from OpenAI"
+                    print(f"⚠️ [AGENT SERVICE] {error_msg}")
+                    return error_msg
+            elif response.status_code == 401:
+                error_msg = "❌ Invalid OpenAI API key. Please check your API key."
+                print(f"❌ [AGENT SERVICE] {error_msg}")
+                return error_msg
+            elif response.status_code == 429:
+                error_msg = "❌ OpenAI API rate limit exceeded. Please try again later."
+                print(f"❌ [AGENT SERVICE] {error_msg}")
+                return error_msg
+            else:
+                error_msg = f"❌ OpenAI API error (HTTP {response.status_code}): {response.text[:200]}"
+                print(f"❌ [AGENT SERVICE] {error_msg}")
+                return error_msg
+                
+        except requests.exceptions.ConnectionError:
+            error_msg = "❌ Cannot connect to OpenAI API. Check your internet connection."
+            print(f"❌ [AGENT SERVICE] Connection error: {error_msg}")
+            return error_msg
+        except requests.exceptions.Timeout:
+            error_msg = "⏱️ OpenAI API request timed out. Please try again."
+            print(f"❌ [AGENT SERVICE] Timeout error: {error_msg}")
+            return error_msg
+        except Exception as e:
+            error_msg = f"❌ OpenAI API error: {str(e)}"
+            print(f"❌ [AGENT SERVICE] General error: {error_msg}")
+            return error_msg
+    
+    async def _call_anthropic_model(self, agent: Dict[str, Any], user_message: str) -> str:
+        """Call real Anthropic Claude API and get response"""
+        try:
+            print(f"🚀 [AGENT SERVICE] _call_anthropic_model called")
+            print(f"🔍 [AGENT SERVICE] agent: {agent.get('name')} (ID: {agent.get('id')})")
+            print(f"🔍 [AGENT SERVICE] user_message: {user_message}")
+            
+            api_key = agent.get("api_key")
+            model_name = agent.get("model_name", "claude-3-sonnet-20240229")
+            system_prompt = agent.get("system_prompt", "")
+            temperature = agent.get("temperature", 0.7)
+            max_tokens = agent.get("max_tokens", 500)
+            
+            print(f"🔍 [AGENT SERVICE] model_name: {model_name}")
+            print(f"🔍 [AGENT SERVICE] temperature: {temperature}")
+            print(f"🔍 [AGENT SERVICE] max_tokens: {max_tokens}")
+            print(f"🔍 [AGENT SERVICE] api_key: {api_key[:20] if api_key else 'None'}...")
+            
+            if not api_key:
+                return "❌ No Anthropic API key provided. Please add your API key in agent settings."
+            
+            # Prepare request
+            url = "https://api.anthropic.com/v1/messages"
+            headers = {
+                "x-api-key": api_key,
+                "Content-Type": "application/json",
+                "anthropic-version": "2023-06-01"
+            }
+            
+            payload = {
+                "model": model_name,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": user_message
+                    }
+                ]
+            }
+            
+            # Add system prompt if provided
+            if system_prompt:
+                payload["system"] = system_prompt
+            
+            print(f"📤 [AGENT SERVICE] Anthropic request URL: {url}")
+            print(f"📤 [AGENT SERVICE] Anthropic payload: {payload}")
+            
+            # Make API call
+            print(f"⏱️ [AGENT SERVICE] Making Anthropic API request...")
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            print(f"📥 [AGENT SERVICE] Anthropic response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                print(f"📥 [AGENT SERVICE] Anthropic response data keys: {list(data.keys())}")
+                
+                if "content" in data and len(data["content"]) > 0:
+                    agent_response = data["content"][0]["text"]
+                    tokens_used = data.get("usage", {}).get("output_tokens", 0)
+                    print(f"✅ [AGENT SERVICE] Anthropic response received, tokens: {tokens_used}")
+                    
+                    # Add indicator this is real response
+                    final_response = f"🤖 [REAL CLAUDE RESPONSE] {agent_response}"
+                    print(f"🎉 [AGENT SERVICE] Final Anthropic response: {final_response[:100]}...")
+                    return final_response
+                else:
+                    error_msg = "❌ No response received from Anthropic"
+                    print(f"⚠️ [AGENT SERVICE] {error_msg}")
+                    return error_msg
+            elif response.status_code == 401:
+                error_msg = "❌ Invalid Anthropic API key. Please check your API key."
+                print(f"❌ [AGENT SERVICE] {error_msg}")
+                return error_msg
+            elif response.status_code == 429:
+                error_msg = "❌ Anthropic API rate limit exceeded. Please try again later."
+                print(f"❌ [AGENT SERVICE] {error_msg}")
+                return error_msg
+            else:
+                error_msg = f"❌ Anthropic API error (HTTP {response.status_code}): {response.text[:200]}"
+                print(f"❌ [AGENT SERVICE] {error_msg}")
+                return error_msg
+                
+        except requests.exceptions.ConnectionError:
+            error_msg = "❌ Cannot connect to Anthropic API. Check your internet connection."
+            print(f"❌ [AGENT SERVICE] Connection error: {error_msg}")
+            return error_msg
+        except requests.exceptions.Timeout:
+            error_msg = "⏱️ Anthropic API request timed out. Please try again."
+            print(f"❌ [AGENT SERVICE] Timeout error: {error_msg}")
+            return error_msg
+        except Exception as e:
+            error_msg = f"❌ Anthropic API error: {str(e)}"
+            print(f"❌ [AGENT SERVICE] General error: {error_msg}")
+            return error_msg
     
     async def create_agent(self, db: AsyncSession, name: str, description: str, agent_type: str,
                     model_provider: str, model_name: str, system_prompt: str,
@@ -233,7 +449,7 @@ class AgentService:
                 # If local_config is provided, ensure is_local_model is True
                 if 'is_local_model' not in updates:
                     updates['is_local_model'] = True
-                    
+                
             for key, value in updates.items():
                 if hasattr(agent, key):
                     setattr(agent, key, value)
@@ -287,7 +503,7 @@ class AgentService:
         # Calculate response time
         response_time = round(time.time() - start_time, 3)
         
-        # Generate agent response - REAL integration for local models
+        # Generate agent response - REAL integration for all models
         is_local = agent.get("is_local_model", False)
         local_config = agent.get("local_config", {})
         
@@ -295,17 +511,16 @@ class AgentService:
             # REAL Local model integration (Ollama, etc.)
             agent_response = await self._call_local_model(local_config, test_message, agent.get("system_prompt", ""))
         else:
-            # Cloud-based model responses (Mock for now)
-            mock_responses = {
-                "openai": "Hello! I'm an AI assistant powered by OpenAI. I'm here to help you with any questions or tasks you might have. How can I assist you today?",
-                "anthropic": "Hi there! I'm Claude, an AI assistant created by Anthropic. I'm ready to help you with a wide variety of tasks. What can I do for you?",
-                "google": "Greetings! I'm a Google AI assistant. I'm designed to be helpful, harmless, and honest. How may I assist you today?",
-                "default": "Hello! I'm an AI assistant. I'm here to help you with your questions and tasks. How can I assist you today?"
-            }
+            # REAL OpenAI/Cloud model integration
+            model_provider = agent.get("model_provider", "openai")
             
-            # Get appropriate response based on model provider
-            model_provider = agent.get("model_provider", "default")
-            agent_response = mock_responses.get(model_provider, mock_responses["default"])
+            if model_provider == "openai":
+                agent_response = await self._call_openai_model(agent, test_message)
+            elif model_provider == "anthropic":
+                agent_response = await self._call_anthropic_model(agent, test_message)
+            else:
+                # Fallback for unsupported providers
+                agent_response = f"🚧 Provider '{model_provider}' integration coming soon! For now using mock response: I'm an AI assistant ready to help!"
         
         # Return detailed test results
         return {

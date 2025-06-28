@@ -107,7 +107,7 @@ type AgentRequest = {
     endpoint: string;
     model_name: string;
     additional_endpoints?: {
-      name: string;
+  name: string;
       host: string;
       port: number;
       endpoint: string;

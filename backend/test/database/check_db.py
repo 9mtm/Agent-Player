@@ -3,7 +3,7 @@ import sqlite3
 def check_db():
     try:
         # Connect to database
-        conn = sqlite3.connect("dpro_agent.db")
+        conn = sqlite3.connect("backend/data/database.db")
         cursor = conn.cursor()
         
         # Get table schema

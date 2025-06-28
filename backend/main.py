@@ -6,6 +6,7 @@ Single FastAPI application with organized structure
 import os
 import sys
 from pathlib import Path
+import asyncio
 
 # Add the backend directory to PYTHONPATH
 backend_dir = Path(__file__).resolve().parent
@@ -16,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Import configuration
 from config.settings import settings
@@ -33,6 +34,10 @@ from api.licensing.endpoints import router as licensing_router
 from api.training_lab.endpoints import router as training_lab_router
 from api.marketplace.endpoints import router as marketplace_router
 from api.system.endpoints import router as system_router
+from api.workflows.endpoints import router as workflows_router
+
+# Import SystemMonitorService
+from backend.services.system_monitor_service import SystemMonitorService
 
 # Configure logging
 logging.basicConfig(
@@ -57,6 +62,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize SystemMonitorService
+system_monitor = SystemMonitorService()
+
+def seconds_until_next_day():
+    now = datetime.now()
+    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return (tomorrow - now).total_seconds() + 1
+
+async def collect_metrics_daily():
+    while True:
+        now = datetime.now()
+        last_metrics = system_monitor.get_last_metrics()
+        last_date = None
+        if last_metrics and "timestamp" in last_metrics:
+            try:
+                last_date = datetime.fromisoformat(last_metrics["timestamp"])
+            except Exception:
+                last_date = None
+        # Collect if not collected today
+        if not last_date or last_date.date() < now.date():
+            logger.info("[SystemMonitor] Collecting system metrics for today...")
+            system_monitor.get_system_metrics()
+        # Sleep until next day
+        await asyncio.sleep(seconds_until_next_day())
+
 # Initialize database on startup
 @app.on_event("startup")
 async def startup_event():
@@ -65,12 +95,13 @@ async def startup_event():
         # Initialize database
         init_db()
         logger.info("Database initialized successfully")
-        
         # Log startup info
         logger.info(f"{settings.APP_NAME} v{settings.VERSION} starting up")
         logger.info(f"Server: {settings.HOST}:{settings.PORT}")
         logger.info(f"Debug mode: {settings.DEBUG}")
-        
+        # Collect system metrics once at startup
+        logger.info("[SystemMonitor] Collecting system metrics at startup...")
+        system_monitor.get_system_metrics()
     except Exception as e:
         logger.error(f"Startup error: {e}")
         raise
@@ -106,6 +137,7 @@ app.include_router(licensing_router, prefix="/licensing", tags=["Licensing"])
 app.include_router(training_lab_router, prefix="/training-lab", tags=["Training Lab"])
 app.include_router(marketplace_router, prefix="/marketplace", tags=["Marketplace"])
 app.include_router(system_router, prefix="/api/system", tags=["System"])
+app.include_router(workflows_router, prefix="/workflows", tags=["Workflows & Boards"])
 
 # Root endpoint
 @app.get("/")

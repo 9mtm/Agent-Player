@@ -3,16 +3,7 @@
  */
 
 import { useState, useEffect } from "react";
-import { authService } from "../services/auth";
-
-interface User {
-  id: string;
-  email: string;
-  username: string;
-  full_name: string;
-  is_active: boolean;
-  is_superuser: boolean;
-}
+import { authService, type User } from "../services/auth";
 
 interface UseAuthReturn {
   user: User | null;

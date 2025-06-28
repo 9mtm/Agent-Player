@@ -63,26 +63,17 @@ const getBaseUrl = () => {
     return `${protocol}//${hostname}`;
 };
 
-export const SystemMonitor: React.FC<SystemMonitorProps> = ({
+export const SystemMonitor: React.FC<SystemMonitorProps & { enabled?: boolean }> = ({
     className,
-    showLoadingState = true
+    showLoadingState = true,
+    enabled = false
 }) => {
-    const { data, error, loading, lastUpdated, isStale, refetch, history } = useSystemInfo({
-        enabled: true
+    const { data, error, loading, lastUpdated, isStale, refetch, history, collectNow } = useSystemInfo({
+        enabled
     });
 
     const baseUrl = useMemo(() => getBaseUrl(), []);
     const { token } = useToken();
-
-    const iconStyle = {
-        fontSize: token.fontSizeLG,
-        color: token.colorPrimary
-    };
-
-    const smallIconStyle = {
-        fontSize: token.fontSizeSM,
-        color: token.colorTextSecondary
-    };
 
     if (error) {
         return (
@@ -187,6 +178,15 @@ export const SystemMonitor: React.FC<SystemMonitorProps> = ({
                         size="large"
                     >
                         Refresh Metrics
+                    </Button>
+                    <Button
+                        icon={<ReloadOutlined />}
+                        onClick={collectNow}
+                        loading={loading}
+                        size="large"
+                        type="dashed"
+                    >
+                        Collect Now
                     </Button>
                 </div>
             </div>

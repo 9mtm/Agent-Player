@@ -6,10 +6,10 @@ Shows all users and their details
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from models import Base
-from models.user import User
+from models import User
 
 # Database path
-db_path = "data/database.db"
+db_path = "backend/data/database.db"
 
 try:
     # Create database URL

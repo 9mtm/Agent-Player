@@ -13,7 +13,7 @@ def create_complete_database():
     """Create complete database with all tables and sample data"""
     
     # Database path
-    db_path = "data/dpro_agent.db"
+    db_path = "backend/data/database.db"
     
     # Create data directory if it doesn't exist
     os.makedirs("data", exist_ok=True)

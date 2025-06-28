@@ -27,7 +27,7 @@ def hash_password_bcrypt(password: str) -> str:
 
 try:
     # Connect to database
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect("backend/data/database.db")
     cursor = conn.cursor()
     
     # Create users table

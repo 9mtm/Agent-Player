@@ -18,6 +18,8 @@ import SettingsPageNew from './pages/Settings/SettingsPageNew';
 import BoardPage from './pages/Board/BoardPage';
 import TrainingLabPage from './pages/TrainingLab/TrainingLabPage';
 import { Sidebar } from './components/Layout/Sidebar';
+import { Toolbar } from './components/Layout/Toolbar';
+import { authService } from './services/auth';
 
 // Import global styles
 import './App.css';
@@ -146,6 +148,7 @@ const handleInvalidRoute = () => {
 function DashboardLayout() {
   const location = useLocation();
   const isBoardPage = location.pathname.includes('/board');
+  const user = authService.getStoredUser();
   
   console.log('📍 Current location:', location.pathname);
   console.log('🎯 Is board page:', isBoardPage);
@@ -154,29 +157,42 @@ function DashboardLayout() {
     <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: '#f8f8f8' }}>
       {!isBoardPage && <Sidebar />}
       
-      <div style={{ 
-        flex: 1, 
-        overflow: 'hidden',
-        width: isBoardPage ? '100%' : 'auto',
-        height: isBoardPage ? '100vh' : 'auto'
-      }}>
-        <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="agents" element={<AgentPage />} />
-          <Route path="child-agents" element={<ChildAgentPage />} />
-          <Route path="chat" element={<ChatPage />} />
-          <Route path="chat/:chatId" element={<ChatPage />} />
-          <Route path="form-builder" element={<FormBuilderPage />} />
-          <Route path="tasks" element={<TasksPage />} />
-          <Route path="training-lab" element={<TrainingLabPage />} />
-          <Route path="marketplace" element={<MarketplacePage />} />
-          <Route path="settings" element={<SettingsPageNew />} />
-          {/* Board routes with agent IDs */}
-          <Route path="board/child-agent/:agentId" element={<BoardPage />} />
-          <Route path="board/agent/:agentId" element={<BoardPage />} />
-          <Route path="board" element={<BoardPage />} />
-          <Route path="*" element={handleInvalidRoute()} />
-        </Routes>
+      <div
+        style={{
+          flex: 1,
+          overflow: 'hidden',
+          width: isBoardPage ? '100%' : 'auto',
+          height: isBoardPage ? '100vh' : 'auto',
+          position: 'relative',
+        }}
+      >
+        {!isBoardPage && (
+          <Toolbar
+            user={user}
+            onToggleSidebar={() => {}}
+            isChildAgentActive={false}
+            unreadNotifications={0}
+          />
+        )}
+        <div style={{ paddingTop: !isBoardPage ? 60 : 0 }}>
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="agents" element={<AgentPage />} />
+            <Route path="child-agents" element={<ChildAgentPage />} />
+            <Route path="chat" element={<ChatPage />} />
+            <Route path="chat/:chatId" element={<ChatPage />} />
+            <Route path="form-builder" element={<FormBuilderPage />} />
+            <Route path="tasks" element={<TasksPage />} />
+            <Route path="training-lab" element={<TrainingLabPage />} />
+            <Route path="marketplace" element={<MarketplacePage />} />
+            <Route path="settings" element={<SettingsPageNew />} />
+            {/* Board routes with agent IDs */}
+            <Route path="board/child-agent/:agentId" element={<BoardPage />} />
+            <Route path="board/agent/:agentId" element={<BoardPage />} />
+            <Route path="board" element={<BoardPage />} />
+            <Route path="*" element={handleInvalidRoute()} />
+          </Routes>
+        </div>
       </div>
     </div>
   );

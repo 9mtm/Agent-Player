@@ -9,7 +9,7 @@ from core.security import security
 from config.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from models.user import User
+from models import User
 from datetime import datetime, timedelta
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
@@ -19,7 +19,7 @@ from config.settings import settings
 async def get_current_user(
     authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
-) -> Dict[str, Any]:
+) -> User:
     """Get current authenticated user from JWT token"""
     print(f"🔐 AUTH DEBUG: Starting authentication check")
     print(f"🔐 AUTH DEBUG: Authorization header: {authorization[:50] if authorization else 'None'}...")
@@ -94,13 +94,13 @@ async def get_current_user(
         )
     
     print(f"🔐 AUTH DEBUG: Authentication successful for user: {user_data.get('email')}")
-    return user_data
+    return user
 
 async def get_current_admin(
-    current_user: Dict[str, Any] = Depends(get_current_user)
-) -> Dict[str, Any]:
+    current_user: User = Depends(get_current_user)
+) -> User:
     """Ensure current user is admin"""
-    if current_user.get("role") != "admin":
+    if not current_user.is_superuser:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required"
@@ -110,7 +110,7 @@ async def get_current_admin(
 async def get_optional_user(
     authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
-) -> Optional[Dict[str, Any]]:
+) -> Optional[User]:
     """Get current user if token is provided (optional authentication)"""
     if not authorization:
         return None

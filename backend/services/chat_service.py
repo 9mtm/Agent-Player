@@ -11,24 +11,86 @@ from fastapi import HTTPException
 import uuid
 from datetime import datetime
 import logging
+from services.agent_service import AgentService
 
 class ChatService:
     """Chat management service"""
     
+    def __init__(self):
+        self.agent_service = AgentService()
+    
     async def get_user_conversations(
-        self, db: AsyncSession, user_id: int, limit: int = 20, offset: int = 0
-    ) -> List[Dict[str, Any]]:
-        """Get user conversations"""
-        query = (
-            select(Conversation)
-            .where(and_(Conversation.user_id == user_id, Conversation.is_active == True))
-            .order_by(desc(Conversation.updated_at))
-            .offset(offset)
-            .limit(limit)
-        )
-        result = await db.execute(query)
-        conversations = result.scalars().all()
-        return [self._conversation_to_dict(conv) for conv in conversations]
+        self, db: AsyncSession, user_id: int, skip: int = 0, limit: int = 20
+    ) -> Dict[str, Any]:
+        """Get user conversations with pagination"""
+        try:
+            print(f"🔍 [CHAT SERVICE] get_user_conversations called")
+            print(f"🔍 [CHAT SERVICE] user_id: {user_id}")
+            print(f"🔍 [CHAT SERVICE] skip: {skip}, limit: {limit}")
+            
+            # Query conversations for the user
+            query = select(Conversation).where(
+                Conversation.user_id == user_id,
+                Conversation.is_active == True
+            ).order_by(Conversation.updated_at.desc()).offset(skip).limit(limit)
+            
+            print(f"🔍 [CHAT SERVICE] Query: {query}")
+            
+            result = await db.execute(query)
+            conversations = result.scalars().all()
+            
+            print(f"🔍 [CHAT SERVICE] Raw conversations from DB: {len(conversations)}")
+            for conv in conversations:
+                print(f"🔍 [CHAT SERVICE] Conv: {conv.id}, Title: {conv.title}, User: {conv.user_id}")
+            
+            # Count total conversations
+            count_query = select(func.count(Conversation.id)).where(
+                Conversation.user_id == user_id,
+                Conversation.is_active == True
+            )
+            count_result = await db.execute(count_query)
+            total = count_result.scalar()
+            
+            print(f"🔍 [CHAT SERVICE] Total conversations count: {total}")
+            
+            # Format conversations
+            formatted_conversations = []
+            for conv in conversations:
+                formatted_conv = {
+                    "id": conv.id,
+                    "title": conv.title or "New Chat",
+                    "user_id": conv.user_id,
+                    "agent_id": conv.agent_id,
+                    "is_active": conv.is_active,
+                    "total_messages": conv.total_messages,
+                    "created_at": conv.created_at.isoformat() if conv.created_at else None,
+                    "updated_at": conv.updated_at.isoformat() if conv.updated_at else None,
+                }
+                formatted_conversations.append(formatted_conv)
+                print(f"🔍 [CHAT SERVICE] Formatted conv: {formatted_conv}")
+            
+            result_data = {
+                "conversations": formatted_conversations,
+                "total": total,
+                "page": (skip // limit) + 1,
+                "pages": ((total - 1) // limit) + 1 if total > 0 else 0,
+                "has_next": skip + limit < total
+            }
+            
+            print(f"🔍 [CHAT SERVICE] Final result: {result_data}")
+            return result_data
+            
+        except Exception as e:
+            print(f"❌ [CHAT SERVICE] Error in get_user_conversations: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "conversations": [],
+                "total": 0,
+                "page": 1,
+                "pages": 0,
+                "has_next": False
+            }
     
     async def get_user_conversations_count(self, db: AsyncSession, user_id: int) -> int:
         """Get total count of user conversations"""
@@ -42,7 +104,11 @@ class ChatService:
         self, db: AsyncSession, title: str, user_id: int, agent_id: Optional[int] = None
     ) -> str:
         """Create new conversation"""
+        print(f"🆕 [CHAT SERVICE] Creating conversation: title='{title}', user_id={user_id}, agent_id={agent_id}")
+        
         conversation_id = str(uuid.uuid4())
+        print(f"🆕 [CHAT SERVICE] Generated UUID: {conversation_id}")
+        
         conversation = Conversation(
             id=conversation_id,
             title=title,
@@ -50,9 +116,27 @@ class ChatService:
             agent_id=agent_id,
             is_active=True
         )
+        print(f"🆕 [CHAT SERVICE] Created Conversation object: {conversation}")
+        
         db.add(conversation)
+        print(f"🆕 [CHAT SERVICE] Added to session")
+        
         await db.commit()
+        print(f"🆕 [CHAT SERVICE] Committed to database")
+        
         await db.refresh(conversation)
+        print(f"🆕 [CHAT SERVICE] Refreshed conversation")
+        print(f"🆕 [CHAT SERVICE] Final conversation: id={conversation.id}, title={conversation.title}, user_id={conversation.user_id}, is_active={conversation.is_active}")
+        
+        # VERIFICATION: Check if conversation is immediately accessible
+        verification_query = select(Conversation).where(Conversation.id == conversation_id)
+        verification_result = await db.execute(verification_query)
+        verification_conv = verification_result.scalar_one_or_none()
+        if verification_conv:
+            print(f"✅ [CHAT SERVICE] VERIFICATION PASSED: Conversation found in DB immediately after creation")
+        else:
+            print(f"❌ [CHAT SERVICE] VERIFICATION FAILED: Conversation NOT found in DB after creation!")
+        
         return conversation_id
     
     async def get_conversation_by_id(
@@ -94,13 +178,17 @@ class ChatService:
     async def delete_conversation(self, db: AsyncSession, conversation_id: str) -> bool:
         """Delete conversation (soft delete)"""
         try:
+            print(f"🗑️ [CHAT SERVICE] Deleting conversation: {conversation_id}")
             query = update(Conversation).where(
                 and_(Conversation.id == conversation_id, Conversation.is_active == True)
-            ).values(is_active=False, deleted_at=func.now())
+            ).values(is_active=False)
             result = await db.execute(query)
             await db.commit()
-            return result.rowcount > 0
-        except Exception:
+            rows_affected = result.rowcount
+            print(f"🗑️ [CHAT SERVICE] Delete result: {rows_affected} rows affected")
+            return rows_affected > 0
+        except Exception as e:
+            print(f"❌ [CHAT SERVICE] Delete error: {e}")
             await db.rollback()
             return False
     
@@ -108,6 +196,10 @@ class ChatService:
         self, db: AsyncSession, conversation_id: str, limit: int = 50, offset: int = 0
     ) -> List[Dict[str, Any]]:
         """Get messages for a conversation"""
+        print(f"🔍 [CHAT SERVICE] get_conversation_messages called")
+        print(f"🔍 [CHAT SERVICE] conversation_id: {conversation_id}")
+        print(f"🔍 [CHAT SERVICE] limit: {limit}, offset: {offset}")
+        
         query = (
             select(Message)
             .where(and_(
@@ -118,9 +210,20 @@ class ChatService:
             .offset(offset)
             .limit(limit)
         )
+        
+        print(f"🔍 [CHAT SERVICE] Query: {query}")
+        
         result = await db.execute(query)
         messages = result.scalars().all()
-        return [self._message_to_dict(msg) for msg in messages]
+        
+        print(f"🔍 [CHAT SERVICE] Raw messages from DB: {len(messages)}")
+        for msg in messages:
+            print(f"🔍 [CHAT SERVICE] Message: ID={msg.id}, Content={msg.content[:50]}..., Sender={msg.sender_type}, Active={msg.is_active}")
+        
+        formatted_messages = [self._message_to_dict(msg) for msg in messages]
+        print(f"🔍 [CHAT SERVICE] Formatted messages: {len(formatted_messages)}")
+        
+        return formatted_messages
     
     async def get_conversation_messages_count(
         self, db: AsyncSession, conversation_id: str
@@ -136,9 +239,15 @@ class ChatService:
         self, db: AsyncSession, conversation_id: str, content: str,
         sender_type: str = "user", agent_id: Optional[int] = None
     ) -> Dict[str, Any]:
-        """Add message to conversation"""
+        """Add message to conversation and return user and AI response objects"""
         try:
-            # Create message
+            print(f"🔍 [CHAT SERVICE] Starting add_message_to_conversation")
+            print(f"🔍 [CHAT SERVICE] conversation_id: {conversation_id}")
+            print(f"🔍 [CHAT SERVICE] content: {content}")
+            print(f"🔍 [CHAT SERVICE] sender_type: {sender_type}")
+            print(f"🔍 [CHAT SERVICE] agent_id: {agent_id}")
+            
+            # Create user message
             message = Message(
                 conversation_id=conversation_id,
                 content=content,
@@ -147,22 +256,96 @@ class ChatService:
                 is_active=True
             )
             db.add(message)
-            
             # Update conversation
             query = select(Conversation).where(Conversation.id == conversation_id)
             result = await db.execute(query)
             conversation = result.scalar_one_or_none()
-            
             if conversation:
                 conversation.total_messages += 1
                 conversation.updated_at = func.now()
-            
             await db.commit()
             await db.refresh(message)
+
+            # Build user message dict
+            user_message = self._message_to_dict(message)
+            print(f"✅ [CHAT SERVICE] User message created: {user_message['id']}")
+
+            # === FIXED: Get agent info and generate REAL AI response ===
+            ai_content = "This is a mock AI response."
+            print(f"🔍 [CHAT SERVICE] Getting conversation agent_id: {conversation.agent_id if conversation else 'None'}")
             
-            return {"message_id": message.id, "status": "success"}
+            if conversation and conversation.agent_id:
+                print(f"🔍 [CHAT SERVICE] Loading agent with ID: {conversation.agent_id}")
+                agent = await self.agent_service.get_agent_by_id(db, conversation.agent_id)
+                print(f"🔍 [CHAT SERVICE] Agent loaded: {agent['name'] if agent else 'None'}")
+                
+                if agent:
+                    is_local = agent.get("is_local_model", False)
+                    print(f"🔍 [CHAT SERVICE] Agent is_local_model: {is_local}")
+                    print(f"🔍 [CHAT SERVICE] Agent model_provider: {agent.get('model_provider')}")
+                    
+                    if is_local:
+                        print(f"🚀 [CHAT SERVICE] Calling REAL local model...")
+                        local_config = agent.get("local_config", {})
+                        system_prompt = agent.get("system_prompt", "")
+                        print(f"🔍 [CHAT SERVICE] Local config: {local_config}")
+                        print(f"🔍 [CHAT SERVICE] System prompt: {system_prompt[:100]}...")
+                        
+                        # Use the REAL local model call (same as test_agent)
+                        ai_content = await self.agent_service._call_local_model(
+                            local_config,
+                            content,
+                            system_prompt
+                        )
+                        print(f"✅ [CHAT SERVICE] REAL AI response received: {ai_content[:100]}...")
+                    else:
+                        print(f"🚀 [CHAT SERVICE] Calling REAL cloud model...")
+                        # Use REAL cloud model integration
+                        model_provider = agent.get("model_provider", "openai")
+                        
+                        if model_provider == "openai":
+                            print(f"🌐 [CHAT SERVICE] Calling OpenAI API...")
+                            ai_content = await self.agent_service._call_openai_model(agent, content)
+                        elif model_provider == "anthropic":
+                            print(f"🌐 [CHAT SERVICE] Calling Anthropic API...")
+                            ai_content = await self.agent_service._call_anthropic_model(agent, content)
+                        else:
+                            print(f"🔄 [CHAT SERVICE] Fallback for unsupported provider: {model_provider}")
+                            ai_content = f"🚧 Provider '{model_provider}' integration coming soon! For now using mock response: I'm an AI assistant ready to help!"
+                        
+                        print(f"✅ [CHAT SERVICE] REAL cloud AI response received: {ai_content[:100]}...")
+                else:
+                    print(f"❌ [CHAT SERVICE] Agent not found!")
+            else:
+                print(f"❌ [CHAT SERVICE] No conversation or agent_id found!")
+
+            # Save AI message
+            print(f"💾 [CHAT SERVICE] Saving AI message...")
+            ai_message = Message(
+                conversation_id=conversation_id,
+                content=ai_content,
+                sender_type="agent",
+                agent_id=agent_id,
+                is_active=True
+            )
+            db.add(ai_message)
+            if conversation:
+                conversation.total_messages += 1
+                conversation.updated_at = func.now()
+            await db.commit()
+            await db.refresh(ai_message)
+            ai_response = self._message_to_dict(ai_message)
+            print(f"✅ [CHAT SERVICE] AI message saved: {ai_response['id']}")
+
+            result = {
+                "user_message": user_message,
+                "ai_response": ai_response
+            }
+            print(f"🎉 [CHAT SERVICE] Complete response ready!")
+            return result
             
         except Exception as e:
+            print(f"❌ [CHAT SERVICE] ERROR: {str(e)}")
             await db.rollback()
             raise HTTPException(status_code=500, detail=str(e))
     
@@ -319,4 +502,63 @@ class ChatService:
             "extra_data": message.extra_data,
             "is_active": message.is_active,
             "created_at": message.created_at
-        } 
+        }
+
+    async def cleanup_all_user_chat_data(self, db: AsyncSession, user_id: int) -> Dict[str, int]:
+        """🧹 DEVELOPMENT ONLY: Delete ALL chat data for user (conversations + messages)"""
+        try:
+            print(f"🧹 Starting chat cleanup for user {user_id}...")
+            
+            # Get count before deletion
+            conversations_count = await db.execute(
+                select(func.count(Conversation.id)).where(
+                    Conversation.user_id == user_id,
+                    Conversation.is_active == True
+                )
+            )
+            total_conversations = conversations_count.scalar()
+            
+            messages_count = await db.execute(
+                select(func.count(Message.id)).join(Conversation).where(
+                    Conversation.user_id == user_id,
+                    Conversation.is_active == True
+                )
+            )
+            total_messages = messages_count.scalar()
+            
+            print(f"📊 Found {total_conversations} conversations and {total_messages} messages to delete")
+            
+            # Delete all messages first (foreign key constraint)
+            deleted_messages = await db.execute(
+                update(Message).where(
+                    Message.conversation_id.in_(
+                        select(Conversation.id).where(
+                            Conversation.user_id == user_id,
+                            Conversation.is_active == True
+                        )
+                    )
+                ).values(is_active=False)
+            )
+            
+            # Delete all conversations (soft delete)
+            deleted_conversations = await db.execute(
+                update(Conversation).where(
+                    Conversation.user_id == user_id,
+                    Conversation.is_active == True
+                ).values(is_active=False)
+            )
+            
+            await db.commit()
+            
+            result = {
+                "conversations_deleted": deleted_conversations.rowcount,
+                "messages_deleted": deleted_messages.rowcount
+            }
+            
+            print(f"✅ Cleanup completed: {result}")
+            return result
+            
+        except Exception as e:
+            await db.rollback()
+            print(f"❌ Error during cleanup: {e}")
+            raise e 

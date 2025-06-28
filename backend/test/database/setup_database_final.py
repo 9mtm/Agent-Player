@@ -18,7 +18,7 @@ def setup_database():
     """Setup database with all required tables and test user"""
     
     # Fixed database path - ONLY in data directory (relative to backend)
-    db_path = os.path.join("data", "dpro_agent.db")
+    db_path = os.path.join("backend", "data", "database.db")
     
     # Ensure data directory exists
     os.makedirs(os.path.dirname(db_path), exist_ok=True)

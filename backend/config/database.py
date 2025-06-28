@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from config.settings import settings
+from sqlalchemy.engine.url import make_url
 
 import logging
 import sqlite3
@@ -68,22 +69,23 @@ AsyncSessionLocal = sessionmaker(
     async_engine, class_=AsyncSession, expire_on_commit=False
 )
 
-# Fixed database path - ONLY in backend/data directory
-DATABASE_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
-DATABASE_PATH = os.path.join(DATABASE_DIR, "dpro_agent.db")
-
 def get_database_path() -> str:
-    """Get the absolute path to the database file"""
-    # Ensure directory exists
-    os.makedirs(DATABASE_DIR, exist_ok=True)
-    return os.path.abspath(DATABASE_PATH)
+    """Get the absolute path to the database file from DATABASE_URL"""
+    url = make_url(SQLALCHEMY_DATABASE_URL)
+    if url.drivername.startswith("sqlite"):
+        db_path = url.database
+        if not os.path.isabs(db_path):
+            db_path = os.path.abspath(db_path)
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        return db_path
+    raise RuntimeError("Only SQLite is supported for get_database_path")
 
 def get_db_connection() -> sqlite3.Connection:
     """Get database connection with proper configuration"""
     db_path = get_database_path()
     conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row  # Enable dict-like access to rows
-    conn.execute("PRAGMA foreign_keys = ON")  # Enable foreign key constraints
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 def get_db() -> Generator[sqlite3.Connection, None, None]:
@@ -118,9 +120,9 @@ def init_database():
 
 # Database configuration
 DATABASE_CONFIG = {
-    "path": DATABASE_PATH,
-    "dir": DATABASE_DIR,
-    "url": f"sqlite:///{DATABASE_PATH}",
+    "path": SQLALCHEMY_DATABASE_URL,
+    "dir": os.path.dirname(SQLALCHEMY_DATABASE_URL),
+    "url": SQLALCHEMY_DATABASE_URL,
     "echo": False,  # Set to True for SQL logging
     "check_same_thread": False
 }

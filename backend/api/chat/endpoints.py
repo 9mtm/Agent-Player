@@ -1,77 +1,87 @@
 """
-Chat API Endpoints
-All chat and conversation related routes
+Chat API endpoints for managing conversations and messages.
+Handles conversation creation, message sending, and real-time chat functionality.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from typing import Dict, Any, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+from datetime import datetime
+
 from models.chat import (
-    ConversationCreate, ConversationUpdate, MessageCreate,
-    ConversationListResponse, ConversationDetailResponse, MessageListResponse,
-    ChatAnalyticsResponse, AIResponseRequest
+    ConversationBase, ConversationUpdate, MessageCreate,
+    ConversationResponse, ConversationListResponse, MessageResponse, MessageListResponse,
+    AIResponseRequest
 )
 from models.shared import SuccessResponse
 from core.dependencies import get_current_user, get_optional_user, get_db
+from models import User
 from services.chat_service import ChatService
+from services.agent_service import AgentService
 
 # Initialize router and service
 router = APIRouter(tags=["Chat"])
 chat_service = ChatService()
+agent_service = AgentService()
 
 # Conversation endpoints
 @router.get("/conversations", response_model=SuccessResponse)
 async def get_conversations(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=1000),
     current_user: Dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0)
+    db: AsyncSession = Depends(get_db)
 ):
-    """Get user conversations"""
+    """Get user conversations with pagination"""
+    print(f"🔍 [CHAT API] get_conversations called")
+    print(f"🔍 [CHAT API] user_id: {current_user.get('user_id')}")
+    print(f"🔍 [CHAT API] skip: {skip}, limit: {limit}")
+    
     try:
-        conversations = await chat_service.get_user_conversations(
-            db=db,
-            user_id=current_user["user_id"], 
-            limit=limit, 
-            offset=offset
-        )
-        total = await chat_service.get_user_conversations_count(db=db, user_id=current_user["user_id"])
+        chat_service = ChatService()
+        result = await chat_service.get_user_conversations(db, current_user["user_id"], skip, limit)
         
+        print(f"🔍 [CHAT API] Service result: {result}")
+        
+        # Return in SuccessResponse format
         return SuccessResponse(
-            message=f"Found {len(conversations)} conversations",
-            data={
-                "conversations": conversations,
-                "total": total,
-                "limit": limit,
-                "offset": offset
-            }
+            message=f"Found {result['total']} conversations",
+            data=result
         )
+        
     except Exception as e:
+        print(f"❌ [CHAT API] Error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/conversations", response_model=SuccessResponse)
 async def create_conversation(
-    request: ConversationCreate,
+    request: ConversationBase,
     current_user: Dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Create new conversation"""
     try:
-        # Set user_id from the authenticated user's session
         user_id = current_user["user_id"]
-        
+        agent_id = request.agent_id if hasattr(request, 'agent_id') and request.agent_id is not None else None
         conversation_id = await chat_service.create_conversation(
             db=db,
             title=request.title,
             user_id=user_id,
-            agent_id=request.agent_id
+            agent_id=agent_id
         )
-        
+        # Get full conversation data
+        conversation = await chat_service.get_conversation_by_id(db=db, conversation_id=conversation_id)
         return SuccessResponse(
             message="Conversation created successfully",
-            data={"conversation_id": conversation_id}
+            data=conversation
         )
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/conversations/{conversation_id}", response_model=SuccessResponse)
@@ -90,9 +100,17 @@ async def get_conversation(
         if conversation["user_id"] != current_user["user_id"]:
             raise HTTPException(status_code=403, detail="Access denied")
         
+        agent = None
+        agent_id = conversation.get("agent_id")
+        if agent_id:
+            agent = await agent_service.get_agent_by_id(db=db, agent_id=agent_id)
+        
         return SuccessResponse(
             message="Conversation found",
-            data=conversation
+            data={
+                **conversation,
+                "agent": agent
+            }
         )
     except HTTPException:
         raise
@@ -173,34 +191,56 @@ async def get_conversation_messages(
 ):
     """Get messages for a conversation"""
     try:
+        print(f"🌐 [CHAT ENDPOINT] get_conversation_messages called")
+        print(f"🌐 [CHAT ENDPOINT] conversation_id: {conversation_id}")
+        print(f"🌐 [CHAT ENDPOINT] current_user: {current_user.get('user_id')}")
+        print(f"🌐 [CHAT ENDPOINT] limit: {limit}, offset: {offset}")
+        
         # Check if user owns this conversation
         conversation = await chat_service.get_conversation_by_id(db=db, conversation_id=conversation_id)
+        print(f"🌐 [CHAT ENDPOINT] Conversation found: {conversation is not None}")
+        if conversation:
+            print(f"🌐 [CHAT ENDPOINT] Conversation user_id: {conversation.get('user_id')}")
+            print(f"🌐 [CHAT ENDPOINT] Conversation title: {conversation.get('title')}")
+        
         if not conversation:
+            print(f"❌ [CHAT ENDPOINT] Conversation not found!")
             raise HTTPException(status_code=404, detail="Conversation not found")
         
         if conversation["user_id"] != current_user["user_id"]:
+            print(f"❌ [CHAT ENDPOINT] Access denied! Conversation user: {conversation['user_id']}, Current user: {current_user['user_id']}")
             raise HTTPException(status_code=403, detail="Access denied")
         
+        print(f"✅ [CHAT ENDPOINT] Access granted, getting messages...")
         messages = await chat_service.get_conversation_messages(
             db=db,
             conversation_id=conversation_id, 
             limit=limit, 
             offset=offset
         )
+        print(f"✅ [CHAT ENDPOINT] Messages received: {len(messages)}")
+        
         total = await chat_service.get_conversation_messages_count(db=db, conversation_id=conversation_id)
+        print(f"✅ [CHAT ENDPOINT] Total count: {total}")
+        
+        response_data = {
+            "messages": messages,
+            "total": total,
+            "limit": limit,
+            "offset": offset
+        }
+        print(f"✅ [CHAT ENDPOINT] Response data ready: {len(response_data['messages'])} messages")
         
         return SuccessResponse(
             message=f"Found {len(messages)} messages",
-            data={
-                "messages": messages,
-                "total": total,
-                "limit": limit,
-                "offset": offset
-            }
+            data=response_data
         )
     except HTTPException:
         raise
     except Exception as e:
+        print(f"❌ [CHAT ENDPOINT] Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/conversations/{conversation_id}/messages", response_model=SuccessResponse)
@@ -702,4 +742,27 @@ async def search_sessions(
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Development cleanup endpoint
+@router.post("/cleanup-all", response_model=SuccessResponse)
+async def cleanup_all_chat_data(
+    current_user: Dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """🧹 DEVELOPMENT ONLY: Delete ALL chat data for current user (conversations + messages)"""
+    try:
+        result = await chat_service.cleanup_all_user_chat_data(db=db, user_id=current_user["user_id"])
+        
+        return SuccessResponse(
+            message=f"Chat cleanup completed",
+            data={
+                "conversations_deleted": result.get("conversations_deleted", 0),
+                "messages_deleted": result.get("messages_deleted", 0),
+                "total_deleted": result.get("conversations_deleted", 0) + result.get("messages_deleted", 0)
+            }
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

@@ -8,7 +8,7 @@ import bcrypt
 from datetime import datetime
 
 # Database path
-db_path = "data/database.db"
+db_path = "backend/data/database.db"
 
 def hash_password_bcrypt(password: str) -> str:
     """Hash password using bcrypt"""

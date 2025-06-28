@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from models.database import Base, User, Session, Agent, AgentType, Conversation, Message, ActivityLog
 
 # Database path
-db_path = "data/database.db"
+db_path = "backend/data/database.db"
 
 # Create the directory if it doesn't exist
 os.makedirs("data", exist_ok=True)

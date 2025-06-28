@@ -24,7 +24,7 @@ def get_size(bytes_value: int) -> str:
 
 class SystemMonitorService:
     def __init__(self):
-        self.log_dir = Path("logs/system")
+        self.log_dir = Path("backend/logs/system")
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.current_log_file = self.log_dir / f"system_metrics_{datetime.now().strftime('%Y%m%d')}.json"
         self.max_history_days = 7  # Keep logs for 7 days

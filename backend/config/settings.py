@@ -25,7 +25,7 @@ class Settings:
     CORS_ALLOW_HEADERS = ["*"]
     
     # Database
-    DATABASE_URL = "sqlite:///data/dpro_agent.db"
+    DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///backend/data/database.db")
     DATABASE_ECHO = True
     
     # Security

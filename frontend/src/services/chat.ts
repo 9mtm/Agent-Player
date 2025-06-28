@@ -1,26 +1,30 @@
-import api from "./api";
+import apiClient from "./api";
 
 // Types for chat
 export interface Conversation {
   id: string;
   title: string;
   agent_id?: number;
+  user_id: number;
   is_active: boolean;
+  total_messages: number;
   created_at: string;
   updated_at: string;
-  user_id: number;
 }
 
 export interface Message {
   id: number;
   conversation_id: string;
-  role: "user" | "assistant" | "system";
   content: string;
   message_metadata?: Record<string, unknown>;
   tokens_used?: number;
   processing_time?: number;
   created_at: string;
-  user_id: number;
+  // Optional fields for compatibility
+  role?: "user" | "assistant" | "system";
+  user_id?: number;
+  sender_type?: string;
+  timestamp?: string;
 }
 
 export interface FileAttachment {
@@ -47,7 +51,9 @@ export interface UpdateConversationRequest {
 export interface SendMessageRequest {
   content: string;
   sender_type?: "user" | "assistant" | "system";
-  message_metadata?: Record<string, any>;
+  agent_id?: number;
+  conversation_id: string;
+  extra_data?: Record<string, unknown>;
 }
 
 export interface ConversationListParams {
@@ -77,6 +83,12 @@ export interface MessageListResponse {
   has_prev: boolean;
 }
 
+// Add this at the top of the file, after imports
+export type SendMessageResult = {
+  user_message: Message;
+  ai_response: Message;
+};
+
 // Chat Service - Updated to use new API structure - ALL CODE IN ENGLISH
 class ChatService {
   // Conversation management - ALL CODE IN ENGLISH
@@ -84,20 +96,27 @@ class ChatService {
     params: ConversationListParams = {}
   ): Promise<ConversationListResponse> {
     try {
-      const response = await api.get("/chat/conversations", { params });
+      console.log(
+        "🔄 Calling backend /chat/conversations with params:",
+        params
+      );
+      const response = await apiClient.get("/chat/conversations", { params });
+      console.log("📦 Backend response:", response.data);
 
-      // Handle new response format
-      const conversations = Array.isArray(response.data.data)
-        ? response.data.data
-        : response.data.conversations || [];
+      // ✅ Fixed: Handle the correct response format from backend
+      // Backend sends: { success: true, data: { conversations: [...], total: X } }
+      const responseData = response.data.data || response.data;
+      const conversations = responseData.conversations || [];
+
+      console.log(`✅ Processed ${conversations.length} conversations`);
 
       return {
-        conversations,
-        total: conversations.length,
-        page: 1,
-        limit: params.limit || 100,
-        has_next: false,
-        has_prev: false,
+        conversations: conversations,
+        total: responseData.total || 0,
+        page: responseData.page || 1,
+        limit: responseData.limit || 20,
+        has_next: responseData.has_next || false,
+        has_prev: responseData.has_prev || false,
       };
     } catch (error) {
       console.error("Error getting conversations:", error);
@@ -105,7 +124,7 @@ class ChatService {
         conversations: [],
         total: 0,
         page: 1,
-        limit: params.limit || 100,
+        limit: 20,
         has_next: false,
         has_prev: false,
       };
@@ -114,7 +133,7 @@ class ChatService {
 
   async getConversation(id: string): Promise<Conversation | null> {
     try {
-      const response = await api.get(`/chat/conversations/${id}`);
+      const response = await apiClient.get(`/chat/conversations/${id}`);
       return response.data.data || response.data;
     } catch (error) {
       console.error("Error getting conversation:", error);
@@ -125,7 +144,12 @@ class ChatService {
   async createConversation(
     conversationData: CreateConversationRequest
   ): Promise<Conversation> {
-    const response = await api.post("/chat/conversations", conversationData);
+    // Remove agent_id if not set
+    const payload: Record<string, unknown> = { title: conversationData.title };
+    if (conversationData.agent_id) {
+      payload.agent_id = conversationData.agent_id;
+    }
+    const response = await apiClient.post("/chat/conversations", payload);
     return response.data.data || response.data;
   }
 
@@ -133,7 +157,7 @@ class ChatService {
     id: string,
     conversationData: UpdateConversationRequest
   ): Promise<Conversation> {
-    const response = await api.put(
+    const response = await apiClient.put(
       `/chat/conversations/${id}`,
       conversationData
     );
@@ -141,7 +165,7 @@ class ChatService {
   }
 
   async deleteConversation(id: string): Promise<void> {
-    await api.delete(`/chat/conversations/${id}`);
+    await apiClient.delete(`/chat/conversations/${id}`);
   }
 
   // Message management - ALL CODE IN ENGLISH
@@ -151,17 +175,23 @@ class ChatService {
     limit: number = 50
   ): Promise<MessageListResponse> {
     try {
-      const response = await api.get(
+      const response = await apiClient.get(
         `/chat/conversations/${conversationId}/messages`,
         {
           params: { skip, limit },
         }
       );
 
-      // Handle new response format
-      const messages = Array.isArray(response.data.data)
-        ? response.data.data
-        : response.data.messages || [];
+      // Map backend fields to frontend fields
+      const messages = (
+        Array.isArray(response.data.data?.messages)
+          ? response.data.data.messages
+          : response.data.messages || []
+      ).map((msg: Message) => ({
+        ...msg,
+        role: (msg as any).sender_type || msg.role,
+        timestamp: (msg as any).created_at || msg.timestamp,
+      }));
 
       return {
         messages,
@@ -171,8 +201,8 @@ class ChatService {
         has_next: false,
         has_prev: false,
       };
-    } catch (error) {
-      console.error("Error getting messages:", error);
+    } catch (err) {
+      console.error("Error getting messages:", err);
       return {
         messages: [],
         total: 0,
@@ -184,23 +214,46 @@ class ChatService {
     }
   }
 
+  // Custom return type for sendMessage
   async sendMessage(
     conversationId: string,
     messageData: SendMessageRequest
-  ): Promise<Message> {
-    const response = await api.post(
+  ): Promise<SendMessageResult> {
+    // Ensure conversation_id is always sent
+    const payload = { ...messageData, conversation_id: conversationId };
+
+    // 🔧 FIX: Increase timeout for chat messages (Ollama can take 20+ seconds)
+    const response = await apiClient.post(
       `/chat/conversations/${conversationId}/messages`,
-      messageData
+      payload,
+      {
+        timeout: 45000, // 45 seconds for Ollama responses
+      }
     );
-    return response.data.data || response.data;
+
+    // Map backend fields to frontend fields for both user and ai messages
+    const data = response.data.data || response.data;
+    return {
+      user_message: {
+        ...(data.user_message as Message),
+        role: data.user_message?.sender_type || data.user_message?.role,
+        timestamp:
+          data.user_message?.created_at || data.user_message?.timestamp,
+      },
+      ai_response: {
+        ...(data.ai_response as Message),
+        role: data.ai_response?.sender_type || data.ai_response?.role,
+        timestamp: data.ai_response?.created_at || data.ai_response?.timestamp,
+      },
+    };
   }
 
   async deleteMessage(messageId: number): Promise<void> {
-    await api.delete(`/chat/messages/${messageId}`);
+    await apiClient.delete(`/chat/messages/${messageId}`);
   }
 
   async updateMessage(messageId: number, content: string): Promise<Message> {
-    const response = await api.put(`/chat/messages/${messageId}`, {
+    const response = await apiClient.put(`/chat/messages/${messageId}`, {
       content,
     });
     return response.data.data || response.data;
@@ -216,7 +269,7 @@ class ChatService {
     formData.append("content", message);
     formData.append("file", file);
 
-    const response = await api.post(
+    const response = await apiClient.post(
       `/chat/conversations/${conversationId}/messages/with-file`,
       formData,
       {
@@ -230,13 +283,15 @@ class ChatService {
 
   // Get message attachments - ALL CODE IN ENGLISH
   async getMessageAttachments(messageId: number): Promise<FileAttachment[]> {
-    const response = await api.get(`/chat/messages/${messageId}/attachments`);
+    const response = await apiClient.get(
+      `/chat/messages/${messageId}/attachments`
+    );
     return response.data.data || response.data || [];
   }
 
   // Download attachment - ALL CODE IN ENGLISH
   async downloadAttachment(attachmentId: number): Promise<Blob> {
-    const response = await api.get(
+    const response = await apiClient.get(
       `/chat/attachments/${attachmentId}/download`,
       {
         responseType: "blob",
@@ -248,7 +303,7 @@ class ChatService {
   // Search conversations - ALL CODE IN ENGLISH
   async searchConversations(query: string): Promise<Conversation[]> {
     try {
-      const response = await api.get("/chat/search", {
+      const response = await apiClient.get("/chat/search", {
         params: { query, type: "conversations" },
       });
       return response.data.data || [];
@@ -262,25 +317,25 @@ class ChatService {
   async searchMessages(
     query: string,
     conversationId?: string
-  ): Promise<Message[]> {
+  ): Promise<Record<string, unknown>> {
     try {
-      const params: any = { query };
+      const params: Record<string, unknown> = { query };
       if (conversationId) {
         params.conversation_id = conversationId;
       }
 
-      const response = await api.get("/chat/search", { params });
-      return response.data.data || [];
-    } catch (error) {
-      console.error("Message search error:", error);
-      return [];
+      const response = await apiClient.get("/chat/search", { params });
+      return response.data.data || {};
+    } catch {
+      console.error("Error searching messages");
+      return {};
     }
   }
 
   // Chat statistics - ALL CODE IN ENGLISH
   async getChatStats(): Promise<any> {
     try {
-      const response = await api.get("/chat/analytics/dashboard");
+      const response = await apiClient.get("/chat/analytics/dashboard");
       return (
         response.data.data || { total_conversations: 0, total_messages: 0 }
       );
@@ -291,12 +346,12 @@ class ChatService {
   }
 
   // Get global analytics (admin only) - ALL CODE IN ENGLISH
-  async getGlobalAnalytics(): Promise<any> {
+  async getGlobalAnalytics(): Promise<Record<string, unknown>> {
     try {
-      const response = await api.get("/chat/analytics/global");
+      const response = await apiClient.get("/chat/analytics/global");
       return response.data.data || {};
-    } catch (error) {
-      console.error("Error getting global analytics:", error);
+    } catch {
+      console.error("Error getting global analytics");
       return {};
     }
   }
@@ -305,15 +360,15 @@ class ChatService {
   async exportConversation(
     conversationId: string,
     format: "json" | "txt" = "json"
-  ): Promise<any> {
+  ): Promise<Record<string, unknown>> {
     try {
-      const response = await api.get(
+      const response = await apiClient.get(
         `/chat/conversations/${conversationId}/export`,
         { params: { format } }
       );
       return response.data.data || {};
-    } catch (error) {
-      console.error("Export error:", error);
+    } catch {
+      console.error("Error exporting conversation");
       return {};
     }
   }
@@ -323,7 +378,7 @@ class ChatService {
     conversationId: string
   ): Promise<{ share_url: string }> {
     try {
-      const response = await api.post(
+      const response = await apiClient.post(
         `/chat/conversations/${conversationId}/share`
       );
       return response.data.data || { share_url: "" };
@@ -336,7 +391,7 @@ class ChatService {
   // Archive conversation - ALL CODE IN ENGLISH
   async archiveConversation(conversationId: string): Promise<Conversation> {
     try {
-      const response = await api.post(
+      const response = await apiClient.post(
         `/chat/conversations/${conversationId}/archive`
       );
       return response.data.data || response.data;
@@ -349,7 +404,7 @@ class ChatService {
   // Restore conversation from archive - ALL CODE IN ENGLISH
   async restoreConversation(conversationId: string): Promise<Conversation> {
     try {
-      const response = await api.post(
+      const response = await apiClient.post(
         `/chat/conversations/${conversationId}/restore`
       );
       return response.data.data || response.data;
@@ -365,7 +420,7 @@ class ChatService {
     message: string,
     conversationId?: string
   ): Promise<Message> {
-    const response = await api.post(`/agents/${agentId}/chat`, {
+    const response = await apiClient.post(`/agents/${agentId}/chat`, {
       message,
       conversation_id: conversationId,
     });
@@ -378,7 +433,7 @@ class ChatService {
     message: string
   ): Promise<EventSource> {
     const token = localStorage.getItem("access_token");
-    const url = `${api.defaults.baseURL}/chat/conversations/${conversationId}/stream/?token=${token}&message=${encodeURIComponent(
+    const url = `${apiClient.defaults.baseURL}/chat/conversations/${conversationId}/stream/?token=${token}&message=${encodeURIComponent(
       message
     )}`;
     return new EventSource(url);
@@ -391,7 +446,7 @@ class ChatService {
     agentId?: number
   ): Promise<any> {
     try {
-      const response = await api.post(
+      const response = await apiClient.post(
         `/chat/conversations/${conversationId}/ai-response`,
         {
           message,
@@ -403,6 +458,40 @@ class ChatService {
     } catch (error) {
       console.error("Error generating AI response:", error);
       throw error;
+    }
+  }
+
+  // Delete all conversations (for development cleanup) - ALL CODE IN ENGLISH
+  async deleteAllConversations(): Promise<{
+    success: boolean;
+    deleted_count: number;
+  }> {
+    try {
+      console.log("🧹 Calling backend cleanup API...");
+
+      const response = await apiClient.post("/chat/cleanup-all");
+
+      if (response.data?.success) {
+        const result = response.data.data;
+        const totalDeleted =
+          result.total_deleted ||
+          result.conversations_deleted + result.messages_deleted;
+
+        console.log(
+          `✅ Cleanup API success: ${result.conversations_deleted} conversations + ${result.messages_deleted} messages = ${totalDeleted} total deleted`
+        );
+
+        return {
+          success: true,
+          deleted_count: totalDeleted,
+        };
+      } else {
+        console.error("❌ Cleanup API returned success=false");
+        return { success: false, deleted_count: 0 };
+      }
+    } catch (error) {
+      console.error("❌ Error calling cleanup API:", error);
+      return { success: false, deleted_count: 0 };
     }
   }
 }

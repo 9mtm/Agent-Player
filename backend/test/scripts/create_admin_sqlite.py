@@ -10,7 +10,7 @@ from datetime import datetime
 os.makedirs("data", exist_ok=True)
 
 # Database path
-db_path = "data/database.db"
+db_path = "backend/data/database.db"
 
 try:
     # Connect to database

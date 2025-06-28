@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ConnectionType } from './WorkflowBoard';
 
@@ -22,6 +22,8 @@ interface AnimatedToolbarProps {
   onToggleLiveMode: () => void;
   showChat: boolean;
   onToggleChat: () => void;
+  showLog: boolean;
+  onToggleLog: () => void;
 }
 
 export const AnimatedToolbar: React.FC<AnimatedToolbarProps> = React.memo(({
@@ -44,59 +46,49 @@ export const AnimatedToolbar: React.FC<AnimatedToolbarProps> = React.memo(({
   onToggleLiveMode,
   showChat,
   onToggleChat,
+  showLog,
+  onToggleLog,
 }) => {
   const navigate = useNavigate();
   const [animatedIcons, setAnimatedIcons] = useState<Set<string>>(new Set());
   const [isEditingBoardName, setIsEditingBoardName] = useState(false);
+  const timeoutRefs = useRef<Map<string, NodeJS.Timeout>>(new Map());
+  const lastClickTimes = useRef<Map<string, number>>(new Map());
 
-  // Use refs to track animation state
-  const animationStateRef = useRef<Record<string, boolean>>({});
+  // Animation timers for cleanup
   const animationTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
 
-  // Memoize animation handlers
-  const startAnimation = useCallback((id: string, duration: number = 1000) => {
-    // Skip if already animating
-    if (animationStateRef.current[id]) return;
-    
-    console.log(`🎯 Starting animation for: ${id} (${duration / 1000} second${duration !== 1000 ? 's' : ''})`);
-    animationStateRef.current[id] = true;
-
-    // Clear any existing timer
-    if (animationTimersRef.current[id]) {
-      clearTimeout(animationTimersRef.current[id]);
-    }
-
-    // Set auto-stop timer
-    animationTimersRef.current[id] = setTimeout(() => {
-      console.log(`⏰ Auto-stopping animation for: ${id}`);
-      animationStateRef.current[id] = false;
-    }, duration);
-  }, []);
-
-  const stopAnimation = useCallback((id: string) => {
-    if (!animationStateRef.current[id]) return;
-    
-    console.log(`🛑 Stopping animation for: ${id}`);
-    animationStateRef.current[id] = false;
-
-    // Clear timer
-    if (animationTimersRef.current[id]) {
-      clearTimeout(animationTimersRef.current[id]);
-      delete animationTimersRef.current[id];
-    }
-  }, []);
+  // Animation handlers optimized for UI
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       Object.values(animationTimersRef.current).forEach(timer => clearTimeout(timer));
+      timeoutRefs.current.forEach(timeout => clearTimeout(timeout));
+      timeoutRefs.current.clear();
     };
   }, []);
 
   const handleGoBack = () => navigate('/dashboard');
 
-  // Handle icon animation toggle
-  const toggleIconAnimation = (iconId: string) => {
+  // Handle icon animation toggle with debouncing
+  const toggleIconAnimation = useCallback((iconId: string) => {
+    // Throttle rapid clicks (minimum 300ms between clicks for same icon)
+    const now = Date.now();
+    const lastClick = lastClickTimes.current.get(iconId) || 0;
+    if (now - lastClick < 300) {
+      console.log(`🚫 Throttled click for: ${iconId} (too rapid)`);
+      return;
+    }
+    lastClickTimes.current.set(iconId, now);
+
+    // Clear any existing timeout for this icon
+    const existingTimeout = timeoutRefs.current.get(iconId);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+      timeoutRefs.current.delete(iconId);
+    }
+
     setAnimatedIcons(prev => {
       const newAnimated = new Set(prev);
       if (newAnimated.has(iconId)) {
@@ -105,18 +97,23 @@ export const AnimatedToolbar: React.FC<AnimatedToolbarProps> = React.memo(({
       } else {
         console.log(`🎯 Starting animation for: ${iconId} (1 second)`);
         newAnimated.add(iconId);
-        setTimeout(() => {
+        
+        // Set up auto-stop timeout
+        const timeout = setTimeout(() => {
           console.log(`⏰ Auto-stopping animation for: ${iconId}`);
           setAnimatedIcons(current => {
             const updated = new Set(current);
             updated.delete(iconId);
             return updated;
           });
+          timeoutRefs.current.delete(iconId);
         }, 1000);
+        
+        timeoutRefs.current.set(iconId, timeout);
       }
       return newAnimated;
     });
-  };
+  }, []);
 
   const getConnectionTypeContent = (type: ConnectionType) => {
     switch (type) {
@@ -725,7 +722,7 @@ export const AnimatedToolbar: React.FC<AnimatedToolbarProps> = React.memo(({
               toggleIconAnimation('components-button');
               setTimeout(() => onToggleComponentLibrary(), 200);
             }}
-            title="Toggle Component Library"
+            title="Toggle Component Library (Ctrl+K)"
             style={{
               background: 'rgba(255, 255, 255, 0.9)',
               border: '1px solid rgba(102, 126, 234, 0.2)',
@@ -813,6 +810,56 @@ export const AnimatedToolbar: React.FC<AnimatedToolbarProps> = React.memo(({
               }}
             />
             Chat
+          </button>
+          
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              toggleIconAnimation('log-button');
+              setTimeout(() => onToggleLog(), 200);
+            }}
+            title={`${showLog ? 'Hide' : 'Show'} Log Panel`}
+            style={{
+              background: showLog ? 'linear-gradient(135deg, #f39c12, #e67e22)' : 'rgba(255, 255, 255, 0.9)',
+              border: `1px solid ${showLog ? 'rgba(243, 156, 18, 0.3)' : 'rgba(243, 156, 18, 0.2)'}`,
+              borderRadius: '8px',
+              padding: '8px 12px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              color: showLog ? 'white' : '#f39c12',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontWeight: '500',
+              transition: 'all 0.2s ease',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+            }}
+            onMouseEnter={(e) => {
+              if (!showLog) {
+                e.currentTarget.style.background = '#f39c12';
+                e.currentTarget.style.color = 'white';
+              }
+              e.currentTarget.style.transform = 'translateY(-1px)';
+              e.currentTarget.style.boxShadow = '0 4px 8px rgba(243, 156, 18, 0.3)';
+            }}
+            onMouseLeave={(e) => {
+              if (!showLog) {
+                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.9)';
+                e.currentTarget.style.color = '#f39c12';
+              }
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.05)';
+            }}
+          >
+            <i 
+              className="fas fa-list-alt" 
+              style={{
+                animation: animatedIcons.has('log-button') ? 'iconShake 0.5s ease-in-out infinite' : 'none',
+                transform: animatedIcons.has('log-button') ? 'scale(1.1)' : 'scale(1)',
+                transition: 'transform 0.2s ease'
+              }}
+            />
+            Log
           </button>
           
           <button

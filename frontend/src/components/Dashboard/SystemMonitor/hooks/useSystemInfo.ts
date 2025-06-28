@@ -14,6 +14,7 @@ interface UseSystemInfoResult {
   isStale: boolean;
   refetch: () => Promise<void>;
   history: SystemMetricsData[];
+  collectNow: () => Promise<void>;
 }
 
 export const useSystemInfo = (
@@ -28,10 +29,12 @@ export const useSystemInfo = (
   const fetchData = async () => {
     try {
       setLoading(true);
-      const response = await fetch("http://localhost:8000/api/system/metrics");
+      const response = await fetch(
+        "http://localhost:8000/api/system/metrics/latest"
+      );
       const result = await response.json();
 
-      if (result.success) {
+      if (result.success && result.data) {
         setData(result.data);
         setHistory((prev) => [...prev, result.data].slice(-24)); // Keep last 24 data points
         setLastUpdated(new Date());
@@ -42,6 +45,37 @@ export const useSystemInfo = (
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to fetch system metrics"
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const collectNow = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch(
+        "http://localhost:8000/api/system/metrics/collect",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      const result = await response.json();
+
+      if (result.success && result.data) {
+        setData(result.data);
+        setHistory((prev) => [...prev, result.data].slice(-24));
+        setLastUpdated(new Date());
+        setError(null);
+      } else {
+        setError(result.message || "Failed to collect system metrics");
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to collect system metrics"
       );
     } finally {
       setLoading(false);
@@ -72,5 +106,6 @@ export const useSystemInfo = (
     isStale,
     refetch: fetchData,
     history,
+    collectNow,
   };
 };
