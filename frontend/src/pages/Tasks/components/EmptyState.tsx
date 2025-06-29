@@ -23,14 +23,14 @@ export const EmptyState: React.FC<EmptyStateProps> = ({ filter, searchTerm }) =>
     }
 
     switch (filter) {
-      case TaskStatus.TODO:
+      case TaskStatus.PENDING:
         return {
           icon: '⏳',
           title: 'No pending tasks',
           description: 'All your tasks are either completed or in progress. Great job!'
         };
       
-      case TaskStatus.IN_PROGRESS:
+      case TaskStatus.RUNNING:
         return {
           icon: '▶️',
           title: 'No running tasks',
@@ -44,11 +44,11 @@ export const EmptyState: React.FC<EmptyStateProps> = ({ filter, searchTerm }) =>
           description: 'Complete some tasks to see them here. Keep up the good work!'
         };
       
-      case TaskStatus.ON_HOLD:
+      case TaskStatus.FAILED:
         return {
           icon: '❌',
-          title: 'No on-hold tasks',
-          description: 'Great! No tasks have been put on hold. Everything is running smoothly.'
+          title: 'No failed tasks',
+          description: 'Great! No tasks have failed. Your workflow is running smoothly.'
         };
       
       case TaskStatus.CANCELLED:
@@ -62,7 +62,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({ filter, searchTerm }) =>
         return {
           icon: '📝',
           title: 'No tasks yet',
-          description: 'Create your first task to get started!'
+          description: 'Create your first task to get started with managing your workflow!'
         };
     }
   };

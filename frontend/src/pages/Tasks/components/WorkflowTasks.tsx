@@ -10,12 +10,12 @@ interface Task {
 const initialTasks: Task[] = [
   { id: 1, title: 'Setup AI Agent Framework', status: 'todo', priority: 'high' },
   { id: 2, title: 'Integrate Local LLM Models', status: 'in-progress', priority: 'high' },
-  { id: 3, title: 'Design Agent Board UI', status: 'done', priority: 'medium' },
+  { id: 3, title: 'Design Workflow Board UI', status: 'done', priority: 'medium' },
   { id: 4, title: 'Setup FastAPI Backend', status: 'todo', priority: 'medium' },
   { id: 5, title: 'Implement File Upload Feature', status: 'in-progress', priority: 'low' },
 ];
 
-const TasksBoard: React.FC = () => {
+const WorkflowTasks: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [newTaskTitle, setNewTaskTitle] = useState('');
 
@@ -226,4 +226,4 @@ const TasksBoard: React.FC = () => {
   );
 };
 
-export default TasksBoard; 
+export default WorkflowTasks; 

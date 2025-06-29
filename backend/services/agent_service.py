@@ -6,17 +6,11 @@ Simplified agent management service using SQLAlchemy
 from typing import Dict, Any, Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, and_, func
-from models.database import Agent
+from models.agent import Agent, AgentType
 import requests
 import time
 from datetime import datetime
 from fastapi import HTTPException
-import logging
-from enum import Enum
-
-class AgentType(str, Enum):
-    MAIN = "main"
-    CHILD = "child"
 
 class AgentService:
     """Agent management service"""
@@ -266,7 +260,7 @@ class AgentService:
             "id": agent.id,
             "name": agent.name,
             "description": agent.description,
-            "agent_type": agent.agent_type.value if isinstance(agent.agent_type, AgentType) else agent.agent_type,
+            "agent_type": agent.agent_type.value,
             "model_provider": agent.model_provider,
             "model_name": agent.model_name,
             "system_prompt": agent.system_prompt,
@@ -276,6 +270,11 @@ class AgentService:
             "parent_agent_id": agent.parent_agent_id,
             "user_id": agent.user_id,
             "is_active": agent.is_active,
-            "created_at": agent.created_at.isoformat() if agent.created_at else None,
-            "updated_at": agent.updated_at.isoformat() if agent.updated_at else None
+            "capabilities": agent.capabilities,
+            "performance_score": agent.performance_score,
+            "tasks_completed": agent.tasks_completed,
+            "learning_enabled": agent.learning_enabled,
+            "autonomy_level": agent.autonomy_level,
+            "created_at": agent.created_at,
+            "updated_at": agent.updated_at
         } 

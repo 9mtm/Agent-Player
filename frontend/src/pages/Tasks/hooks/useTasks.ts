@@ -29,11 +29,10 @@ export interface UseTasksReturn {
   filteredTasks: Task[];
   taskStats: {
     total: number;
-    todo: number;
-    in_progress: number;
-    under_review: number;
+    pending: number;
+    running: number;
     completed: number;
-    on_hold: number;
+    failed: number;
     cancelled: number;
   };
 
@@ -172,7 +171,7 @@ export const useTasks = (props: UseTasksProps = {}): UseTasksReturn => {
   ) => {
     const newStatus =
       currentStatus === TaskStatus.COMPLETED
-        ? TaskStatus.TODO
+        ? TaskStatus.PENDING
         : TaskStatus.COMPLETED;
     await updateTaskStatus(taskId, newStatus);
   };
@@ -212,8 +211,8 @@ export const useTasks = (props: UseTasksProps = {}): UseTasksReturn => {
 
   // Update document title with task count
   useEffect(() => {
-    const activeCount = taskStats.todo + taskStats.in_progress;
-    const title = activeCount > 0 ? `Tasks (${activeCount})` : "Tasks";
+    const pendingCount = taskStats.pending + taskStats.running;
+    const title = pendingCount > 0 ? `Tasks (${pendingCount})` : "Tasks";
 
     document.title = title;
 

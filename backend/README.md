@@ -27,11 +27,6 @@ Or
 python3 main.py
 ```
 
-
-
-taskkill /F /IM python.exe
-
-
 #### Using py/py -3
 ```bash
 

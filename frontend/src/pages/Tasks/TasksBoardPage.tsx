@@ -1,5 +1,5 @@
 import React from 'react';
-import { TasksBoard } from './components';
+import { WorkflowTasks } from './components';
 
 const TasksBoardPage: React.FC = () => (
   <div style={{display: 'flex', flexDirection: 'column', flex: 1, height: '100vh', width: '100vw', padding: 0, margin: 0, background: '#f8f8f8'}}>
@@ -8,7 +8,7 @@ const TasksBoardPage: React.FC = () => (
       <p style={{color: '#888', margin: '4px 0 16px 0', fontSize: 15}}>Visual kanban/tasks board (drag-and-drop).</p>
     </div>
     <div style={{flex: 1, minHeight: 0, minWidth: 0, display: 'flex'}}>
-      <TasksBoard />
+      <WorkflowTasks />
     </div>
   </div>
 );

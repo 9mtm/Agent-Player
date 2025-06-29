@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { TaskStatus } from '../../../services';
+import { TaskStatus, TaskPriority } from '../../../services';
 import type { Task } from '../../../services';
 import {
   taskItemStyle,
@@ -52,7 +52,7 @@ export const TaskItem: React.FC<TaskItemProps> = ({
       setUpdating(true);
       await onToggleStatus(task.id, task.status);
     } catch (error) {
-      console.error('Error toggling task status:', error);
+      console.error('Failed to toggle task status:', error);
     } finally {
       setUpdating(false);
     }
@@ -69,7 +69,7 @@ export const TaskItem: React.FC<TaskItemProps> = ({
       setDeleting(true);
       await onDelete(task.id);
     } catch (error) {
-      console.error('Error deleting task:', error);
+      console.error('Failed to delete task:', error);
       setDeleting(false);
     }
   };
@@ -81,7 +81,7 @@ export const TaskItem: React.FC<TaskItemProps> = ({
     try {
       await onUpdateProgress(task.id, newProgress);
     } catch (error) {
-      console.error('Error updating progress:', error);
+      console.error('Failed to update progress:', error);
     }
   };
 
@@ -90,7 +90,7 @@ export const TaskItem: React.FC<TaskItemProps> = ({
   };
 
   const isCompleted = task.status === TaskStatus.COMPLETED;
-  const isInProgress = task.status === TaskStatus.IN_PROGRESS;
+  const isRunning = task.status === TaskStatus.RUNNING;
   const priorityConfig = TASK_PRIORITY_CONFIG[task.priority];
 
   return (
@@ -109,7 +109,7 @@ export const TaskItem: React.FC<TaskItemProps> = ({
           onChange={handleToggleStatus}
           style={checkboxStyle}
           disabled={updating || deleting}
-          title={isCompleted ? 'Mark as to do' : 'Mark as completed'}
+          title={isCompleted ? 'Mark as pending' : 'Mark as completed'}
         />
 
         {/* Task Details */}
@@ -160,8 +160,8 @@ export const TaskItem: React.FC<TaskItemProps> = ({
 
       {/* Actions */}
       <div style={taskActionsStyle}>
-        {/* Progress Bar for In Progress Tasks */}
-        {isInProgress && (
+        {/* Progress Bar for Running Tasks */}
+        {isRunning && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             <div style={progressBarContainerStyle}>
               <div style={progressBarStyle(task.progress)} />
@@ -188,7 +188,7 @@ export const TaskItem: React.FC<TaskItemProps> = ({
         {/* Quick Status Change Buttons */}
         {!compact && task.status !== TaskStatus.COMPLETED && (
           <div style={{ display: 'flex', gap: '4px' }}>
-            {task.status !== TaskStatus.IN_PROGRESS && (
+            {task.status !== TaskStatus.RUNNING && (
               <button
                 onClick={() => onToggleStatus && onToggleStatus(task.id, task.status)}
                 style={{
@@ -207,7 +207,7 @@ export const TaskItem: React.FC<TaskItemProps> = ({
               </button>
             )}
             
-            {task.status === TaskStatus.IN_PROGRESS && (
+            {task.status === TaskStatus.RUNNING && (
               <button
                 onClick={() => onToggleStatus && onToggleStatus(task.id, task.status)}
                 style={{

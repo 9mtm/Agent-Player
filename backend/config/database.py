@@ -3,14 +3,12 @@ Database Configuration
 SQLAlchemy database setup and connection management
 """
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from config.settings import settings
-
 import logging
-import sqlite3
-from models.database import Base
+from models.agent import Base
 
 # Create logger
 logger = logging.getLogger(__name__)
@@ -18,46 +16,20 @@ logger = logging.getLogger(__name__)
 # Create database URL
 SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
 
-# Create async database URL
-ASYNC_DATABASE_URL = (
-    SQLALCHEMY_DATABASE_URL.replace("sqlite:///", "sqlite+aiosqlite:///")
-    if SQLALCHEMY_DATABASE_URL.startswith("sqlite")
-    else SQLALCHEMY_DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
-)
-
-# Determine if using SQLite
-is_sqlite = SQLALCHEMY_DATABASE_URL.startswith("sqlite")
-
-# Create engine for initialization and migrations
-sync_engine = create_engine(
+# Create engine
+engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
-    # SQLite-specific settings
-    connect_args={"check_same_thread": False} if is_sqlite else {},
-    # Enable foreign key support for SQLite
-    pool_pre_ping=True,
-    # Enable SQLite debugging
-    echo=True
+    connect_args={"check_same_thread": False}  # Needed for SQLite
 )
-
-# Enable foreign key support for SQLite
-if is_sqlite:
-    def _fk_pragma_on_connect(dbapi_con, con_record):
-        dbapi_con.execute('pragma foreign_keys=ON')
-        # Enable SQLite debugging
-        dbapi_con.execute('pragma synchronous=OFF')
-        dbapi_con.execute('pragma journal_mode=MEMORY')
-
-    event.listen(sync_engine, 'connect', _fk_pragma_on_connect)
 
 # Create async engine for FastAPI
 async_engine = create_async_engine(
-    ASYNC_DATABASE_URL,
-    connect_args={"check_same_thread": False} if is_sqlite else {},
-    pool_pre_ping=True,
-    echo=True
+    SQLALCHEMY_DATABASE_URL.replace("sqlite:///", "sqlite+aiosqlite:///"),
+    connect_args={"check_same_thread": False}  # Needed for SQLite
 )
 
 # Create session factories
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 AsyncSessionLocal = sessionmaker(
     async_engine, class_=AsyncSession, expire_on_commit=False
 )
@@ -65,8 +37,7 @@ AsyncSessionLocal = sessionmaker(
 def init_db():
     """Initialize database with all models"""
     try:
-        # Create all tables
-        Base.metadata.create_all(bind=sync_engine)
+        Base.metadata.create_all(bind=engine)
         logger.info("Database initialized successfully")
     except Exception as e:
         logger.error(f"Database initialization error: {e}")

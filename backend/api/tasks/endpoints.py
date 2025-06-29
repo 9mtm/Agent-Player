@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 import uuid
 
-router = APIRouter(tags=["Tasks"])
+router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 # ============================================================================
 # ENUMS

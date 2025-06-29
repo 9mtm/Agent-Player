@@ -3,23 +3,17 @@ import type { TaskStatusConfig, TaskPriorityConfig } from "../types";
 
 // Task status configurations
 export const TASK_STATUS_CONFIG: Record<TaskStatus, TaskStatusConfig> = {
-  [TaskStatus.TODO]: {
-    label: "To Do",
+  [TaskStatus.PENDING]: {
+    label: "Pending",
     color: "#fff",
     backgroundColor: "#ffa726",
     icon: "⏳",
   },
-  [TaskStatus.IN_PROGRESS]: {
-    label: "In Progress",
+  [TaskStatus.RUNNING]: {
+    label: "Running",
     color: "#fff",
     backgroundColor: "#42a5f5",
     icon: "▶️",
-  },
-  [TaskStatus.UNDER_REVIEW]: {
-    label: "Under Review",
-    color: "#fff",
-    backgroundColor: "#ab47bc",
-    icon: "👀",
   },
   [TaskStatus.COMPLETED]: {
     label: "Completed",
@@ -27,17 +21,17 @@ export const TASK_STATUS_CONFIG: Record<TaskStatus, TaskStatusConfig> = {
     backgroundColor: "#66bb6a",
     icon: "✅",
   },
+  [TaskStatus.FAILED]: {
+    label: "Failed",
+    color: "#fff",
+    backgroundColor: "#ef5350",
+    icon: "❌",
+  },
   [TaskStatus.CANCELLED]: {
     label: "Cancelled",
     color: "#fff",
     backgroundColor: "#bdbdbd",
     icon: "⏹️",
-  },
-  [TaskStatus.ON_HOLD]: {
-    label: "On Hold",
-    color: "#fff",
-    backgroundColor: "#ef5350",
-    icon: "⏸️",
   },
 };
 
@@ -72,12 +66,10 @@ export const TASK_PRIORITY_CONFIG: Record<TaskPriority, TaskPriorityConfig> = {
 // Default filter options
 export const FILTER_OPTIONS: Array<"all" | TaskStatus> = [
   "all",
-  TaskStatus.TODO,
-  TaskStatus.IN_PROGRESS,
-  TaskStatus.UNDER_REVIEW,
+  TaskStatus.PENDING,
+  TaskStatus.RUNNING,
   TaskStatus.COMPLETED,
-  TaskStatus.ON_HOLD,
-  TaskStatus.CANCELLED,
+  TaskStatus.FAILED,
 ];
 
 // Sort options
@@ -202,30 +194,26 @@ export const filterTasks = (
 export const calculateTaskStats = (tasks: any[]) => {
   const stats = {
     total: tasks.length,
-    todo: 0,
-    in_progress: 0,
-    under_review: 0,
+    pending: 0,
+    running: 0,
     completed: 0,
-    on_hold: 0,
+    failed: 0,
     cancelled: 0,
   };
 
   tasks.forEach((task) => {
     switch (task.status) {
-      case TaskStatus.TODO:
-        stats.todo++;
+      case TaskStatus.PENDING:
+        stats.pending++;
         break;
-      case TaskStatus.IN_PROGRESS:
-        stats.in_progress++;
-        break;
-      case TaskStatus.UNDER_REVIEW:
-        stats.under_review++;
+      case TaskStatus.RUNNING:
+        stats.running++;
         break;
       case TaskStatus.COMPLETED:
         stats.completed++;
         break;
-      case TaskStatus.ON_HOLD:
-        stats.on_hold++;
+      case TaskStatus.FAILED:
+        stats.failed++;
         break;
       case TaskStatus.CANCELLED:
         stats.cancelled++;

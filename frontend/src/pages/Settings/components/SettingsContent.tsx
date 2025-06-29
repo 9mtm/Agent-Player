@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import type { SettingsSection } from '../types/newTypes';
 import ThemeEditor from './ThemeEditor';
 import SecuritySettingsComponent from './SecuritySettingsComponent';
@@ -26,7 +26,6 @@ import {
   BackupRestoreComponent
 } from './AdditionalSettingsComponents';
 import config from '../../../config';
-import api from '../../../services/api';
 
 interface ProfileData {
   user_type: string;
@@ -375,7 +374,7 @@ const DynamicProfileSelector: React.FC = () => {
   const loadProfileData = async () => {
     try {
       const token = localStorage.getItem('access_token');
-      const response = await fetch(`${config.api.baseURL}/settings/profile`, {
+      const response = await fetch(`${config.api.baseURL}/api/v1/settings/profile`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -410,7 +409,7 @@ const DynamicProfileSelector: React.FC = () => {
     
     try {
       const token = localStorage.getItem('access_token');
-      const response = await fetch(`${config.api.baseURL}/settings/profile`, {
+      const response = await fetch(`${config.api.baseURL}/api/v1/settings/profile`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',

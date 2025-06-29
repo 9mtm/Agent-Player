@@ -10,26 +10,20 @@ interface TestAgentModalProps {
 
 interface TestResponse {
   success: boolean;
-  result?: {
-    message?: string;
-    data?: {
-      response?: string;
-      [key: string]: unknown;
-    } | null;
-    status?: string;
-    agent_name?: string;
-    model?: string;
-    user_message?: string;
-    ai_response?: string;
-    response_time?: string;
+  data?: {
+    agent_name: string;
+    model: string;
+    user_message: string;
+    ai_response: string;
     usage?: {
-      total_tokens: number;
-      prompt_tokens: number;
-      completion_tokens: number;
+      total_tokens?: number;
+      prompt_tokens?: number;
+      completion_tokens?: number;
     };
+    response_time: string;
   };
-  message?: string;
-  error?: string;
+  message: string;
+  error_details?: string;
 }
 
 const TestAgentModal: React.FC<TestAgentModalProps> = ({
@@ -68,7 +62,7 @@ const TestAgentModal: React.FC<TestAgentModalProps> = ({
       
       const responseData: TestResponse = {
         success: result.success,
-        result: result.result,
+        data: result.result,
         message: result.error || (result.success ? 'Test successful' : 'Test failed'),
       };
 
@@ -334,59 +328,59 @@ const TestAgentModal: React.FC<TestAgentModalProps> = ({
           <div
             style={{
               ...styles.result,
-              ...(testResult.success && !testResult.result?.message?.includes("Invalid") ? styles.successResult : styles.errorResult),
+              ...(testResult.success ? styles.successResult : styles.errorResult),
             }}
           >
             <div
               style={{
                 ...styles.resultTitle,
-                ...(testResult.success && !testResult.result?.message?.includes("Invalid") ? styles.successTitle : styles.errorTitle),
+                ...(testResult.success ? styles.successTitle : styles.errorTitle),
               }}
             >
-              {testResult.success && !testResult.result?.message?.includes("Invalid") ? '✅ Test Successful!' : '❌ Test Failed'}
+              {testResult.success ? '✅ Test Successful!' : '❌ Test Failed'}
             </div>
             
             <div style={styles.resultContent}>
-              {testResult.success ? (
+              {(() => {
+                console.log('🎨 Rendering results. Success:', testResult.success, 'Data exists:', !!testResult.data);
+                if (testResult.data) {
+                  console.log('🎨 Data fields:', Object.keys(testResult.data));
+                  console.log('🎨 Agent name:', testResult.data.agent_name);
+                  console.log('🎨 Model:', testResult.data.model);
+                }
+                return null;
+              })()}
+              
+              {testResult.success && testResult.data ? (
                 <>
-                  {testResult.result?.message ? (
-                    <div style={styles.messageBox}>
-                      <strong>Message:</strong><br />
-                      {testResult.result.message}
-                    </div>
-                  ) : (
-                    <>
-                      {testResult.result?.agent_name && (
-                        <div><strong>🤖 Agent:</strong> {testResult.result.agent_name}</div>
-                      )}
-                      {testResult.result?.model && (
-                        <div><strong>🧠 Model:</strong> {testResult.result.model}</div>
-                      )}
-                      {testResult.result?.response_time && (
-                        <div><strong>⏱️ Response Time:</strong> {testResult.result.response_time}</div>
-                      )}
-                      
-                      <div style={styles.messageBox}>
-                        <strong>👤 Your Message:</strong><br />
-                        {testResult.result?.user_message || testMessage}
-                      </div>
-                      
-                      <div style={styles.responseBox}>
-                        <strong>🤖 Agent Response:</strong><br />
-                        {testResult.result?.ai_response || testResult.result?.data?.response || 'No response'}
-                      </div>
+                  <div><strong>🤖 Agent:</strong> {testResult.data.agent_name || 'Unknown'}</div>
+                  <div><strong>🧠 Model:</strong> {testResult.data.model || 'Unknown'}</div>
+                  <div><strong>⏱️ Response Time:</strong> {testResult.data.response_time || 'Unknown'}</div>
+                  
+                  <div style={styles.messageBox}>
+                    <strong>👤 Your Message:</strong><br />
+                    {testResult.data.user_message || 'No message'}
+                  </div>
+                  
+                  <div style={styles.responseBox}>
+                    <strong>🤖 Agent Response:</strong><br />
+                    {testResult.data.ai_response || 'No response'}
+                  </div>
 
-                      {testResult.result?.usage && (
-                        <div style={{ fontSize: '12px', color: '#666', marginTop: '8px' }}>
-                          📊 Usage: {testResult.result.usage.total_tokens} tokens ({testResult.result.usage.prompt_tokens} prompt + {testResult.result.usage.completion_tokens} completion)
-                        </div>
-                      )}
-                    </>
+                  {testResult.data.usage && (
+                    <div style={{ fontSize: '12px', color: '#666', marginTop: '8px' }}>
+                      📊 Usage: {testResult.data.usage.total_tokens || 0} tokens
+                    </div>
                   )}
                 </>
               ) : (
                 <>
-                  <div><strong>Error Message:</strong> {testResult.error || testResult.message || 'Unknown error'}</div>
+                  <div><strong>Error Message:</strong> {testResult.message}</div>
+                  {testResult.error_details && (
+                    <div style={{ fontSize: '12px', color: '#999', marginTop: '8px' }}>
+                      Error Details: {testResult.error_details}
+                    </div>
+                  )}
                 </>
               )}
             </div>

@@ -90,11 +90,10 @@ export interface TaskFormData {
 
 export interface TaskStats {
   total: number;
-  todo: number;
-  in_progress: number;
-  under_review: number;
+  pending: number;
+  running: number;
   completed: number;
-  on_hold: number;
+  failed: number;
   cancelled: number;
 }
 

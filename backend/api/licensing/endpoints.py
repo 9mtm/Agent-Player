@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timedelta
 import json
 
-router = APIRouter(tags=["Licensing"])
+router = APIRouter(prefix="/licensing", tags=["licensing"])
 
 # ============================================================================
 # PYDANTIC MODELS

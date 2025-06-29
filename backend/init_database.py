@@ -8,7 +8,11 @@ import bcrypt
 from datetime import datetime
 from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.orm import sessionmaker
-from models.database import Base, User, Session, Agent, AgentType, Conversation, Message, ActivityLog
+from models import Base
+from models.user import User, UserSession
+from models.agent import Agent, AgentType
+from models.chat import Conversation, Message
+from models.activity_log import ActivityLog
 
 # Database path
 db_path = "data/database.db"
@@ -54,6 +58,13 @@ try:
             password_hash=password_hash,
             role="admin",
             is_active=True,
+            is_verified=True,
+            email_verified=True,
+            phone_verified=False,
+            two_factor_enabled=False,
+            last_login=datetime.utcnow(),
+            failed_login_attempts=0,
+            preferences={},
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow()
         )

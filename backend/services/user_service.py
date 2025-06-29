@@ -6,9 +6,9 @@ Simplified user management service using SQLAlchemy
 from typing import Dict, Any, Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, and_, func, desc
-from models.database import User, UserSession
+from models.user import User, UserSession
+from models.activity_log import ActivityLog
 from fastapi import HTTPException
-import logging
 
 class UserService:
     """User management service"""
@@ -178,6 +178,17 @@ class UserService:
             await db.rollback()
             return False
 
+    async def get_user_activity(self, db: AsyncSession, user_id: int) -> List[Dict[str, Any]]:
+        """Get user activity log"""
+        query = (
+            select(ActivityLog)
+            .where(ActivityLog.user_id == user_id)
+            .order_by(desc(ActivityLog.created_at))
+        )
+        result = await db.execute(query)
+        activities = result.scalars().all()
+        return [self._activity_to_dict(activity) for activity in activities]
+
     async def get_user_statistics_by_id(self, db: AsyncSession, user_id: int) -> Dict[str, Any]:
         """Get statistics for a specific user"""
         # Get login count from sessions
@@ -194,9 +205,17 @@ class UserService:
             .where(UserSession.user_id == user_id)
         )
         
+        # Get total actions
+        action_count = await db.scalar(
+            select(func.count())
+            .select_from(ActivityLog)
+            .where(ActivityLog.user_id == user_id)
+        )
+        
         return {
             "total_logins": login_count or 0,
-            "last_login": last_login.isoformat() if last_login else None
+            "last_login": last_login.isoformat() if last_login else None,
+            "total_actions": action_count or 0
         }
 
     async def update_user_by_admin(self, db: AsyncSession, user_id: int, updates: Dict[str, Any]) -> bool:
@@ -245,9 +264,21 @@ class UserService:
         
         if include_timestamps:
             result.update({
-                "created_at": user.created_at.isoformat() if user.created_at else None,
-                "updated_at": user.updated_at.isoformat() if user.updated_at else None,
-                "last_login": user.last_login.isoformat() if user.last_login else None
+                "created_at": user.created_at,
+                "updated_at": user.updated_at,
+                "last_login": user.last_login
             })
             
-        return result 
+        return result
+    
+    def _activity_to_dict(self, activity: ActivityLog) -> Dict[str, Any]:
+        """Convert ActivityLog model to dictionary"""
+        return {
+            "id": activity.id,
+            "action": activity.action,
+            "details": activity.details,
+            "ip_address": activity.ip_address,
+            "user_agent": activity.user_agent,
+            "extra_data": activity.extra_data,
+            "created_at": activity.created_at
+        } 

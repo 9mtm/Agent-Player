@@ -10,7 +10,7 @@ from core.dependencies import get_current_user, get_current_admin
 from services.user_service import UserService
 
 # Initialize router and service
-router = APIRouter(tags=["Users"])
+router = APIRouter(prefix="/users", tags=["Users"])
 user_service = UserService()
 
 @router.get("/profile", response_model=SuccessResponse)

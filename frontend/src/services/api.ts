@@ -1,31 +1,6 @@
 import axios from "axios";
-import type {
-  AxiosInstance,
-  InternalAxiosRequestConfig,
-  AxiosError,
-  CreateAxiosDefaults,
-  AxiosResponse,
-} from "axios";
+import type { AxiosInstance, InternalAxiosRequestConfig } from "axios";
 import config from "../config";
-
-// Custom types for our extended Axios configuration
-interface RetryConfig {
-  retries: number;
-  retryDelay: number;
-  retryCondition: (error: AxiosError) => boolean;
-}
-
-interface CustomAxiosConfig extends CreateAxiosDefaults {
-  retryConfig?: RetryConfig;
-}
-
-interface CustomInternalAxiosRequestConfig extends InternalAxiosRequestConfig {
-  metadata?: {
-    startTime: Date;
-  };
-  _retry?: number;
-  retryConfig?: RetryConfig;
-}
 
 // API Base URL - from central configuration
 const API_BASE_URL = config.api.baseURL;
@@ -50,9 +25,9 @@ const clearAuthData = () => {
   delete api.defaults.headers.common["Authorization"];
 };
 
-// Create axios instance with standardized configuration
+// Create axios instance
 const api: AxiosInstance = axios.create({
-  baseURL: API_BASE_URL, // No /api/v1 prefix - endpoints are now standardized
+  baseURL: API_BASE_URL,
   headers: {
     "Content-Type": "application/json",
     Accept: "application/json",
@@ -63,7 +38,7 @@ const api: AxiosInstance = axios.create({
   retryConfig: {
     retries: 2,
     retryDelay: 1000,
-    retryCondition: (error: AxiosError) => {
+    retryCondition: (error: any) => {
       return (
         axios.isAxiosError(error) &&
         (error.code === "ECONNABORTED" ||
@@ -72,11 +47,11 @@ const api: AxiosInstance = axios.create({
       );
     },
   },
-} as CustomAxiosConfig);
+});
 
 // Add request interceptor for debugging
 api.interceptors.request.use(
-  (config: CustomInternalAxiosRequestConfig) => {
+  (config: InternalAxiosRequestConfig) => {
     // Add request timestamp for timeout tracking
     config.metadata = { startTime: new Date() };
 
@@ -115,11 +90,11 @@ api.interceptors.request.use(
 
 // Handle responses and errors with retry logic
 api.interceptors.response.use(
-  (response: AxiosResponse) => {
+  (response) => {
     // Calculate request duration
-    const config = response.config as CustomInternalAxiosRequestConfig;
-    const duration = config.metadata
-      ? new Date().getTime() - new Date(config.metadata.startTime).getTime()
+    const duration = response.config.metadata
+      ? new Date().getTime() -
+        new Date(response.config.metadata.startTime).getTime()
       : 0;
 
     console.log(`✅ API Response: ${response.status}`, {
@@ -130,17 +105,20 @@ api.interceptors.response.use(
     });
     return response;
   },
-  async (error: AxiosError) => {
-    const config = error.config as CustomInternalAxiosRequestConfig;
-    const retryConfig = config.retryConfig;
+  async (error) => {
+    const retryConfig = api.defaults.retryConfig;
+
+    // Get the original request configuration
+    const originalRequest = error.config;
 
     // Check if we should retry the request
     if (
       retryConfig &&
-      (!config._retry || config._retry < retryConfig.retries) &&
+      (!originalRequest._retry ||
+        originalRequest._retry < retryConfig.retries) &&
       retryConfig.retryCondition(error)
     ) {
-      config._retry = (config._retry || 0) + 1;
+      originalRequest._retry = (originalRequest._retry || 0) + 1;
 
       // Wait before retrying
       await new Promise((resolve) =>
@@ -148,14 +126,14 @@ api.interceptors.response.use(
       );
 
       // Increase timeout for retry
-      config.timeout = config.timeout ? config.timeout * 1.5 : 15000;
+      originalRequest.timeout = originalRequest.timeout * 1.5;
 
-      console.log(`🔄 Retrying request (attempt ${config._retry}):`, {
-        url: config.url,
-        timeout: config.timeout,
+      console.log(`🔄 Retrying request (attempt ${originalRequest._retry}):`, {
+        url: originalRequest.url,
+        timeout: originalRequest.timeout,
       });
 
-      return api(config);
+      return api(originalRequest);
     }
 
     console.error("❌ API Response Error:", {
@@ -164,7 +142,7 @@ api.interceptors.response.use(
       statusText: error.response?.statusText,
       data: error.response?.data,
       message: error.message,
-      retryAttempts: config?._retry || 0,
+      retryAttempts: error.config?._retry || 0,
     });
 
     if (error.response?.status === 401) {

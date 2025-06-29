@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import config from "../../../../config";
-import api from "../../../../services/api";
 
 // Extend window object for board/agent IDs
 declare global {
@@ -31,82 +30,7 @@ import type {
   GroupDragOffsets,
 } from "../types";
 
-export const useBoard = (childId?: string) => {
-  const [boards, setBoards] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (childId) {
-      fetchBoards();
-    }
-  }, [childId]);
-
-  const fetchBoards = async () => {
-    setLoading(true);
-    try {
-      const response = await api.get(
-        childId ? `/boards?agent_id=${childId}` : "/boards"
-      );
-      setBoards(response.data);
-      setError("");
-    } catch (error) {
-      console.error("Error fetching boards:", error);
-      setError("Failed to load boards");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const createBoard = async (data: any) => {
-    setLoading(true);
-    try {
-      const response = await api.post("/boards", data);
-      setBoards((prev) => [...prev, response.data]);
-      setError("");
-      return response.data;
-    } catch (error) {
-      console.error("Error creating board:", error);
-      setError("Failed to create board");
-      throw error;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const updateBoard = async (boardId: string, data: any) => {
-    setLoading(true);
-    try {
-      const response = await api.put(`/boards/${boardId}`, data);
-      setBoards((prev) =>
-        prev.map((board) => (board.id === boardId ? response.data : board))
-      );
-      setError("");
-      return response.data;
-    } catch (error) {
-      console.error("Error updating board:", error);
-      setError("Failed to update board");
-      throw error;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const deleteBoard = async (boardId: string) => {
-    setLoading(true);
-    try {
-      await api.delete(`/boards/${boardId}`);
-      setBoards((prev) => prev.filter((board) => board.id !== boardId));
-      setError("");
-    } catch (error) {
-      console.error("Error deleting board:", error);
-      setError("Failed to delete board");
-      throw error;
-    } finally {
-      setLoading(false);
-    }
-  };
-
+export const useBoard = () => {
   // Core state
   const [nodes, setNodes] = useState<BoardNodeData[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -184,7 +108,7 @@ export const useBoard = (childId?: string) => {
 
           // First, get boards for this child agent
           const boardsResponse = await fetch(
-            `${config.api.baseURL}/boards?agent_id=${childId}`
+            `${config.api.baseURL}/api/v1/boards?agent_id=${childId}`
           );
           const boardsResult = await boardsResponse.json();
 
@@ -215,7 +139,7 @@ export const useBoard = (childId?: string) => {
 
             try {
               const createResponse = await fetch(
-                `${config.api.baseURL}/boards`,
+                `${config.api.baseURL}/api/v1/boards`,
                 {
                   method: "POST",
                   headers: {
@@ -304,7 +228,7 @@ export const useBoard = (childId?: string) => {
           console.log("💾 Saving board to API:", window.boardId);
 
           const response = await fetch(
-            `${config.api.baseURL}/boards/${window.boardId}`,
+            `${config.api.baseURL}/api/v1/boards/${window.boardId}`,
             {
               method: "PUT",
               headers: {
@@ -593,14 +517,5 @@ export const useBoard = (childId?: string) => {
     onBoardClick: clearSelection,
     onMinimapViewportChange: setPan,
     onMinimapToggleVisible: () => setMinimapVisible((v) => !v),
-
-    // New board management
-    boards,
-    loading,
-    error,
-    fetchBoards,
-    createBoard,
-    updateBoard,
-    deleteBoard,
   };
 };

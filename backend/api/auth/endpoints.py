@@ -3,23 +3,13 @@ Authentication API Endpoints
 All authentication related routes
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
-from fastapi.responses import RedirectResponse
-from typing import Dict, Any, Optional
+from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Dict, Any
 from models.shared import LoginRequest, RegisterRequest, TokenRefreshRequest, SuccessResponse, UserResponse, SystemStatus
 from core.dependencies import get_current_user, get_current_admin
 from services.auth_service import AuthService
-from services.gemini_service import gemini_service
 from config.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
-from models.database import User
-
-try:
-    from google_auth_oauthlib.flow import Flow
-    GOOGLE_AUTH_AVAILABLE = True
-except ImportError:
-    GOOGLE_AUTH_AVAILABLE = False
-    print("Warning: Google OAuth libraries not available. Some features will be disabled.")
 
 # Initialize router and service
 router = APIRouter(tags=["Authentication"])
@@ -167,76 +157,4 @@ async def terminate_session(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Failed to terminate session")
-
-@router.get("/google/auth")
-async def google_auth_url():
-    """Get Google OAuth URL for Gemini authentication"""
-    if not GOOGLE_AUTH_AVAILABLE:
-        return {
-            "success": False,
-            "error": "Google OAuth is not available. Please install required packages.",
-            "fallback_url": "https://makersuite.google.com/app/apikey"
-        }
-        
-    try:
-        flow = Flow.from_client_secrets_file(
-            'client_secrets.json',
-            scopes=['https://www.googleapis.com/auth/generative-ai'],
-            redirect_uri="http://localhost:8000/auth/google/callback"
-        )
-        
-        auth_url, _ = flow.authorization_url(
-            access_type='offline',
-            include_granted_scopes='true'
-        )
-        
-        return {
-            "success": True,
-            "auth_url": auth_url
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "fallback_url": "https://makersuite.google.com/app/apikey"
-        }
-
-@router.get("/google/callback")
-async def google_auth_callback(
-    code: str,
-    current_user: User = Depends(get_current_user)
-):
-    """Handle Google OAuth callback and initialize Gemini"""
-    if not GOOGLE_AUTH_AVAILABLE:
-        raise HTTPException(
-            status_code=400,
-            detail="Google OAuth is not available. Please use API key authentication."
-        )
-        
-    try:
-        # Initialize Gemini with Google auth
-        result = await gemini_service.initialize_with_google_auth(code)
-        
-        if not result['success']:
-            raise HTTPException(status_code=400, detail=result['error'])
-            
-        # Store credentials in user settings
-        await update_user_gemini_credentials(
-            user_id=current_user.id,
-            credentials=result['credentials']
-        )
-        
-        return {
-            "success": True,
-            "message": "Successfully authenticated with Google",
-            "user_info": result['user_info']
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-async def update_user_gemini_credentials(user_id: int, credentials: dict):
-    """Update user's stored Gemini credentials"""
-    # Implementation depends on your database schema
-    pass 
+        raise HTTPException(status_code=500, detail="Failed to terminate session") 

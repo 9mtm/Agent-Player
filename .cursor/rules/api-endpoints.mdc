@@ -8,166 +8,242 @@ alwaysApply: true
 ## 🚀 **COMPLETE API DOCUMENTATION**
 
 **Base URL:** `http://localhost:8000`  
-**API Version:** 2.0.0  
-**Total Modules:** 8 core modules  
-**Total Endpoints:** 60+ endpoints  
+**API Version:** Latest (no versioning prefix needed)  
+**Total APIs:** 9 modules  
+**Total Endpoints:** 67+ endpoints  
 
-**Note:** All endpoints are direct without any version prefix. Workflow functionality is integrated into Child Agent Board.
-
----
-
-## 🔐 **AUTHENTICATION** `/auth`
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/auth/login` | User login |
-| POST | `/auth/register/admin` | Admin registration |
-| GET | `/auth/me` | Get current user |
-| POST | `/auth/logout` | User logout |
-| POST | `/auth/refresh` | Refresh token |
-| GET | `/auth/system/status` | Get system status |
-| GET | `/auth/users` | Get users |
-| GET | `/auth/sessions` | Get active sessions |
-| DELETE | `/auth/sessions/{session_id}` | Terminate session |
+**Note:** All endpoints are available directly without `/api/v1` prefix. Legacy v1 routes have been removed to eliminate duplication.
 
 ---
 
-## 🤖 **AGENTS** `/agents`
+## 🔐 **AUTHENTICATION API** `/auth`
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/agents` | Get all agents |
-| POST | `/agents` | Create agent |
-| GET | `/agents/main` | Get main agents |
-| GET | `/agents/child` | Get child agents |
-| POST | `/agents/child` | Create child agent |
-| GET | `/agents/{agent_id}` | Get agent by ID |
-| PUT | `/agents/{agent_id}` | Update agent |
-| DELETE | `/agents/{agent_id}` | Delete agent |
-| POST | `/agents/{agent_id}/test` | Test agent |
-| GET | `/agents/{agent_id}/children` | Get agent children |
-| GET | `/agents/statistics/overview` | Get agent statistics |
-| GET | `/agents/{agent_id}/performance` | Get agent performance |
-| GET | `/agents/{agent_id}/analytics` | Get agent analytics |
-| POST | `/agents/{agent_id}/clone` | Clone agent |
-| PUT | `/agents/{agent_id}/activate` | Activate agent |
-| PUT | `/agents/{agent_id}/deactivate` | Deactivate agent |
+| Method | Endpoint | Description | Status |
+|--------|----------|-------------|--------|
+| POST | `/auth/login` | User login | ✅ |
+| POST | `/auth/register/admin` | Admin registration | ✅ |
+| GET | `/auth/me` | Get current user | ✅ |
+| POST | `/auth/logout` | User logout | ✅ |
+| POST | `/auth/refresh` | Refresh token | ✅ |
+| POST | `/auth/forgot-password` | Forgot password | ✅ |
+| POST | `/auth/reset-password` | Reset password | ✅ |
+| POST | `/auth/change-password` | Change password | ✅ |
 
 ---
 
-## 💬 **CHAT** `/chat`
+## 🤖 **AGENTS API** `/agents`
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/chat/conversations` | Get conversations |
-| POST | `/chat/conversations` | Create conversation |
-| GET | `/chat/conversations/{conversation_id}` | Get conversation |
-| PUT | `/chat/conversations/{conversation_id}` | Update conversation |
-| DELETE | `/chat/conversations/{conversation_id}` | Delete conversation |
-| GET | `/chat/conversations/{conversation_id}/messages` | Get messages |
-| POST | `/chat/conversations/{conversation_id}/messages` | Add message |
-| POST | `/chat/conversations/{conversation_id}/ai-response` | Get AI response |
-| GET | `/chat/analytics/dashboard` | Get chat analytics |
-| GET | `/chat/analytics/global` | Get global analytics |
-| GET | `/chat/search` | Search messages |
-
----
-
-## 👥 **USERS** `/users`
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/users/profile` | Get user profile |
-| PUT | `/users/profile` | Update profile |
-| GET | `/users/settings` | Get settings |
-| PUT | `/users/settings` | Update settings |
-| GET | `/users/preferences` | Get preferences |
-| PUT | `/users/preferences` | Update preferences |
-| GET | `/users/activity` | Get activity |
-| GET | `/users/statistics` | Get statistics |
-| GET | `/users/notifications` | Get notifications |
-| GET | `/users/admin/all` | Get all users |
-| GET | `/users/admin/statistics/overview` | Get users overview |
-| GET | `/users/admin/{user_id}` | Get user by ID |
-| PUT | `/users/admin/{user_id}` | Update user |
-| DELETE | `/users/admin/{user_id}` | Deactivate user |
-| POST | `/users/admin/{user_id}/activate` | Activate user |
+| Method | Endpoint | Description | Status |
+|--------|----------|-------------|--------|
+| GET | `/agents` | List agents | ✅ |
+| POST | `/agents` | Create agent | ✅ |
+| GET | `/agents/{id}` | Get agent details | ✅ |
+| PUT | `/agents/{id}` | Update agent | ✅ |
+| DELETE | `/agents/{id}` | Delete agent | ✅ |
+| POST | `/agents/{id}/test` | Test agent | ✅ |
+| POST | `/agents/{id}/clone` | Clone agent | ✅ |
+| PUT | `/agents/{id}/activate` | Activate agent | ✅ |
+| PUT | `/agents/{id}/deactivate` | Deactivate agent | ✅ |
+| GET | `/agents/{id}/analytics` | Agent analytics | ✅ |
+| GET | `/agents/{id}/export` | Export agent | ✅ |
 
 ---
 
-## ✅ **TASKS** `/task/tasks`
+## 💬 **CHAT API** `/chat`
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/task/tasks/analytics` | Get analytics |
-| GET | `/task/tasks/my-tasks` | Get my tasks |
-| GET | `/task/tasks` | List tasks |
-| POST | `/task/tasks` | Create task |
-| GET | `/task/tasks/{task_id}` | Get task |
-| PUT | `/task/tasks/{task_id}` | Update task |
-| DELETE | `/task/tasks/{task_id}` | Delete task |
-| POST | `/task/tasks/{task_id}/comments` | Add comment |
-| GET | `/task/tasks/{task_id}/comments` | Get comments |
-| POST | `/task/tasks/{task_id}/assign` | Assign task |
-| POST | `/task/tasks/{task_id}/time-logs` | Log time |
-| GET | `/task/tasks/{task_id}/time-logs` | Get time logs |
+| Method | Endpoint | Description | Status |
+|--------|----------|-------------|--------|
+| GET | `/chat/conversations` | List conversations | ✅ |
+| POST | `/chat/conversations` | Create conversation | ✅ |
+| GET | `/chat/conversations/{id}` | Get conversation | ✅ |
+| DELETE | `/chat/conversations/{id}` | Delete conversation | ✅ |
+| GET | `/chat/conversations/{id}/messages` | Get messages | ✅ |
+| POST | `/chat/conversations/{id}/messages` | Send message | ✅ |
+| POST | `/chat/conversations/{id}/ai-response` | Get AI response | ✅ |
+| POST | `/chat/conversations/{id}/export` | Export conversation | ✅ |
 
 ---
 
-## 🔑 **LICENSING** `/license/licensing`
+## 👥 **USERS API** `/users`
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/license/licensing/validate` | Validate license |
-| GET | `/license/licensing/status` | Get status |
-| POST | `/license/licensing/activate` | Activate license |
-| GET | `/license/licensing/hardware-info` | Get hardware info |
-| GET | `/license/licensing/environment-check` | Check environment |
-| GET | `/license/licensing/features` | Get features |
-| POST | `/license/licensing/deployment-check` | Check deployment |
-| GET | `/license/licensing/deployment-guide` | Get guide |
-
----
-
-## 🎓 **TRAINING** `/training/training-lab`
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/training/training-lab/workspaces` | List workspaces |
-| POST | `/training/training-lab/workspaces` | Create workspace |
-| GET | `/training/training-lab/workspaces/{workspace_id}` | Get workspace |
-| PUT | `/training/training-lab/workspaces/{workspace_id}` | Update workspace |
-| DELETE | `/training/training-lab/workspaces/{workspace_id}` | Delete workspace |
-| POST | `/training/training-lab/workspaces/{workspace_id}/test` | Test workspace |
-| GET | `/training/training-lab/workspaces/{workspace_id}/sessions` | Get sessions |
-| POST | `/training/training-lab/workspaces/{workspace_id}/sessions` | Create session |
-| GET | `/training/training-lab/analytics` | Get analytics |
-| GET | `/training/training-lab/templates` | Get templates |
-| POST | `/training/training-lab/workspaces/{workspace_id}/import-template` | Import template |
-| POST | `/training/training-lab/workspaces/{workspace_id}/export` | Export workspace |
+| Method | Endpoint | Description | Status |
+|--------|----------|-------------|--------|
+| GET | `/users/profile` | Get user profile | ✅ |
+| PUT | `/users/profile` | Update profile | ✅ |
+| GET | `/users/settings` | Get user settings | ✅ |
+| PUT | `/users/settings` | Update settings | ✅ |
+| GET | `/users/activity` | Get user activity | ✅ |
+| GET | `/users/notifications` | Get notifications | ✅ |
+| PUT | `/users/notifications/{id}/read` | Mark notification read | ✅ |
+| DELETE | `/users/account` | Delete account | ✅ |
+| GET | `/users/admin/all` | List all users (admin) | ✅ |
+| PUT | `/users/admin/{id}/role` | Update user role (admin) | ✅ |
+| PUT | `/users/admin/{id}/status` | Update user status (admin) | ✅ |
+| GET | `/users/admin/analytics` | User analytics (admin) | ✅ |
 
 ---
 
-## 🛒 **MARKETPLACE** `/market/marketplace`
+## 🔑 **LICENSING API** `/licensing` - **NEW ✨**
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/market/marketplace/items` | Get items |
-| GET | `/market/marketplace/items/{item_id}` | Get item |
-| GET | `/market/marketplace/categories` | Get categories |
-| GET | `/market/marketplace/featured` | Get featured |
-| POST | `/market/marketplace/items/{item_id}/purchase` | Purchase item |
-| POST | `/market/marketplace/items/{item_id}/reviews` | Add review |
-| POST | `/market/marketplace/publish` | Publish item |
-| GET | `/market/marketplace/my-purchases` | Get purchases |
-| GET | `/market/marketplace/my-listings` | Get listings |
-| GET | `/market/marketplace/search` | Search marketplace |
+| Method | Endpoint | Description | Status |
+|--------|----------|-------------|--------|
+| POST | `/licensing/validate` | Validate license key | ✅ NEW |
+| GET | `/licensing/status` | Get license status | ✅ NEW |
+| POST | `/licensing/activate` | Activate license | ✅ NEW |
+| GET | `/licensing/hardware-info` | Get hardware fingerprint | ✅ NEW |
+| GET | `/licensing/environment-check` | Check environment | ✅ NEW |
+| GET | `/licensing/features` | Get available features | ✅ NEW |
+| POST | `/licensing/deployment-check` | Check deployment readiness | ✅ NEW |
+| GET | `/licensing/deployment-guide` | Get deployment guide | ✅ NEW |
+
+**Features:**
+- Deployment-only licensing (free development)
+- Hardware fingerprinting for production
+- Environment detection (dev/prod)
+- Feature-based access control
 
 ---
 
-## 📝 **API SCHEMAS**
+## 🎓 **TRAINING LAB API** `/training-lab` - **NEW ✨**
 
-All data models and request/response schemas are documented in the OpenAPI specification at `/docs`.
+| Method | Endpoint | Description | Status |
+|--------|----------|-------------|--------|
+| GET | `/training-lab/workspaces` | List training workspaces | ✅ NEW |
+| POST | `/training-lab/workspaces` | Create workspace | ✅ NEW |
+| GET | `/training-lab/workspaces/{id}` | Get workspace details | ✅ NEW |
+| PUT | `/training-lab/workspaces/{id}` | Update workspace | ✅ NEW |
+| DELETE | `/training-lab/workspaces/{id}` | Delete workspace | ✅ NEW |
+| POST | `/training-lab/workspaces/{id}/test` | Test workspace scenario | ✅ NEW |
+| GET | `/training-lab/workspaces/{id}/sessions` | Get training sessions | ✅ NEW |
+| POST | `/training-lab/workspaces/{id}/sessions` | Create training session | ✅ NEW |
+| GET | `/training-lab/analytics` | Get training analytics | ✅ NEW |
+| GET | `/training-lab/templates` | Get training templates | ✅ NEW |
+| POST | `/training-lab/workspaces/{id}/import-template` | Import template | ✅ NEW |
+| POST | `/training-lab/workspaces/{id}/export` | Export workspace | ✅ NEW |
+
+**Features:**
+- AI Agent training workspaces
+- Scenario testing & evaluation
+- Performance analytics & reporting
+- Template library with import/export
+
+---
+
+## 🛒 **MARKETPLACE API** `/marketplace` - **NEW ✨**
+
+| Method | Endpoint | Description | Status |
+|--------|----------|-------------|--------|
+| GET | `/marketplace/items` | List marketplace items | ✅ NEW |
+| GET | `/marketplace/items/{id}` | Get item details | ✅ NEW |
+| GET | `/marketplace/categories` | Get categories | ✅ NEW |
+| GET | `/marketplace/featured` | Get featured items | ✅ NEW |
+| POST | `/marketplace/items/{id}/purchase` | Purchase item | ✅ NEW |
+| POST | `/marketplace/items/{id}/reviews` | Add review | ✅ NEW |
+| POST | `/marketplace/publish` | Publish item | ✅ NEW |
+| GET | `/marketplace/my-purchases` | Get user purchases | ✅ NEW |
+| GET | `/marketplace/my-listings` | Get user listings | ✅ NEW |
+| GET | `/marketplace/search` | Search marketplace | ✅ NEW |
+
+**Features:**
+- Agent & template marketplace
+- Purchase & licensing system
+- Review & rating system
+- Advanced search & filtering
+
+---
+
+## 🔄 **WORKFLOWS API** `/workflows` - **NEW ✨**
+
+| Method | Endpoint | Description | Status |
+|--------|----------|-------------|--------|
+| GET | `/workflows` | List workflows | ✅ NEW |
+| POST | `/workflows` | Create workflow | ✅ NEW |
+| GET | `/workflows/{id}` | Get workflow details | ✅ NEW |
+| PUT | `/workflows/{id}` | Update workflow | ✅ NEW |
+| DELETE | `/workflows/{id}` | Delete workflow | ✅ NEW |
+| POST | `/workflows/{id}/execute` | Execute workflow | ✅ NEW |
+| GET | `/workflows/{id}/executions` | Get execution history | ✅ NEW |
+| GET | `/workflows/templates` | Get workflow templates | ✅ NEW |
+| POST | `/workflows/templates/{id}/create` | Create from template | ✅ NEW |
+| GET | `/workflows/analytics` | Get workflow analytics | ✅ NEW |
+
+**Features:**
+- Business process automation
+- Visual workflow designer
+- Multi-agent coordination
+- Trigger system (webhook, schedule, API, etc.)
+
+---
+
+## ✅ **TASKS API** `/tasks` - **NEW ✨**
+
+| Method | Endpoint | Description | Status |
+|--------|----------|-------------|--------|
+| GET | `/tasks` | List tasks | ✅ NEW |
+| POST | `/tasks` | Create task | ✅ NEW |
+| GET | `/tasks/{id}` | Get task details | ✅ NEW |
+| PUT | `/tasks/{id}` | Update task | ✅ NEW |
+| DELETE | `/tasks/{id}` | Delete task | ✅ NEW |
+| POST | `/tasks/{id}/comments` | Add comment | ✅ NEW |
+| GET | `/tasks/{id}/comments` | Get comments | ✅ NEW |
+| POST | `/tasks/{id}/assign` | Assign task | ✅ NEW |
+| POST | `/tasks/{id}/time-logs` | Log time | ✅ NEW |
+| GET | `/tasks/{id}/time-logs` | Get time logs | ✅ NEW |
+| GET | `/tasks/analytics` | Get task analytics | ✅ NEW |
+| GET | `/tasks/my-tasks` | Get user's tasks | ✅ NEW |
+
+**Features:**
+- Task management system
+- Agent & user assignment
+- Time tracking & logging
+- Comments & collaboration
+
+---
+
+## 🔄 **SYSTEM ENDPOINTS**
+
+| Method | Endpoint | Description | Status |
+|--------|----------|-------------|--------|
+| GET | `/` | API information & routes | ✅ |
+| GET | `/health` | Health check | ✅ |
+| GET | `/system/status` | System status | ✅ |
+| GET | `/docs` | API documentation (Swagger) | ✅ |
+| GET | `/redoc` | API documentation (ReDoc) | ✅ |
+
+---
+
+## 📋 **API CONVENTIONS**
+
+### **Authentication**
+```http
+Authorization: Bearer <jwt_token>
+```
+
+### **Content Types**
+```http
+Content-Type: application/json
+Accept: application/json
+```
+
+### **Standard HTTP Status Codes**
+- `200` - Success
+- `201` - Created
+- `400` - Bad Request
+- `401` - Unauthorized
+- `403` - Forbidden
+- `404` - Not Found
+- `422` - Validation Error
+- `500` - Internal Server Error
+
+### **Pagination Parameters**
+- `skip` - Number of items to skip (default: 0)
+- `limit` - Number of items to return (default: 20, max: 100)
+
+### **Common Filters**
+- `search` - Search text
+- `status` - Filter by status
+- `category` - Filter by category
+- `sort_by` - Sort field
 
 ---
 

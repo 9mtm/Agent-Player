@@ -48,7 +48,7 @@ class WebSocketService {
     }
 
     const token = this.getAuthToken();
-    const wsUrl = `ws://localhost:8000/chat/ws/${conversationId}?token=${token}`;
+    const wsUrl = `ws://localhost:8000/api/v1/chat/ws/${conversationId}?token=${token}`;
 
     try {
       this.ws = new WebSocket(wsUrl);

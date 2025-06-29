@@ -6,11 +6,10 @@ Simplified chat and conversation management service using SQLAlchemy
 from typing import Dict, Any, Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, and_, func, desc
-from models.database import Conversation, Message
+from models.chat import Conversation, Message
 from fastapi import HTTPException
 import uuid
 from datetime import datetime
-import logging
 
 class ChatService:
     """Chat management service"""

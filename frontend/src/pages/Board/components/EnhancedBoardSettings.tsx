@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { ConnectionType } from './WorkflowBoard';
-import api from '../../../services/api';
 
 interface EnhancedBoardSettingsProps {
   isOpen: boolean;
@@ -57,7 +56,7 @@ export const EnhancedBoardSettings: React.FC<EnhancedBoardSettingsProps> = ({
     {
       id: 'ep-1',
       name: 'Webhook Trigger',
-      url: `/boards/${boardId}/webhook`,
+      url: `/api/v1/boards/${boardId}/webhook`,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       isActive: true
@@ -65,7 +64,7 @@ export const EnhancedBoardSettings: React.FC<EnhancedBoardSettingsProps> = ({
     {
       id: 'ep-2', 
       name: 'Execute Workflow',
-      url: `/boards/${boardId}/execute`,
+      url: `/api/v1/boards/${boardId}/execute`,
       method: 'POST',
       headers: { 'Authorization': 'Bearer <token>' },
       isActive: true
@@ -104,42 +103,6 @@ export const EnhancedBoardSettings: React.FC<EnhancedBoardSettingsProps> = ({
     compressionEnabled: true
   });
 
-  const boardEndpoints = {
-    webhook: (boardId: string) => `/boards/${boardId}/webhook`,
-    execute: (boardId: string) => `/boards/${boardId}/execute`,
-    custom: (boardId: string) => `/boards/${boardId}/custom`,
-  };
-
-  const handleWebhookUpdate = async (boardId: string, data: any) => {
-    try {
-      await api.put(boardEndpoints.webhook(boardId), data);
-      // Handle success
-    } catch (error) {
-      console.error('Error updating webhook:', error);
-      // Handle error
-    }
-  };
-
-  const handleExecute = async (boardId: string, data: any) => {
-    try {
-      await api.post(boardEndpoints.execute(boardId), data);
-      // Handle success
-    } catch (error) {
-      console.error('Error executing board:', error);
-      // Handle error
-    }
-  };
-
-  const handleCustomUpdate = async (boardId: string, data: any) => {
-    try {
-      await api.put(boardEndpoints.custom(boardId), data);
-      // Handle success
-    } catch (error) {
-      console.error('Error updating custom settings:', error);
-      // Handle error
-    }
-  };
-
   useEffect(() => {
     setTempBoardName(boardName);
   }, [boardName, isOpen]);
@@ -153,7 +116,7 @@ export const EnhancedBoardSettings: React.FC<EnhancedBoardSettingsProps> = ({
     const newEndpoint: BoardEndpoint = {
       id: `ep-${Date.now()}`,
       name: 'New Endpoint',
-      url: `/boards/${boardId}/custom`,
+      url: `/api/v1/boards/${boardId}/custom`,
       method: 'POST',
       headers: {},
       isActive: true

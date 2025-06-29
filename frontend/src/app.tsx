@@ -17,6 +17,7 @@ import MarketplacePage from './pages/Marketplace/MarketplacePage';
 import SettingsPageNew from './pages/Settings/SettingsPageNew';
 import BoardPage from './pages/Board/BoardPage';
 import TrainingLabPage from './pages/TrainingLab/TrainingLabPage';
+import WorkflowsPage from './pages/Workflows/WorkflowsPage';
 import { Sidebar } from './components/Layout/Sidebar';
 
 // Import global styles
@@ -169,6 +170,7 @@ function DashboardLayout() {
           <Route path="form-builder" element={<FormBuilderPage />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="training-lab" element={<TrainingLabPage />} />
+          <Route path="workflows" element={<WorkflowsPage />} />
           <Route path="marketplace" element={<MarketplacePage />} />
           <Route path="settings" element={<SettingsPageNew />} />
           {/* Board routes with agent IDs */}

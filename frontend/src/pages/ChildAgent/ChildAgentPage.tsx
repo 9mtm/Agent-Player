@@ -1,99 +1,193 @@
 import React, { useState, useEffect } from 'react';
-import api from '../../services/api';
 import { useNotificationContext } from '../../context/NotificationContext';
 
-interface ChildAgent {
-  id: string;
+interface ParentAgent {
+  id: number;
   name: string;
-  status: string;
-  type: string;
-  created_at: string;
+  description: string;
+  status: 'active' | 'inactive';
+  performance_score: number;
 }
 
-interface MainAgent {
-  id: string;
+interface ChildAgent {
+  id: number;
   name: string;
-  type: string;
+  description: string;
+  parent_agent_id: number;
+  parent_agent_name: string;
+  specialization: string;
+  status: 'active' | 'training' | 'inactive';
+  autonomy_level: 'supervised' | 'semi-autonomous' | 'autonomous';
+  learning_enabled: boolean;
+  tasks_completed: number;
+  performance_score: number;
+  created_at: string;
+  capabilities: string[];
+}
+
+interface CreateChildAgentData {
+  name: string;
+  description: string;
+  parent_agent_id: number;
+  specialization: string;
+  capabilities: string[];
+  autonomy_level: 'supervised' | 'semi-autonomous' | 'autonomous';
+  learning_enabled: boolean;
 }
 
 const ChildAgentPage: React.FC = () => {
   const { showSuccess, showError, confirm } = useNotificationContext();
   const [childAgents, setChildAgents] = useState<ChildAgent[]>([]);
-  const [mainAgents, setMainAgents] = useState<MainAgent[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [parentAgents, setParentAgents] = useState<ParentAgent[]>([]);
+  const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [selectedParentFilter, setSelectedParentFilter] = useState<string | null>(null);
+  const [selectedParentFilter, setSelectedParentFilter] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'hierarchy'>('grid');
 
+  // Fetch data on component mount
   useEffect(() => {
     fetchChildAgents();
-    fetchMainAgents();
+    fetchParentAgents();
   }, []);
 
   const fetchChildAgents = async () => {
     try {
-      const response = await api.get('/agents/child');
-      setChildAgents(response.data);
+      const response = await fetch('http://127.0.0.1:8000/api/v1/child-agents');
+      const result = await response.json();
+      if (result.success) {
+        setChildAgents(result.data);
+      } else {
+        showError('Error', 'Failed to fetch child agents');
+      }
     } catch (error) {
       console.error('Error fetching child agents:', error);
-      setError('Failed to load child agents');
+      showError('Error', 'Network error while fetching child agents');
     }
   };
 
-  const fetchMainAgents = async () => {
+  const fetchParentAgents = async () => {
     try {
-      const response = await api.get('/agents/main');
-      setMainAgents(response.data);
+      const response = await fetch('http://127.0.0.1:8000/api/v1/agents');
+      const result = await response.json();
+      if (result.success) {
+        setParentAgents(result.data);
+      } else {
+        showError('Error', 'Failed to fetch parent agents');
+      }
     } catch (error) {
-      console.error('Error fetching main agents:', error);
-      setError('Failed to load main agents');
+      console.error('Error fetching parent agents:', error);
+      showError('Error', 'Network error while fetching parent agents');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const createChildAgent = async (data: Partial<ChildAgent>) => {
-    setLoading(true);
+  const handleCreateChildAgent = async (data: CreateChildAgentData) => {
     try {
-      await api.post('/agents/child', data);
-      await fetchChildAgents(); // Refresh the list
-      setError('');
-      showSuccess('Success', `Child Agent "${data.name}" created successfully!`);
+      const response = await fetch('http://127.0.0.1:8000/api/v1/child-agents', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: data.name,
+          description: data.description,
+          parent_agent_id: data.parent_agent_id,
+          specialization: data.specialization,
+          capabilities: data.capabilities,
+          autonomy_level: data.autonomy_level,
+          learning_enabled: data.learning_enabled,
+          training_data: {}
+        }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        setChildAgents(prev => [...prev, result.data]);
+        setShowCreateModal(false);
+        showSuccess('Success', `Child Agent "${data.name}" created successfully!`);
+        
+        // Ask if user wants to start training
+        setTimeout(() => {
+          confirm(
+            `🎓 Child Agent created! Would you like to start training "${data.name}"?`,
+            'Start Training',
+            () => handleStartTraining(result.data.id)
+          );
+        }, 1000);
+      } else {
+        showError('Error', result.message || 'Failed to create child agent');
+      }
     } catch (error) {
       console.error('Error creating child agent:', error);
-      setError('Failed to create child agent');
-    } finally {
-      setLoading(false);
+      showError('Error', 'Network error while creating child agent');
     }
   };
 
-  const trainChildAgent = async (childAgentId: string) => {
-    setLoading(true);
+  const handleStartTraining = async (childAgentId: number) => {
     try {
-      await api.post(`/agents/${childAgentId}/train`);
-      await fetchChildAgents(); // Refresh the list
-      setError('');
-      showSuccess('Training Started', 'Training for Child Agent has begun.');
+      const trainingData = {
+        training_type: "basic_skills",
+        duration_minutes: 30,
+        data_sources: ["parent_agent_logs", "knowledge_base"],
+        focus_areas: ["communication", "problem_solving"]
+      };
+
+      const response = await fetch(`http://127.0.0.1:8000/api/v1/child-agents/${childAgentId}/train`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(trainingData),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        showSuccess('Training Started', `Training for Child Agent ${childAgentId} has begun. ${result.estimated_duration}`);
+        
+        // Update child agent status to training
+        setChildAgents(prev => prev.map(agent => 
+          agent.id === childAgentId 
+            ? { ...agent, status: 'training' as const }
+            : agent
+        ));
+      } else {
+        showError('Error', result.message || 'Failed to start training');
+      }
     } catch (error) {
-      console.error('Error training child agent:', error);
-      setError('Failed to train child agent');
-    } finally {
-      setLoading(false);
+      console.error('Error starting training:', error);
+      showError('Error', 'Network error while starting training');
     }
   };
 
-  const deleteChildAgent = async (childAgentId: string) => {
-    setLoading(true);
-    try {
-      await api.delete(`/agents/${childAgentId}`);
-      await fetchChildAgents(); // Refresh the list
-      setError('');
-      showSuccess('Deleted', 'Child Agent has been deleted successfully.');
-    } catch (error) {
-      console.error('Error deleting child agent:', error);
-      setError('Failed to delete child agent');
-    } finally {
-      setLoading(false);
-    }
+  const handleDeleteChildAgent = async (childAgent: ChildAgent) => {
+    confirm(
+      `⚠️ Are you sure you want to delete "${childAgent.name}"?\n\nThis will permanently remove the child agent and all its training data.`,
+      'Delete Child Agent',
+      async () => {
+        try {
+          const response = await fetch(`http://127.0.0.1:8000/api/v1/child-agents/${childAgent.id}`, {
+            method: 'DELETE',
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            setChildAgents(prev => prev.filter(agent => agent.id !== childAgent.id));
+            showSuccess('Deleted', `Child Agent "${childAgent.name}" has been deleted successfully.`);
+          } else {
+            showError('Error', result.message || 'Failed to delete child agent');
+          }
+        } catch (error) {
+          console.error('Error deleting child agent:', error);
+          showError('Error', 'Network error while deleting child agent');
+        }
+      }
+    );
+  };
+
+  const navigateToTrainingBoard = (childAgent: ChildAgent) => {
+    // Navigate to training board with fixed board ID 158831
+    window.location.href = `/dashboard/board/child-agent/158831`;
   };
 
   const getStatusColor = (status: string) => {
@@ -115,12 +209,12 @@ const ChildAgentPage: React.FC = () => {
   };
 
   const filteredChildAgents = selectedParentFilter 
-    ? childAgents.filter(agent => agent.status === selectedParentFilter)
+    ? childAgents.filter(agent => agent.parent_agent_id === selectedParentFilter)
     : childAgents;
 
-  const groupedByParent = mainAgents.map(parent => ({
+  const groupedByParent = parentAgents.map(parent => ({
     parent,
-    children: childAgents.filter(child => child.type === parent.type)
+    children: childAgents.filter(child => child.parent_agent_id === parent.id)
   }));
 
   if (loading) {
@@ -431,7 +525,7 @@ const ChildAgentPage: React.FC = () => {
     <div
       key={agent.id}
       style={styles.agentCard}
-      onClick={() => trainChildAgent(agent.id)}
+      onClick={() => navigateToTrainingBoard(agent)}
       onMouseEnter={(e) => {
         e.currentTarget.style.transform = 'translateY(-4px)';
         e.currentTarget.style.boxShadow = '0 12px 40px rgba(0, 0, 0, 0.15)';
@@ -447,37 +541,81 @@ const ChildAgentPage: React.FC = () => {
 
       <div style={styles.agentName}>{agent.name}</div>
       <div style={styles.parentInfo}>
-        👤 Type: {agent.type}
+        👤 Parent: {agent.parent_agent_name}
       </div>
-      <div style={styles.agentDescription}>{agent.status}</div>
+      <div style={styles.agentDescription}>{agent.description}</div>
 
       <div style={styles.statusRow}>
         <span style={{
           ...styles.statusBadge,
-          backgroundColor: getStatusColor(agent.status),
+          backgroundColor: agent.status === 'active' ? '#d4edda' : agent.status === 'training' ? '#fff3cd' : '#f8f9fa',
           color: getStatusColor(agent.status),
           border: `1px solid ${getStatusColor(agent.status)}30`,
         }}>
           {agent.status}
         </span>
+        <span style={{
+          ...styles.statusBadge,
+          backgroundColor: `${getAutonomyColor(agent.autonomy_level)}20`,
+          color: getAutonomyColor(agent.autonomy_level),
+          border: `1px solid ${getAutonomyColor(agent.autonomy_level)}30`,
+        }}>
+          {agent.autonomy_level}
+        </span>
+        {agent.learning_enabled && (
+          <span style={{
+            ...styles.statusBadge,
+            backgroundColor: '#e3f2fd',
+            color: '#1976d2',
+            border: '1px solid #1976d230',
+          }}>
+            Learning
+          </span>
+        )}
+      </div>
+
+      <div style={styles.statsRow}>
+        <div style={styles.statItem}>
+          <div style={styles.statValue}>{agent.tasks_completed}</div>
+          <div style={styles.statLabel}>Tasks</div>
+        </div>
+        <div style={styles.statItem}>
+          <div style={styles.statValue}>{agent.performance_score}%</div>
+          <div style={styles.statLabel}>Performance</div>
+        </div>
+        <div style={styles.statItem}>
+          <div style={styles.statValue}>{agent.specialization}</div>
+          <div style={styles.statLabel}>Specialty</div>
+        </div>
+      </div>
+
+      <div style={styles.capabilities}>
+        <div style={styles.capabilitiesTitle}>Capabilities</div>
+        <div style={styles.capabilityTags}>
+          {agent.capabilities.map((capability, index) => (
+            <span key={index} style={styles.capabilityTag}>
+              {capability}
+            </span>
+          ))}
+        </div>
       </div>
 
       <div style={styles.actions} onClick={(e) => e.stopPropagation()}>
         <button
           style={{ ...styles.actionButton, ...styles.primaryButton }}
-          onClick={(e) => {
-            e.stopPropagation();
-            trainChildAgent(agent.id);
-          }}
+          onClick={() => navigateToTrainingBoard(agent)}
         >
           🎓 Train
         </button>
         <button
+          style={{ ...styles.actionButton, ...styles.successButton }}
+          onClick={() => handleStartTraining(agent.id)}
+        >
+          ▶️ Start
+        </button>
+        <button
           style={{ ...styles.actionButton, ...styles.dangerButton }}
-          onClick={(e) => {
-            e.stopPropagation();
-            deleteChildAgent(agent.id);
-          }}
+          onClick={() => handleDeleteChildAgent(agent)}
         >
           🗑️ Delete
         </button>
@@ -501,11 +639,11 @@ const ChildAgentPage: React.FC = () => {
               <select
                 style={styles.select}
                 value={selectedParentFilter || ''}
-                onChange={(e) => setSelectedParentFilter(e.target.value)}
+                onChange={(e) => setSelectedParentFilter(e.target.value ? Number(e.target.value) : null)}
               >
-                <option value="">All Types</option>
-                {mainAgents.map(parent => (
-                  <option key={parent.type} value={parent.type}>
+                <option value="">All Parent Agents</option>
+                {parentAgents.map(parent => (
+                  <option key={parent.id} value={parent.id}>
                     {parent.name}
                   </option>
                 ))}
@@ -573,7 +711,7 @@ const ChildAgentPage: React.FC = () => {
         ) : (
           <div style={styles.hierarchyContainer}>
             {groupedByParent.map(({ parent, children }) => (
-              <div key={parent.type} style={styles.parentSection}>
+              <div key={parent.id} style={styles.parentSection}>
                 <div style={styles.parentHeader}>
                   <div style={styles.parentIcon}>🚀</div>
                   <div>
@@ -606,9 +744,9 @@ const ChildAgentPage: React.FC = () => {
       {/* Create Child Agent Modal */}
       {showCreateModal && (
         <CreateChildAgentModal
-          mainAgents={mainAgents}
+          parentAgents={parentAgents}
           onClose={() => setShowCreateModal(false)}
-          onCreate={createChildAgent}
+          onCreate={handleCreateChildAgent}
         />
       )}
     </div>
@@ -617,26 +755,50 @@ const ChildAgentPage: React.FC = () => {
 
 // Create Child Agent Modal Component
 interface CreateChildAgentModalProps {
-  mainAgents: MainAgent[];
+  parentAgents: ParentAgent[];
   onClose: () => void;
-  onCreate: (data: Partial<ChildAgent>) => void;
+  onCreate: (data: CreateChildAgentData) => void;
 }
 
 const CreateChildAgentModal: React.FC<CreateChildAgentModalProps> = ({
-  mainAgents,
+  parentAgents,
   onClose,
   onCreate,
 }) => {
-  const [formData, setFormData] = useState<Partial<ChildAgent>>({
+  const [formData, setFormData] = useState<CreateChildAgentData>({
     name: '',
-    type: '',
+    description: '',
+    parent_agent_id: 0,
+    specialization: '',
+    capabilities: [],
+    autonomy_level: 'supervised',
+    learning_enabled: true,
   });
+
+  const [newCapability, setNewCapability] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (formData.name && formData.type) {
+    if (formData.name && formData.parent_agent_id && formData.specialization) {
       onCreate(formData);
     }
+  };
+
+  const addCapability = () => {
+    if (newCapability.trim() && !formData.capabilities.includes(newCapability.trim())) {
+      setFormData(prev => ({
+        ...prev,
+        capabilities: [...prev.capabilities, newCapability.trim()]
+      }));
+      setNewCapability('');
+    }
+  };
+
+  const removeCapability = (capability: string) => {
+    setFormData(prev => ({
+      ...prev,
+      capabilities: prev.capabilities.filter(cap => cap !== capability)
+    }));
   };
 
   const modalStyles = {
@@ -691,12 +853,62 @@ const CreateChildAgentModal: React.FC<CreateChildAgentModalProps> = ({
       borderRadius: '8px',
       fontSize: '14px',
     },
+    textarea: {
+      padding: '12px',
+      border: '2px solid #e9ecef',
+      borderRadius: '8px',
+      fontSize: '14px',
+      minHeight: '80px',
+      resize: 'vertical' as const,
+    },
     select: {
       padding: '12px',
       border: '2px solid #e9ecef',
       borderRadius: '8px',
       fontSize: '14px',
       backgroundColor: 'white',
+    },
+    capabilitiesSection: {
+      border: '2px solid #e9ecef',
+      borderRadius: '8px',
+      padding: '16px',
+    },
+    capabilityInput: {
+      display: 'flex',
+      gap: '8px',
+      marginBottom: '12px',
+    },
+    capabilityTags: {
+      display: 'flex',
+      flexWrap: 'wrap' as const,
+      gap: '8px',
+    },
+    capabilityTag: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '4px',
+      padding: '4px 8px',
+      backgroundColor: '#e3f2fd',
+      color: '#1976d2',
+      borderRadius: '12px',
+      fontSize: '12px',
+      fontWeight: '500',
+    },
+    removeButton: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      color: '#dc3545',
+      fontSize: '12px',
+    },
+    checkboxField: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+    },
+    checkbox: {
+      width: '18px',
+      height: '18px',
     },
     actions: {
       display: 'flex',
@@ -742,20 +954,108 @@ const CreateChildAgentModal: React.FC<CreateChildAgentModalProps> = ({
           </div>
 
           <div style={modalStyles.field}>
-            <label style={modalStyles.label}>Type *</label>
+            <label style={modalStyles.label}>Description</label>
+            <textarea
+              style={modalStyles.textarea}
+              placeholder="Describe what this child agent will do"
+              value={formData.description}
+              onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
+            />
+          </div>
+
+          <div style={modalStyles.field}>
+            <label style={modalStyles.label}>Parent Agent *</label>
             <select
               style={modalStyles.select}
-              value={formData.type}
-              onChange={(e) => setFormData(prev => ({ ...prev, type: e.target.value }))}
+              value={formData.parent_agent_id}
+              onChange={(e) => setFormData(prev => ({ ...prev, parent_agent_id: Number(e.target.value) }))}
               required
             >
-              <option value="">Select Type</option>
-              {mainAgents.map(agent => (
-                <option key={agent.type} value={agent.type}>
+              <option value={0}>Select Parent Agent</option>
+              {parentAgents.map(agent => (
+                <option key={agent.id} value={agent.id}>
                   {agent.name}
                 </option>
               ))}
             </select>
+          </div>
+
+          <div style={modalStyles.field}>
+            <label style={modalStyles.label}>Specialization *</label>
+            <input
+              style={modalStyles.input}
+              type="text"
+              placeholder="e.g., customer_support, data_analysis, content_moderation"
+              value={formData.specialization}
+              onChange={(e) => setFormData(prev => ({ ...prev, specialization: e.target.value }))}
+              required
+            />
+          </div>
+
+          <div style={modalStyles.field}>
+            <label style={modalStyles.label}>Autonomy Level</label>
+            <select
+              style={modalStyles.select}
+              value={formData.autonomy_level}
+              onChange={(e) => setFormData(prev => ({ ...prev, autonomy_level: e.target.value as any }))}
+            >
+              <option value="supervised">Supervised - Requires approval for actions</option>
+              <option value="semi-autonomous">Semi-Autonomous - Some independent actions</option>
+              <option value="autonomous">Autonomous - Full independent operation</option>
+            </select>
+          </div>
+
+          <div style={modalStyles.field}>
+            <label style={modalStyles.label}>Capabilities</label>
+            <div style={modalStyles.capabilitiesSection}>
+              <div style={modalStyles.capabilityInput}>
+                <input
+                  style={{ ...modalStyles.input, flex: 1 }}
+                  type="text"
+                  placeholder="Add capability (e.g., chat, analysis, reporting)"
+                  value={newCapability}
+                  onChange={(e) => setNewCapability(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addCapability())}
+                />
+                <button
+                  type="button"
+                  style={{ ...modalStyles.button, ...modalStyles.primaryButton }}
+                  onClick={addCapability}
+                >
+                  Add
+                </button>
+              </div>
+              
+              {formData.capabilities.length > 0 && (
+                <div style={modalStyles.capabilityTags}>
+                  {formData.capabilities.map((capability, index) => (
+                    <span key={index} style={modalStyles.capabilityTag}>
+                      {capability}
+                      <button
+                        type="button"
+                        style={modalStyles.removeButton}
+                        onClick={() => removeCapability(capability)}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div style={modalStyles.checkboxField}>
+            <input
+              style={modalStyles.checkbox}
+              type="checkbox"
+              id="learning_enabled"
+              checked={formData.learning_enabled}
+              onChange={(e) => setFormData(prev => ({ ...prev, learning_enabled: e.target.checked }))}
+            />
+            <label htmlFor="learning_enabled" style={modalStyles.label}>
+              Enable Learning (Agent will learn from interactions)
+            </label>
           </div>
 
           <div style={modalStyles.actions}>

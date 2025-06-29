@@ -43,7 +43,7 @@ def test_agent_response():
         
         test_data = {"message": "Hello! Can you help me with a quick test?"}
         
-        test_response = requests.post(f"{base_url}/agents/12/test", 
+        test_response = requests.post(f"{base_url}/api/v1/agents/12/test", 
                                     headers=headers, 
                                     json=test_data)
         

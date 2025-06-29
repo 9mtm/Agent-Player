@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 import uuid
 
-router = APIRouter(tags=["Marketplace"])
+router = APIRouter(prefix="/marketplace", tags=["marketplace"])
 
 # ============================================================================
 # PYDANTIC MODELS

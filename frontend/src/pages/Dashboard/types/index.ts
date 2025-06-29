@@ -1,29 +1,15 @@
 export interface DashboardStats {
-  system: {
-    uptime: string;
-    cpuUsage: number;
-    memoryUsage: number;
-    apiCalls: number;
-    childAgentsActive: number;
-  };
-  notifications: {
-    total: number;
-    unread: number;
-  };
   agents: {
     total: number;
     active: number;
-    training: number;
-  };
-  conversations: {
-    total: number;
-    active: number;
-    completed: number;
+    mainAgents: number;
+    childAgents: number;
   };
   tasks: {
     total: number;
-    pending: number;
     completed: number;
+    pending: number;
+    failed: number;
   };
   chats: {
     total: number;
@@ -34,6 +20,12 @@ export interface DashboardStats {
     total: number;
     running: number;
     paused: number;
+  };
+  system: {
+    uptime: string;
+    cpuUsage: number;
+    memoryUsage: number;
+    apiCalls: number;
   };
 }
 

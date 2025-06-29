@@ -22,11 +22,10 @@ interface TaskHeaderProps {
   // Data
   taskStats: {
     total: number;
-    todo: number;
-    in_progress: number;
-    under_review: number;
+    pending: number;
+    running: number;
     completed: number;
-    on_hold: number;
+    failed: number;
     cancelled: number;
   };
   error: string | null;
@@ -67,7 +66,7 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
         <div style={titleSectionStyle}>
           <h2 style={titleStyle}>Tasks</h2>
           <p style={subtitleStyle}>
-            Manage your tasks and track progress
+            Manage your tasks and workflow items
           </p>
           {error && (
             <div style={errorMessageStyle}>
@@ -106,24 +105,20 @@ export const TaskHeader: React.FC<TaskHeaderProps> = ({
           <div style={statLabelStyle}>Total</div>
         </div>
         <div style={statItemStyle}>
-          <div style={statValueStyle}>{taskStats.todo}</div>
-          <div style={statLabelStyle}>To Do</div>
+          <div style={statValueStyle}>{taskStats.pending}</div>
+          <div style={statLabelStyle}>Pending</div>
         </div>
         <div style={statItemStyle}>
-          <div style={statValueStyle}>{taskStats.in_progress}</div>
-          <div style={statLabelStyle}>In Progress</div>
-        </div>
-        <div style={statItemStyle}>
-          <div style={statValueStyle}>{taskStats.under_review}</div>
-          <div style={statLabelStyle}>Under Review</div>
+          <div style={statValueStyle}>{taskStats.running}</div>
+          <div style={statLabelStyle}>Running</div>
         </div>
         <div style={statItemStyle}>
           <div style={statValueStyle}>{taskStats.completed}</div>
           <div style={statLabelStyle}>Completed</div>
         </div>
         <div style={statItemStyle}>
-          <div style={statValueStyle}>{taskStats.on_hold}</div>
-          <div style={statLabelStyle}>On Hold</div>
+          <div style={statValueStyle}>{taskStats.failed}</div>
+          <div style={statLabelStyle}>Failed</div>
         </div>
       </div>
 
