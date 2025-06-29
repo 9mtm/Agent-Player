@@ -814,7 +814,7 @@ const AdvancedSettingsModal: React.FC<AdvancedSettingsModalProps> = ({ onClose, 
       collaborative_mode: false
     },
     advanced: {
-      api_endpoint: '/api/v1/chat/conversations',
+      api_endpoint: '/chat/conversations',
       websocket_endpoint: 'ws://localhost:8000/ws/chat',
       timeout: 30000,
       retry_attempts: 3,

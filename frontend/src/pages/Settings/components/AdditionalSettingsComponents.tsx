@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import config from '../../../config';
+import api from '../../../services/api';
 
 // Privacy Controls Component
 export const PrivacyControlsComponent: React.FC = () => {
@@ -19,7 +20,7 @@ export const PrivacyControlsComponent: React.FC = () => {
   const handleSave = async () => {
     setLoading(true);
     try {
-      const response = await fetch(`${config.api.baseURL}/api/v1/settings/privacy`, {
+      const response = await fetch(`${config.api.baseURL}/settings/privacy`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(privacyData)
@@ -34,6 +35,26 @@ export const PrivacyControlsComponent: React.FC = () => {
     }
     setLoading(false);
     setTimeout(() => setMessage(''), 3000);
+  };
+
+  const fetchPrivacySettings = async () => {
+    try {
+      const response = await api.get('/user/privacy');
+      setPrivacyData(response.data);
+    } catch (error) {
+      console.error('Error fetching privacy settings:', error);
+      // Handle error appropriately
+    }
+  };
+
+  const updatePrivacySettings = async (data: any) => {
+    try {
+      await api.put('/user/privacy', data);
+      // Handle success
+    } catch (error) {
+      console.error('Error updating privacy settings:', error);
+      // Handle error appropriately
+    }
   };
 
   return (
@@ -137,7 +158,7 @@ export const LayoutSettingsComponent: React.FC = () => {
   const handleSave = async () => {
     setLoading(true);
     try {
-      const response = await fetch(`${config.api.baseURL}/api/v1/settings/layout`, {
+      const response = await fetch(`${config.api.baseURL}/settings/layout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(layoutData)
@@ -152,6 +173,26 @@ export const LayoutSettingsComponent: React.FC = () => {
     }
     setLoading(false);
     setTimeout(() => setMessage(''), 3000);
+  };
+
+  const fetchLayoutSettings = async () => {
+    try {
+      const response = await api.get('/user/layout');
+      setLayoutData(response.data);
+    } catch (error) {
+      console.error('Error fetching layout settings:', error);
+      // Handle error appropriately
+    }
+  };
+
+  const updateLayoutSettings = async (data: any) => {
+    try {
+      await api.put('/user/layout', data);
+      // Handle success
+    } catch (error) {
+      console.error('Error updating layout settings:', error);
+      // Handle error appropriately
+    }
   };
 
   return (
@@ -270,7 +311,7 @@ export const TypographyComponent: React.FC = () => {
   const handleSave = async () => {
     setLoading(true);
     try {
-      const response = await fetch(`${config.api.baseURL}/api/v1/settings/typography`, {
+      const response = await fetch(`${config.api.baseURL}/settings/typography`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(typography)
@@ -285,6 +326,26 @@ export const TypographyComponent: React.FC = () => {
     }
     setLoading(false);
     setTimeout(() => setMessage(''), 3000);
+  };
+
+  const fetchTypographySettings = async () => {
+    try {
+      const response = await api.get('/user/typography');
+      setTypography(response.data);
+    } catch (error) {
+      console.error('Error fetching typography settings:', error);
+      // Handle error appropriately
+    }
+  };
+
+  const updateTypographySettings = async (data: any) => {
+    try {
+      await api.put('/user/typography', data);
+      // Handle success
+    } catch (error) {
+      console.error('Error updating typography settings:', error);
+      // Handle error appropriately
+    }
   };
 
   return (

@@ -1,5 +1,5 @@
 // Tasks Components Index
-export { default as WorkflowTasks } from "./WorkflowTasks";
+export { default as TasksBoard } from "./TasksBoard";
 export { default as TaskNode } from "./TaskNode";
 export { default as TaskEdge } from "./TaskEdge";
 export { default as TasksCanvas } from "./TasksCanvas";

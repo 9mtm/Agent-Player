@@ -35,7 +35,7 @@ const mockChildAgents = [
     name: 'Code Assistant',
     type: 'Programming',
     status: 'active',
-    chat_endpoint: '/api/v1/chat/child-agent/child-1',
+    chat_endpoint: '/chat/child-agent/child-1',
     chat_url: '/chat/child-agent/child-1'
   },
   {
@@ -43,7 +43,7 @@ const mockChildAgents = [
     name: 'Data Analyst',
     type: 'Analytics',
     status: 'active',
-    chat_endpoint: '/api/v1/chat/child-agent/child-2',
+    chat_endpoint: '/chat/child-agent/child-2',
     chat_url: '/chat/child-agent/child-2'
   }
 ];
@@ -664,10 +664,10 @@ export const SimpleChatSettings: React.FC<SimpleChatSettingsProps> = ({
                 <div style={styles.settingLabel}>API Endpoint</div>
                 <div style={styles.settingDescription}>REST API endpoint for this conversation</div>
                 <div style={styles.codeBlock}>
-                  /api/v1/chat/conversations/{conversation?.id || 'conv-1234567890'}
+                  /chat/conversations/{conversation?.id || 'conv-1234567890'}
                   <button
                     style={styles.copyCodeButton}
-                    onClick={() => handleCopyToClipboard(`/api/v1/chat/conversations/${conversation?.id || 'conv-1234567890'}`, 'api-endpoint')}
+                    onClick={() => handleCopyToClipboard(`/chat/conversations/${conversation?.id || 'conv-1234567890'}`, 'api-endpoint')}
                   >
                     {copiedItems.has('api-endpoint') ? 'Copied!' : 'Copy'}
                   </button>

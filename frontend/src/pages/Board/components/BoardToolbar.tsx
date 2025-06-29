@@ -1,7 +1,39 @@
 import React, { useState } from 'react';
-import workflowService from '../../../services/workflow';
 import type { BaseNodeData } from './nodeTypes';
 import { MIN_ZOOM, MAX_ZOOM } from './utils/constants';
+
+// Local validation function
+const validateWorkflowLocally = (nodes: BaseNodeData[], edges: unknown[]) => {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // Basic validation
+  if (nodes.length === 0) {
+    errors.push('Workflow must have at least one node');
+  }
+
+  if (edges.length === 0 && nodes.length > 1) {
+    warnings.push('Nodes are not connected');
+  }
+
+  // Check for required node properties
+  nodes.forEach((node) => {
+    if (!node.id) {
+      errors.push('All nodes must have an ID');
+    }
+    if (!node.type) {
+      errors.push(`Node ${node.id} must have a type`);
+    }
+  });
+
+  return {
+    is_valid: errors.length === 0,
+    errors,
+    warnings,
+    node_count: nodes.length,
+    edge_count: Array.isArray(edges) ? edges.length : 0,
+  };
+};
 
 interface BoardToolbarProps {
   theme: 'light' | 'dark';
@@ -91,7 +123,7 @@ export const BoardToolbar: React.FC<BoardToolbarProps> = ({
 
     try {
       // Local validation first
-      const localValidation = workflowService.validateWorkflowLocally(
+      const localValidation = validateWorkflowLocally(
         currentBoard.nodes,
         currentBoard.edges
       );
@@ -132,7 +164,7 @@ export const BoardToolbar: React.FC<BoardToolbarProps> = ({
     }
 
     // Validate before execution
-    const validation = workflowService.validateWorkflowLocally(
+    const validation = validateWorkflowLocally(
       currentBoard.nodes,
       currentBoard.edges
     );

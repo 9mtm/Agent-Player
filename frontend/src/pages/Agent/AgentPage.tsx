@@ -75,12 +75,20 @@ type MainAgentRequest = {
 type ChildAgentRequest = {
   name: string;
   description: string;
-  parent_agent_id?: number;
-  specialization: string;
-  training_data: Record<string, unknown>;
+  agent_type: string;
+  parent_agent_id: number;
+  model_provider: string;
+  model_name: string;
+  api_key: string;
+  system_prompt: string;
   capabilities: string[];
-  learning_enabled: boolean;
-  autonomy_level: string;
+  tools_enabled: string[];
+  temperature: number;
+  max_tokens: number;
+  timeout_seconds: number;
+  is_system: boolean;
+  is_local_model: boolean;
+  local_config: object | null;
 };
 
 const AgentPage: React.FC = () => {
@@ -462,15 +470,24 @@ const AgentPage: React.FC = () => {
           is_system: false
         };
       } else {
+        // Child Agent - match backend ChildAgentCreateRequest schema
         agentRequest = {
           name: agentData.name,
           description: agentData.description || '',
-          parent_agent_id: agentData.parent_agent_id,
-          specialization: agentData.type || 'general',
-          training_data: {},
+          agent_type: 'child',  // Required by backend
+          parent_agent_id: agentData.parent_agent_id || 1, // Default to first main agent if not specified
+          model_provider: agentData.llmConfig?.provider || 'openai',
+          model_name: agentData.llmConfig?.model || 'gpt-4',
+          api_key: agentData.llmConfig?.apiKey || '',
+          system_prompt: `You are a specialized child agent trained for ${agentData.type || 'general'} tasks.`,
           capabilities: agentData.capabilities || [],
-          learning_enabled: agentData.settings?.learning || true,
-          autonomy_level: 'supervised'
+          tools_enabled: ['chat', 'analysis'],
+          temperature: agentData.settings?.temperature || 0.7,
+          max_tokens: agentData.settings?.maxTokens || 2048,
+          timeout_seconds: 300,
+          is_system: false,
+          is_local_model: false,
+          local_config: null
         };
       }
 

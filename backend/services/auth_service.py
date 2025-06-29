@@ -4,12 +4,11 @@ Simplified authentication service using SQLAlchemy
 """
 
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from core.security import security
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, insert, func, and_
-from models.user import User, UserSession
-from models.activity_log import ActivityLog
+from models.database import User, UserSession, ActivityLog
 import logging
 
 # Create logger

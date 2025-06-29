@@ -6,239 +6,365 @@ alwaysApply: true
 # DATABASE TABLES DETAILED DOCUMENTATION
 
 ## Database Overview
-- **Database System:** PostgreSQL 15+
+- **Database System:** SQLite (development) / PostgreSQL (production)
 - **Total Tables:** 37 tables across 11 business domains
 - **ORM:** SQLAlchemy 2.0+ (Async)
 - **Migration Tool:** Alembic
+- **Current Status:** ✅ All tables implemented and functional
 
-## DOMAIN 1: IAM (Identity & Access Management) - 4 Tables
+---
 
-### **Table: iam_users**
+## 🔍 **ACTUAL DATABASE STRUCTURE (37 TABLES)**
+
+### **DOMAIN 1: USER MANAGEMENT (5 tables)**
+
+#### **1. users** - Main user accounts
 ```sql
-CREATE TABLE iam_users (
-    id SERIAL PRIMARY KEY,
+-- Current structure with 15 columns
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
     email VARCHAR(255) UNIQUE NOT NULL,
     username VARCHAR(100) UNIQUE NOT NULL,
+    full_name VARCHAR(200),
     password_hash VARCHAR(255) NOT NULL,
-    role VARCHAR(50) DEFAULT 'user' CHECK (role IN ('admin', 'user', 'viewer')),
-    is_active BOOLEAN DEFAULT true,
-    is_verified BOOLEAN DEFAULT false,
-    email_verified BOOLEAN DEFAULT false,
-    phone_verified BOOLEAN DEFAULT false,
-    two_factor_enabled BOOLEAN DEFAULT false,
-    last_login TIMESTAMP,
-    failed_login_attempts INTEGER DEFAULT 0,
-    locked_until TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP
+    role VARCHAR(50) NOT NULL,
+    is_active BOOLEAN NOT NULL,
+    last_activity DATETIME,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    is_superuser BOOLEAN,
+    gemini_auth BOOLEAN,
+    gemini_api_key TEXT,
+    gemini_auth_type TEXT,
+    preferences TEXT
 );
-
--- Indexes
-CREATE INDEX idx_iam_users_email ON iam_users(email);
-CREATE INDEX idx_iam_users_username ON iam_users(username);
-CREATE INDEX idx_iam_users_role ON iam_users(role);
-CREATE INDEX idx_iam_users_active ON iam_users(is_active);
-CREATE INDEX idx_iam_users_created_at ON iam_users(created_at);
-
--- Business Rules:
--- - Email must be unique and valid format
--- - Username must be 3-30 characters, alphanumeric and underscore only
--- - Password must be hashed with bcrypt (min 12 salt rounds)
--- - Account locked after 5 failed login attempts for 30 minutes
--- - Soft delete with deleted_at timestamp
--- - Role-based access control (admin, user, viewer)
 ```
 
-### **Table: iam_user_profiles**
-```sql
-CREATE TABLE iam_user_profiles (
-    user_id INTEGER REFERENCES iam_users(id) ON DELETE CASCADE,
-    first_name VARCHAR(100),
-    last_name VARCHAR(100),
-    display_name VARCHAR(200),
-    avatar_url TEXT,
-    bio TEXT CHECK (LENGTH(bio) <= 1000),
-    company VARCHAR(200),
-    job_title VARCHAR(150),
-    website_url TEXT,
-    location VARCHAR(200),
-    timezone VARCHAR(50) DEFAULT 'UTC',
-    language VARCHAR(10) DEFAULT 'en',
-    country VARCHAR(2),
-    phone VARCHAR(20),
-    birth_date DATE,
-    gender VARCHAR(20),
-    social_links JSONB DEFAULT '{}',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (user_id)
-);
+#### **2. user_profiles** - Extended user information
+#### **3. user_preferences** - User settings and preferences  
+#### **4. user_sessions** - Active user sessions
+#### **5. activity_logs** - User activity tracking
 
--- Business Rules:
--- - One profile per user (1:1 relationship)
--- - Avatar images must be validated for size and type
--- - Bio limited to 1000 characters
--- - Social links stored as JSONB for flexibility
--- - Timezone must be valid IANA timezone
--- - Country code must be ISO 3166-1 alpha-2
+### **DOMAIN 2: AI AGENTS SYSTEM (4 tables)**
+
+#### **6. agents** - Main agent definitions
+#### **7. agent_capabilities** - Agent skill definitions
+#### **8. agent_performance** - Performance metrics
+#### **9. board_templates** - Board templates
+
+### **DOMAIN 3: WORKFLOW BOARDS (4 tables)**
+
+#### **10. boards** - Main board definitions
+#### **11. board_nodes** - Individual nodes in boards
+#### **12. board_connections** - Connections between nodes
+#### **13. board_executions** - Board execution history
+
+### **DOMAIN 4: COMMUNICATION SYSTEM (4 tables)**
+
+#### **14. conversations** - Chat conversations
+#### **15. messages** - Individual messages
+#### **16. message_attachments** - File attachments
+#### **17. chat_session_history** - Session tracking
+
+### **DOMAIN 5: TRAINING SYSTEM (4 tables)**
+
+#### **18. training_courses** - Training course definitions
+#### **19. course_modules** - Course content modules
+#### **20. student_enrollments** - User enrollments
+#### **21. training_sessions** - Training session tracking
+
+### **DOMAIN 6: MARKETPLACE SYSTEM (3 tables)**
+
+#### **22. marketplace_items** - Items for sale
+#### **23. marketplace_purchases** - Purchase records
+#### **24. marketplace_reviews** - User reviews
+
+### **DOMAIN 7: TASK MANAGEMENT (3 tables)**
+
+#### **25. tasks** - Task definitions
+#### **26. task_comments** - Task comments
+#### **27. task_time_logs** - Time tracking
+
+### **DOMAIN 8: LICENSING SYSTEM (2 tables)**
+
+#### **28. user_licenses** - User license records
+#### **29. license_activations** - License activation tracking
+
+### **DOMAIN 9: WORKFLOW AUTOMATION (2 tables)**
+
+#### **30. workflows** - Workflow definitions
+#### **31. workflow_executions** - Workflow execution history
+
+### **DOMAIN 10: ANALYTICS SYSTEM (2 tables)**
+
+#### **32. user_analytics** - User behavior analytics
+#### **33. system_analytics** - System performance analytics
+
+### **DOMAIN 11: SYSTEM CONFIGURATION (3 tables)**
+
+#### **34. system_settings** - System configuration
+#### **35. notifications** - User notifications
+#### **36. sessions** - Session management
+#### **37. sqlite_sequence** - SQLite system table
+
+---
+
+## 🔥 **NEW DOMAIN 12: CUSTOM FIELD BUILDER (4 tables) - PLANNED**
+
+### **38. custom_fields** - Field definitions and configuration
+```sql
+CREATE TABLE custom_fields (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    label VARCHAR(200) NOT NULL,
+    field_type VARCHAR(50) NOT NULL, -- 'text', 'number', 'select', 'checkbox'
+    description TEXT,
+    placeholder VARCHAR(255),
+    default_value TEXT,
+    options TEXT, -- JSON for select/radio options
+    validation_rules TEXT, -- JSON validation config
+    is_required BOOLEAN DEFAULT FALSE,
+    position INTEGER DEFAULT 0,
+    group_id INTEGER,
+    created_by INTEGER NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    FOREIGN KEY (group_id) REFERENCES custom_field_groups(id),
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
 ```
 
-### **Table: iam_user_preferences**
+### **39. custom_field_groups** - Field grouping and organization
 ```sql
-CREATE TABLE iam_user_preferences (
-    user_id INTEGER REFERENCES iam_users(id) ON DELETE CASCADE,
-    theme VARCHAR(20) DEFAULT 'light' CHECK (theme IN ('light', 'dark', 'auto')),
-    sidebar_collapsed BOOLEAN DEFAULT false,
-    default_model VARCHAR(50) DEFAULT 'gpt-4',
-    notifications_enabled BOOLEAN DEFAULT true,
-    email_notifications BOOLEAN DEFAULT true,
-    push_notifications BOOLEAN DEFAULT false,
-    auto_save BOOLEAN DEFAULT true,
-    auto_save_interval INTEGER DEFAULT 30 CHECK (auto_save_interval BETWEEN 10 AND 300),
-    display_density VARCHAR(20) DEFAULT 'comfortable' CHECK (display_density IN ('compact', 'comfortable', 'spacious')),
-    date_format VARCHAR(20) DEFAULT 'YYYY-MM-DD',
-    time_format VARCHAR(10) DEFAULT '24h' CHECK (time_format IN ('12h', '24h')),
-    currency VARCHAR(3) DEFAULT 'USD',
-    number_format VARCHAR(10) DEFAULT 'en-US',
-    dashboard_layout JSONB DEFAULT '{}',
-    quick_actions JSONB DEFAULT '[]',
-    keyboard_shortcuts JSONB DEFAULT '{}',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (user_id)
-);
-
--- Business Rules:
--- - One preference set per user (1:1 relationship)
--- - Auto-save interval between 10-300 seconds
--- - Dashboard layout stored as JSONB for flexibility
--- - Quick actions array for customizable shortcuts
--- - Keyboard shortcuts customization support
-```
-
-### **Table: iam_user_sessions**
-```sql
-CREATE TABLE iam_user_sessions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id INTEGER REFERENCES iam_users(id) ON DELETE CASCADE,
-    session_token VARCHAR(255) UNIQUE NOT NULL,
-    refresh_token VARCHAR(255) UNIQUE,
-    device_info JSONB,
-    ip_address INET,
-    user_agent TEXT,
-    browser_name VARCHAR(100),
-    browser_version VARCHAR(50),
-    os_name VARCHAR(100),
-    os_version VARCHAR(50),
-    device_type VARCHAR(50),
-    is_active BOOLEAN DEFAULT true,
-    is_mobile BOOLEAN DEFAULT false,
-    last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Business Rules:
--- - Maximum 5 active sessions per user
--- - Session expires after 24 hours of inactivity
--- - Automatic cleanup of expired sessions (daily job)
--- - Device fingerprinting for security
--- - IP address tracking for suspicious activity detection
-```
-
-## DOMAIN 2: AI_AGENTS (Agent Management) - 3 Tables
-
-### **Table: ai_agents**
-```sql
-CREATE TABLE ai_agents (
-    id SERIAL PRIMARY KEY,
+CREATE TABLE custom_field_groups (
+    id INTEGER PRIMARY KEY,
     name VARCHAR(200) NOT NULL,
     description TEXT,
-    user_id INTEGER REFERENCES iam_users(id) ON DELETE CASCADE,
-    agent_type VARCHAR(50) NOT NULL CHECK (agent_type IN ('conversational', 'task_specific', 'analytical', 'creative')),
-    model_provider VARCHAR(50) NOT NULL CHECK (model_provider IN ('openai', 'anthropic', 'google', 'cohere', 'local')),
-    model_name VARCHAR(100) NOT NULL,
-    model_version VARCHAR(50),
-    system_prompt TEXT CHECK (LENGTH(system_prompt) <= 10000),
-    temperature DECIMAL(3,2) DEFAULT 0.7 CHECK (temperature >= 0 AND temperature <= 2),
-    max_tokens INTEGER DEFAULT 2048 CHECK (max_tokens > 0 AND max_tokens <= 32000),
-    top_p DECIMAL(3,2) DEFAULT 1.0 CHECK (top_p >= 0 AND top_p <= 1),
-    frequency_penalty DECIMAL(3,2) DEFAULT 0.0 CHECK (frequency_penalty >= -2 AND frequency_penalty <= 2),
-    presence_penalty DECIMAL(3,2) DEFAULT 0.0 CHECK (presence_penalty >= -2 AND presence_penalty <= 2),
-    stop_sequences TEXT[],
-    custom_parameters JSONB DEFAULT '{}',
-    is_active BOOLEAN DEFAULT true,
-    is_public BOOLEAN DEFAULT false,
-    is_featured BOOLEAN DEFAULT false,
-    usage_count INTEGER DEFAULT 0,
-    rating_average DECIMAL(3,2) DEFAULT 0.0,
-    rating_count INTEGER DEFAULT 0,
-    tags TEXT[],
-    category VARCHAR(100),
-    subcategory VARCHAR(100),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP
+    location VARCHAR(100) NOT NULL, -- 'agent_form', 'task_form', 'profile'
+    entity_type VARCHAR(50), -- 'agent', 'task', 'user'
+    display_rules TEXT, -- JSON conditions for showing
+    position INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    FOREIGN KEY (created_by) REFERENCES users(id)
 );
-
--- Business Rules:
--- - Agent name must be unique per user
--- - System prompt limited to 10,000 characters
--- - Model parameters must be within valid ranges
--- - Public agents can be used by other users
--- - Featured agents promoted in marketplace
--- - Usage tracking for analytics
--- - Rating system for quality assessment
--- - Soft delete with deleted_at timestamp
 ```
 
-## DOMAIN 3: COMMUNICATION (Chat System) - 3 Tables
-
-### **Table: communication_conversations**
+### **40. custom_field_values** - User-entered field values
 ```sql
-CREATE TABLE communication_conversations (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES iam_users(id) ON DELETE CASCADE,
-    agent_id INTEGER REFERENCES ai_agents(id) ON DELETE SET NULL,
-    title VARCHAR(300),
-    conversation_type VARCHAR(50) DEFAULT 'chat' CHECK (conversation_type IN ('chat', 'support', 'training', 'analysis')),
-    status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'paused', 'completed', 'archived')),
-    priority VARCHAR(20) DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
-    language VARCHAR(10) DEFAULT 'en',
-    is_active BOOLEAN DEFAULT true,
-    is_archived BOOLEAN DEFAULT false,
-    is_pinned BOOLEAN DEFAULT false,
-    is_shared BOOLEAN DEFAULT false,
-    share_token UUID,
-    context_data JSONB DEFAULT '{}',
-    metadata JSONB DEFAULT '{}',
-    summary TEXT,
-    sentiment_score DECIMAL(3,2),
-    satisfaction_rating INTEGER CHECK (satisfaction_rating BETWEEN 1 AND 5),
-    total_messages INTEGER DEFAULT 0,
-    total_tokens INTEGER DEFAULT 0,
-    total_cost DECIMAL(10,4) DEFAULT 0,
-    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    ended_at TIMESTAMP,
-    last_message_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    archived_at TIMESTAMP
+CREATE TABLE custom_field_values (
+    id INTEGER PRIMARY KEY,
+    field_id INTEGER NOT NULL,
+    entity_type VARCHAR(50) NOT NULL, -- 'agent', 'task', 'user'
+    entity_id INTEGER NOT NULL,
+    value TEXT, -- Stored as JSON for complex values
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    FOREIGN KEY (field_id) REFERENCES custom_fields(id),
+    UNIQUE(field_id, entity_type, entity_id)
 );
-
--- Business Rules:
--- - Auto-generated title from first message
--- - Conversation types for categorization
--- - Status workflow management
--- - Sharing capability with secure tokens
--- - Context preservation across sessions
--- - Sentiment analysis integration
--- - Automatic archiving after 90 days inactivity
--- - Token and cost tracking
 ```
 
-**REMEMBER: Database is the foundation - every table must be properly designed!**
-**REMEMBER: All constraints must be enforced at database level!**
-**REMEMBER: Performance indexes are mandatory for all foreign keys!**
+### **41. field_templates** - Reusable field configurations
+```sql
+CREATE TABLE field_templates (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    category VARCHAR(100), -- 'agent', 'task', 'general'
+    fields_config TEXT NOT NULL, -- JSON field definitions
+    preview_image VARCHAR(255),
+    is_public BOOLEAN DEFAULT FALSE,
+    usage_count INTEGER DEFAULT 0,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+```
+
+---
+
+## 📊 **UPDATED DATABASE METRICS**
+
+| **Metric** | **Current** | **Planned** | **Total** | **Status** |
+|------------|-------------|-------------|-----------|------------|
+| **Total Tables** | **37** | **+4** | **41** | **🎯 Target** |
+| User Management | 5 tables | - | 5 tables | ✅ Complete |
+| AI Agents | 4 tables | - | 4 tables | ✅ Complete |
+| **Custom Fields** | **-** | **+4 tables** | **4 tables** | **🔥 NEW FEATURE** |
+| Workflow Boards | 4 tables | - | 4 tables | ✅ Complete |
+| Communication | 4 tables | - | 4 tables | ✅ Complete |
+| Training System | 4 tables | - | 4 tables | ✅ Complete |
+| Marketplace | 3 tables | - | 3 tables | ✅ Complete |
+| Task Management | 3 tables | - | 3 tables | ✅ Complete |
+| Licensing | 2 tables | - | 2 tables | ✅ Complete |
+| Workflows | 2 tables | - | 2 tables | ✅ Complete |
+| Analytics | 2 tables | - | 2 tables | ✅ Complete |
+| System Config | 3 tables | - | 3 tables | ✅ Complete |
+
+---
+
+## 🚀 **CUSTOM FIELD BUILDER IMPACT**
+
+### **Feature Scope**
+- **Field Types:** 20 different types (text, select, file, etc.)
+- **Integration Points:** 8 existing forms (agents, tasks, profiles, etc.)
+- **Templates:** Reusable field configurations
+- **Groups:** Organized field collections
+- **Validation:** Rich validation rules
+- **Conditional Logic:** Show/hide based on conditions
+
+### **Database Growth**
+- **From:** 37 tables → **To:** 41 tables (+4 tables)
+- **New Domain:** Custom Field Builder system
+- **Storage Requirements:** +50MB estimated
+- **Performance Impact:** Minimal (optimized queries)
+
+### **Migration Strategy**
+1. **Phase 1:** Create new tables without data
+2. **Phase 2:** Add field management APIs
+3. **Phase 3:** Integrate with existing forms
+4. **Phase 4:** Populate default field templates
+
+---
+
+## 🎯 **IMPLEMENTATION PRIORITY**
+
+### **Custom Field Builder Tables Priority**
+1. **custom_fields** - Core field definitions (Week 1, Day 1)
+2. **custom_field_groups** - Field organization (Week 1, Day 2)
+3. **custom_field_values** - Value storage (Week 1, Day 3)
+4. **field_templates** - Template system (Week 1, Day 4)
+
+### **API Integration Priority**
+1. **Agent forms** - Most requested feature
+2. **Task management** - High user value
+3. **User profiles** - Personalization
+4. **Training lab** - Advanced configurations
+
+---
+
+**REMEMBER: Custom Field Builder will be a game-changing feature!**
+**REMEMBER: Database will grow from 37 to 41 tables!**
+**REMEMBER: All new tables follow established naming conventions!**
+**REMEMBER: English only policy applies to all new fields and data!**
+
+---
+
+## 🔑 **KEY RELATIONSHIPS**
+
+### **User-Centric Relationships**
+- users → user_profiles (1:1)
+- users → user_preferences (1:1)  
+- users → user_sessions (1:many)
+- users → activity_logs (1:many)
+- users → agents (1:many)
+- users → conversations (1:many)
+- users → tasks (1:many)
+
+### **Agent-Centric Relationships**
+- agents → agent_capabilities (1:many)
+- agents → agent_performance (1:many)
+- agents → conversations (1:many)
+- agents → boards (1:many)
+
+### **Communication Relationships**
+- conversations → messages (1:many)
+- messages → message_attachments (1:many)
+- conversations → chat_session_history (1:many)
+
+### **Training Relationships**
+- training_courses → course_modules (1:many)
+- training_courses → student_enrollments (1:many)
+- training_sessions → student_enrollments (many:1)
+
+---
+
+## 🚀 **API COVERAGE REQUIREMENTS**
+
+### **✅ Currently Covered APIs**
+- Users Management (users, user_profiles, user_preferences)
+- Agents (agents - partial)
+- Chat (conversations, messages - partial)
+- Tasks (tasks, task_comments, task_time_logs)
+- Licensing (user_licenses, license_activations)
+- Training (training system tables)
+- Marketplace (marketplace tables)
+
+### **❌ Missing APIs Required**
+- **Activity Logs API** - activity_logs table
+- **Agent Capabilities API** - agent_capabilities table
+- **Agent Performance API** - agent_performance table
+- **Board Management API** - boards, board_nodes, board_connections, board_executions
+- **Board Templates API** - board_templates table
+- **Message Attachments API** - message_attachments table
+- **Chat Session History API** - chat_session_history table
+- **Notifications API** - notifications table
+- **User Analytics API** - user_analytics table
+- **System Analytics API** - system_analytics table
+- **System Settings API** - system_settings table
+- **Sessions Management API** - sessions table
+- **Workflow Executions API** - workflow_executions table
+
+---
+
+## 🎯 **NEXT IMPLEMENTATION PRIORITIES**
+
+### **Priority 1: Core Extensions**
+1. Agent Capabilities API
+2. Agent Performance API  
+3. Activity Logs API
+4. Notifications API
+
+### **Priority 2: Board System**
+1. Board Management API
+2. Board Templates API
+3. Board Executions API
+
+### **Priority 3: Enhanced Communication**
+1. Message Attachments API
+2. Chat Session History API
+
+### **Priority 4: Analytics & System**
+1. User Analytics API
+2. System Analytics API
+3. System Settings API
+4. Sessions Management API
+
+### **Priority 5: Workflow Enhancement**
+1. Workflow Executions API
+
+---
+
+## 📝 **IMPLEMENTATION RULES**
+
+### **MANDATORY for Each API**
+- Full CRUD operations where applicable
+- Proper authentication and authorization
+- Input validation and sanitization
+- Error handling with appropriate HTTP status codes
+- Pagination for list endpoints
+- Filtering and searching capabilities
+- Documentation in OpenAPI format
+- Unit and integration tests
+
+### **API Structure Standards**
+```
+/api/{domain}/
+├── list (GET)
+├── create (POST)
+├── get/{id} (GET)
+├── update/{id} (PUT)
+├── delete/{id} (DELETE)
+├── analytics (GET)
+└── search (GET)
+```
+
+**REMEMBER: Every table in the database must have a corresponding API!**
+**REMEMBER: All APIs must follow the same patterns and standards!**
+**REMEMBER: Documentation must be updated for every new API!**
 

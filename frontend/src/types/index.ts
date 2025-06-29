@@ -28,7 +28,9 @@ export interface User {
 export interface Agent {
   id: number;
   name: string;
-  description: string;
+  description?: string;
+  provider: AIProvider;
+  providerConfig: ProviderConfig;
   model_provider: string;
   model_name: string;
   is_active: boolean;
@@ -123,3 +125,19 @@ export type Without<T, K extends keyof T> = Pick<T, Exclude<keyof T, K>>;
 export type XOR<T, U> = T | U extends object
   ? (Without<T, keyof U> & U) | (Without<U, keyof T> & T)
   : T | U;
+
+export type AIProvider = "openai" | "gemini";
+
+export interface GeminiConfig {
+  authType: "google" | "apiKey";
+  apiKey?: string;
+  model?: string;
+}
+
+export interface ProviderConfig {
+  openai?: {
+    apiKey: string;
+    model: string;
+  };
+  gemini?: GeminiConfig;
+}

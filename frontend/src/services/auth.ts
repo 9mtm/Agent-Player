@@ -20,6 +20,7 @@ export interface User {
   full_name: string;
   is_active: boolean;
   is_superuser: boolean;
+  role?: "admin" | "user" | "viewer";
 }
 
 export interface AuthResponse {

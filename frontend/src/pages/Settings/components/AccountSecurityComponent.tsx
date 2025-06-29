@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import api from '../../../services/api';
 import config from '../../../config';
 
 const AccountSecurityComponent: React.FC = () => {
+  const [securitySettings, setSecuritySettings] = useState({});
+
   const [securityData, setSecurityData] = useState({
     password_policy: 'medium',
     login_attempts: 5,
@@ -18,20 +21,29 @@ const AccountSecurityComponent: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
 
-  const loadSecuritySettings = async () => {
+  const fetchSecuritySettings = async () => {
     try {
-      const response = await fetch(`${config.api.baseURL}/api/v1/settings/account-security`);
-      if (response.ok) {
-        const data = await response.json();
-        setSecurityData(data);
-      }
+      const response = await api.get('/user/security');
+      setSecuritySettings(response.data);
+      setSecurityData(response.data);
     } catch (error) {
-      console.error('Error loading security settings:', error);
+      console.error('Error fetching security settings:', error);
+      // Handle error appropriately
+    }
+  };
+
+  const updateSecuritySettings = async (data: any) => {
+    try {
+      await api.put('/user/security', data);
+      // Handle success
+    } catch (error) {
+      console.error('Error updating security settings:', error);
+      // Handle error appropriately
     }
   };
 
   useEffect(() => {
-    loadSecuritySettings();
+    fetchSecuritySettings();
   }, []);
 
   const handleSave = async () => {
@@ -39,17 +51,8 @@ const AccountSecurityComponent: React.FC = () => {
     setMessage('');
     
     try {
-      const response = await fetch(`${config.api.baseURL}/api/v1/settings/account-security`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(securityData)
-      });
-
-      if (response.ok) {
-        setMessage('✅ Account security settings saved successfully!');
-      } else {
-        setMessage('❌ Failed to save settings');
-      }
+      await updateSecuritySettings(securityData);
+      setMessage('✅ Account security settings saved successfully!');
     } catch (error) {
       setMessage('❌ Error saving settings');
       console.error('Error:', error);

@@ -17,7 +17,8 @@ import MarketplacePage from './pages/Marketplace/MarketplacePage';
 import SettingsPageNew from './pages/Settings/SettingsPageNew';
 import BoardPage from './pages/Board/BoardPage';
 import TrainingLabPage from './pages/TrainingLab/TrainingLabPage';
-import WorkflowsPage from './pages/Workflows/WorkflowsPage';
+import { AppsPage } from './pages/Apps';
+import CustomFieldBuilderPro from './pages/Apps/CustomFieldBuilderPro';
 import { Sidebar } from './components/Layout/Sidebar';
 
 // Import global styles
@@ -170,9 +171,11 @@ function DashboardLayout() {
           <Route path="form-builder" element={<FormBuilderPage />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="training-lab" element={<TrainingLabPage />} />
-          <Route path="workflows" element={<WorkflowsPage />} />
           <Route path="marketplace" element={<MarketplacePage />} />
+          <Route path="apps" element={<AppsPage />} />
           <Route path="settings" element={<SettingsPageNew />} />
+          {/* Marketplace Apps Routes */}
+          <Route path="apps/custom-field-builder-pro" element={<CustomFieldBuilderPro />} />
           {/* Board routes with agent IDs */}
           <Route path="board/child-agent/:agentId" element={<BoardPage />} />
           <Route path="board/agent/:agentId" element={<BoardPage />} />
@@ -198,6 +201,7 @@ function AppWithNotifications() {
       <AuthWrapper>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/apps" element={<Navigate to="/dashboard/apps" replace />} />
           <Route path="/dashboard/*" element={
             <ProtectedRoute>
               <DashboardLayout />

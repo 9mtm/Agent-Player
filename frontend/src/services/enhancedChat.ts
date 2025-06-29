@@ -214,7 +214,7 @@ export interface ConversationFilters {
 // ========================================
 
 class EnhancedChatService {
-  private baseUrl = "/api/v1";
+  private baseUrl = "";
   private wsConnections: Map<string, WebSocket> = new Map();
 
   // ========================================

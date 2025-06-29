@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { agentsService } from '../../../services/agents';
+import EndpointSuggestions from '../../../components/EndpointSuggestions';
 
 interface LocalEndpoint {
   id: string;
@@ -128,7 +129,7 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
               id: agent.id,
               name: agent.name,
               description: agent.description || '',
-              model_provider: agent.model_provider || 'openai',
+              model_provider: 'openai', // Default value since Agent type doesn't have this property
               status: agent.is_active ? 'active' : 'inactive'
             }));
             setMainAgents(agentsArray);
@@ -380,41 +381,148 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
       cost: 'Free',
       description: 'Run AI models locally on your computer. Complete privacy and control.',
       models: [
-        { value: 'llama2', label: '🟢 Llama 2 (Recommended)', desc: 'Good starting local model' },
-        { value: 'llama2:13b', label: '🟡 Llama 2 13B', desc: 'Larger Llama model' },
-        { value: 'llama2:70b', label: '🔴 Llama 2 70B', desc: 'Largest Llama model' },
-        { value: 'codellama', label: '🟡 Code Llama', desc: 'For programming tasks' },
-        { value: 'mistral', label: '🟢 Mistral 7B', desc: 'Efficient and fast' },
-        { value: 'vicuna', label: '🟡 Vicuna', desc: 'ChatGPT-like model' },
-        { value: 'orca-mini', label: '🟢 Orca Mini', desc: 'Small but capable' },
+        { value: 'llama3.2:latest', label: '🟢 Llama 3.2 (Recommended)', desc: 'Latest Llama model - Fast and capable' },
+        { value: 'llama3:latest', label: '🟢 Llama 3', desc: 'Previous generation - Very stable' },
+        { value: 'llama2', label: '🟡 Llama 2', desc: 'Older but reliable model' },
+        { value: 'llama2:7b', label: '🟢 Llama 2 7B', desc: 'Small and fast' },
+        { value: 'llama2:13b', label: '🟡 Llama 2 13B', desc: 'Balanced performance' },
+        { value: 'llama2:70b', label: '🔴 Llama 2 70B', desc: 'Large model - requires more RAM' },
+        { value: 'codellama:latest', label: '🟡 Code Llama', desc: 'Specialized for programming' },
+        { value: 'codellama:7b', label: '🟢 Code Llama 7B', desc: 'Fast code generation' },
+        { value: 'codellama:13b', label: '🟡 Code Llama 13B', desc: 'Better code understanding' },
+        { value: 'codellama:34b', label: '🔴 Code Llama 34B', desc: 'Advanced code generation' },
+        { value: 'mistral:latest', label: '🟢 Mistral 7B', desc: 'Efficient European model' },
+        { value: 'mistral:7b', label: '🟢 Mistral 7B', desc: 'Fast and multilingual' },
+        { value: 'mixtral:8x7b', label: '🔴 Mixtral 8x7B', desc: 'Mixture of experts - very capable' },
+        { value: 'vicuna:latest', label: '🟡 Vicuna', desc: 'ChatGPT-like fine-tuned model' },
+        { value: 'vicuna:7b', label: '🟡 Vicuna 7B', desc: 'Conversation specialist' },
+        { value: 'vicuna:13b', label: '🔴 Vicuna 13B', desc: 'Advanced conversation' },
+        { value: 'orca-mini:latest', label: '🟢 Orca Mini', desc: 'Small but very capable' },
+        { value: 'orca-mini:3b', label: '🟢 Orca Mini 3B', desc: 'Tiny and fast' },
+        { value: 'neural-chat:latest', label: '🟡 Neural Chat', desc: 'Intel optimized chat model' },
+        { value: 'starling-lm:latest', label: '🟡 Starling LM', desc: 'High-quality conversations' },
+        { value: 'tinyllama:latest', label: '🟢 TinyLlama', desc: 'Very small and fast' },
+        { value: 'phi:latest', label: '🟢 Phi', desc: 'Microsoft research model' },
+        { value: 'gemma:latest', label: '🟡 Gemma', desc: 'Google research model' },
+        { value: 'qwen:latest', label: '🟡 Qwen', desc: 'Alibaba multilingual model' },
+        { value: 'deepseek-coder:latest', label: '🟡 DeepSeek Coder', desc: 'Advanced code generation' },
       ],
     },
     lmstudio: {
       name: '🖥️ LM Studio (Local)',
-      difficulty: 'Hard',
+      difficulty: 'Easy',
       cost: 'Free',
       description: 'Desktop app for running local AI models with GPU acceleration.',
       models: [
         { value: 'llama-2-7b-chat', label: '🟢 Llama 2 7B Chat', desc: 'Local chat model' },
+        { value: 'llama-3-8b-instruct', label: '🟢 Llama 3 8B Instruct', desc: 'Latest Llama model' },
         { value: 'mistral-7b-instruct', label: '🟢 Mistral 7B Instruct', desc: 'Instruction following' },
+        { value: 'mixtral-8x7b-instruct', label: '🔴 Mixtral 8x7B Instruct', desc: 'High-quality responses' },
         { value: 'code-llama-7b', label: '🟡 Code Llama 7B', desc: 'Code generation' },
+        { value: 'code-llama-13b', label: '🟡 Code Llama 13B', desc: 'Better code understanding' },
+        { value: 'vicuna-7b', label: '🟡 Vicuna 7B', desc: 'Chat specialist' },
         { value: 'vicuna-13b', label: '🟡 Vicuna 13B', desc: 'Larger chat model' },
+        { value: 'orca-2-7b', label: '🟢 Orca 2 7B', desc: 'Microsoft trained model' },
+        { value: 'orca-2-13b', label: '🟡 Orca 2 13B', desc: 'Advanced reasoning' },
+        { value: 'neural-chat-7b', label: '🟡 Neural Chat 7B', desc: 'Intel optimized' },
+        { value: 'starling-lm-7b', label: '🟡 Starling LM 7B', desc: 'High-quality chat' },
+        { value: 'zephyr-7b-beta', label: '🟢 Zephyr 7B Beta', desc: 'Fine-tuned Mistral' },
+        { value: 'openchat-3.5', label: '🟡 OpenChat 3.5', desc: 'Advanced chat model' },
+        { value: 'wizard-vicuna-13b', label: '🔴 Wizard Vicuna 13B', desc: 'Enhanced reasoning' },
       ],
     },
     textgen: {
-      name: '📝 Text Generation WebUI',
-      difficulty: 'Hard',
+      name: '📝 Text Generation WebUI (oobabooga)',
+      difficulty: 'Medium',
       cost: 'Free',
-      description: 'Self-hosted web interface for running local language models.',
+      description: 'Popular self-hosted web interface for running local language models.',
       models: [
-        { value: 'llama-2-7b', label: '🟢 Llama 2 7B', desc: 'Base model' },
-        { value: 'llama-2-13b', label: '🟡 Llama 2 13B', desc: 'Larger base model' },
+        { value: 'llama-2-7b-chat-hf', label: '🟢 Llama 2 7B Chat', desc: 'HuggingFace format' },
+        { value: 'llama-2-13b-chat-hf', label: '🟡 Llama 2 13B Chat', desc: 'Larger chat model' },
+        { value: 'llama-2-70b-chat-hf', label: '🔴 Llama 2 70B Chat', desc: 'Very large model' },
+        { value: 'mistral-7b-instruct-v0.1', label: '🟢 Mistral 7B Instruct', desc: 'Efficient instruction model' },
+        { value: 'mixtral-8x7b-instruct-v0.1', label: '🔴 Mixtral 8x7B', desc: 'Mixture of experts' },
+        { value: 'codellama-7b-instruct-hf', label: '🟡 Code Llama 7B', desc: 'Code generation' },
+        { value: 'codellama-13b-instruct-hf', label: '🟡 Code Llama 13B', desc: 'Better code understanding' },
+        { value: 'vicuna-7b-v1.5', label: '🟡 Vicuna 7B v1.5', desc: 'Conversation specialist' },
+        { value: 'vicuna-13b-v1.5', label: '🔴 Vicuna 13B v1.5', desc: 'Advanced conversation' },
         { value: 'wizard-lm-7b', label: '🟡 WizardLM 7B', desc: 'Enhanced reasoning' },
+        { value: 'wizard-lm-13b', label: '🔴 WizardLM 13B', desc: 'Better reasoning' },
         { value: 'alpaca-7b', label: '🟢 Alpaca 7B', desc: 'Stanford fine-tuned' },
+        { value: 'alpaca-13b', label: '🟡 Alpaca 13B', desc: 'Larger Stanford model' },
+        { value: 'orca-2-7b', label: '🟢 Orca 2 7B', desc: 'Microsoft research' },
+        { value: 'orca-2-13b', label: '🟡 Orca 2 13B', desc: 'Advanced reasoning' },
+        { value: 'neural-chat-7b-v3-1', label: '🟡 Neural Chat 7B', desc: 'Intel optimized' },
+        { value: 'starling-lm-7b-alpha', label: '🟡 Starling LM 7B', desc: 'High-quality responses' },
+        { value: 'zephyr-7b-beta', label: '🟢 Zephyr 7B Beta', desc: 'Fine-tuned Mistral' },
+        { value: 'openchat-3.5-0106', label: '🟡 OpenChat 3.5', desc: 'Advanced chat model' },
+        { value: 'nous-hermes-2-mixtral-8x7b', label: '🔴 Nous Hermes 2 Mixtral', desc: 'Advanced reasoning' },
       ],
     },
 
-    // Tier 5: Specialized & Experimental
+    // Tier 5: Additional Local Servers
+    llamafile: {
+      name: '🗂️ llamafile',
+      difficulty: 'Easy',
+      cost: 'Free',
+      description: 'Single executable file that runs LLMs locally. No installation needed.',
+      models: [
+        { value: 'llama-2-7b-chat', label: '🟢 Llama 2 7B Chat', desc: 'Portable local model' },
+        { value: 'mistral-7b-instruct', label: '🟢 Mistral 7B Instruct', desc: 'Efficient reasoning' },
+        { value: 'codellama-7b-instruct', label: '🟡 Code Llama 7B', desc: 'Code generation' },
+        { value: 'phi-2', label: '🟢 Phi-2', desc: 'Microsoft compact model' },
+      ],
+    },
+    jan: {
+      name: '🌟 Jan',
+      difficulty: 'Easy',
+      cost: 'Free',
+      description: 'ChatGPT alternative that runs locally. User-friendly desktop app.',
+      models: [
+        { value: 'llama2-7b-chat', label: '🟢 Llama 2 7B Chat', desc: 'Local ChatGPT experience' },
+        { value: 'mistral-7b-instruct', label: '🟢 Mistral 7B Instruct', desc: 'Fast and capable' },
+        { value: 'trinity-v1', label: '🟡 Trinity v1', desc: 'Jan optimized model' },
+        { value: 'openchat-3.5', label: '🟡 OpenChat 3.5', desc: 'Advanced conversation' },
+      ],
+    },
+    vllm: {
+      name: '⚡ vLLM',
+      difficulty: 'Hard',
+      cost: 'Free',
+      description: 'High-throughput and memory-efficient inference engine for LLMs.',
+      models: [
+        { value: 'meta-llama/Llama-2-7b-chat-hf', label: '🟢 Llama 2 7B Chat', desc: 'High-performance inference' },
+        { value: 'meta-llama/Llama-2-13b-chat-hf', label: '🟡 Llama 2 13B Chat', desc: 'Balanced performance' },
+        { value: 'mistralai/Mistral-7B-Instruct-v0.1', label: '🟢 Mistral 7B Instruct', desc: 'Optimized inference' },
+        { value: 'codellama/CodeLlama-7b-Instruct-hf', label: '🟡 Code Llama 7B', desc: 'Code generation' },
+      ],
+    },
+    llamacppserver: {
+      name: '🔧 llama.cpp Server',
+      difficulty: 'Medium',
+      cost: 'Free',
+      description: 'High-performance C++ implementation of LLaMA models.',
+      models: [
+        { value: 'llama-2-7b-chat.q4_0.gguf', label: '🟢 Llama 2 7B Q4', desc: 'Quantized for speed' },
+        { value: 'llama-2-13b-chat.q4_0.gguf', label: '🟡 Llama 2 13B Q4', desc: 'Balanced quantized' },
+        { value: 'mistral-7b-instruct-v0.1.q4_0.gguf', label: '🟢 Mistral 7B Q4', desc: 'Efficient quantized' },
+        { value: 'codellama-7b-instruct.q4_0.gguf', label: '🟡 Code Llama 7B Q4', desc: 'Code generation' },
+      ],
+    },
+    llamaapi: {
+      name: '🌐 Llama API',
+      difficulty: 'Easy',
+      cost: 'Free/Paid',
+      description: 'Simple API access to Llama models. Easy integration.',
+      models: [
+        { value: 'llama-7b-chat', label: '🟢 Llama 7B Chat', desc: 'API-accessible Llama' },
+        { value: 'llama-13b-chat', label: '🟡 Llama 13B Chat', desc: 'Larger API model' },
+        { value: 'llama-70b-chat', label: '🔴 Llama 70B Chat', desc: 'Most capable API model' },
+        { value: 'codellama-34b-instruct', label: '🟡 Code Llama 34B', desc: 'Code generation via API' },
+      ],
+    },
+
+    // Tier 6: Specialized & Experimental
     fireworks: {
       name: '🎆 Fireworks AI',
       difficulty: 'Medium',
@@ -436,17 +544,6 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
         { value: 'meta-llama/Llama-2-7b-chat', label: '🟢 Llama 2 7B', desc: 'Fast and affordable' },
         { value: 'meta-llama/Llama-2-70b-chat', label: '🔴 Llama 2 70B', desc: 'High performance' },
         { value: 'codellama/CodeLlama-34b-Instruct', label: '🟡 Code Llama 34B', desc: 'Code specialist' },
-      ],
-    },
-    lepton: {
-      name: '⚛️ Lepton AI',
-      difficulty: 'Medium',
-      cost: 'Paid',
-      description: 'Simplified AI inference platform with optimized models.',
-      models: [
-        { value: 'llama2-7b', label: '🟢 Llama 2 7B', desc: 'Optimized inference' },
-        { value: 'llama2-13b', label: '🟡 Llama 2 13B', desc: 'Better reasoning' },
-        { value: 'mixtral-8x7b', label: '🔴 Mixtral 8x7B', desc: 'Advanced model' },
       ],
     },
   };
@@ -831,7 +928,7 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
   };
 
   // Handle behavioral settings toggle
-  const toggleBehavioralSetting = (setting: string) => {
+  const toggleBehavioralSetting = (setting: keyof AgentSettings) => {
     setFormData(prev => ({
       ...prev,
       settings: {
@@ -1270,6 +1367,22 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
                       📍 Full URL: http://{formData.llmConfig.localConfig.host}:{formData.llmConfig.localConfig.port}{formData.llmConfig.localConfig.endpoint}
                     </div>
                   </div>
+
+                  {/* Endpoint Suggestions Component */}
+                  <EndpointSuggestions
+                    selectedModel={formData.llmConfig.model}
+                    currentHost={formData.llmConfig.localConfig.host}
+                    currentPort={formData.llmConfig.localConfig.port}
+                    currentEndpoint={formData.llmConfig.localConfig.endpoint}
+                    onEndpointSelect={(host, port, endpoint) => {
+                      updateLocalConfig('host', host);
+                      updateLocalConfig('port', port);
+                      updateLocalConfig('endpoint', endpoint);
+                    }}
+                    onConfigChange={(config) => {
+                      console.log('📋 Suggested endpoint config selected:', config);
+                    }}
+                  />
 
                   {/* Additional Endpoints */}
                   <div style={{ marginBottom: '16px' }}>

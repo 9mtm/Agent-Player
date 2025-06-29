@@ -127,7 +127,7 @@ class MCPService {
     context: Record<string, any> = {},
     sessionId?: string
   ): Promise<AICommandResponse> {
-    const response = await api.post("/api/v1/mcp/execute", {
+    const response = await api.post("/mcp/execute", {
       command,
       context,
       session_id: sessionId,
@@ -497,20 +497,20 @@ class MCPService {
     status: string;
     servers: Record<string, string>;
   }> {
-    const response = await api.get("/api/v1/mcp/health");
+    const response = await api.get("/mcp/health");
     return response.data;
   }
 
   async getHelp(topic?: string): Promise<{ help: string; examples: string[] }> {
     const params = topic ? { topic } : {};
-    const response = await api.get("/api/v1/mcp/help", { params });
+    const response = await api.get("/mcp/help", { params });
     return response.data;
   }
 
   // WebSocket for real-time updates (if implemented)
   connectToMCPUpdates(callback: (update: any) => void): WebSocket | null {
     if (typeof WebSocket !== "undefined") {
-      const ws = new WebSocket(`ws://localhost:8000/api/v1/mcp/ws`);
+      const ws = new WebSocket(`ws://localhost:8000/mcp/ws`);
 
       ws.onmessage = (event) => {
         try {

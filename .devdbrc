@@ -1,0 +1,6 @@
+[
+  {
+    "type": "sqlite",
+    "path": "c:\\MAMP\\htdocs\\dpro_aI_agent\\backend\\data\\database.db"
+  }
+]

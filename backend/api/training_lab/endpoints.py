@@ -12,7 +12,7 @@ import json
 from datetime import datetime, timedelta
 import asyncio
 
-router = APIRouter(prefix="/training-lab", tags=["training-lab"])
+router = APIRouter(tags=["Training Lab"])
 
 # ============================================================================
 # PYDANTIC MODELS
