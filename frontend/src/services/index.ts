@@ -17,7 +17,7 @@ export { default as websocketService } from "./websocket";
 export { licenseService } from "./license";
 export { trainingLabService } from "./trainingLab";
 export { marketplaceService } from "./marketplace";
-// export { usersService } from "./users"; // TODO: Create users service file
+export { usersService } from "./users";
 
 // Export enums as values (not types)
 export { TaskStatus, TaskPriority } from "./tasks";
@@ -147,3 +147,87 @@ export type {
   LoadingState,
   PaginatedResponse,
 } from "../types";
+
+// Authentication
+export type {
+  LoginCredentials,
+  RegisterData,
+  AuthResponse,
+  User as AuthUser,
+} from "./auth";
+
+// Users
+export type {
+  User,
+  UserPreferences,
+  UserStats,
+  ProfileUpdateData,
+  UsersResponse,
+} from "./users";
+
+// Agents
+export type {
+  Agent,
+  AgentType,
+  CreateAgentData,
+  UpdateAgentData,
+  AgentResponse,
+} from "./agents";
+
+// Chat
+export type { CreateConversationData, SendMessageData } from "./chat";
+
+// Tasks
+export type {
+  Task,
+  CreateTaskData,
+  UpdateTaskData,
+  TaskComment,
+  TaskTimeLog,
+} from "./tasks";
+
+// Settings
+export type {
+  UserProfile,
+  UserAddress,
+  UserLink,
+  UserFile,
+  SettingsResponse,
+} from "./settings";
+
+// Training Lab
+export type {
+  Workspace,
+  TrainingSession,
+  CreateWorkspaceData,
+} from "./trainingLab";
+
+// License
+export type { LicenseInfo, LicenseValidation, HardwareInfo } from "./license";
+
+// Marketplace
+export type {
+  MarketplaceItem,
+  MarketplaceCategory,
+  PurchaseData,
+} from "./marketplace";
+
+// Child Agents
+export type { CreateChildAgentData, ChildAgentResponse } from "./childAgents";
+
+// Boards
+export type {
+  Board,
+  BoardNode,
+  BoardConnection,
+  CreateBoardData,
+} from "./boards";
+
+// WebSocket
+export type { WebSocketService } from "./websocketService";
+
+// MCP
+export type { MCPTool, MCPConnection, MCPMessage } from "./mcp";
+
+// API Base
+export type { apiCall } from "./api";

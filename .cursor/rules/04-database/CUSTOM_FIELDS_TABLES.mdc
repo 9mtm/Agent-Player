@@ -1,0 +1,311 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# 🔥 CUSTOM FIELD BUILDER - DATABASE TABLES
+
+## 📋 **Overview**
+
+**New Database Domain:** Custom Field Builder System  
+**Tables Count:** 4 new tables  
+**Purpose:** ACF-style dynamic field system  
+**Status:** PLANNED - Ready for implementation  
+**Priority:** CRITICAL 🔥
+
+---
+
+## 🗄️ **NEW DOMAIN 12: CUSTOM FIELD BUILDER (4 tables)**
+
+### **Table 38: custom_fields** - Field definitions and configuration
+```sql
+CREATE TABLE custom_fields (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    label VARCHAR(200) NOT NULL,
+    field_type VARCHAR(50) NOT NULL, -- 'text', 'number', 'select', 'checkbox', 'date', 'file'
+    description TEXT,
+    placeholder VARCHAR(255),
+    default_value TEXT,
+    options TEXT, -- JSON for select/radio options: {"options": [{"label": "Option 1", "value": "opt1"}]}
+    validation_rules TEXT, -- JSON validation config: {"required": true, "minLength": 3, "maxLength": 100}
+    is_required BOOLEAN DEFAULT FALSE,
+    position INTEGER DEFAULT 0,
+    group_id INTEGER,
+    created_by INTEGER NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    FOREIGN KEY (group_id) REFERENCES custom_field_groups(id),
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+-- Indexes for performance
+CREATE INDEX idx_custom_fields_type ON custom_fields(field_type);
+CREATE INDEX idx_custom_fields_group ON custom_fields(group_id);
+CREATE INDEX idx_custom_fields_active ON custom_fields(is_active);
+```
+
+### **Table 39: custom_field_groups** - Field grouping and organization
+```sql
+CREATE TABLE custom_field_groups (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    location VARCHAR(100) NOT NULL, -- 'agent_form', 'task_form', 'profile', 'training_form'
+    entity_type VARCHAR(50), -- 'agent', 'task', 'user', 'training'
+    display_rules TEXT, -- JSON conditions: {"show_when": {"agent_type": "conversational"}}
+    position INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+-- Indexes for performance
+CREATE INDEX idx_custom_field_groups_location ON custom_field_groups(location);
+CREATE INDEX idx_custom_field_groups_entity ON custom_field_groups(entity_type);
+CREATE INDEX idx_custom_field_groups_active ON custom_field_groups(is_active);
+```
+
+### **Table 40: custom_field_values** - User-entered field values
+```sql
+CREATE TABLE custom_field_values (
+    id INTEGER PRIMARY KEY,
+    field_id INTEGER NOT NULL,
+    entity_type VARCHAR(50) NOT NULL, -- 'agent', 'task', 'user'
+    entity_id INTEGER NOT NULL,
+    value TEXT, -- Stored as JSON for complex values: {"text": "value"} or {"array": ["val1", "val2"]}
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    FOREIGN KEY (field_id) REFERENCES custom_fields(id),
+    UNIQUE(field_id, entity_type, entity_id)
+);
+
+-- Indexes for performance
+CREATE INDEX idx_custom_field_values_entity ON custom_field_values(entity_type, entity_id);
+CREATE INDEX idx_custom_field_values_field ON custom_field_values(field_id);
+```
+
+### **Table 41: field_templates** - Reusable field configurations
+```sql
+CREATE TABLE field_templates (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    category VARCHAR(100), -- 'agent', 'task', 'general', 'ecommerce', 'blog'
+    fields_config TEXT NOT NULL, -- JSON field definitions array
+    preview_image VARCHAR(255),
+    is_public BOOLEAN DEFAULT FALSE,
+    usage_count INTEGER DEFAULT 0,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+-- Indexes for performance
+CREATE INDEX idx_field_templates_category ON field_templates(category);
+CREATE INDEX idx_field_templates_public ON field_templates(is_public);
+CREATE INDEX idx_field_templates_usage ON field_templates(usage_count DESC);
+```
+
+---
+
+## 🔧 **Field Types Supported**
+
+### **Basic Fields (6 types)**
+1. **text** - Single line text input
+2. **textarea** - Multi-line text input
+3. **number** - Numeric input with validation
+4. **email** - Email format validation
+5. **url** - URL format validation
+6. **password** - Hidden text input
+
+### **Selection Fields (4 types)**
+7. **select** - Dropdown menu (single selection)
+8. **multiselect** - Multiple selection dropdown
+9. **radio** - Radio button group
+10. **checkbox** - Single or multiple checkboxes
+
+### **Date/Time Fields (3 types)**
+11. **date** - Date picker
+12. **datetime** - Date and time picker
+13. **time** - Time picker
+
+### **File Fields (3 types)**
+14. **file** - General file upload
+15. **image** - Image upload with preview
+16. **video** - Video file upload
+
+### **Advanced Fields (4 types)**
+17. **color** - Color picker
+18. **richtext** - WYSIWYG editor
+19. **relationship** - Link to other entities
+20. **json** - Raw JSON editor
+
+---
+
+## 🔗 **Table Relationships**
+
+### **Primary Relationships**
+```
+users (1) ----< custom_fields (many)
+users (1) ----< custom_field_groups (many)
+users (1) ----< field_templates (many)
+
+custom_field_groups (1) ----< custom_fields (many)
+custom_fields (1) ----< custom_field_values (many)
+```
+
+### **Entity Relationships**
+```
+agents (1) ----< custom_field_values (many) [entity_type='agent']
+tasks (1) ----< custom_field_values (many) [entity_type='task']
+users (1) ----< custom_field_values (many) [entity_type='user']
+```
+
+---
+
+## 📊 **Database Impact Analysis**
+
+### **Storage Requirements**
+- **custom_fields:** ~500 bytes per field × 1000 fields = 500KB
+- **custom_field_groups:** ~300 bytes per group × 100 groups = 30KB
+- **custom_field_values:** ~200 bytes per value × 50,000 values = 10MB
+- **field_templates:** ~2KB per template × 50 templates = 100KB
+- **Total Additional Storage:** ~11MB for active usage
+
+### **Performance Impact**
+- **Query Performance:** Optimized with proper indexes
+- **Join Complexity:** Minimal impact on existing queries
+- **Cache Strategy:** Field definitions cached in memory
+- **Backup Size:** +11MB additional backup space
+
+### **Migration Requirements**
+```sql
+-- Migration Script: Add Custom Field Builder Tables
+-- File: backend/migrations/add_custom_field_builder_tables.py
+
+def upgrade():
+    # Create tables in order (respecting foreign keys)
+    op.create_table('custom_field_groups', ...)
+    op.create_table('custom_fields', ...)
+    op.create_table('custom_field_values', ...)
+    op.create_table('field_templates', ...)
+    
+    # Create indexes
+    op.create_index('idx_custom_fields_type', 'custom_fields', ['field_type'])
+    # ... other indexes
+    
+    # Insert default field templates
+    op.execute("INSERT INTO field_templates ...")
+
+def downgrade():
+    # Drop tables in reverse order
+    op.drop_table('field_templates')
+    op.drop_table('custom_field_values')
+    op.drop_table('custom_fields')
+    op.drop_table('custom_field_groups')
+```
+
+---
+
+## 🎯 **Integration Points**
+
+### **Existing Forms to Integrate**
+1. **Agent Creation Form** - `/agents/create`
+2. **Agent Editing Form** - `/agents/{id}/edit`
+3. **Child Agent Form** - `/agents/child/create`
+4. **Task Creation Form** - `/tasks/create`
+5. **Task Editing Form** - `/tasks/{id}/edit`
+6. **User Profile Form** - `/profile/edit`
+7. **Training Configuration** - `/training/configure`
+8. **Marketplace Item Form** - `/marketplace/create`
+
+### **Database Integration Strategy**
+```python
+# Example: Agent with custom fields
+class Agent(Base):
+    __tablename__ = 'agents'
+    # ... existing fields
+    
+    # Relationship to custom field values
+    custom_field_values = relationship(
+        "CustomFieldValue",
+        primaryjoin="and_(Agent.id == CustomFieldValue.entity_id, "
+                   "CustomFieldValue.entity_type == 'agent')",
+        foreign_keys="CustomFieldValue.entity_id"
+    )
+```
+
+---
+
+## 🚀 **Implementation Timeline**
+
+### **Week 1: Database Foundation**
+- **Day 1:** Create migration scripts
+- **Day 2:** Test database schema
+- **Day 3:** Add seed data and templates
+- **Day 4:** Performance testing
+- **Day 5:** Integration testing
+
+### **Week 2: API Development**
+- **Day 1:** Field management APIs
+- **Day 2:** Group management APIs
+- **Day 3:** Value storage APIs
+- **Day 4:** Template management APIs
+- **Day 5:** API testing
+
+### **Week 3: Frontend Integration**
+- **Day 1:** Field builder UI
+- **Day 2:** Field renderer component
+- **Day 3:** Form integration
+- **Day 4:** Template management
+- **Day 5:** Testing and deployment
+
+---
+
+## ✅ **Quality Assurance**
+
+### **Data Integrity**
+- Foreign key constraints enforced
+- Unique constraints prevent duplicates
+- JSON validation for complex fields
+- Cascade deletes handled properly
+
+### **Performance Optimization**
+- Proper indexing on all lookup columns
+- Query optimization for field retrieval
+- Caching strategy for field definitions
+- Lazy loading for field values
+
+### **Security Considerations**
+- User-based access control
+- Input sanitization for all field types
+- File upload security (type/size validation)
+- XSS prevention in rich text fields
+
+---
+
+## 🎯 **Success Metrics**
+
+### **Database Performance**
+- **Field Creation:** < 100ms per field
+- **Value Storage:** < 50ms per value
+- **Form Loading:** < 500ms with 20 fields
+- **Search Performance:** < 200ms
+
+### **User Adoption**
+- **Field Creation Rate:** 80% of users create custom fields
+- **Template Usage:** 60% use templates
+- **Error Rate:** < 2% field creation failures
+- **Performance:** No degradation to existing features
+
+---
+
+**Database Growth: 37 tables → 41 tables (+4 tables)**  
+**New Feature: Game-changing Custom Field Builder**  
+**Status: Ready for implementation** 🔥
+

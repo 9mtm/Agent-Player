@@ -5,20 +5,20 @@ import type { User } from '../../services/auth';
 
 // Main navigation items - with locked items and Workflows removed
 const navigationItems = [
-  { path: '/dashboard', label: 'Dashboard', icon: '📊', locked: false },
-  { path: '/dashboard/agents', label: 'Agents', icon: '🤖', locked: false },
-  { path: '/dashboard/chat', label: 'Chat', icon: '💬', locked: false },
-  { path: '/dashboard/training-lab', label: 'Training Lab', icon: '🧪', locked: true },
-  { path: '/dashboard/tasks', label: 'Tasks', icon: '✅', locked: true },
-  { path: '/dashboard/form-builder', label: 'Form Builder', icon: '📝', locked: true },
-  { path: '/dashboard/marketplace', label: 'Marketplace', icon: '🛒', locked: true },
-  { path: '/dashboard/settings', label: 'Settings', icon: '⚙️', locked: false },
+  { path: '/dashboard', label: 'Dashboard', icon: '📊', locked: false, hidden: false },
+  { path: '/dashboard/agents', label: 'Agents', icon: '🤖', locked: false, hidden: false },
+  { path: '/dashboard/chat', label: 'Chat', icon: '💬', locked: false, hidden: false },
+  { path: '/dashboard/training-lab', label: 'Training Lab', icon: '🧪', locked: true, hidden: false },
+  { path: '/dashboard/tasks', label: 'Tasks', icon: '✅', locked: true, hidden: false },
+  { path: '/dashboard/form-builder', label: 'Form Builder', icon: '📝', locked: true, hidden: false },
+  { path: '/dashboard/apps', label: 'Apps', icon: '📱', locked: false, hidden: true },
+  { path: '/dashboard/marketplace', label: 'Marketplace', icon: '🛒', locked: false, hidden: true },
+  { path: '/dashboard/settings', label: 'Settings', icon: '⚙️', locked: false, hidden: false },
 ];
 
 export function Sidebar() {
   const location = useLocation();
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
 
   useEffect(() => {
@@ -43,13 +43,11 @@ export function Sidebar() {
   const loadUserData = async () => {
     try {
       console.log('🔍 Sidebar: Loading user data...');
-      setLoading(true);
       
       const token = localStorage.getItem('access_token');
       if (!token) {
         console.log('❌ Sidebar: No access token found');
         setUser(null);
-        setLoading(false);
         return;
       }
 
@@ -74,8 +72,6 @@ export function Sidebar() {
         console.log('❌ Sidebar: No stored user data available');
         setUser(null);
       }
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -189,7 +185,7 @@ export function Sidebar() {
             }}>
               Main Menu
             </div>
-            {navigationItems.map((item) => (
+            {navigationItems.filter(item => !item.hidden).map((item) => (
               <Link
                 key={item.path}
                 to={item.locked ? '#' : item.path}

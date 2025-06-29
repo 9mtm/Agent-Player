@@ -224,6 +224,85 @@ class UserService:
             await db.rollback()
             return False
     
+    async def get_user_activity(self, db: AsyncSession, user_id: int) -> List[Dict[str, Any]]:
+        """Get user activity log"""
+        from models.database import ActivityLog
+        query = (
+            select(ActivityLog)
+            .where(ActivityLog.user_id == user_id)
+            .order_by(desc(ActivityLog.created_at))
+            .limit(50)
+        )
+        result = await db.execute(query)
+        activities = result.scalars().all()
+        
+        return [
+            {
+                "id": activity.id,
+                "action": activity.action,
+                "details": activity.details,
+                "created_at": activity.created_at.isoformat() if activity.created_at else None
+            }
+            for activity in activities
+        ]
+
+    async def get_users_overview(self, db: AsyncSession) -> Dict[str, Any]:
+        """Get users overview statistics"""
+        total = await db.scalar(select(func.count()).select_from(User))
+        active = await db.scalar(select(func.count()).select_from(User).where(User.is_active == True))
+        
+        # Get new users this month
+        from datetime import datetime, timedelta
+        this_month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        new_this_month = await db.scalar(
+            select(func.count()).select_from(User).where(User.created_at >= this_month)
+        )
+        
+        return {
+            "total_users": total or 0,
+            "active_users": active or 0,
+            "inactive_users": (total or 0) - (active or 0),
+            "new_this_month": new_this_month or 0
+        }
+
+    async def deactivate_user(self, db: AsyncSession, user_id: int) -> bool:
+        """Deactivate user (soft delete)"""
+        try:
+            query = select(User).where(User.id == user_id)
+            result = await db.execute(query)
+            user = result.scalar_one_or_none()
+            
+            if not user:
+                return False
+                
+            user.is_active = False
+            user.updated_at = func.now()
+            await db.commit()
+            return True
+            
+        except Exception:
+            await db.rollback()
+            return False
+
+    async def activate_user(self, db: AsyncSession, user_id: int) -> bool:
+        """Activate user"""
+        try:
+            query = select(User).where(User.id == user_id)
+            result = await db.execute(query)
+            user = result.scalar_one_or_none()
+            
+            if not user:
+                return False
+                
+            user.is_active = True
+            user.updated_at = func.now()
+            await db.commit()
+            return True
+            
+        except Exception:
+            await db.rollback()
+            return False
+    
     def _user_to_dict(self, user: User, include_timestamps: bool = False) -> Optional[Dict[str, Any]]:
         """Convert User model to dictionary"""
         if not user:
@@ -236,18 +315,13 @@ class UserService:
             "full_name": user.full_name,
             "role": user.role,
             "is_active": user.is_active,
-            "is_verified": user.is_verified,
-            "email_verified": user.email_verified,
-            "phone_verified": user.phone_verified,
-            "two_factor_enabled": user.two_factor_enabled,
             "preferences": user.preferences
         }
         
         if include_timestamps:
             result.update({
                 "created_at": user.created_at.isoformat() if user.created_at else None,
-                "updated_at": user.updated_at.isoformat() if user.updated_at else None,
-                "last_login": user.last_login.isoformat() if user.last_login else None
+                "updated_at": user.updated_at.isoformat() if user.updated_at else None
             })
             
         return result 

@@ -21,6 +21,45 @@ const MarketplacePage: React.FC = () => {
 
   // Sample marketplace data - will come from API in production
   const products: MarketplaceProduct[] = [
+    // ⭐ FEATURED: Custom Field Builder
+    {
+      id: 'custom-field-builder',
+      name: 'Custom Field Builder Pro',
+      category: 'extensions',
+      description: 'Revolutionary ACF-style field builder for dynamic forms. Create custom fields without coding!',
+      longDescription: 'Transform your DPRO AI Agent experience with our powerful Custom Field Builder. Inspired by WordPress Advanced Custom Fields (ACF), this app lets you create dynamic forms for agents, tasks, profiles, and more without writing a single line of code. Features 20+ field types, drag & drop interface, live preview, and template system.',
+      price: 0,
+      rating: 4.9,
+      downloads: 0,
+      developer: 'DPRO AI Team',
+      version: '1.0.0',
+      compatibility: ['v2.0+'],
+      tags: ['forms', 'fields', 'builder', 'acf', 'dynamic', 'no-code', 'free'],
+      icon: '🔧',
+      images: ['/images/custom-field-builder-1.png', '/images/custom-field-builder-2.png'],
+      features: [
+        '✨ Completely FREE - No Payment Required!',
+        '20+ Field Types (Text, Select, File, Date, Rating, etc.)',
+        'Drag & Drop Visual Builder',
+        'Live Preview Mode',
+        'Template System for Reusability',
+        'Integration with 8+ Existing Forms',
+        'Advanced Validation Rules',
+        'Conditional Field Logic',
+        'Export/Import Configurations'
+      ],
+      requirements: ['DPRO AI Agent v2.0+'],
+      changelog: '1.0.0: Initial release - Now completely FREE!',
+      isPaid: false,
+      isFeatured: true,
+      installCount: 0,
+      lastUpdated: '2025-06-29',
+      // Special app properties
+      isApp: true,
+      appPath: '/marketplace/apps/custom-field-builder',
+      category_new: 'apps', // New category for marketplace apps
+    },
+    
     // Extensions
     {
       id: '1',

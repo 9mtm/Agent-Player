@@ -91,8 +91,14 @@ async def create_agent(
 ):
     """Create new agent"""
     try:
-        # Set user_id from current user
-        request.user_id = current_user["user_id"]
+        # Don't modify the request object - it's immutable
+        # Pass user_id directly from current_user
+        user_id = current_user["user_id"]
+        
+        # Add debugging information
+        import logging
+        logging.info(f"Creating agent with data: name={request.name}, user_id={user_id}")
+        logging.info(f"Request data: {request.dict()}")
         
         agent_id = await agent_service.create_agent(
             db=db,
@@ -106,15 +112,24 @@ async def create_agent(
             max_tokens=request.max_tokens,
             api_key=request.api_key,
             parent_agent_id=request.parent_agent_id,
-            user_id=request.user_id
+            user_id=user_id,  # Use the extracted user_id
+            api_endpoint=getattr(request, 'api_endpoint', None)  # NEW: Support for Ollama endpoints
         )
+        
+        logging.info(f"Agent created successfully with ID: {agent_id}")
         
         return SuccessResponse(
             message="Agent created successfully",
             data={"agent_id": agent_id}
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import logging
+        import traceback
+        logging.error(f"Error creating agent: {e}")
+        logging.error(f"Full error details: {type(e).__name__}: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        logging.error(f"Request data received: {request.dict() if hasattr(request, 'dict') else 'No dict method'}")
+        raise HTTPException(status_code=500, detail=f"Agent creation failed: {str(e)}")
 
 @router.post("/child", response_model=SuccessResponse)
 async def create_child_agent(
@@ -124,8 +139,9 @@ async def create_child_agent(
 ):
     """Create new child agent"""
     try:
-        # Set user_id from current user
-        request.user_id = current_user["user_id"]
+        # Don't modify the request object - it's immutable
+        # Pass user_id directly from current_user
+        user_id = current_user["user_id"]
         
         agent_id = await agent_service.create_agent(
             db=db,
@@ -139,7 +155,8 @@ async def create_child_agent(
             max_tokens=request.max_tokens,
             api_key=request.api_key,
             parent_agent_id=request.parent_agent_id,
-            user_id=request.user_id
+            user_id=user_id,  # Use the extracted user_id
+            api_endpoint=getattr(request, 'api_endpoint', None)  # NEW: Support for Ollama endpoints
         )
         
         return SuccessResponse(
@@ -328,6 +345,158 @@ async def deactivate_agent(agent_id: int, current_user: Dict = Depends(get_curre
         return SuccessResponse(
             message="Agent deactivated successfully",
             data={"agent_id": agent_id, "is_active": False}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{agent_id}/capabilities", response_model=SuccessResponse)
+async def get_agent_capabilities(
+    agent_id: int, 
+    current_user: Dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get agent capabilities and skills"""
+    try:
+        capabilities = await agent_service.get_agent_capabilities(db, agent_id)
+        return SuccessResponse(
+            message="Agent capabilities retrieved",
+            data={
+                "agent_id": agent_id,
+                "capabilities": capabilities or [],
+                "total_capabilities": len(capabilities) if capabilities else 0
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/{agent_id}/capabilities", response_model=SuccessResponse)
+async def update_agent_capabilities(
+    agent_id: int,
+    capabilities: List[Dict[str, Any]],
+    current_user: Dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update agent capabilities"""
+    try:
+        success = await agent_service.update_agent_capabilities(db, agent_id, capabilities)
+        if not success:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        
+        return SuccessResponse(
+            message="Agent capabilities updated successfully",
+            data={"agent_id": agent_id, "capabilities_count": len(capabilities)}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{agent_id}/train", response_model=SuccessResponse)
+async def train_agent(
+    agent_id: int,
+    training_data: Dict[str, Any],
+    current_user: Dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Start agent training session"""
+    try:
+        training_session = await agent_service.start_training_session(
+            db, agent_id, training_data, current_user["user_id"]
+        )
+        
+        return SuccessResponse(
+            message="Training session started",
+            data={
+                "agent_id": agent_id,
+                "training_session_id": training_session.get("session_id"),
+                "status": "training_started",
+                "estimated_duration": "15-30 minutes"
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{agent_id}/training-status", response_model=SuccessResponse)
+async def get_training_status(
+    agent_id: int,
+    current_user: Dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get agent training status"""
+    try:
+        status = await agent_service.get_training_status(db, agent_id)
+        return SuccessResponse(
+            message="Training status retrieved",
+            data=status
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{agent_id}/usage-history", response_model=SuccessResponse)
+async def get_agent_usage_history(
+    agent_id: int,
+    current_user: Dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(default=30, ge=1, le=365)
+):
+    """Get agent usage history"""
+    try:
+        history = await agent_service.get_usage_history(db, agent_id, days)
+        return SuccessResponse(
+            message=f"Usage history for last {days} days",
+            data={
+                "agent_id": agent_id,
+                "period_days": days,
+                "usage_data": history,
+                "total_interactions": sum(day.get("interactions", 0) for day in history)
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{agent_id}/backup", response_model=SuccessResponse)
+async def backup_agent(
+    agent_id: int,
+    current_user: Dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Create agent backup"""
+    try:
+        backup_result = await agent_service.create_agent_backup(
+            db, agent_id, current_user["user_id"]
+        )
+        
+        return SuccessResponse(
+            message="Agent backup created",
+            data={
+                "agent_id": agent_id,
+                "backup_id": backup_result.get("backup_id"),
+                "backup_size": backup_result.get("size"),
+                "created_at": backup_result.get("created_at")
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/restore", response_model=SuccessResponse)
+async def restore_agent(
+    backup_id: str,
+    current_user: Dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Restore agent from backup"""
+    try:
+        restored_agent = await agent_service.restore_agent_from_backup(
+            db, backup_id, current_user["user_id"]
+        )
+        
+        return SuccessResponse(
+            message="Agent restored successfully",
+            data={
+                "agent_id": restored_agent.get("agent_id"),
+                "backup_id": backup_id,
+                "restored_at": restored_agent.get("restored_at")
+            }
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) 

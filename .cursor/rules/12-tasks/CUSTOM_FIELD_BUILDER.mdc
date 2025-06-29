@@ -1,0 +1,374 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# 🔧 CUSTOM FIELD BUILDER (ACF) - NEW FEATURE
+
+## 📋 **Feature Overview**
+
+**Inspired by:** WordPress Advanced Custom Fields (ACF)  
+**Purpose:** Allow users to add custom fields to any component/page dynamically  
+**Priority:** CRITICAL  
+**Status:** PLANNING  
+**Estimated Time:** 2-3 weeks
+
+---
+
+## 🎯 **Core Concept**
+
+Create a dynamic field builder system that allows users to:
+- ✅ Add custom fields to any form or page
+- ✅ Choose from multiple field types
+- ✅ Configure field properties and validation
+- ✅ Auto-render fields in UI without coding
+- ✅ Save/load field configurations
+- ✅ Create field templates for reuse
+
+---
+
+## 🗄️ **Database Design**
+
+### custom_fields table
+```sql
+CREATE TABLE custom_fields (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    label VARCHAR(200) NOT NULL,
+    field_type VARCHAR(50) NOT NULL, -- 'text', 'number', 'select', 'checkbox'
+    description TEXT,
+    placeholder VARCHAR(255),
+    default_value TEXT,
+    options TEXT, -- JSON for select/radio options
+    validation_rules TEXT, -- JSON validation config
+    is_required BOOLEAN DEFAULT FALSE,
+    position INTEGER DEFAULT 0,
+    group_id INTEGER,
+    created_by INTEGER NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    FOREIGN KEY (group_id) REFERENCES custom_field_groups(id),
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+```
+
+### custom_field_groups table
+```sql
+CREATE TABLE custom_field_groups (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    location VARCHAR(100) NOT NULL, -- 'agent_form', 'task_form', 'profile'
+    entity_type VARCHAR(50), -- 'agent', 'task', 'user'
+    display_rules TEXT, -- JSON conditions for showing
+    position INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+```
+
+### custom_field_values table
+```sql
+CREATE TABLE custom_field_values (
+    id INTEGER PRIMARY KEY,
+    field_id INTEGER NOT NULL,
+    entity_type VARCHAR(50) NOT NULL, -- 'agent', 'task', 'user'
+    entity_id INTEGER NOT NULL,
+    value TEXT, -- Stored as JSON for complex values
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    FOREIGN KEY (field_id) REFERENCES custom_fields(id),
+    UNIQUE(field_id, entity_type, entity_id)
+);
+```
+
+### field_templates table
+```sql
+CREATE TABLE field_templates (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    category VARCHAR(100), -- 'agent', 'task', 'general'
+    fields_config TEXT NOT NULL, -- JSON field definitions
+    preview_image VARCHAR(255),
+    is_public BOOLEAN DEFAULT FALSE,
+    usage_count INTEGER DEFAULT 0,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+```
+
+---
+
+## 🔧 **Supported Field Types**
+
+### Basic Fields
+- **Text:** Single line text input
+- **Textarea:** Multi-line text input
+- **Number:** Numeric input with validation
+- **Email:** Email format validation
+- **URL:** URL format validation
+- **Password:** Hidden text input
+
+### Selection Fields
+- **Select:** Dropdown menu
+- **Multi-select:** Multiple selection dropdown
+- **Radio:** Radio button group
+- **Checkbox:** Single or multiple checkboxes
+
+### Date/Time Fields
+- **Date:** Date picker
+- **DateTime:** Date and time picker
+- **Time:** Time picker
+
+### File Fields
+- **File Upload:** General file upload
+- **Image Upload:** Image with preview
+- **Video Upload:** Video file upload
+
+### Advanced Fields
+- **Color Picker:** Color selection
+- **Rich Text Editor:** WYSIWYG editor
+- **Relationship:** Link to other entities
+- **JSON Editor:** Raw JSON input
+
+---
+
+## 🔗 **API Endpoints**
+
+### Field Management
+```javascript
+// POST /custom-fields/fields - Create new field
+const response = await fetch('/custom-fields/fields', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        name: 'agent_experience_level',
+        label: 'Experience Level',
+        field_type: 'select',
+        description: 'Select the agent experience level',
+        options: [
+            { label: 'Beginner', value: 'beginner' },
+            { label: 'Intermediate', value: 'intermediate' },
+            { label: 'Advanced', value: 'advanced' }
+        ],
+        validation_rules: { required: true },
+        group_id: 1
+    })
+});
+
+// GET /custom-fields/fields - List all fields
+// PUT /custom-fields/fields/{id} - Update field
+// DELETE /custom-fields/fields/{id} - Delete field
+// GET /custom-fields/fields/{id} - Get field details
+```
+
+### Field Groups Management
+```javascript
+// POST /custom-fields/groups - Create field group
+const response = await fetch('/custom-fields/groups', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        name: 'Agent Configuration',
+        description: 'Additional configuration fields for agents',
+        location: 'agent_form',
+        entity_type: 'agent',
+        display_rules: {
+            show_when: { agent_type: 'conversational' }
+        }
+    })
+});
+
+// GET /custom-fields/groups - List field groups
+// PUT /custom-fields/groups/{id} - Update group
+// DELETE /custom-fields/groups/{id} - Delete group
+```
+
+### Field Values Management
+```javascript
+// POST /custom-fields/values - Save field values
+const response = await fetch('/custom-fields/values', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        entity_type: 'agent',
+        entity_id: 5,
+        values: [
+            { field_id: 1, value: 'intermediate' },
+            { field_id: 2, value: 'Customer service, Technical support' }
+        ]
+    })
+});
+
+// GET /custom-fields/values - Get field values for entity
+// PUT /custom-fields/values/{id} - Update value
+```
+
+---
+
+## ⚛️ **React Components**
+
+### FieldBuilder Component
+```typescript
+export const FieldBuilder: React.FC = () => {
+    const [fields, setFields] = useState<CustomField[]>([]);
+    const [selectedField, setSelectedField] = useState<CustomField | null>(null);
+    
+    const fieldTypes = [
+        { type: 'text', label: 'Text Field', icon: '📝' },
+        { type: 'number', label: 'Number', icon: '🔢' },
+        { type: 'select', label: 'Dropdown', icon: '📋' },
+        { type: 'checkbox', label: 'Checkbox', icon: '☑️' },
+        { type: 'date', label: 'Date', icon: '📅' },
+        { type: 'file', label: 'File Upload', icon: '📎' }
+    ];
+    
+    return (
+        <div className="field-builder">
+            <div className="field-palette">
+                <h3>Field Types</h3>
+                {fieldTypes.map(fieldType => (
+                    <FieldTypeItem
+                        key={fieldType.type}
+                        fieldType={fieldType}
+                        onAdd={handleAddField}
+                    />
+                ))}
+            </div>
+            
+            <div className="field-canvas">
+                <h3>Form Fields</h3>
+                <SortableFieldList
+                    fields={fields}
+                    onFieldSelect={setSelectedField}
+                    onFieldsReorder={setFields}
+                />
+            </div>
+            
+            <div className="field-settings">
+                <h3>Field Settings</h3>
+                {selectedField && (
+                    <FieldSettings
+                        field={selectedField}
+                        onChange={handleFieldUpdate}
+                    />
+                )}
+            </div>
+        </div>
+    );
+};
+```
+
+### FieldRenderer Component
+```typescript
+export const FieldRenderer: React.FC<FieldRendererProps> = ({
+    fields,
+    values = {},
+    onChange,
+    errors = {}
+}) => {
+    return (
+        <div className="custom-fields">
+            {fields.map(field => (
+                <FieldWrapper
+                    key={field.id}
+                    field={field}
+                    value={values[field.name]}
+                    onChange={(value) => onChange({ ...values, [field.name]: value })}
+                    error={errors[field.name]}
+                />
+            ))}
+        </div>
+    );
+};
+```
+
+---
+
+## 🔌 **Integration Points**
+
+### 1. Agent Forms
+- Agent creation form
+- Agent editing form
+- Child agent configuration
+
+### 2. Task Management
+- Task creation form
+- Task properties
+- Project templates
+
+### 3. User Profiles
+- Profile customization
+- Settings pages
+- Preferences
+
+### 4. Training Lab
+- Training configuration
+- Course customization
+- Assessment forms
+
+### 5. Marketplace
+- Item descriptions
+- Custom properties
+- Seller information
+
+---
+
+## 📊 **Implementation Timeline**
+
+### Week 1: Foundation (5 days)
+- **Day 1:** Database design and migration
+- **Day 2:** Backend API endpoints
+- **Day 3:** Basic field types
+- **Day 4:** Field groups system
+- **Day 5:** Value storage system
+
+### Week 2: UI Development (5 days)
+- **Day 1:** Field builder interface
+- **Day 2:** Drag & drop functionality
+- **Day 3:** Field renderer component
+- **Day 4:** Field settings panel
+- **Day 5:** Template system
+
+### Week 3: Integration (5 days)
+- **Day 1:** Agent form integration
+- **Day 2:** Task form integration
+- **Day 3:** Advanced field types
+- **Day 4:** Testing and debugging
+- **Day 5:** Documentation and deployment
+
+---
+
+## 🎯 **Success Criteria**
+
+1. ✅ **Easy Field Creation:** Users can create fields without coding
+2. ✅ **Auto-Rendering:** Fields appear automatically in forms
+3. ✅ **Data Persistence:** Values are saved and retrieved correctly
+4. ✅ **Template System:** Reusable field configurations
+5. ✅ **Performance:** Fast with 50+ fields
+6. ✅ **Mobile Responsive:** Works on all devices
+
+---
+
+## 🚀 **Future Enhancements**
+
+- **Conditional Logic:** Show/hide fields based on conditions
+- **Field Dependencies:** Cascade selections
+- **Custom Validation:** Advanced validation rules
+- **Import/Export:** JSON configuration transfer
+- **Field Analytics:** Usage tracking
+- **API Integration:** External data sources
+
+---
+
+**Status:** 🔥 CRITICAL PRIORITY  
+**Next Action:** Start database design  
+**Estimated ROI:** HIGH - Game-changing feature
+

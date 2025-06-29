@@ -1,0 +1,124 @@
+{
+    "id": "custom-field-builder",
+    "name": "Custom Field Builder",
+    "displayName": "🔧 Custom Field Builder Pro",
+    "version": "1.0.0",
+    "description": "Revolutionary ACF-style field builder for dynamic forms. Create custom fields without coding!",
+    "longDescription": "Transform your DPRO AI Agent experience with our powerful Custom Field Builder. Inspired by WordPress Advanced Custom Fields (ACF), this app lets you create dynamic forms for agents, tasks, profiles, and more without writing a single line of code. Features 20+ field types, drag & drop interface, live preview, and template system.",
+    "category": "productivity",
+    "tags": [
+        "forms",
+        "fields",
+        "builder",
+        "acf",
+        "dynamic",
+        "no-code"
+    ],
+    "author": {
+        "name": "DPRO AI Team",
+        "email": "support@dpro-ai.com",
+        "website": "https://dpro-ai.com"
+    },
+    "price": {
+        "type": "free",
+        "freeFeatures": [
+            "All 20+ field types",
+            "Unlimited forms",
+            "Full drag & drop",
+            "Template system",
+            "Live preview"
+        ],
+        "premiumFeatures": [],
+        "cost": 0,
+        "currency": "USD"
+    },
+    "compatibility": {
+        "minVersion": "2.0.0",
+        "maxVersion": "*",
+        "dependencies": []
+    },
+    "permissions": [
+        "forms.create",
+        "forms.edit",
+        "forms.delete",
+        "database.custom_fields",
+        "templates.manage"
+    ],
+    "installation": {
+        "type": "automatic",
+        "requiresRestart": false,
+        "databaseMigrations": [
+            "custom_fields",
+            "custom_field_groups",
+            "custom_field_values",
+            "field_templates"
+        ]
+    },
+    "features": [
+        {
+            "name": "20+ Field Types",
+            "description": "Text, select, file, date, rating, and more",
+            "icon": "📝"
+        },
+        {
+            "name": "Drag & Drop Interface",
+            "description": "Intuitive visual field builder",
+            "icon": "🎨"
+        },
+        {
+            "name": "Live Preview",
+            "description": "See your forms in real-time",
+            "icon": "👁️"
+        },
+        {
+            "name": "Template System",
+            "description": "Save and reuse field configurations",
+            "icon": "📋"
+        },
+        {
+            "name": "Integration Ready",
+            "description": "Works with agents, tasks, profiles, and more",
+            "icon": "🔗"
+        }
+    ],
+    "screenshots": [
+        "/images/custom-field-builder-1.png",
+        "/images/custom-field-builder-2.png",
+        "/images/custom-field-builder-3.png"
+    ],
+    "changelog": [
+        {
+            "version": "1.0.0",
+            "date": "2025-06-29",
+            "changes": [
+                "Initial release",
+                "20+ field types supported",
+                "Drag & drop interface",
+                "Template system",
+                "Integration with 8+ forms",
+                "🎉 Now completely FREE!"
+            ]
+        }
+    ],
+    "support": {
+        "documentation": "/docs/custom-field-builder",
+        "video": "/videos/custom-field-builder-tutorial",
+        "contact": "support@dpro-ai.com"
+    },
+    "ratings": {
+        "average": 4.9,
+        "count": 0,
+        "breakdown": {
+            "5": 0,
+            "4": 0,
+            "3": 0,
+            "2": 0,
+            "1": 0
+        }
+    },
+    "downloads": 0,
+    "status": "active",
+    "featured": true,
+    "createdAt": "2025-06-29T19:00:00Z",
+    "updatedAt": "2025-06-29T19:00:00Z"
+}

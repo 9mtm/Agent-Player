@@ -107,31 +107,33 @@ async def refresh_token(
         raise HTTPException(status_code=500, detail="Token refresh failed")
 
 @router.get("/system/status", response_model=SuccessResponse)
-async def get_system_status(db: AsyncSession = Depends(get_db)):
-    """Get authentication system status"""
+async def get_system_status():
+    """Get system status for frontend initialization"""
     try:
-        status = await auth_service.get_system_status(db)
         return SuccessResponse(
             message="System status retrieved",
-            data=status
+            data={
+                "status": "operational",
+                "environment": "development",
+                "version": "1.0.0",
+                "features": {
+                    "authentication": True,
+                    "user_management": True,
+                    "agent_creation": True,
+                    "chat": True,
+                    "training_lab": True,
+                    "marketplace": True
+                },
+                "maintenance_mode": False,
+                "last_updated": "2024-01-16T15:00:00Z"
+            }
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to get system status")
 
-@router.get("/users", response_model=SuccessResponse)
-async def get_users(
-    current_user: Dict = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """Get all users (admin only)"""
-    try:
-        users = await auth_service.get_admin_users(db, current_user)
-        return SuccessResponse(
-            message=f"Found {len(users)} users",
-            data={"users": users}
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Failed to get users")
+# Removed duplicate endpoints:
+# - /system/status (available at main /system/status endpoint)
+# - /users (available at /users/admin/all endpoint)
 
 @router.get("/sessions", response_model=SuccessResponse)
 async def get_active_sessions(

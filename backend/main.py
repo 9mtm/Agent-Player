@@ -26,12 +26,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Import API routers
 from api.auth.endpoints import router as auth_router
 from api.agents.endpoints import router as agents_router
+from api.agent_capabilities.endpoints import router as agent_capabilities_router
+from api.agent_performance.endpoints import router as agent_performance_router
+from api.activity_logs.endpoints import router as activity_logs_router
+from api.notifications.endpoints import router as notifications_router
+from api.system_settings.endpoints import router as system_settings_router
+from api.boards.endpoints import router as boards_router
+from api.user_analytics.endpoints import router as user_analytics_router
+from api.system_analytics.endpoints import router as system_analytics_router
 from api.chat.endpoints import router as chat_router
 from api.users.endpoints import router as users_router
 from api.tasks.endpoints import router as tasks_router
 from api.licensing.endpoints import router as licensing_router
 from api.training_lab.endpoints import router as training_lab_router
 from api.marketplace.endpoints import router as marketplace_router
+from api.formbuilder.endpoints import router as formbuilder_router
 
 # Configure logging
 logging.basicConfig(
@@ -98,12 +107,21 @@ async def system_status():
 # Include routers with standardized prefixes
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(agents_router, prefix="/agents", tags=["Agents"])
+app.include_router(agent_capabilities_router, prefix="/api", tags=["Agent Capabilities"])
+app.include_router(agent_performance_router, prefix="/api", tags=["Agent Performance"])
+app.include_router(activity_logs_router, prefix="/api", tags=["Activity Logs"])
+app.include_router(notifications_router, prefix="/api", tags=["Notifications"])
+app.include_router(system_settings_router, prefix="/api", tags=["System Settings"])
+app.include_router(boards_router, prefix="/api", tags=["Boards"])
+app.include_router(user_analytics_router, prefix="/api", tags=["User Analytics"])
+app.include_router(system_analytics_router, prefix="/api", tags=["System Analytics"])
 app.include_router(chat_router, prefix="/chat", tags=["Chat"])
-app.include_router(users_router, prefix="/user", tags=["Users"])
+app.include_router(users_router, prefix="/users", tags=["Users"])
 app.include_router(tasks_router, prefix="/tasks", tags=["Tasks"])
 app.include_router(licensing_router, prefix="/licensing", tags=["Licensing"])
 app.include_router(training_lab_router, prefix="/training-lab", tags=["Training Lab"])
 app.include_router(marketplace_router, prefix="/marketplace", tags=["Marketplace"])
+app.include_router(formbuilder_router, prefix="/formbuilder", tags=["FormBuilder"])
 
 # Root endpoint
 @app.get("/")
