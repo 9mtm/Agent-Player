@@ -389,7 +389,7 @@ const LicensePage: React.FC = () => {
                 fontSize: '14px',
                 boxSizing: 'border-box' as const,
               }}
-              placeholder="Ahmed Al-Abdullah"
+              placeholder="Professional Developer"
             />
           </div>
 
@@ -407,7 +407,7 @@ const LicensePage: React.FC = () => {
                 fontSize: '14px',
                 boxSizing: 'border-box' as const,
               }}
-              placeholder="ahmed@example.com"
+              placeholder="professional@company.com"
             />
           </div>
         </div>
@@ -445,7 +445,7 @@ const LicensePage: React.FC = () => {
                 fontSize: '14px',
                 boxSizing: 'border-box' as const,
               }}
-              placeholder="Riyadh"
+                              placeholder="Business District"
             />
           </div>
 

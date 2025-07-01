@@ -372,7 +372,7 @@ const ProfileSettingsForm: React.FC = () => {
                 borderRadius: '8px',
                 fontSize: '14px',
               }}
-              placeholder="Riyadh"
+                              placeholder="Business District"
             />
           </div>
 

@@ -99,7 +99,7 @@ const AdminDashboard: React.FC = () => {
           </h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {[
-              { action: 'New user registration', user: 'Ahmed Hassan', time: '2 min ago', type: 'user' },
+              { action: 'New user registration', user: 'System Administrator', time: '2 min ago', type: 'user' },
               { action: 'Theme submission', user: 'DesignMaster', time: '15 min ago', type: 'theme' },
               { action: 'Premium upgrade', user: 'TechCorp LLC', time: '1 hour ago', type: 'billing' },
               { action: 'Theme download', user: 'Anonymous', time: '2 hours ago', type: 'download' }

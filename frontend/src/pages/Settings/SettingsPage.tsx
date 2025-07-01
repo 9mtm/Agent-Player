@@ -5,7 +5,6 @@ import {
   ProfileTab,
   LLMTab,
   KnowledgeTab,
-  ThemesTab,
   UpdatesTab,
   AISyncTab,
 } from './components';
@@ -33,6 +32,7 @@ const SettingsPage: React.FC = () => {
     handleDeleteRequest,
     handleShareErrorsChange,
     handleFileUpload,
+    updateUserSettings,
   } = useSettings();
 
   // Render appropriate tab content
@@ -46,6 +46,8 @@ const SettingsPage: React.FC = () => {
             generalSubTab={generalSubTab}
             setGeneralSubTab={setGeneralSubTab}
             handleFileUpload={handleFileUpload}
+            user={user}
+            updateUserSettings={updateUserSettings}
           />
         );
 
@@ -70,14 +72,6 @@ const SettingsPage: React.FC = () => {
 
       case 'knowledge':
         return <KnowledgeTab />;
-
-      case 'themes':
-        return (
-          <ThemesTab
-            theme={theme}
-            setTheme={setTheme}
-          />
-        );
 
       case 'updates':
         return <UpdatesTab navigate={navigate} />;
@@ -114,6 +108,28 @@ const SettingsPage: React.FC = () => {
     );
   }
 
+  if (error) {
+    return (
+      <div style={{ padding: '40px', textAlign: 'center', color: '#e53935' }}>
+        <div>Error: {error}</div>
+        <button 
+          onClick={() => window.location.reload()} 
+          style={{ 
+            marginTop: 16, 
+            padding: '8px 16px', 
+            background: '#1976d2', 
+            color: 'white', 
+            border: 'none', 
+            borderRadius: 6, 
+            cursor: 'pointer' 
+          }}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div style={{ 
       display: 'flex', 
@@ -131,17 +147,6 @@ const SettingsPage: React.FC = () => {
         zIndex: 2 
       }}>
         <h2 style={{ margin: 0 }}>Settings</h2>
-        
-        {error && (
-          <div style={{ 
-            color: 'red', 
-            fontSize: '14px', 
-            marginTop: '8px', 
-            marginBottom: '16px' 
-          }}>
-            {error}
-          </div>
-        )}
         
         <button
           onClick={() => navigate('/registration')}

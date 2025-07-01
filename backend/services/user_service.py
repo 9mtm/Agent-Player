@@ -9,6 +9,8 @@ from sqlalchemy import select, update, and_, func, desc
 from models.user import User, UserSession
 from models.activity_log import ActivityLog
 from fastapi import HTTPException
+import logging
+from sqlalchemy.orm.attributes import flag_modified
 
 class UserService:
     """User management service"""
@@ -88,9 +90,28 @@ class UserService:
         return self._user_to_dict(user, include_timestamps=True) if user else None
 
     async def update_user_profile(self, db: AsyncSession, user_id: int, updates: Dict[str, Any]) -> bool:
-        """Update current user profile (full_name, bio, etc.)"""
+        """Update current user profile (includes all profile fields)"""
         try:
-            allowed = {k: v for k, v in updates.items() if k in ["full_name", "bio"]}
+            # Allow all profile-related fields
+            allowed_fields = [
+                # Basic fields
+                "full_name", "bio", "first_name", "last_name", "current_position",
+                # Profile type
+                "user_type",
+                # Company fields  
+                "company_name", "company_registration_number", "industry", 
+                "company_size", "founded_year",
+                # Contact fields
+                "phone", "country", "city",
+                # Address fields
+                "address_street", "address_city", "address_state", 
+                "address_zip", "address_country",
+                # Subscription
+                "subscription_type"
+            ]
+            
+            allowed = {k: v for k, v in updates.items() if k in allowed_fields}
+            
             if not allowed:
                 return False
                 
@@ -100,15 +121,34 @@ class UserService:
             
             if not user:
                 return False
+            
+            # Initialize preferences if not exists
+            if not user.preferences:
+                user.preferences = {}
                 
+            # Create a copy of preferences to ensure SQLAlchemy detects changes
+            new_preferences = dict(user.preferences)
+            
+            # Update basic user table fields and preferences
             for key, value in allowed.items():
-                setattr(user, key, value)
-                
+                if key == "full_name":
+                    user.full_name = value
+                else:
+                    # Store additional fields in preferences
+                    new_preferences[key] = value
+            
+            # Assign the new preferences dictionary to trigger SQLAlchemy change detection
+            user.preferences = new_preferences
             user.updated_at = func.now()
+            
+            # Force the session to see the change
+            flag_modified(user, "preferences")
+            
             await db.commit()
             return True
             
-        except Exception:
+        except Exception as e:
+            logging.error(f"Error updating user profile: {e}")
             await db.rollback()
             return False
 
@@ -261,6 +301,21 @@ class UserService:
             "two_factor_enabled": user.two_factor_enabled,
             "preferences": user.preferences
         }
+        
+        # Add profile fields from preferences if available
+        if user.preferences:
+            profile_fields = [
+                "bio", "first_name", "last_name", "current_position",
+                "user_type", "company_name", "company_registration_number", 
+                "industry", "company_size", "founded_year",
+                "phone", "country", "city",
+                "address_street", "address_city", "address_state", 
+                "address_zip", "address_country", "subscription_type"
+            ]
+            
+            for field in profile_fields:
+                if field in user.preferences:
+                    result[field] = user.preferences[field]
         
         if include_timestamps:
             result.update({

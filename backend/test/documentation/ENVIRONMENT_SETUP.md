@@ -210,5 +210,5 @@ python -c "from config.settings import settings; print('✅ Environment loaded s
 
 If you encounter issues with environment setup:
 - Check the [troubleshooting section](#-troubleshooting)
-- Review the [project documentation](README.md)
+- Review the [project documentation](../README.md)
 - Open an issue on [GitHub](https://github.com/Dpro-at/Dpro-AI-Agent/issues) 

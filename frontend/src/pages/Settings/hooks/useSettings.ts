@@ -1,8 +1,17 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { authService } from "../../../services";
+import { authService, settingsService } from "../../../services";
 import type { User } from "../../../services";
 import type { SettingsJson, Profile, Theme } from "../types";
+
+// Interface for updating user settings
+interface SettingsUpdate {
+  full_name?: string;
+  language?: string;
+  country?: string;
+  state?: string;
+  city?: string;
+}
 
 export const useSettings = () => {
   const navigate = useNavigate();
@@ -49,6 +58,7 @@ export const useSettings = () => {
       fullName: "",
       preferredLanguage: "",
       country: "",
+      state: "",
       city: "",
       hobbies: "",
       jobField: "",
@@ -109,40 +119,115 @@ export const useSettings = () => {
     loadUserData();
   }, []);
 
-  // Load user data from backend
+  // Load user data from backend using both authService and settingsService
   const loadUserData = async () => {
     try {
       setLoading(true);
+
+      // Load current user from auth service
       const currentUser = await authService.getCurrentUser();
       setUser(currentUser);
 
-      // Initialize settings with user data
-      setSettingsJson((prev) => ({
-        ...prev,
-        individualInfo: {
-          ...prev.individualInfo,
-          fullName: currentUser.full_name || "",
-          preferredLanguage: currentUser.language || "",
-        },
-      }));
+      // Load user settings and preferences from settings service
+      try {
+        const userSettings = await settingsService.getAllSettings();
+        const userPreferences = await settingsService.getSettingsOverview();
+
+        // Update theme from settings
+        if (userSettings.data?.theme) {
+          setTheme(userSettings.data.theme as Theme);
+        }
+
+        // Initialize settings with user data and preferences
+        setSettingsJson((prev) => ({
+          ...prev,
+          systemType: userSettings.data?.system_type || prev.systemType,
+          defaultLLM: userSettings.data?.default_llm || prev.defaultLLM,
+          individualInfo: {
+            ...prev.individualInfo,
+            fullName: currentUser.full_name || "",
+            preferredLanguage: userSettings.data?.ui_language || "",
+            country: userSettings.data?.country || "",
+            state: userSettings.data?.state || "",
+            city: userSettings.data?.city || "",
+          },
+          llmPermissions: {
+            ...prev.llmPermissions,
+            ...userSettings.data?.llm_permissions,
+          },
+        }));
+
+        // Update profile from preferences
+        setProfile((prev) => ({
+          ...prev,
+          licenseType: userPreferences.data?.subscription_type || "free",
+          shareErrors: userPreferences.data?.telemetry_enabled || false,
+        }));
+      } catch (settingsError) {
+        console.warn("Could not load user settings:", settingsError);
+        // Continue with basic user data only
+      }
 
       setError(null);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || "Error loading user data");
+    } catch (err: unknown) {
+      const errorMessage =
+        err instanceof Error ? err.message : "Error loading user data";
+      setError(errorMessage);
       console.error("Error loading user data:", err);
     } finally {
       setLoading(false);
     }
   };
 
-  // Update user settings
-  const updateUserSettings = async (updates: Partial<User>) => {
+  // Update user settings using both authService and settingsService
+  const updateUserSettings = async (updates: SettingsUpdate) => {
     try {
-      const updatedUser = await authService.updateProfile(updates);
-      setUser(updatedUser);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || "Error updating user");
+      // Update basic profile fields through authService
+      const profileUpdates: Partial<User> = {};
+      if (updates.full_name !== undefined)
+        profileUpdates.full_name = updates.full_name;
+
+      if (Object.keys(profileUpdates).length > 0) {
+        const updatedUser = await authService.updateProfile(profileUpdates);
+        setUser(updatedUser);
+      }
+
+      // Update other settings through settingsService
+      const settingsUpdates: Record<string, unknown> = {};
+      if (updates.country !== undefined)
+        settingsUpdates.country = updates.country;
+      if (updates.state !== undefined) settingsUpdates.state = updates.state;
+      if (updates.city !== undefined) settingsUpdates.city = updates.city;
+
+      if (Object.keys(settingsUpdates).length > 0) {
+        await settingsService.updateAdvancedSettings(settingsUpdates);
+      }
+
+      // Update language preference separately
+      if (updates.language !== undefined) {
+        await settingsService.updateThemeSettings({
+          ui_language: updates.language,
+        });
+      }
+    } catch (err: unknown) {
+      const errorMessage =
+        err instanceof Error ? err.message : "Error updating user";
+      setError(errorMessage);
       console.error("Error updating user:", err);
+      throw err; // Re-throw to let the caller handle it
+    }
+  };
+
+  // Update theme and save to backend
+  const updateTheme = async (newTheme: Theme) => {
+    try {
+      setTheme(newTheme);
+      await settingsService.updateThemeSettings({
+        theme: newTheme,
+      });
+    } catch (err: unknown) {
+      console.error("Error updating theme:", err);
+      setError("Failed to save theme preference");
     }
   };
 
@@ -153,8 +238,20 @@ export const useSettings = () => {
   };
 
   // Handle error/crash report sharing toggle
-  const handleShareErrorsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setProfile((prev) => ({ ...prev, shareErrors: e.target.checked }));
+  const handleShareErrorsChange = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const shareErrors = e.target.checked;
+    setProfile((prev) => ({ ...prev, shareErrors }));
+
+    try {
+      await settingsService.updateAdvancedSettings({
+        telemetry_enabled: shareErrors,
+      });
+    } catch (err: unknown) {
+      console.error("Error updating error sharing preference:", err);
+      setError("Failed to save error sharing preference");
+    }
   };
 
   // File upload handler
@@ -176,8 +273,8 @@ export const useSettings = () => {
         } else {
           alert("Upload failed");
         }
-      } catch (error) {
-        console.error("Upload error:", error);
+      } catch (uploadError) {
+        console.error("Upload error:", uploadError);
         alert("Upload error");
       }
     }
@@ -204,6 +301,7 @@ export const useSettings = () => {
     navigate,
     loadUserData,
     updateUserSettings,
+    updateTheme,
     handleDeleteRequest,
     handleShareErrorsChange,
     handleFileUpload,

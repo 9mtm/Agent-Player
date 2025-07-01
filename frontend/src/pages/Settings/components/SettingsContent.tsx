@@ -43,6 +43,11 @@ interface ProfileData {
   company_size?: string;
   founded_year?: number;
   subscription_type?: string;
+  address_street?: string;
+  address_city?: string;
+  address_state?: string;
+  address_zip?: string;
+  address_country?: string;
 }
 
 // Marketplace Component
@@ -374,7 +379,7 @@ const DynamicProfileSelector: React.FC = () => {
   const loadProfileData = async () => {
     try {
       const token = localStorage.getItem('access_token');
-      const response = await fetch(`${config.api.baseURL}/api/v1/settings/profile`, {
+      const response = await fetch(`${config.api.baseURL}/users/profile`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -409,8 +414,8 @@ const DynamicProfileSelector: React.FC = () => {
     
     try {
       const token = localStorage.getItem('access_token');
-      const response = await fetch(`${config.api.baseURL}/api/v1/settings/profile`, {
-        method: 'POST',
+      const response = await fetch(`${config.api.baseURL}/users/profile`, {
+        method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
@@ -540,7 +545,7 @@ const DynamicProfileSelector: React.FC = () => {
                     fontSize: '14px',
                     boxSizing: 'border-box' as const,
                   }}
-                  placeholder="Ahmed"
+                  placeholder="Professional User"
                 />
               </div>
 
@@ -560,7 +565,7 @@ const DynamicProfileSelector: React.FC = () => {
                     fontSize: '14px',
                     boxSizing: 'border-box' as const,
                   }}
-                  placeholder="Al-Abdullah"
+                  placeholder="System Administrator"
                 />
               </div>
 
@@ -728,6 +733,139 @@ const DynamicProfileSelector: React.FC = () => {
                     min="1900"
                     max={new Date().getFullYear()}
                   />
+                </div>
+              </div>
+
+              {/* Company Address Section */}
+              <div style={{ marginTop: '20px' }}>
+                <h4 style={{ 
+                  fontSize: '16px', 
+                  fontWeight: '600', 
+                  marginBottom: '16px',
+                  color: '#2c3e50',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  📍 Company Address
+                </h4>
+                
+                <div style={{ display: 'grid', gap: '20px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontWeight: '600', marginBottom: '8px', color: '#2c3e50' }}>
+                      Street Address
+                    </label>
+                    <input
+                      type="text"
+                      value={profileData.address_street || ''}
+                      onChange={(e) => handleInputChange('address_street', e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        border: '2px solid #e1e5e9',
+                        borderRadius: '8px',
+                        fontSize: '14px',
+                        boxSizing: 'border-box' as const,
+                      }}
+                      placeholder="Business District"
+                    />
+                  </div>
+                  
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
+                    <div>
+                      <label style={{ display: 'block', fontWeight: '600', marginBottom: '8px', color: '#2c3e50' }}>
+                        City
+                      </label>
+                      <input
+                        type="text"
+                        value={profileData.address_city || ''}
+                        onChange={(e) => handleInputChange('address_city', e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '12px',
+                          border: '2px solid #e1e5e9',
+                          borderRadius: '8px',
+                          fontSize: '14px',
+                          boxSizing: 'border-box' as const,
+                        }}
+                        placeholder="Riyadh"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label style={{ display: 'block', fontWeight: '600', marginBottom: '8px', color: '#2c3e50' }}>
+                        State/Province
+                      </label>
+                      <input
+                        type="text"
+                        value={profileData.address_state || ''}
+                        onChange={(e) => handleInputChange('address_state', e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '12px',
+                          border: '2px solid #e1e5e9',
+                          borderRadius: '8px',
+                          fontSize: '14px',
+                          boxSizing: 'border-box' as const,
+                        }}
+                        placeholder="State/Province"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label style={{ display: 'block', fontWeight: '600', marginBottom: '8px', color: '#2c3e50' }}>
+                        ZIP/Postal Code
+                      </label>
+                      <input
+                        type="text"
+                        value={profileData.address_zip || ''}
+                        onChange={(e) => handleInputChange('address_zip', e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '12px',
+                          border: '2px solid #e1e5e9',
+                          borderRadius: '8px',
+                          fontSize: '14px',
+                          boxSizing: 'border-box' as const,
+                        }}
+                        placeholder="12345"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label style={{ display: 'block', fontWeight: '600', marginBottom: '8px', color: '#2c3e50' }}>
+                      Country
+                    </label>
+                    <select
+                      value={profileData.address_country || ''}
+                      onChange={(e) => handleInputChange('address_country', e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        border: '2px solid #e1e5e9',
+                        borderRadius: '8px',
+                        fontSize: '14px',
+                        boxSizing: 'border-box' as const,
+                      }}
+                    >
+                      <option value="">Select Country</option>
+                      <option value="SA">Saudi Arabia</option>
+                      <option value="AE">United Arab Emirates</option>
+                      <option value="QA">Qatar</option>
+                      <option value="KW">Kuwait</option>
+                      <option value="BH">Bahrain</option>
+                      <option value="OM">Oman</option>
+                      <option value="JO">Jordan</option>
+                      <option value="LB">Lebanon</option>
+                      <option value="EG">Egypt</option>
+                      <option value="US">United States</option>
+                      <option value="GB">United Kingdom</option>
+                      <option value="CA">Canada</option>
+                      <option value="AU">Australia</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>

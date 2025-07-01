@@ -8,7 +8,6 @@ export const TAB_LIST: TabItem[] = [
   { key: "profile", label: "Profile" },
   { key: "account", label: "Account" },
   { key: "integrations", label: "Integrations" },
-  { key: "themes", label: "Themes" },
   { key: "updates", label: "Updates" },
   { key: "aisync", label: "AI Sync & Files" },
 ];

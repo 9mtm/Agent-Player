@@ -3,6 +3,7 @@ export interface IndividualInfo {
   fullName: string;
   preferredLanguage: string;
   country: string;
+  state: string;
   city: string;
   hobbies: string;
   jobField: string;

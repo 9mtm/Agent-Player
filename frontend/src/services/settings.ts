@@ -118,30 +118,42 @@ export interface SettingsResponse<T> {
 }
 
 class SettingsService {
-  private readonly baseUrl = "/users/settings";
+  private readonly baseUrl = "/users";
 
-  // Settings Overview
+  // Settings Overview - Fixed URL
   async getSettingsOverview(): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/`, {
+    return apiCall(`${this.baseUrl}/settings`, {
       method: "GET",
     });
   }
 
   async getAllSettings(): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/all`, {
+    return apiCall(`${this.baseUrl}/settings`, {
       method: "GET",
     });
   }
 
-  // Theme Settings
+  // Theme Settings - Map to main settings
   async getThemeSettings(): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/theme`, {
+    const result = await apiCall(`${this.baseUrl}/preferences`, {
       method: "GET",
     });
+
+    // Extract theme-related preferences
+    const themeSettings = {
+      theme: result.data?.theme || "light",
+      ui_language: result.data?.ui_language || "en",
+      animations_enabled: result.data?.animations_enabled !== false,
+    };
+
+    return {
+      success: true,
+      data: themeSettings,
+    };
   }
 
   async updateThemeSettings(themeData: any): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/theme`, {
+    return apiCall(`${this.baseUrl}/preferences`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -150,113 +162,227 @@ class SettingsService {
     });
   }
 
-  // Security Settings
+  // Security Settings - Map to main settings
   async getSecuritySettings(): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/security`, {
+    const result = await apiCall(`${this.baseUrl}/preferences`, {
       method: "GET",
     });
+
+    // Extract security-related preferences
+    const securitySettings = {
+      login_alerts: result.data?.security_login_alerts !== false,
+      session_timeout: result.data?.security_session_timeout || 3600,
+      two_factor_enabled: result.data?.two_factor_enabled || false,
+    };
+
+    return {
+      success: true,
+      data: securitySettings,
+    };
   }
 
   async updateSecuritySettings(
     securityData: any
   ): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/security`, {
+    // Map security data to preferences format
+    const preferencesUpdate = {
+      security_login_alerts: securityData.login_alerts,
+      security_session_timeout: securityData.session_timeout,
+      two_factor_enabled: securityData.two_factor_enabled,
+    };
+
+    return apiCall(`${this.baseUrl}/preferences`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(securityData),
+      body: JSON.stringify(preferencesUpdate),
     });
   }
 
-  // Notification Settings
+  // Notification Settings - Map to main settings
   async getNotificationSettings(): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/notifications`, {
+    const result = await apiCall(`${this.baseUrl}/preferences`, {
       method: "GET",
     });
+
+    // Extract notification-related preferences
+    const notificationSettings = {
+      email_notifications: result.data?.email_notifications !== false,
+      push_notifications: result.data?.push_notifications !== false,
+      marketing_emails: result.data?.marketing_emails || false,
+    };
+
+    return {
+      success: true,
+      data: notificationSettings,
+    };
   }
 
   async updateNotificationSettings(
     notificationData: any
   ): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/notifications`, {
+    // Map notification data to preferences format
+    const preferencesUpdate = {
+      email_notifications: notificationData.email_notifications,
+      push_notifications: notificationData.push_notifications,
+      marketing_emails: notificationData.marketing_emails,
+    };
+
+    return apiCall(`${this.baseUrl}/preferences`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(notificationData),
+      body: JSON.stringify(preferencesUpdate),
     });
   }
 
-  // AI Model Settings
+  // AI Model Settings - Map to main settings
   async getAIModelSettings(): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/ai-models`, {
+    const result = await apiCall(`${this.baseUrl}/preferences`, {
       method: "GET",
     });
+
+    // Extract AI-related preferences
+    const aiSettings = {
+      ai_suggestions_enabled: result.data?.ai_suggestions_enabled !== false,
+      ai_auto_complete: result.data?.ai_auto_complete !== false,
+      default_model: result.data?.default_model || "openai",
+    };
+
+    return {
+      success: true,
+      data: aiSettings,
+    };
   }
 
   async updateAIModelSettings(
     aiModelData: any
   ): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/ai-models`, {
+    // Map AI model data to preferences format
+    const preferencesUpdate = {
+      ai_suggestions_enabled: aiModelData.ai_suggestions_enabled,
+      ai_auto_complete: aiModelData.ai_auto_complete,
+      default_model: aiModelData.default_model,
+    };
+
+    return apiCall(`${this.baseUrl}/preferences`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(aiModelData),
+      body: JSON.stringify(preferencesUpdate),
     });
   }
 
-  // Integration Settings
+  // Integration Settings - Map to main settings
   async getIntegrationSettings(): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/integrations`, {
+    const result = await apiCall(`${this.baseUrl}/preferences`, {
       method: "GET",
     });
+
+    // Extract integration-related preferences
+    const integrationSettings = {
+      integrations_enabled: result.data?.integrations_enabled !== false,
+      third_party_access: result.data?.third_party_access || false,
+    };
+
+    return {
+      success: true,
+      data: integrationSettings,
+    };
   }
 
   async updateIntegrationSettings(
     integrationData: any
   ): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/integrations`, {
+    // Map integration data to preferences format
+    const preferencesUpdate = {
+      integrations_enabled: integrationData.integrations_enabled,
+      third_party_access: integrationData.third_party_access,
+    };
+
+    return apiCall(`${this.baseUrl}/preferences`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(integrationData),
+      body: JSON.stringify(preferencesUpdate),
     });
   }
 
-  // Advanced Settings
+  // Advanced Settings - Map to main settings
   async getAdvancedSettings(): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/advanced`, {
+    const result = await apiCall(`${this.baseUrl}/preferences`, {
       method: "GET",
     });
+
+    // Extract advanced preferences
+    const advancedSettings = {
+      debug_mode: result.data?.debug_mode || false,
+      telemetry_enabled: result.data?.telemetry_enabled !== false,
+      auto_updates: result.data?.auto_updates !== false,
+    };
+
+    return {
+      success: true,
+      data: advancedSettings,
+    };
   }
 
   async updateAdvancedSettings(
     advancedData: any
   ): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/advanced`, {
+    // Map advanced data to preferences format
+    const preferencesUpdate = {
+      debug_mode: advancedData.debug_mode,
+      telemetry_enabled: advancedData.telemetry_enabled,
+      auto_updates: advancedData.auto_updates,
+    };
+
+    return apiCall(`${this.baseUrl}/preferences`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(advancedData),
+      body: JSON.stringify(preferencesUpdate),
     });
   }
 
-  // Logs
+  // Logs - Map to activity endpoint
   async getSettingsLogs(): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/logs`, {
+    return apiCall(`${this.baseUrl}/activity`, {
       method: "GET",
     });
   }
 
-  // Health Check
+  // Health Check - Map to profile endpoint
   async getSettingsHealth(): Promise<SettingsResponse<any>> {
-    return apiCall(`${this.baseUrl}/health`, {
-      method: "GET",
-    });
+    try {
+      const profileResult = await apiCall(`${this.baseUrl}/profile`, {
+        method: "GET",
+      });
+
+      return {
+        success: true,
+        data: {
+          status: "healthy",
+          profile_accessible: true,
+          last_updated:
+            profileResult.data?.updated_at || new Date().toISOString(),
+        },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        data: {
+          status: "unhealthy",
+          profile_accessible: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+        },
+      };
+    }
   }
 
   // Profile Management

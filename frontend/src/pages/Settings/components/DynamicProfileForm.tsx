@@ -62,6 +62,8 @@ const DynamicProfileForm: React.FC<DynamicProfileFormProps> = ({ userType = 'ind
         email: 'john.doe@example.com',
         phone: '+1-555-0123',
         bio: 'A brief description about yourself or your company.',
+        current_position: 'Senior Developer',
+        contact_person_name: 'Professional Administrator',
       };
 
       if (activeUserType === 'company') {
@@ -69,20 +71,18 @@ const DynamicProfileForm: React.FC<DynamicProfileFormProps> = ({ userType = 'ind
         mockProfile.legal_name = 'DPRO Technology Ltd.';
         mockProfile.industry = 'technology';
         mockProfile.company_size = 'medium';
-        mockProfile.website_url = 'https://dpro.com';
+        mockProfile.website_url = 'https://dpro.at';
         mockProfile.founded_year = 2020;
         mockProfile.company_registration_number = '1010123456';
         mockProfile.tax_id = '301234567890003';
-        mockProfile.contact_person_name = 'Ahmed Mohammed Abdullah';
         mockProfile.contact_person_title = 'CEO';
-        mockProfile.contact_person_email = 'ceo@dpro.com';
+        mockProfile.contact_person_email = 'ceo@dpro.at';
         mockProfile.contact_person_phone = '+966 50 123 4567';
       } else {
         mockProfile.middle_name = 'Middle';
         mockProfile.gender = 'male';
         mockProfile.date_of_birth = '1990-01-01';
         mockProfile.nationality = 'US';
-        mockProfile.current_position = 'Software Developer';
         mockProfile.experience_years = 5;
       }
 
@@ -214,7 +214,7 @@ const DynamicProfileForm: React.FC<DynamicProfileFormProps> = ({ userType = 'ind
                 borderRadius: '8px',
                 fontSize: '14px',
               }}
-              placeholder="John"
+              placeholder="Professional"
             />
           </div>
 
@@ -358,7 +358,7 @@ const DynamicProfileForm: React.FC<DynamicProfileFormProps> = ({ userType = 'ind
                 borderRadius: '8px',
                 fontSize: '14px',
               }}
-              placeholder="Software Developer"
+              placeholder="Professional"
             />
           </div>
 
@@ -581,7 +581,7 @@ const DynamicProfileForm: React.FC<DynamicProfileFormProps> = ({ userType = 'ind
                   borderRadius: '8px',
                   fontSize: '14px',
                 }}
-                placeholder="https://dpro.com"
+                placeholder="https://dpro.at"
               />
             </div>
           </div>
@@ -623,7 +623,7 @@ const DynamicProfileForm: React.FC<DynamicProfileFormProps> = ({ userType = 'ind
                 borderRadius: '8px',
                 fontSize: '14px',
               }}
-              placeholder="Ahmed Mohammed Abdullah"
+              placeholder="Professional Administrator"
             />
           </div>
 
@@ -661,7 +661,7 @@ const DynamicProfileForm: React.FC<DynamicProfileFormProps> = ({ userType = 'ind
                 borderRadius: '8px',
                 fontSize: '14px',
               }}
-              placeholder="ceo@dpro.com"
+              placeholder="ceo@dpro.at"
             />
           </div>
 
@@ -828,7 +828,7 @@ const DynamicProfileForm: React.FC<DynamicProfileFormProps> = ({ userType = 'ind
                   borderRadius: '8px',
                   fontSize: '14px',
                 }}
-                placeholder="Riyadh"
+                placeholder="Business District"
               />
             </div>
 
@@ -847,7 +847,7 @@ const DynamicProfileForm: React.FC<DynamicProfileFormProps> = ({ userType = 'ind
                   borderRadius: '8px',
                   fontSize: '14px',
                 }}
-                placeholder="Riyadh Province"
+                placeholder="State/Province"
               />
             </div>
 
