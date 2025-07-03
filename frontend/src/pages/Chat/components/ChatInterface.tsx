@@ -1,510 +1,496 @@
 /**
- * Chat Interface - Main chat messages and input area
+ * Chat Interface - Main chat UI component
+ * Features: Message display, input, typing indicators, real-time updates
+ * UPDATED: Support for both backend agents and direct Ollama integration
  */
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { 
-  Send, 
-  Paperclip, 
-  Image, 
-  Smile, 
-  Mic,
-  Bot,
-  MoreVertical,
-  Copy,
-  ThumbsUp,
-  ThumbsDown,
-  Heart,
-  Zap,
-  X,
-  File,
-  Download,
-  Eye,
-  Settings
-} from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Send, Paperclip, Mic, Square, Bot, User } from 'lucide-react';
 
+// Types
 interface Message {
-  id: string;
+  id: number;
+  conversation_id: string;
+  sender: "user" | "agent";
   content: string;
-  sender: 'user' | 'agent';
-  timestamp: Date;
-  agent_id?: number;
+  created_at: string;
+  status?: 'sending' | 'sent' | 'error';
   attachments?: FileAttachment[];
-  ai_confidence?: number;
-  response_time_ms?: number;
-  total_tokens?: number;
-  sentiment_score?: number;
-  follow_up_suggestions?: string[];
+  tokens_used?: number;
+  processing_time?: number;
 }
 
 interface FileAttachment {
   id: string;
   name: string;
-  size: number;
   type: string;
+  size: number;
   url: string;
+  preview?: string;
 }
 
-interface Agent {
+interface ChatAgent {
   id: number;
   name: string;
-  model_provider: string;
-  model_name: string;
-  is_active: boolean;
-}
-
-interface Conversation {
-  id: string;
-  title: string;
-  messages: Message[];
-  created_at: string;
-  updated_at: string;
+  description?: string;
+  agent_type?: 'main' | 'child';
+  model_provider?: string;
+  model_name?: string;
+  is_active?: boolean;
+  endpoint?: string; // For direct Ollama integration
 }
 
 interface ChatInterfaceProps {
-  conversation: Conversation | null;
   messages: Message[];
-  selectedAgent: Agent | null;
-  isLoading: boolean;
-  onSendMessage: (content: string, files?: File[]) => void;
-  onOpenSettings: () => void;
+  onSendMessage: (message: string) => Promise<void>;
+  selectedAgent: ChatAgent | null;
+  isTyping?: boolean;
+  disabled?: boolean;
 }
 
+// Ollama Integration Helper
+const ollamaService = {
+  async isAvailable(): Promise<boolean> {
+    try {
+      const response = await fetch('http://localhost:11434/api/tags');
+      return response.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  async getModels(): Promise<string[]> {
+    try {
+      const response = await fetch('http://localhost:11434/api/tags');
+      if (response.ok) {
+        const data = await response.json();
+        return data.models?.map((m: any) => m.name) || [];
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  },
+
+  async generateResponse(model: string, prompt: string): Promise<string> {
+    try {
+      const response = await fetch('http://localhost:11434/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          prompt,
+          stream: false
+        })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        return data.response || 'No response from Ollama';
+      }
+      throw new Error('Ollama request failed');
+    } catch (error) {
+      console.error('Ollama error:', error);
+      throw error;
+    }
+  }
+};
+
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({
-  conversation,
   messages,
-  selectedAgent,
-  isLoading,
   onSendMessage,
-  onOpenSettings
+  selectedAgent,
+  isTyping = false,
+  disabled = false
 }) => {
   const [messageInput, setMessageInput] = useState('');
-  const [attachments, setAttachments] = useState<File[]>([]);
-  const [showQuickActions, setShowQuickActions] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isOllamaAvailable, setIsOllamaAvailable] = useState(false);
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [selectedOllamaModel, setSelectedOllamaModel] = useState<string>('');
+  const [useOllama, setUseOllama] = useState(false);
+  const [ollamaMessages, setOllamaMessages] = useState<Message[]>([]);
+  const [isOllamaTyping, setIsOllamaTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-scroll to bottom
+  // Check Ollama availability on mount
+  useEffect(() => {
+    const checkOllama = async () => {
+      const available = await ollamaService.isAvailable();
+      setIsOllamaAvailable(available);
+      
+      if (available) {
+        const models = await ollamaService.getModels();
+        setOllamaModels(models);
+        if (models.length > 0) {
+          setSelectedOllamaModel(models[0]);
+        }
+        console.log('🟢 Ollama detected with models:', models);
+      } else {
+        console.log('🔴 Ollama not available');
+      }
+    };
+
+    checkOllama();
+  }, []);
+
+  // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   // Auto-resize textarea
-  const adjustTextareaHeight = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
-    }
-  }, []);
-
   useEffect(() => {
-    adjustTextareaHeight();
-  }, [messageInput, adjustTextareaHeight]);
-
-  const handleSend = () => {
-    if (!messageInput.trim() || isLoading) return;
-    
-    onSendMessage(messageInput.trim(), attachments.length > 0 ? attachments : undefined);
-    setMessageInput('');
-    setAttachments([]);
-    
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+  }, [messageInput]);
+
+  // Get current messages (either from parent or Ollama)
+  const currentMessages = useOllama ? ollamaMessages : messages;
+  const currentIsTyping = useOllama ? isOllamaTyping : isTyping;
+
+  // Enhanced send message with Ollama support
+  const handleSendMessage = async () => {
+    if (!messageInput.trim() || disabled) return;
+
+    const message = messageInput.trim();
+    setMessageInput('');
+
+    try {
+      if (useOllama && isOllamaAvailable && selectedOllamaModel) {
+        // Send message via direct Ollama integration
+        await sendViaOllama(message);
+      } else {
+        // Send message via backend
+        await onSendMessage(message);
+      }
+    } catch (error) {
+      console.error('Error sending message:', error);
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  // Direct Ollama message sending - IMPROVED
+  const sendViaOllama = async (message: string) => {
+    // Create user message first
+    const userMessage: Message = {
+      id: Date.now(),
+      conversation_id: 'ollama-direct',
+      sender: 'user',
+      content: message,
+      created_at: new Date().toISOString(),
+      status: 'sent'
+    };
+
+    // Add user message to Ollama messages immediately
+    setOllamaMessages(prev => [...prev, userMessage]);
+    setIsOllamaTyping(true);
+
+    try {
+      console.log(`🤖 Generating response with Ollama model: ${selectedOllamaModel}`);
+      const startTime = Date.now();
+      
+      // Generate AI response via Ollama
+      const response = await ollamaService.generateResponse(selectedOllamaModel, message);
+      const processingTime = (Date.now() - startTime) / 1000;
+      
+      const aiMessage: Message = {
+        id: Date.now() + 1,
+        conversation_id: 'ollama-direct',
+        sender: 'agent',
+        content: response,
+        created_at: new Date().toISOString(),
+        processing_time: processingTime
+      };
+
+      console.log('🤖 AI response from Ollama:', aiMessage);
+      
+      // Add AI response to Ollama messages
+      setOllamaMessages(prev => [...prev, aiMessage]);
+      
+    } catch (error) {
+      console.error('❌ Ollama conversation error:', error);
+      
+      const errorMessage: Message = {
+        id: Date.now() + 1,
+        conversation_id: 'ollama-direct',
+        sender: 'agent',
+        content: `Error: ${error instanceof Error ? error.message : 'Failed to get response from Ollama'}`,
+        created_at: new Date().toISOString(),
+        status: 'error'
+      };
+      
+      // Add error message to Ollama messages
+      setOllamaMessages(prev => [...prev, errorMessage]);
+      
+    } finally {
+      setIsOllamaTyping(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      handleSendMessage();
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    setAttachments(prev => [...prev, ...files]);
-  };
-
-  const removeAttachment = (index: number) => {
-    setAttachments(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleCopy = (content: string) => {
-    navigator.clipboard.writeText(content);
-  };
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  const getFileIcon = (type: string) => {
-    if (type.startsWith('image/')) return <Image className="w-4 h-4" />;
-    return <File className="w-4 h-4" />;
-  };
-
-  const formatTimestamp = (timestamp: Date) => {
-    return timestamp.toLocaleTimeString([], { 
+  const formatTime = (timestamp: string) => {
+    return new Date(timestamp).toLocaleTimeString([], { 
       hour: '2-digit', 
       minute: '2-digit' 
     });
   };
 
-  const getSentimentColor = (score?: number) => {
-    if (!score) return 'text-gray-500';
-    if (score > 0.6) return 'text-green-600';
-    if (score < 0.4) return 'text-red-600';
-    return 'text-yellow-600';
+  const getMessageSenderName = (message: Message) => {
+    if (message.sender === 'user') return 'You';
+    if (useOllama && selectedOllamaModel) return `Ollama (${selectedOllamaModel})`;
+    return selectedAgent?.name || 'AI Assistant';
   };
 
-  const quickActions = [
-    {
-      id: 'help',
-      label: 'Ask for help',
-      action: () => setMessageInput('Can you help me with ')
-    },
-    {
-      id: 'explain',
-      label: 'Explain something',
-      action: () => setMessageInput('Please explain ')
-    },
-    {
-      id: 'create',
-      label: 'Create content',
-      action: () => setMessageInput('Please create ')
-    },
-    {
-      id: 'analyze',
-      label: 'Analyze data',
-      action: () => setMessageInput('Please analyze ')
-    }
-  ];
-
-  if (!conversation) {
-    return (
-      <div className="flex-1 flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <Bot className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">Welcome to AI Chat</h3>
-          <p className="text-gray-600">Select a conversation or start a new one to begin chatting</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex flex-col h-full bg-white">
-      {/* Chat Header */}
-      <div className="flex items-center justify-between p-4 border-b bg-white sticky top-0 z-10">
-        <div className="flex items-center space-x-3">
-          <Bot className="w-6 h-6 text-emerald-600" />
-          <div>
-            <h3 className="font-semibold text-gray-900">
-              {selectedAgent?.name || 'AI Assistant'}
-            </h3>
-            <p className="text-sm text-gray-500">
-              {selectedAgent?.model_name || 'No agent selected'}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={() => setShowQuickActions(!showQuickActions)}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-            title="Quick Actions"
-          >
-            <Zap className="w-5 h-5 text-gray-600" />
-          </button>
-          <button
-            onClick={onOpenSettings}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-            title="Chat Settings"
-          >
-            <Settings className="w-5 h-5 text-gray-600" />
-          </button>
-        </div>
-      </div>
-
-      {/* Quick Actions Bar */}
-      {showQuickActions && (
-        <div className="p-3 border-b bg-gray-50">
-          <div className="flex items-center space-x-2 mb-2">
-            <Zap className="w-4 h-4 text-emerald-600" />
-            <span className="text-sm font-medium text-gray-700">Quick Actions</span>
-            <button
-              onClick={() => setShowQuickActions(false)}
-              className="ml-auto p-1 hover:bg-gray-200 rounded"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {quickActions.map((action) => (
-              <button
-                key={action.id}
-                onClick={action.action}
-                className="text-left text-sm p-2 border border-gray-200 rounded-lg hover:bg-white hover:border-emerald-200 transition-colors"
+    <div className="chat-interface flex flex-col h-full bg-white">
+      {/* Ollama Integration Header */}
+      {isOllamaAvailable && (
+        <div className="ollama-controls p-3 bg-gray-50 border-b">
+          <div className="flex items-center space-x-4">
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={useOllama}
+                onChange={(e) => setUseOllama(e.target.checked)}
+                className="rounded"
+              />
+              <span className="text-sm font-medium">Use Ollama Direct</span>
+            </label>
+            
+            {useOllama && ollamaModels.length > 0 && (
+              <select
+                value={selectedOllamaModel}
+                onChange={(e) => setSelectedOllamaModel(e.target.value)}
+                className="text-sm border rounded px-2 py-1"
               >
-                {action.label}
-              </button>
-            ))}
+                {ollamaModels.map(model => (
+                  <option key={model} value={model}>{model}</option>
+                ))}
+              </select>
+            )}
+            
+            <span className="text-xs text-green-600">
+              🟢 Ollama Available ({ollamaModels.length} model{ollamaModels.length !== 1 ? 's' : ''})
+            </span>
+            
+            {useOllama && (
+              <div className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">
+                Active: {selectedOllamaModel}
+              </div>
+            )}
+            
+            {useOllama && ollamaMessages.length > 0 && (
+              <div className="flex items-center space-x-2">
+                <span className="text-xs text-blue-600">
+                  {ollamaMessages.length} message{ollamaMessages.length !== 1 ? 's' : ''}
+                </span>
+                <button
+                  onClick={() => setOllamaMessages([])}
+                  className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded hover:bg-red-200"
+                  title="Clear Ollama chat history"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
           </div>
+          
+          {useOllama && (
+            <div className="mt-2 text-xs text-gray-600">
+              💡 You're connected directly to Ollama. Messages won't be saved to conversations.
+            </div>
+          )}
         </div>
       )}
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 ? (
-          <div className="text-center text-gray-500 mt-8">
-            <Bot className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-            <p className="text-lg font-medium mb-2">Start a conversation</p>
-            <p className="text-sm">Send a message to begin chatting with your AI assistant</p>
+      <div className="messages-container flex-1 overflow-y-auto p-4 space-y-4">
+        {currentMessages.length === 0 ? (
+          <div className="empty-state text-center py-12">
+            <Bot size={48} className="mx-auto mb-4 text-gray-400" />
+            <h3 className="text-lg font-medium text-gray-900 mb-2">
+              {useOllama ? 'Ready to chat with Ollama' : 'Start a conversation'}
+            </h3>
+            <p className="text-gray-500">
+              {useOllama 
+                ? `Connected to Ollama model: ${selectedOllamaModel}`
+                : selectedAgent 
+                  ? `Chat with ${selectedAgent.name}`
+                  : 'Select an agent to begin'
+              }
+            </p>
           </div>
         ) : (
-          messages.map((message) => (
-            <div key={message.id} className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'} group`}>
-              <div className={`max-w-[80%] ${message.sender === 'user' ? 'order-2' : 'order-1'}`}>
-                {/* Message Header */}
-                <div className={`flex items-center space-x-2 mb-1 ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  {message.sender === 'agent' && (
-                    <div className="flex items-center space-x-1">
-                      <Bot className="w-4 h-4 text-emerald-500" />
-                      <span className="text-xs text-gray-600 font-medium">
-                        AI Assistant
+          <>
+            {currentMessages.map((message) => (
+              <div
+                key={message.id}
+                className={`message-bubble flex ${
+                  message.sender === 'user' ? 'justify-end' : 'justify-start'
+                }`}
+              >
+                <div
+                  className={`max-w-[70%] rounded-lg px-4 py-2 ${
+                    message.sender === 'user'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 text-gray-900'
+                  }`}
+                >
+                  <div className="message-header flex items-center space-x-2 mb-1">
+                    {message.sender === 'user' ? (
+                      <User size={14} />
+                    ) : (
+                      <Bot size={14} />
+                    )}
+                    <span className="text-xs font-medium">
+                      {getMessageSenderName(message)}
+                    </span>
+                    <span className="text-xs opacity-70">
+                      {formatTime(message.created_at)}
+                    </span>
+                  </div>
+                  
+                  <div className="message-content">
+                    <p className="whitespace-pre-wrap">{message.content}</p>
+                  </div>
+
+                  {/* Message metadata */}
+                  {(message.tokens_used || message.processing_time) && (
+                    <div className="message-meta mt-2 pt-2 border-t border-opacity-20">
+                      <div className="flex space-x-4 text-xs opacity-70">
+                        {message.tokens_used && (
+                          <span>Tokens: {message.tokens_used}</span>
+                        )}
+                        {message.processing_time && (
+                          <span>Time: {message.processing_time.toFixed(2)}s</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Message status */}
+                  {message.status && message.status !== 'sent' && (
+                    <div className="message-status mt-1">
+                      <span className={`text-xs ${
+                        message.status === 'sending' ? 'text-yellow-300' :
+                        message.status === 'error' ? 'text-red-300' : ''
+                      }`}>
+                        {message.status === 'sending' && '⏳ Sending...'}
+                        {message.status === 'error' && '❌ Failed to send'}
                       </span>
                     </div>
                   )}
-                  <span className="text-xs text-gray-500">
-                    {formatTimestamp(message.timestamp)}
-                  </span>
-                </div>
-
-                {/* Message Bubble */}
-                <div className={`relative px-4 py-3 rounded-2xl ${
-                  message.sender === 'user'
-                    ? 'bg-emerald-600 text-white rounded-br-md'
-                    : 'bg-gray-100 text-gray-900 rounded-bl-md'
-                }`}>
-                  {/* Message Content */}
-                  <div className="whitespace-pre-wrap break-words">
-                    {message.content}
-                  </div>
-
-                  {/* File Attachments */}
-                  {message.attachments && message.attachments.length > 0 && (
-                    <div className="mt-2 space-y-2">
-                      {message.attachments.map((attachment) => (
-                        <div key={attachment.id} className="flex items-center space-x-2 p-2 bg-black bg-opacity-10 rounded-lg">
-                          {getFileIcon(attachment.type)}
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium truncate">{attachment.name}</p>
-                            <p className="text-xs opacity-75">{formatFileSize(attachment.size)}</p>
-                          </div>
-                          <button className="p-1 hover:bg-black hover:bg-opacity-10 rounded">
-                            <Download className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* AI Performance Metrics */}
-                  {message.sender === 'agent' && (message.ai_confidence || message.response_time_ms || message.total_tokens) && (
-                    <div className="mt-2 space-y-1">
-                      {message.ai_confidence && (
-                        <div className="flex items-center space-x-2">
-                          <span className="text-xs text-gray-500">Confidence:</span>
-                          <div className="flex-1 bg-gray-200 rounded-full h-1">
-                            <div
-                              className="h-1 rounded-full bg-emerald-500 transition-all duration-300"
-                              style={{ width: `${message.ai_confidence * 100}%` }}
-                            />
-                          </div>
-                          <span className="text-xs text-gray-500">
-                            {(message.ai_confidence * 100).toFixed(0)}%
-                          </span>
-                        </div>
-                      )}
-                      <div className="flex items-center space-x-3 text-xs text-gray-500">
-                        {message.response_time_ms && (
-                          <span>{message.response_time_ms}ms</span>
-                        )}
-                        {message.total_tokens && (
-                          <span>{message.total_tokens} tokens</span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Sentiment & Follow-up */}
-                {message.sender === 'agent' && (
-                  <>
-                    {/* Sentiment Score */}
-                    {message.sentiment_score && (
-                      <div className="mt-1 flex items-center space-x-2 text-xs">
-                        <span className={`flex items-center space-x-1 ${getSentimentColor(message.sentiment_score)}`}>
-                          <span>😊</span>
-                          <span>{(message.sentiment_score * 100).toFixed(0)}%</span>
-                        </span>
-                      </div>
-                    )}
-
-                    {/* Follow-up Suggestions */}
-                    {message.follow_up_suggestions && message.follow_up_suggestions.length > 0 && (
-                      <div className="mt-2 space-y-1">
-                        {message.follow_up_suggestions.slice(0, 2).map((suggestion, index) => (
-                          <button
-                            key={index}
-                            className="block w-full text-left text-xs text-emerald-600 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2 py-1 rounded transition-colors"
-                            onClick={() => setMessageInput(suggestion)}
-                          >
-                            💡 {suggestion}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {/* Message Actions */}
-                <div className={`mt-2 flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity ${
-                  message.sender === 'user' ? 'justify-end' : 'justify-start'
-                }`}>
-                  <button
-                    onClick={() => handleCopy(message.content)}
-                    className="p-1 rounded-full hover:bg-gray-100 transition-colors"
-                    title="Copy"
-                  >
-                    <Copy className="w-3 h-3 text-gray-500" />
-                  </button>
-                  {message.sender === 'agent' && (
-                    <>
-                      <button
-                        className="p-1 rounded-full hover:bg-gray-100 transition-colors"
-                        title="Good response"
-                      >
-                        <ThumbsUp className="w-3 h-3 text-gray-500" />
-                      </button>
-                      <button
-                        className="p-1 rounded-full hover:bg-gray-100 transition-colors"
-                        title="Poor response"
-                      >
-                        <ThumbsDown className="w-3 h-3 text-gray-500" />
-                      </button>
-                    </>
-                  )}
                 </div>
               </div>
-            </div>
-          ))
+            ))}
+
+            {/* Typing indicator */}
+            {currentIsTyping && (
+              <div className="typing-indicator flex justify-start">
+                <div className="bg-gray-100 rounded-lg px-4 py-2 max-w-[70%]">
+                  <div className="flex items-center space-x-2">
+                    <Bot size={14} />
+                    <span className="text-sm text-gray-600">
+                      {useOllama ? selectedOllamaModel : selectedAgent?.name || 'AI'} is typing...
+                    </span>
+                    <div className="typing-dots flex space-x-1">
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-100"></div>
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-200"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
         )}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Attachments Preview */}
-      {attachments.length > 0 && (
-        <div className="border-t bg-gray-50 p-3">
-          <div className="flex items-center space-x-2 mb-2">
-            <Paperclip className="w-4 h-4 text-gray-500" />
-            <span className="text-sm font-medium text-gray-700">Attachments ({attachments.length})</span>
+      {/* Input Area */}
+      <div className="input-area border-t bg-white p-4">
+        {/* Warning if no agent selected and not using Ollama */}
+        {!selectedAgent && !useOllama && (
+          <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <p className="text-amber-700 text-sm">
+              ⚠️ Please select an agent or enable Ollama to start chatting
+            </p>
           </div>
-          <div className="space-y-2">
-            {attachments.map((file, index) => (
-              <div key={index} className="flex items-center space-x-2 p-2 bg-white border rounded-lg">
-                {getFileIcon(file.type)}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{file.name}</p>
-                  <p className="text-xs text-gray-500">{formatFileSize(file.size)}</p>
-                </div>
-                <button
-                  onClick={() => removeAttachment(index)}
-                  className="p-1 hover:bg-gray-100 rounded text-red-500"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+        )}
 
-      {/* Message Input */}
-      <div className="border-t bg-white p-4">
-        <div className="flex items-end space-x-3">
-          {/* File Upload */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            onChange={handleFileSelect}
-            className="hidden"
-            accept="image/*,.pdf,.doc,.docx,.txt,.json,.csv"
-          />
-          
-          <div className="flex space-x-1">
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              title="Attach file"
-            >
-              <Paperclip className="w-5 h-5 text-gray-600" />
-            </button>
-            
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              title="Upload image"
-            >
-              <Image className="w-5 h-5 text-gray-600" />
-            </button>
-            
-            <button
-              onClick={() => setIsRecording(!isRecording)}
-              className={`p-2 rounded-lg transition-colors ${
-                isRecording 
-                  ? 'bg-red-100 text-red-600' 
-                  : 'hover:bg-gray-100 text-gray-600'
-              }`}
-              title="Voice message"
-            >
-              <Mic className="w-5 h-5" />
-            </button>
-          </div>
-
-          {/* Text Input */}
-          <div className="flex-1 min-w-0">
+        <div className="flex items-end space-x-2">
+          <div className="flex-1 relative">
             <textarea
               ref={textareaRef}
               value={messageInput}
               onChange={(e) => setMessageInput(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder="Type your message..."
-              className="w-full p-3 border border-gray-200 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+              onKeyDown={handleKeyDown}
+              placeholder={
+                useOllama 
+                  ? `Message ${selectedOllamaModel}...`
+                  : selectedAgent 
+                    ? `Message ${selectedAgent.name}...`
+                    : 'Select an agent first...'
+              }
+              disabled={disabled || (!selectedAgent && !useOllama)}
+              className="w-full resize-none border border-gray-300 rounded-lg px-3 py-2 pr-12 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed min-h-[44px] max-h-32"
               rows={1}
-              disabled={isLoading}
             />
+            
+            {/* Attachment button */}
+            <button
+              type="button"
+              disabled={disabled || (!selectedAgent && !useOllama)}
+              className="absolute right-2 top-2 p-2 text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed"
+            >
+              <Paperclip size={16} />
+            </button>
           </div>
 
-          {/* Send Button */}
+          {/* Voice button */}
           <button
-            onClick={handleSend}
-            disabled={!messageInput.trim() || isLoading}
-            className="p-3 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            type="button"
+            disabled={disabled || (!selectedAgent && !useOllama)}
+            className="p-2 text-gray-400 hover:text-gray-600 border border-gray-300 rounded-lg disabled:cursor-not-allowed"
           >
-            {isLoading ? (
-              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <Send className="w-5 h-5" />
-            )}
+            <Mic size={16} />
           </button>
+
+          {/* Send button */}
+          <button
+            type="button"
+            onClick={handleSendMessage}
+            disabled={disabled || !messageInput.trim() || (!selectedAgent && !useOllama)}
+            className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+          >
+            <Send size={16} />
+          </button>
+        </div>
+
+        {/* Connection status */}
+        <div className="mt-2 flex items-center space-x-4 text-xs text-gray-500">
+          <div className="flex items-center space-x-1">
+            <div className={`w-2 h-2 rounded-full ${
+              useOllama && isOllamaAvailable ? 'bg-green-500' : 
+              selectedAgent ? 'bg-blue-500' : 'bg-gray-400'
+            }`}></div>
+            <span>
+              {useOllama && isOllamaAvailable ? 'Connected to Ollama' :
+               selectedAgent ? 'Connected to Backend' : 'Not connected'}
+            </span>
+          </div>
+          
+          {messageInput.length > 0 && (
+            <span>{messageInput.length} characters</span>
+          )}
         </div>
       </div>
     </div>

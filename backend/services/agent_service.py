@@ -182,14 +182,25 @@ class AgentService:
                     "error": "Agent with the specified ID does not exist"
                 }
             
-            # Validate API key if needed (basic format check only)
-            if agent.get("model_provider") == "openai":
-                api_key = agent.get("api_key_encrypted")  # Changed to api_key_encrypted
+            # ✅ IMPROVED: Check model provider first, then validate API key only if needed
+            model_provider = agent.get("model_provider", "").lower()
+            
+            # Local providers that don't need API keys
+            local_providers = ["ollama", "lmstudio", "textgen", "localai", "llamafile", "jan", "vllm", "llamacppserver"]
+            
+            # Check if this is a local provider that doesn't need API key
+            if model_provider in local_providers:
+                # ✅ Skip API key validation for local providers (they don't need API keys!)
+                logging.info(f"🟢 Local provider '{model_provider}' detected - no API key required")
+                pass
+            elif model_provider == "openai":
+                # Only validate API key for OpenAI
+                api_key = agent.get("api_key_encrypted")
                 if not api_key or not self._validate_openai_key(api_key):
                     return {
                         "status": "error", 
                         "message": "Invalid or missing OpenAI API Key",
-                        "error": "API key validation failed"
+                        "error": "API key validation failed for OpenAI. Local providers like Ollama don't need API keys."
                     }
                 
                 # Make real OpenAI API call

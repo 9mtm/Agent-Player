@@ -1,0 +1,224 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# FILE CREATION RESTRICTIONS - MANDATORY
+
+## PURPOSE
+Maintain a clean, professional project structure by restricting unnecessary file creation and enforcing proper organization standards.
+
+## STRICTLY FORBIDDEN FILE TYPES
+
+### **Temporary and Test Files in Root Directory**
+```bash
+❌ test_*.html              # No test HTML files in root
+❌ demo_*.html              # No demo HTML files  
+❌ *_celebration.html       # No celebration pages
+❌ *_test.html             # No temporary test files
+❌ success_*.html          # No success pages
+❌ *_fix.html              # No fix demonstration pages
+❌ *.ps1 (in root)         # No temporary PowerShell scripts
+❌ test_*.py (in root)     # No test Python scripts in root
+❌ temp_*.js               # No temporary JavaScript files
+❌ debug_*.ts              # No debug TypeScript files
+```
+
+### **Prohibited Documentation Files**
+```bash
+❌ extra_readme.md         # Only ONE README.md allowed in root
+❌ temp_documentation.md   # No temporary documentation
+❌ test_guide.md          # No test documentation in root
+❌ demo_instructions.md    # No demo instructions
+❌ celebration_notes.md    # No celebration documentation
+```
+
+### **Prohibited Directory Structures**
+```bash
+❌ temp/                   # No temporary directories
+❌ test_files/            # No test file directories in root
+❌ demo/                  # No demo directories in root
+❌ experiments/           # No experiment directories
+❌ playground/            # No playground directories
+```
+
+## ALLOWED ESSENTIAL FILES ONLY
+
+### **Root Directory - Essential Files Only**
+```bash
+✅ README.md              # Main project documentation (ONE ONLY)
+✅ package.json           # Frontend dependencies
+✅ requirements.txt       # Python dependencies
+✅ .gitignore            # Git configuration
+✅ .env                  # Environment variables
+✅ docker-compose.yml    # Docker configuration
+✅ tsconfig.json         # TypeScript configuration
+```
+
+### **Proper File Organization**
+```bash
+✅ backend/test/          # ALL test files here
+✅ docs/                  # Documentation here
+✅ frontend/src/         # Frontend source code
+✅ backend/api/          # Backend API code
+```
+
+## DEVELOPMENT FOCUS RULES
+
+### **1. Production Code Only**
+- Create only files needed for the application to function
+- No experimental files in the main project structure
+- Use proper development environments for testing and experimentation
+
+### **2. Organized Testing**
+- All tests MUST be in designated test directories
+- No test files in root or main source directories
+- Proper naming conventions for test files
+
+### **3. Essential Documentation**
+- Document features through proper code documentation
+- Use API guides within page components
+- Avoid creating demo pages or celebration pages
+
+### **4. Professional Standards**
+- Maintain enterprise-level code organization
+- Keep project structure clean for team collaboration
+- Follow industry best practices for project layout
+
+## ENFORCEMENT MECHANISMS
+
+### **Pre-commit Checks**
+```bash
+# Check for prohibited files before commit
+find . -name "test_*.html" -o -name "demo_*.html" -o -name "*_celebration.html"
+if [ $? -eq 0 ]; then
+    echo "❌ Prohibited files found. Remove before committing."
+    exit 1
+fi
+```
+
+### **Code Review Requirements**
+- Reject pull requests containing prohibited file types
+- Require cleanup of temporary files before merge
+- Enforce proper file organization standards
+
+### **Automated Cleanup Scripts**
+```bash
+# Cleanup script for removing prohibited files
+#!/bin/bash
+echo "🧹 Cleaning up prohibited files..."
+rm -f test_*.html demo_*.html *_celebration.html success_*.html
+rm -f test_*.py (in root directory only)
+rm -f *.ps1 (in root directory only)
+echo "✅ Cleanup completed"
+```
+
+## VIOLATION CONSEQUENCES
+
+### **Immediate Actions Required**
+1. **File Removal** - Immediately delete prohibited files
+2. **Structure Fix** - Move files to proper directories
+3. **Rule Review** - Review and understand file creation rules
+4. **Process Update** - Update development process to prevent recurrence
+
+### **Prevention Measures**
+1. **Developer Training** - Educate team on file organization standards
+2. **Automated Checks** - Implement pre-commit hooks
+3. **Code Review** - Strict enforcement in pull requests
+4. **Continuous Monitoring** - Regular project structure audits
+
+## EXAMPLES OF PROPER FILE CREATION
+
+### **Instead of Creating Test HTML Files:**
+```typescript
+// ✅ CORRECT - Create proper React components for testing
+// frontend/src/components/__tests__/ChatInterface.test.tsx
+import { render, screen } from '@testing-library/react';
+import ChatInterface from '../ChatInterface';
+
+describe('ChatInterface', () => {
+  it('should render correctly', () => {
+    render(<ChatInterface />);
+    expect(screen.getByRole('main')).toBeInTheDocument();
+  });
+});
+```
+
+### **Instead of Creating Demo Pages:**
+```typescript
+// ✅ CORRECT - Use Storybook or proper component documentation
+// frontend/src/components/Button/Button.stories.tsx
+export default {
+  title: 'Components/Button',
+  component: Button,
+};
+
+export const Primary = {
+  args: {
+    variant: 'primary',
+    children: 'Click me',
+  },
+};
+```
+
+### **Instead of Creating Celebration Pages:**
+```typescript
+// ✅ CORRECT - Use proper notification system
+// frontend/src/components/Notifications/SuccessToast.tsx
+interface SuccessToastProps {
+  message: string;
+  onClose: () => void;
+}
+
+export const SuccessToast: React.FC<SuccessToastProps> = ({ message, onClose }) => {
+  return (
+    <div className="success-toast">
+      <span>{message}</span>
+      <button onClick={onClose}>×</button>
+    </div>
+  );
+};
+```
+
+## PROJECT CLEANLINESS CHECKLIST
+
+### **Daily Development Checklist**
+```bash
+✅ All test files in /backend/test/ directory
+✅ No temporary files in root directory  
+✅ No demo/celebration pages created
+✅ Single README.md file only
+✅ Only essential configuration files in root
+✅ Proper component structure maintained
+✅ Clean git status (no untracked prohibited files)
+```
+
+### **Weekly Project Audit**
+```bash
+✅ Review project structure for compliance
+✅ Remove any accidentally created prohibited files
+✅ Update team on file organization standards
+✅ Check git history for prohibited file commits
+✅ Validate test file organization
+✅ Ensure documentation is properly organized
+```
+
+---
+
+## SUMMARY
+
+**This rule ensures:**
+- Clean, professional project structure
+- Proper organization of all file types
+- Focus on production-ready code
+- Enterprise-level development standards
+- Easy project navigation and maintenance
+
+**Key Principle:** *Create only what is essential for the application to function. Everything else is clutter.*
+
+---
+
+**REMEMBER: Professional development means clean code organization!**  
+**REMEMBER: Focus on production code, not temporary experiments!**  
+**REMEMBER: Every file should serve a clear purpose in the application!**
+

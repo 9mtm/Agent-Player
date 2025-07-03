@@ -5,12 +5,15 @@ import {
   getRecommendedServers,
   formatEndpointUrl,
   validateEndpoint,
-  ModelEndpointConfig,
+  ALL_AI_PROVIDERS,
+  CLOUD_AI_PROVIDERS,
   LOCAL_AI_SERVERS
 } from '../utils/localModelEndpoints';
+import type { ModelEndpointConfig } from '../utils/localModelEndpoints';
 
 interface EndpointSuggestionsProps {
   selectedModel: string;
+  selectedProvider?: string;
   currentHost: string;
   currentPort: string;
   currentEndpoint: string;
@@ -26,6 +29,7 @@ interface EndpointOption {
 
 export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
   selectedModel,
+  selectedProvider,
   currentHost,
   currentPort,
   currentEndpoint,
@@ -35,10 +39,11 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
   const [suggestions, setSuggestions] = useState<EndpointOption[]>([]);
   const [showAllOptions, setShowAllOptions] = useState(false);
   const [selectedSuggestion, setSelectedSuggestion] = useState<string | null>(null);
+  const [activeCategory, setActiveCategory] = useState<'all' | 'cloud' | 'local'>('all');
 
   useEffect(() => {
     generateSuggestions();
-  }, [selectedModel]);
+  }, [selectedModel, selectedProvider, activeCategory]);
 
   const generateSuggestions = () => {
     if (!selectedModel) {
@@ -46,33 +51,47 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
       return;
     }
 
-    const suggestedEndpoints = getSuggestedEndpoints(selectedModel);
-    const recommendedServers = getRecommendedServers().map(s => s.server.toLowerCase().replace(/\s+/g, ''));
+    // Determine category based on selected provider or model
+    let suggestedCategory: 'local' | 'cloud' | 'all' = activeCategory;
+    
+    if (selectedProvider) {
+      const providerConfig = ALL_AI_PROVIDERS[selectedProvider.toLowerCase()];
+      if (providerConfig) {
+        suggestedCategory = providerConfig.category;
+      }
+    }
+
+    // Get suggested endpoints based on model and category
+    const suggestedEndpoints = getSuggestedEndpoints(selectedModel, suggestedCategory);
+    const recommendedServers = getRecommendedServers(suggestedCategory).map(s => s.server.toLowerCase().replace(/\s+/g, ''));
     
     const endpointOptions: EndpointOption[] = [];
 
     // Add suggested endpoints
     suggestedEndpoints.forEach(serverKey => {
       const config = getEndpointConfig(serverKey);
-      if (config) {
+      if (config && (activeCategory === 'all' || config.category === activeCategory || activeCategory === suggestedCategory)) {
         endpointOptions.push({
           config,
-          isRecommended: recommendedServers.includes(serverKey),
+          isRecommended: recommendedServers.includes(serverKey) || config.isRecommended || false,
           compatibilityScore: calculateCompatibilityScore(config, selectedModel)
         });
       }
     });
 
-    // Add other popular servers if not already included
-    Object.keys(LOCAL_AI_SERVERS).forEach(serverKey => {
+    // Add other relevant servers if not already included
+    Object.keys(ALL_AI_PROVIDERS).forEach(serverKey => {
       if (!suggestedEndpoints.includes(serverKey)) {
         const config = getEndpointConfig(serverKey);
-        if (config && config.difficulty === 'easy') {
-          endpointOptions.push({
-            config,
-            isRecommended: false,
-            compatibilityScore: calculateCompatibilityScore(config, selectedModel)
-          });
+        if (config && (activeCategory === 'all' || config.category === activeCategory)) {
+          // Only add if it's a good match or easy to use
+          if (config.difficulty === 'easy' || config.isRecommended) {
+            endpointOptions.push({
+              config,
+              isRecommended: config.isRecommended || false,
+              compatibilityScore: calculateCompatibilityScore(config, selectedModel) * 0.7 // Lower score for non-suggested
+            });
+          }
         }
       }
     });
@@ -81,6 +100,8 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
     const sortedSuggestions = endpointOptions.sort((a, b) => {
       if (a.isRecommended && !b.isRecommended) return -1;
       if (!a.isRecommended && b.isRecommended) return 1;
+      if (a.config.category === 'cloud' && b.config.category === 'local') return -1;
+      if (a.config.category === 'local' && b.config.category === 'cloud') return 1;
       return b.compatibilityScore - a.compatibilityScore;
     });
 
@@ -106,6 +127,16 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
     
     // Bonus for streaming support
     if (config.supportsStreaming) score += 10;
+    
+    // Cloud provider bonus for cloud models
+    if (config.category === 'cloud' && (modelLower.includes('gpt') || modelLower.includes('claude') || modelLower.includes('gemini'))) {
+      score += 40;
+    }
+    
+    // Local provider bonus for local models
+    if (config.category === 'local' && (modelLower.includes('llama') || modelLower.includes('mistral') || modelLower.includes('alpaca'))) {
+      score += 30;
+    }
     
     return score;
   };
@@ -136,14 +167,24 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
     }
   };
 
-  const currentUrl = formatEndpointUrl(currentHost, currentPort, currentEndpoint);
+  const getCategoryIcon = (category: string) => {
+    return category === 'cloud' ? '☁️' : '🏠';
+  };
+
+  const getCategoryColor = (category: string) => {
+    return category === 'cloud' ? '#007bff' : '#28a745';
+  };
+
+  const currentUrl = formatEndpointUrl(currentHost, currentPort, currentEndpoint, currentPort === '443');
   const validation = validateEndpoint(currentHost, currentPort, currentEndpoint);
 
-  if (!selectedModel || selectedModel === 'gpt-4' || selectedModel === 'gpt-3.5-turbo') {
-    return null; // Don't show suggestions for online models
+  if (!selectedModel) {
+    return null;
   }
 
-  const displaySuggestions = showAllOptions ? suggestions : suggestions.slice(0, 3);
+  const displaySuggestions = showAllOptions ? suggestions : suggestions.slice(0, 4);
+  const cloudSuggestions = suggestions.filter(s => s.config.category === 'cloud');
+  const localSuggestions = suggestions.filter(s => s.config.category === 'local');
 
   return (
     <div style={{
@@ -153,6 +194,7 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
       borderRadius: '8px',
       border: '1px solid #e9ecef'
     }}>
+      {/* Header with category filters */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
@@ -164,24 +206,75 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
           fontWeight: '600',
           color: '#495057'
         }}>
-          💡 Suggested Endpoints for {selectedModel}
+          💡 Endpoint Suggestions for {selectedModel}
         </div>
-        {suggestions.length > 3 && (
-          <button
-            type="button"
-            style={{
-              background: 'none',
-              border: 'none',
-              color: '#667eea',
-              cursor: 'pointer',
-              fontSize: '12px',
-              textDecoration: 'underline'
-            }}
-            onClick={() => setShowAllOptions(!showAllOptions)}
-          >
-            {showAllOptions ? 'Show Less' : `Show All (${suggestions.length})`}
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {/* Category filters */}
+          <div style={{ display: 'flex', gap: '4px' }}>
+            <button
+              type="button"
+              style={{
+                padding: '4px 8px',
+                backgroundColor: activeCategory === 'all' ? '#667eea' : 'transparent',
+                color: activeCategory === 'all' ? 'white' : '#667eea',
+                border: '1px solid #667eea',
+                borderRadius: '4px',
+                fontSize: '10px',
+                cursor: 'pointer'
+              }}
+              onClick={() => setActiveCategory('all')}
+            >
+              All ({suggestions.length})
+            </button>
+            <button
+              type="button"
+              style={{
+                padding: '4px 8px',
+                backgroundColor: activeCategory === 'cloud' ? '#007bff' : 'transparent',
+                color: activeCategory === 'cloud' ? 'white' : '#007bff',
+                border: '1px solid #007bff',
+                borderRadius: '4px',
+                fontSize: '10px',
+                cursor: 'pointer'
+              }}
+              onClick={() => setActiveCategory('cloud')}
+            >
+              ☁️ Cloud ({cloudSuggestions.length})
+            </button>
+            <button
+              type="button"
+              style={{
+                padding: '4px 8px',
+                backgroundColor: activeCategory === 'local' ? '#28a745' : 'transparent',
+                color: activeCategory === 'local' ? 'white' : '#28a745',
+                border: '1px solid #28a745',
+                borderRadius: '4px',
+                fontSize: '10px',
+                cursor: 'pointer'
+              }}
+              onClick={() => setActiveCategory('local')}
+            >
+              🏠 Local ({localSuggestions.length})
+            </button>
+          </div>
+          
+          {suggestions.length > 4 && (
+            <button
+              type="button"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#667eea',
+                cursor: 'pointer',
+                fontSize: '12px',
+                textDecoration: 'underline'
+              }}
+              onClick={() => setShowAllOptions(!showAllOptions)}
+            >
+              {showAllOptions ? 'Show Less' : `Show All (${suggestions.length})`}
+            </button>
+          )}
+        </div>
       </div>
 
       {displaySuggestions.length > 0 ? (
@@ -219,22 +312,52 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
                   }
                 }}
               >
-                {/* Recommendation badge */}
-                {(option.isRecommended || index === 0) && (
+                {/* Badges */}
+                <div style={{
+                  position: 'absolute',
+                  top: '-6px',
+                  right: '8px',
+                  display: 'flex',
+                  gap: '4px'
+                }}>
+                  {/* Category badge */}
                   <div style={{
-                    position: 'absolute',
-                    top: '-6px',
-                    right: '8px',
-                    backgroundColor: option.isRecommended ? '#28a745' : '#667eea',
+                    backgroundColor: getCategoryColor(option.config.category),
                     color: 'white',
-                    fontSize: '10px',
+                    fontSize: '9px',
                     padding: '2px 6px',
                     borderRadius: '10px',
                     fontWeight: '600'
                   }}>
-                    {option.isRecommended ? '⭐ RECOMMENDED' : '🥇 BEST MATCH'}
+                    {getCategoryIcon(option.config.category)} {option.config.category.toUpperCase()}
                   </div>
-                )}
+                  
+                  {/* API Key requirement badge */}
+                  <div style={{
+                    backgroundColor: option.config.requiresApiKey ? '#ffc107' : '#28a745',
+                    color: 'white',
+                    fontSize: '9px',
+                    padding: '2px 6px',
+                    borderRadius: '10px',
+                    fontWeight: '600'
+                  }}>
+                    {option.config.requiresApiKey ? '🔑 API KEY' : '✅ NO KEY'}
+                  </div>
+                  
+                  {/* Recommendation badge */}
+                  {(option.isRecommended || index === 0) && (
+                    <div style={{
+                      backgroundColor: option.isRecommended ? '#28a745' : '#667eea',
+                      color: 'white',
+                      fontSize: '9px',
+                      padding: '2px 6px',
+                      borderRadius: '10px',
+                      fontWeight: '600'
+                    }}>
+                      {option.isRecommended ? '⭐ RECOMMENDED' : '🥇 BEST MATCH'}
+                    </div>
+                  )}
+                </div>
 
                 {isCurrentlyUsed && (
                   <div style={{
@@ -256,7 +379,8 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
                   display: 'flex',
                   alignItems: 'flex-start',
                   justifyContent: 'space-between',
-                  marginBottom: '8px'
+                  marginBottom: '8px',
+                  marginTop: '8px'
                 }}>
                   <div>
                     <div style={{
@@ -297,7 +421,7 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
                   fontFamily: 'monospace',
                   marginBottom: '8px'
                 }}>
-                  📍 {formatEndpointUrl(option.config.defaultHost, option.config.defaultPort, option.config.defaultEndpoint)}
+                  📍 {formatEndpointUrl(option.config.defaultHost, option.config.defaultPort, option.config.defaultEndpoint, option.config.defaultPort === '443')}
                 </div>
 
                 <div style={{
@@ -311,7 +435,7 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
                       key={idx}
                       style={{
                         fontSize: '10px',
-                        backgroundColor: '#667eea',
+                        backgroundColor: option.config.category === 'cloud' ? '#007bff' : '#667eea',
                         color: 'white',
                         padding: '2px 6px',
                         borderRadius: '10px'
@@ -333,11 +457,11 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
                 {option.config.setup && (
                   <div style={{
                     fontSize: '11px',
-                    color: '#856404',
-                    backgroundColor: '#fff3cd',
+                    color: option.config.category === 'cloud' ? '#004085' : '#856404',
+                    backgroundColor: option.config.category === 'cloud' ? '#cce5ff' : '#fff3cd',
                     padding: '6px 8px',
                     borderRadius: '4px',
-                    border: '1px solid #ffeaa7'
+                    border: `1px solid ${option.config.category === 'cloud' ? '#b3d9ff' : '#ffeaa7'}`
                   }}>
                     <strong>Setup:</strong> {option.config.setup}
                   </div>
@@ -365,9 +489,9 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
           fontSize: '13px'
         }}>
           <div style={{ fontSize: '24px', marginBottom: '8px' }}>🤔</div>
-          <div>No specific suggestions for this model.</div>
+          <div>No specific suggestions for this model in {activeCategory} category.</div>
           <div style={{ marginTop: '4px', fontSize: '11px' }}>
-            Try Ollama (port 11434) or LocalAI (port 8080) for most local models.
+            Try switching categories or use general endpoints like OpenAI for cloud or Ollama for local.
           </div>
         </div>
       )}
@@ -402,37 +526,24 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
         marginTop: '12px',
         display: 'flex',
         gap: '8px',
-        justifyContent: 'center'
+        justifyContent: 'center',
+        flexWrap: 'wrap'
       }}>
+        {/* Cloud quick actions */}
         <button
           type="button"
           style={{
             padding: '4px 8px',
-            backgroundColor: '#667eea',
+            backgroundColor: '#007bff',
             color: 'white',
             border: 'none',
             borderRadius: '4px',
             fontSize: '10px',
             cursor: 'pointer'
           }}
-          onClick={() => handleSuggestionSelect(LOCAL_AI_SERVERS.ollama)}
+          onClick={() => handleSuggestionSelect(CLOUD_AI_PROVIDERS.openai)}
         >
-          🦙 Quick: Ollama Default
-        </button>
-        <button
-          type="button"
-          style={{
-            padding: '4px 8px',
-            backgroundColor: '#28a745',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            fontSize: '10px',
-            cursor: 'pointer'
-          }}
-          onClick={() => handleSuggestionSelect(LOCAL_AI_SERVERS.localai)}
-        >
-          🏠 Quick: LocalAI Default
+          🤖 OpenAI
         </button>
         <button
           type="button"
@@ -445,9 +556,39 @@ export const EndpointSuggestions: React.FC<EndpointSuggestionsProps> = ({
             fontSize: '10px',
             cursor: 'pointer'
           }}
+          onClick={() => handleSuggestionSelect(CLOUD_AI_PROVIDERS.anthropic)}
+        >
+          🧠 Claude
+        </button>
+        <button
+          type="button"
+          style={{
+            padding: '4px 8px',
+            backgroundColor: '#28a745',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            fontSize: '10px',
+            cursor: 'pointer'
+          }}
+          onClick={() => handleSuggestionSelect(LOCAL_AI_SERVERS.ollama)}
+        >
+          🦙 Ollama
+        </button>
+        <button
+          type="button"
+          style={{
+            padding: '4px 8px',
+            backgroundColor: '#17a2b8',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            fontSize: '10px',
+            cursor: 'pointer'
+          }}
           onClick={() => handleSuggestionSelect(LOCAL_AI_SERVERS.lmstudio)}
         >
-          🖥️ Quick: LM Studio
+          🖥️ LM Studio
         </button>
       </div>
     </div>

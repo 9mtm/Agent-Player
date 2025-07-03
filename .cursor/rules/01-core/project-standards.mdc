@@ -304,11 +304,93 @@ const TextField: React.FC<CustomFieldProps> = ({ field, value, onChange, error }
 .\run-simple.ps1 install-deps  # Install all dependencies
 ```
 
+## PROJECT CLEANLINESS RULES - MANDATORY
+
+### **Prohibited File Types - STRICTLY FORBIDDEN**
+```bash
+# ❌ FORBIDDEN - Temporary/Test Files in Root Directory
+test_*.html              # No test HTML files
+demo_*.html               # No demo HTML files  
+*_celebration.html        # No celebration pages
+*_test.html              # No temporary test files
+success_*.html           # No success pages
+*.ps1 (in root)          # No temporary PowerShell scripts
+test_*.py (in root)      # No test Python scripts in root
+
+# ✅ ALLOWED - Only Essential Project Files
+index.html (frontend)    # Main frontend entry point
+README.md (root only)    # Main project documentation
+package.json             # Dependency management
+requirements.txt         # Python dependencies
+```
+
+### **File Creation Rules - MANDATORY**
+1. **NO celebration pages or success pages** - Focus on functional code only
+2. **NO temporary test files** - Use proper test directories only
+3. **NO demo HTML files** - Create proper UI components instead
+4. **NO temporary scripts in root** - Move all scripts to appropriate directories
+5. **NO unnecessary README files** - One README.md in root is sufficient
+6. **ALL test files MUST be in `/backend/test/` directory ONLY**
+
+### **Clean Project Structure - MANDATORY**
+```bash
+# ✅ CORRECT - Clean root directory
+dpro_aI_agent/
+├── backend/              # Backend code only
+├── frontend/             # Frontend code only
+├── docs/                 # Documentation only
+├── README.md             # ✅ ONLY ONE README allowed
+├── package.json          # Dependencies
+└── .gitignore           # Git configuration
+
+# ❌ WRONG - Cluttered root directory
+dpro_aI_agent/
+├── test_something.html   # ❌ FORBIDDEN
+├── demo_page.html        # ❌ FORBIDDEN
+├── celebration.html      # ❌ FORBIDDEN
+├── test_script.py        # ❌ FORBIDDEN
+├── extra_readme.md       # ❌ FORBIDDEN
+└── temp_files/           # ❌ FORBIDDEN
+```
+
+### **Development Focus Rules - MANDATORY**
+1. **Focus on Production Code** - Create only files needed for the application
+2. **No Experimental Files** - Use proper development environments for testing
+3. **Organized Test Structure** - All tests in designated test directories
+4. **Essential Documentation Only** - Document features, not create demo pages
+5. **Professional Standards** - Maintain enterprise-level code organization
+
+### **File Cleanup Rules - MANDATORY**
+```bash
+# Automatic cleanup required for:
+- Temporary test files
+- Demo HTML pages
+- Celebration pages
+- Temporary scripts
+- Duplicate README files
+- Any non-essential files
+
+# Clean project checklist:
+✅ All test files in /backend/test/
+✅ No temporary files in root
+✅ No demo/celebration pages
+✅ Single README.md only
+✅ Only essential configuration files
+```
+
+### **Enforcement Rules - MANDATORY**
+1. **Pre-commit Checks** - Scan for prohibited file types
+2. **Code Review Requirements** - Reject PRs with unnecessary files
+3. **Automated Cleanup** - Scripts to remove temporary files
+4. **Developer Education** - Team training on file organization standards
+5. **Continuous Monitoring** - Regular audits of project structure
+
 ---
 
 **REMEMBER: English only - no exceptions!**  
 **REMEMBER: All test files MUST be in `/backend/test/` directory only!**  
-**REMEMBER: Rules must be updated with every code change!**  
-**REMEMBER: Custom Field Builder will be game-changing feature!**  
-**REMEMBER: 87.5% production ready - almost there!**
+**REMEMBER: NO celebration pages, demo files, or temporary scripts!**  
+**REMEMBER: Keep project structure clean and professional!**  
+**REMEMBER: Focus on production code, not experimental files!**  
+**REMEMBER: Rules must be updated with every code change!**
 

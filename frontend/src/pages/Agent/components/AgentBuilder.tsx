@@ -68,6 +68,17 @@ interface MainAgentOption {
   status: string;
 }
 
+interface ProviderConfig {
+  name: string;
+  description: string;
+  difficulty: string;
+  cost: string;
+  models: Array<{ value: string; label: string; desc: string }>;
+  requiresApiKey?: boolean;
+  isLocal?: boolean;
+  category?: 'cloud' | 'local';
+}
+
 interface AgentBuilderProps {
   isOpen: boolean;
   onClose: () => void;
@@ -111,7 +122,7 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
     },
   });
 
-  const [providerFilter, setProviderFilter] = useState<'all' | 'easy' | 'medium' | 'hard' | 'free'>('easy');
+  const [providerFilter, setProviderFilter] = useState<'all' | 'easy' | 'medium' | 'hard' | 'free' | 'localhost'>('easy');
   const [showApiKey, setShowApiKey] = useState(false);
   const [mainAgents, setMainAgents] = useState<MainAgentOption[]>([]);
   const [selectedParentAgent, setSelectedParentAgent] = useState<number | null>(null);
@@ -146,16 +157,67 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
     }
   }, [agentType, isOpen]);
 
-  // Load initial data when editing
+  // Load initial data when editing - ENHANCED VERSION
   React.useEffect(() => {
     if (isEditing && initialData) {
       console.log('🔧 Loading initial data for editing:', initialData);
+      console.log('🔧 Initial data received:', JSON.stringify(initialData, null, 2));
       
       // Show API key if exists when editing
       if (initialData.apiKey) {
         console.log('🔑 API Key found in agent data - setting up visibility controls');
         setShowApiKey(false); // Start hidden but can be shown with eye button
       }
+      
+      // ✅ NEW: Determine deployment type from backend data
+      let deployment: 'online' | 'local' = 'online';
+      let localConfig = {
+        host: 'localhost',
+        port: '8080',
+        endpoint: '/v1/chat/completions',
+      };
+      
+      // Check for local deployment indicators in saved data
+      const agentData = initialData as any; // Type assertion for extended data
+      
+      if (agentData.llmConfig && agentData.llmConfig.deployment === 'local') {
+        // From enhanced agent data with llmConfig
+        deployment = 'local';
+        localConfig = agentData.llmConfig.localConfig || localConfig;
+        console.log('✅ Found local deployment in llmConfig:', agentData.llmConfig);
+      } else if (agentData.api_endpoint && agentData.api_endpoint.includes('localhost')) {
+        // From api_endpoint field
+        deployment = 'local';
+        try {
+          const url = new URL(agentData.api_endpoint);
+          localConfig = {
+            host: url.hostname,
+            port: url.port || (url.hostname === 'localhost' ? '11434' : '8080'), // Default to Ollama port for localhost
+            endpoint: url.pathname,
+          };
+          console.log('✅ Detected local deployment from api_endpoint:', agentData.api_endpoint);
+          console.log('✅ Parsed localConfig:', localConfig);
+          
+          // ✅ NEW: Also update the model provider if it's local
+          if (url.port === '11434' || agentData.model_provider === 'ollama') {
+            console.log('🦙 Setting provider to ollama based on port 11434');
+          }
+        } catch (error) {
+          console.warn('⚠️ Could not parse api_endpoint:', agentData.api_endpoint, error);
+        }
+      } else if (agentData.local_config) {
+        // From local_config field
+        deployment = 'local';
+        localConfig = agentData.local_config;
+        console.log('✅ Found local deployment in local_config:', agentData.local_config);
+      } else if (agentData.is_local_model) {
+        // From is_local_model flag
+        deployment = 'local';
+        console.log('✅ Found local deployment flag is_local_model:', agentData.is_local_model);
+      }
+      
+      console.log('🎯 Final deployment type:', deployment);
+      console.log('🎯 Final localConfig:', localConfig);
       
       setFormData({
         name: initialData.name || '',
@@ -165,21 +227,17 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
         llmConfig: {
           provider: initialData.llmProvider || 'openai',
           model: initialData.llmModel || 'gpt-4',
-          deployment: 'online',
+          deployment: deployment, // ✅ NOW USES DETECTED DEPLOYMENT TYPE
           apiKey: initialData.apiKey || '', // Show saved API key
-          localConfig: {
-            host: 'localhost',
-            port: '8080',
-            endpoint: '/v1/chat/completions',
-          },
+          localConfig: localConfig, // ✅ NOW USES DETECTED LOCAL CONFIG
           localEndpoints: [],
         },
         settings: {
           autoResponse: true,
           learning: true,
           maxConcurrency: 10,
-                  temperature: parseFloat(initialData.temperature || '0.7'), // Use saved value
-        maxTokens: initialData.maxTokens || 2048, // Use saved value
+          temperature: parseFloat(initialData.temperature || '0.7'), // Use saved value
+          maxTokens: initialData.maxTokens || 2048, // Use saved value
         },
       });
     } else if (!isEditing) {
@@ -218,6 +276,9 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
       name: '🤖 OpenAI (Most Popular)',
       difficulty: 'Easy',
       cost: 'Paid',
+      requiresApiKey: true,
+      isLocal: false,
+      category: 'paid',
       description: 'Most popular and user-friendly AI service. Best for beginners!',
       models: [
         { value: 'gpt-3.5-turbo', label: '🟢 GPT-3.5 Turbo (Recommended)', desc: 'Perfect for beginners - Fast and affordable' },
@@ -230,6 +291,9 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
       name: '🧠 Anthropic Claude',
       difficulty: 'Easy',
       cost: 'Paid',
+      requiresApiKey: true,
+      isLocal: false,
+      category: 'paid',
       description: 'Safe and helpful AI. Excellent for creative and analytical tasks.',
       models: [
         { value: 'claude-3-haiku', label: '🟢 Claude 3 Haiku', desc: 'Fast and affordable' },
@@ -242,6 +306,9 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
       name: '🔍 Google Gemini',
       difficulty: 'Easy',
       cost: 'Paid',
+      requiresApiKey: true,
+      isLocal: false,
+      category: 'paid',
       description: 'Google\'s powerful AI with strong multimodal capabilities.',
       models: [
         { value: 'gemini-1.5-flash', label: '🟢 Gemini 1.5 Flash', desc: 'Fast and efficient' },
@@ -256,6 +323,9 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
       name: '🏢 Microsoft Azure OpenAI',
       difficulty: 'Medium',
       cost: 'Enterprise',
+      requiresApiKey: true,
+      isLocal: false,
+      category: 'paid',
       description: 'Enterprise-grade OpenAI models with enhanced security and compliance.',
       models: [
         { value: 'gpt-35-turbo', label: '🟢 GPT-3.5 Turbo (Azure)', desc: 'Enterprise GPT-3.5' },
@@ -267,6 +337,9 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
       name: '🌪️ Mistral AI',
       difficulty: 'Medium',
       cost: 'Paid',
+      requiresApiKey: true,
+      isLocal: false,
+      category: 'paid',
       description: 'French AI company with efficient and powerful models.',
       models: [
         { value: 'mistral-7b', label: '🟢 Mistral 7B', desc: 'Fast and efficient' },
@@ -377,9 +450,12 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
     // Tier 4: Local & Self-Hosted
     ollama: {
       name: '🦙 Ollama (Local)',
-      difficulty: 'Hard',
+      difficulty: 'Easy',
       cost: 'Free',
-      description: 'Run AI models locally on your computer. Complete privacy and control.',
+      requiresApiKey: false,
+      isLocal: true,
+      category: 'free',
+      description: '✅ FREE! Run AI models locally on your computer. Complete privacy and control.',
       models: [
         { value: 'llama3.2:latest', label: '🟢 Llama 3.2 (Recommended)', desc: 'Latest Llama model - Fast and capable' },
         { value: 'llama3:latest', label: '🟢 Llama 3', desc: 'Previous generation - Very stable' },
@@ -412,7 +488,10 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
       name: '🖥️ LM Studio (Local)',
       difficulty: 'Easy',
       cost: 'Free',
-      description: 'Desktop app for running local AI models with GPU acceleration.',
+      requiresApiKey: false,
+      isLocal: true,
+      category: 'free',
+      description: '✅ FREE! Desktop app for running local AI models with GPU acceleration.',
       models: [
         { value: 'llama-2-7b-chat', label: '🟢 Llama 2 7B Chat', desc: 'Local chat model' },
         { value: 'llama-3-8b-instruct', label: '🟢 Llama 3 8B Instruct', desc: 'Latest Llama model' },
@@ -435,7 +514,10 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
       name: '📝 Text Generation WebUI (oobabooga)',
       difficulty: 'Medium',
       cost: 'Free',
-      description: 'Popular self-hosted web interface for running local language models.',
+      requiresApiKey: false,
+      isLocal: true,
+      category: 'free',
+      description: '✅ FREE! Popular self-hosted web interface for running local language models.',
       models: [
         { value: 'llama-2-7b-chat-hf', label: '🟢 Llama 2 7B Chat', desc: 'HuggingFace format' },
         { value: 'llama-2-13b-chat-hf', label: '🟡 Llama 2 13B Chat', desc: 'Larger chat model' },
@@ -1015,7 +1097,7 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
 
   if (!isOpen) return null;
 
-  const currentProvider = llmProviders[formData.llmConfig.provider as keyof typeof llmProviders];
+  const currentProvider = llmProviders[formData.llmConfig.provider as keyof typeof llmProviders] as ProviderConfig;
 
   return (
     <div style={styles.overlay} onClick={onClose}>
@@ -1139,6 +1221,7 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
                     { key: 'medium', label: '🟡 Professional', desc: 'More features' },
                     { key: 'hard', label: '🔴 Advanced', desc: 'Expert level' },
                     { key: 'free', label: '💚 Free/Local', desc: 'No cost' },
+                    { key: 'localhost', label: '🏠 Localhost', desc: 'Run on your PC' },
                     { key: 'all', label: '🌐 All Providers', desc: 'Show everything' },
                   ].map((filter) => (
                     <button
@@ -1156,7 +1239,7 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
                         transition: 'all 0.2s ease',
                         borderColor: providerFilter === filter.key ? '#667eea' : '#e9ecef',
                       }}
-                      onClick={() => setProviderFilter(filter.key as 'all' | 'easy' | 'medium' | 'hard' | 'free')}
+                      onClick={() => setProviderFilter(filter.key as 'all' | 'easy' | 'medium' | 'hard' | 'free' | 'localhost')}
                     >
                       <div>{filter.label}</div>
                       <div style={{ fontSize: '10px', opacity: 0.8 }}>{filter.desc}</div>
@@ -1171,7 +1254,8 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
                       if (providerFilter === 'easy') return provider.difficulty === 'Easy';
                       if (providerFilter === 'medium') return provider.difficulty === 'Medium';
                       if (providerFilter === 'hard') return provider.difficulty === 'Hard';
-                      if (providerFilter === 'free') return provider.cost === 'Free' || provider.cost === 'Free/Paid';
+                      if (providerFilter === 'free') return provider.cost === 'Free' || provider.cost === 'Free/Paid' || (provider as any).category === 'free';
+                      if (providerFilter === 'localhost') return (provider as any).isLocal === true;
                       return true;
                     })
                     .map(([key, provider]) => (
@@ -1191,7 +1275,7 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
                       <div style={{ fontSize: '11px', color: '#6c757d', marginBottom: '8px' }}>
                         {provider.description}
                       </div>
-                      <div style={{ display: 'flex', gap: '8px', fontSize: '10px' }}>
+                      <div style={{ display: 'flex', gap: '8px', fontSize: '10px', flexWrap: 'wrap' }}>
                         <span style={{ 
                           backgroundColor: provider.difficulty === 'Easy' ? '#d4edda' : provider.difficulty === 'Medium' ? '#fff3cd' : '#f8d7da', 
                           color: provider.difficulty === 'Easy' ? '#155724' : provider.difficulty === 'Medium' ? '#856404' : '#721c24',
@@ -1208,6 +1292,30 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
                         }}>
                           {provider.cost}
                         </span>
+                        {/* ✅ NEW: API Key Requirement Indicator */}
+                        <span style={{ 
+                          backgroundColor: (provider as ProviderConfig).requiresApiKey ? '#fff3cd' : '#d4edda', 
+                          color: (provider as ProviderConfig).requiresApiKey ? '#856404' : '#155724',
+                          padding: '2px 6px', 
+                          borderRadius: '4px',
+                          fontSize: '9px',
+                          fontWeight: '600'
+                        }}>
+                          {(provider as ProviderConfig).requiresApiKey ? '🔑 API Key' : '✅ No Key'}
+                        </span>
+                        {/* ✅ NEW: Local Indicator */}
+                        {(provider as ProviderConfig).isLocal && (
+                          <span style={{ 
+                            backgroundColor: '#e8f4fd', 
+                            color: '#0c5460',
+                            padding: '2px 6px', 
+                            borderRadius: '4px',
+                            fontSize: '9px',
+                            fontWeight: '600'
+                          }}>
+                            🏠 Local
+                          </span>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1274,21 +1382,32 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
                   }}>
                     <div style={{ fontSize: '12px', color: '#856404', lineHeight: '1.5' }}>
                       <strong>📋 How to get your API Key:</strong><br/>
-                      {formData.llmConfig.provider === 'openai' && '1. Go to platform.openai.com → 2. Sign up/Login → 3. Create API Key'}
-                      {formData.llmConfig.provider === 'anthropic' && '1. Go to console.anthropic.com → 2. Sign up/Login → 3. Create API Key'}
-                      {formData.llmConfig.provider === 'ollama' && '1. Install Ollama locally → 2. Run your model → 3. No API key needed!'}
+                      {currentProvider?.requiresApiKey ? (
+                        <>
+                          {formData.llmConfig.provider === 'openai' && '1. Go to platform.openai.com → 2. Sign up/Login → 3. Create API Key'}
+                          {formData.llmConfig.provider === 'anthropic' && '1. Go to console.anthropic.com → 2. Sign up/Login → 3. Create API Key'}
+                          {formData.llmConfig.provider === 'google' && '1. Go to console.cloud.google.com → 2. Enable AI API → 3. Create API Key'}
+                          {!['openai', 'anthropic', 'google'].includes(formData.llmConfig.provider) && 'Check the provider\'s website for API key instructions'}
+                        </>
+                      ) : (
+                        '✅ No API Key needed! This provider runs locally on your computer.'
+                      )}
                     </div>
                   </div>
                   <div style={{ position: 'relative' }}>
                     <input
                       style={styles.input}
                       type={showApiKey ? 'text' : 'password'}
-                      placeholder={formData.llmConfig.provider === 'ollama' ? 'No API Key needed for Ollama' : 'Paste your API Key here (starts with sk-...)'}
+                      placeholder={
+                        !currentProvider?.requiresApiKey 
+                          ? '✅ No API Key needed for this provider!' 
+                          : 'Paste your API Key here (starts with sk-...)'
+                      }
                       value={formData.llmConfig.apiKey}
                       onChange={(e) => updateLLMConfig('apiKey', e.target.value)}
-                      disabled={formData.llmConfig.provider === 'ollama'}
+                      disabled={!currentProvider?.requiresApiKey}
                     />
-                    {formData.llmConfig.apiKey && formData.llmConfig.provider !== 'ollama' && (
+                    {formData.llmConfig.apiKey && currentProvider?.requiresApiKey && (
                       <button
                         type="button"
                         style={{
@@ -1320,16 +1439,44 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
                       </button>
                     )}
                   </div>
-                  {formData.llmConfig.apiKey && formData.llmConfig.provider !== 'ollama' && (
+                  {currentProvider?.requiresApiKey ? (
+                    formData.llmConfig.apiKey && (
+                      <div style={{ fontSize: '11px', color: '#28a745', marginTop: '4px' }}>
+                        ✅ API Key entered! Your AI is ready to connect.
+                        {isEditing && (
+                          <span style={{ color: '#667eea', marginLeft: '8px' }}>
+                            (Current key loaded - click 👁️ to view)
+                          </span>
+                        )}
+                      </div>
+                    )
+                  ) : (
                     <div style={{ fontSize: '11px', color: '#28a745', marginTop: '4px' }}>
-                      ✅ API Key entered! Your AI is ready to connect.
-                      {isEditing && (
-                        <span style={{ color: '#667eea', marginLeft: '8px' }}>
-                          (Current key loaded - click 👁️ to view)
-                        </span>
-                      )}
+                      ✅ No API Key needed! This provider runs locally on your computer.
                     </div>
                   )}
+
+                  {/* ✅ NEW: Cloud Endpoint Suggestions for Online Mode */}
+                  <div style={{ marginTop: '20px' }}>
+                    <div style={{ fontSize: '13px', fontWeight: '600', marginBottom: '12px', color: '#495057' }}>
+                      🌐 {currentProvider?.category === 'cloud' ? 'Cloud API' : 'Local Server'} Endpoint Configuration
+                    </div>
+                    <EndpointSuggestions
+                      selectedModel={formData.llmConfig.model}
+                      selectedProvider={formData.llmConfig.provider}
+                      currentHost={formData.llmConfig.localConfig.host}
+                      currentPort={formData.llmConfig.localConfig.port}
+                      currentEndpoint={formData.llmConfig.localConfig.endpoint}
+                      onEndpointSelect={(host, port, endpoint) => {
+                        updateLocalConfig('host', host);
+                        updateLocalConfig('port', port);
+                        updateLocalConfig('endpoint', endpoint);
+                      }}
+                      onConfigChange={(config) => {
+                        console.log('📋 Endpoint config selected:', config);
+                      }}
+                    />
+                  </div>
                 </div>
               ) : (
                 <div style={styles.configSection}>
@@ -1371,6 +1518,7 @@ export const AgentBuilder: React.FC<AgentBuilderProps> = ({
                   {/* Endpoint Suggestions Component */}
                   <EndpointSuggestions
                     selectedModel={formData.llmConfig.model}
+                    selectedProvider={formData.llmConfig.provider}
                     currentHost={formData.llmConfig.localConfig.host}
                     currentPort={formData.llmConfig.localConfig.port}
                     currentEndpoint={formData.llmConfig.localConfig.endpoint}

@@ -581,9 +581,7 @@ const ModernHelpDialog: React.FC<ModernHelpDialogProps> = ({ open, onClose }) =>
               color: '#475569'
             }}>Ctrl+?</kbd> anytime to open this help
           </div>
-          <div>
-            Made with ❤️ by Dpro AI Team
-          </div>
+          
         </div>
       </div>
     </div>

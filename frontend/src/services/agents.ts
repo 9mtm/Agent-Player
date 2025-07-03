@@ -22,6 +22,49 @@ function getAuthHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// Utility function to calculate API endpoint based on provider and configuration
+function calculateApiEndpoint(
+  llmConfig: CreateAgentData["llmConfig"]
+): string | null {
+  if (!llmConfig) return null;
+
+  if (llmConfig.deployment === "local" && llmConfig.localConfig) {
+    // For local deployment, construct full URL
+    const { host, port, endpoint } = llmConfig.localConfig;
+    return `http://${host}:${port}${endpoint}`;
+  } else {
+    // For online deployment, use provider-specific endpoints
+    const providerEndpoints = {
+      openai: "https://api.openai.com/v1/chat/completions",
+      anthropic: "https://api.anthropic.com/v1/messages",
+      google: "https://generativelanguage.googleapis.com/v1beta/models",
+      azure: "https://api.cognitive.microsoft.com/sts/v1.0",
+      mistral: "https://api.mistral.ai/v1/chat/completions",
+      cohere: "https://api.cohere.ai/v1/generate",
+      perplexity: "https://api.perplexity.ai/chat/completions",
+      huggingface: "https://api-inference.huggingface.co/models",
+      together: "https://api.together.xyz/inference",
+      replicate: "https://api.replicate.com/v1/predictions",
+      openrouter: "https://openrouter.ai/api/v1/chat/completions",
+      ai21: "https://api.ai21.com/studio/v1/chat/completions",
+      anyscale: "https://api.endpoints.anyscale.com/v1/chat/completions",
+      ollama: "http://localhost:11434/v1/chat/completions",
+      lmstudio: "http://localhost:1234/v1/chat/completions",
+      textgen: "http://localhost:5000/api/v1/chat/completions",
+      localai: "http://localhost:8080/v1/chat/completions",
+      llamafile: "http://localhost:8080/completion",
+      jan: "http://localhost:1337/v1/chat/completions",
+      vllm: "http://localhost:8000/v1/chat/completions",
+      llamacppserver: "http://localhost:8080/v1/chat/completions",
+    };
+
+    return (
+      providerEndpoints[llmConfig.provider as keyof typeof providerEndpoints] ||
+      null
+    );
+  }
+}
+
 // Define agent creation data type
 interface CreateAgentData {
   name: string;
@@ -61,29 +104,46 @@ interface CreateAgentData {
 
 // Helper function to handle both old and new response formats
 function extractData<T>(response: any): T[] {
+  console.log("🔍 Extracting data from response:", response);
+
   // If response has 'success' and 'data' properties (new format)
   if (response && response.success && response.data) {
-    if (Array.isArray(response.data)) return response.data;
-    if (response.data.agents && Array.isArray(response.data.agents))
+    console.log("✅ Response has success and data properties");
+    if (Array.isArray(response.data)) {
+      console.log("✅ response.data is array:", response.data);
+      return response.data;
+    }
+    if (response.data.agents && Array.isArray(response.data.agents)) {
+      console.log("✅ response.data.agents is array:", response.data.agents);
       return response.data.agents;
+    }
+    console.log("⚠️ No array found in response.data");
     return [];
   }
 
   // If response has 'data' property (standard format)
   if (response && typeof response === "object" && "data" in response) {
-    if (Array.isArray(response.data)) return response.data;
-    if (response.data.agents && Array.isArray(response.data.agents))
+    console.log("✅ Response has data property");
+    if (Array.isArray(response.data)) {
+      console.log("✅ response.data is array:", response.data);
+      return response.data;
+    }
+    if (response.data.agents && Array.isArray(response.data.agents)) {
+      console.log("✅ response.data.agents is array:", response.data.agents);
       return response.data.agents;
+    }
+    console.log("⚠️ No array found in response.data");
     return [];
   }
 
   // If response is directly an array (old format)
   if (Array.isArray(response)) {
+    console.log("✅ Response is direct array:", response);
     return response;
   }
 
   // Fallback: empty array
-  console.warn("Unknown response format:", response);
+  console.warn("❌ Unknown response format:", response);
   return [];
 }
 
@@ -99,16 +159,24 @@ export const agentsService = {
 
       // Ensure authentication headers are included
       const headers = getAuthHeaders();
+      console.log("🔑 Auth headers:", headers ? "Present" : "Missing");
+
       const response = await api.get(AGENTS_ENDPOINTS.list, { headers });
 
       console.log("📊 Raw API Response:", response.data);
+      console.log("📊 Response status:", response.status);
+
       const agents = extractData<Agent>(response.data);
-      console.log("✅ Extracted agents:", agents);
+      console.log("✅ Extracted agents count:", agents.length);
+      console.log("✅ Agents:", agents);
 
       return agents;
-    } catch (error) {
+    } catch (error: any) {
       console.error("❌ Error loading agents:", error);
-      if ((error as any)?.response?.status === 401) {
+      console.error("❌ Error response:", error.response?.data);
+      console.error("❌ Error status:", error.response?.status);
+
+      if (error?.response?.status === 401) {
         console.warn("🔒 Authentication error - redirecting to login");
         window.location.href = "/login";
       }
@@ -125,16 +193,27 @@ export const agentsService = {
       );
 
       const headers = getAuthHeaders();
+      console.log(
+        "🔑 Auth headers for main agents:",
+        headers ? "Present" : "Missing"
+      );
+
       const response = await api.get(AGENTS_ENDPOINTS.main, { headers });
 
       console.log("📊 Main agents response:", response.data);
+      console.log("📊 Main agents status:", response.status);
+
       const agents = extractData<Agent>(response.data);
-      console.log("✅ Main agents extracted:", agents);
+      console.log("✅ Main agents extracted count:", agents.length);
+      console.log("✅ Main agents:", agents);
 
       return agents;
-    } catch (error) {
+    } catch (error: any) {
       console.error("❌ Error loading main agents:", error);
-      if ((error as any)?.response?.status === 401) {
+      console.error("❌ Main agents error response:", error.response?.data);
+      console.error("❌ Main agents error status:", error.response?.status);
+
+      if (error?.response?.status === 401) {
         console.warn("🔒 Authentication error - redirecting to login");
         window.location.href = "/login";
       }
@@ -151,16 +230,27 @@ export const agentsService = {
       );
 
       const headers = getAuthHeaders();
+      console.log(
+        "🔑 Auth headers for child agents:",
+        headers ? "Present" : "Missing"
+      );
+
       const response = await api.get(AGENTS_ENDPOINTS.child, { headers });
 
       console.log("📊 Child agents response:", response.data);
+      console.log("📊 Child agents status:", response.status);
+
       const agents = extractData<Agent>(response.data);
-      console.log("✅ Child agents extracted:", agents);
+      console.log("✅ Child agents extracted count:", agents.length);
+      console.log("✅ Child agents:", agents);
 
       return agents;
-    } catch (error) {
+    } catch (error: any) {
       console.error("❌ Error loading child agents:", error);
-      if ((error as any)?.response?.status === 401) {
+      console.error("❌ Child agents error response:", error.response?.data);
+      console.error("❌ Child agents error status:", error.response?.status);
+
+      if (error?.response?.status === 401) {
         console.warn("🔒 Authentication error - redirecting to login");
         window.location.href = "/login";
       }
@@ -175,6 +265,10 @@ export const agentsService = {
     try {
       console.log("🔵 Creating agent:", agentData);
 
+      // Calculate API endpoint using utility function
+      const apiEndpoint = calculateApiEndpoint(agentData.llmConfig);
+      console.log("🔗 API endpoint calculated:", apiEndpoint);
+
       // Transform frontend data to backend format
       const backendData = {
         name: agentData.name,
@@ -186,8 +280,11 @@ export const agentsService = {
         temperature: agentData.settings.temperature,
         max_tokens: agentData.settings.maxTokens,
         api_key: agentData.llmConfig.apiKey,
+        api_endpoint: apiEndpoint, // ✅ Using calculated API endpoint!
         parent_agent_id: agentData.parent_agent_id || null,
       };
+
+      console.log("📤 Backend data with API endpoint:", backendData);
 
       const headers = getAuthHeaders();
       const response = await api.post(AGENTS_ENDPOINTS.create, backendData, {
@@ -246,6 +343,10 @@ export const agentsService = {
     try {
       console.log("🔵 Creating child agent:", agentData);
 
+      // Calculate API endpoint using utility function
+      const apiEndpoint = calculateApiEndpoint(agentData.llmConfig);
+      console.log("🔗 Child agent API endpoint calculated:", apiEndpoint);
+
       // Transform frontend data to backend format
       const backendData = {
         name: agentData.name,
@@ -257,7 +358,13 @@ export const agentsService = {
         temperature: agentData.settings?.temperature || 0.7,
         max_tokens: agentData.settings?.maxTokens || 1024,
         api_key: agentData.llmConfig?.apiKey || "",
+        api_endpoint: apiEndpoint, // ✅ Using calculated API endpoint for child agents too!
       };
+
+      console.log(
+        "📤 Child agent backend data with API endpoint:",
+        backendData
+      );
 
       const headers = getAuthHeaders();
       const response = await api.post(
@@ -331,11 +438,44 @@ export const agentsService = {
   // Update agent
   async updateAgent(
     id: number,
-    agentData: Partial<Agent>
+    agentData: Partial<Agent> & {
+      llmConfig?: CreateAgentData["llmConfig"];
+      settings?: CreateAgentData["settings"];
+    }
   ): Promise<{ success: boolean; agent?: Agent; error?: string }> {
     try {
+      console.log("🔵 Updating agent:", id, agentData);
+
+      // Calculate API endpoint if llmConfig is provided using utility function
+      const apiEndpoint = agentData.llmConfig
+        ? calculateApiEndpoint(agentData.llmConfig)
+        : undefined;
+      if (apiEndpoint !== undefined) {
+        console.log("🔗 Update API endpoint calculated:", apiEndpoint);
+      }
+
+      // Transform frontend data to backend format
+      const updateData: Record<string, unknown> = {};
+
+      if (agentData.name) updateData.name = agentData.name;
+      if (agentData.description !== undefined)
+        updateData.description = agentData.description;
+      if (agentData.llmConfig?.provider)
+        updateData.model_provider = agentData.llmConfig.provider;
+      if (agentData.llmConfig?.model)
+        updateData.model_name = agentData.llmConfig.model;
+      if (agentData.llmConfig?.apiKey !== undefined)
+        updateData.api_key = agentData.llmConfig.apiKey;
+      if (agentData.settings?.temperature !== undefined)
+        updateData.temperature = agentData.settings.temperature;
+      if (agentData.settings?.maxTokens !== undefined)
+        updateData.max_tokens = agentData.settings.maxTokens;
+      if (apiEndpoint !== undefined) updateData.api_endpoint = apiEndpoint; // ✅ Update API endpoint if calculated
+
+      console.log("📤 Update data with API endpoint:", updateData);
+
       const headers = getAuthHeaders();
-      const response = await api.put(AGENTS_ENDPOINTS.update(id), agentData, {
+      const response = await api.put(AGENTS_ENDPOINTS.update(id), updateData, {
         headers,
       });
 

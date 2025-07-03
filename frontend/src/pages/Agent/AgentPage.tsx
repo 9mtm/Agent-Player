@@ -28,6 +28,9 @@ interface AgentData {
   specialization?: string;
   learningEnabled?: boolean;
   autonomyLevel?: string;
+  // ✅ NEW: Complete configuration support
+  llmConfig?: AgentFormData['llmConfig'];
+  settings?: AgentFormData['settings'];
 }
 
 interface AgentFormData {
@@ -450,8 +453,51 @@ const AgentPage: React.FC = () => {
     console.log(isEditing ? 'Updating agent:' : 'Creating agent:', agentData);
     
     try {
+      // Calculate API endpoint from local configuration
+      let apiEndpoint = null;
+      let localConfig = null;
+      
+      if (agentData.llmConfig?.deployment === 'local' && agentData.llmConfig.localConfig) {
+        const { host, port, endpoint } = agentData.llmConfig.localConfig;
+        // Construct full API endpoint URL
+        apiEndpoint = `http://${host}:${port}${endpoint}`;
+        localConfig = {
+          host,
+          port,
+          endpoint,
+          full_url: apiEndpoint
+        };
+        console.log('🏠 Local configuration detected:', {
+          localConfig,
+          apiEndpoint
+        });
+      } else if (agentData.llmConfig?.provider) {
+        // Online providers - use standard endpoints
+        const providerEndpoints = {
+          'openai': 'https://api.openai.com/v1/chat/completions',
+          'anthropic': 'https://api.anthropic.com/v1/messages',
+          'google': 'https://generativelanguage.googleapis.com/v1beta/models',
+          'azure': 'https://api.cognitive.microsoft.com/v1/chat/completions',
+          'mistral': 'https://api.mistral.ai/v1/chat/completions',
+          'cohere': 'https://api.cohere.ai/v1/generate',
+          'perplexity': 'https://api.perplexity.ai/chat/completions',
+          'huggingface': 'https://api-inference.huggingface.co/models',
+          'together': 'https://api.together.xyz/inference',
+          'replicate': 'https://api.replicate.com/v1/predictions',
+          'openrouter': 'https://openrouter.ai/api/v1/chat/completions',
+          'ai21': 'https://api.ai21.com/studio/v1/chat/completions',
+          'anyscale': 'https://api.anyscale.com/v1/chat/completions'
+        };
+        
+        apiEndpoint = providerEndpoints[agentData.llmConfig.provider as keyof typeof providerEndpoints] || null;
+        console.log('🌐 Online provider endpoint:', {
+          provider: agentData.llmConfig.provider,
+          apiEndpoint
+        });
+      }
+
       // Prepare data for backend based on agent type
-      let agentRequest: MainAgentRequest | ChildAgentRequest;
+      let agentRequest: any;
 
       if (builderType === 'main') {
         agentRequest = {
@@ -460,14 +506,22 @@ const AgentPage: React.FC = () => {
           model_provider: agentData.llmConfig?.provider || 'openai',
           model_name: agentData.llmConfig?.model || 'gpt-4',
           api_key: agentData.llmConfig?.apiKey || '',
+          api_endpoint: apiEndpoint, // ✅ NEW: Include calculated endpoint
           system_prompt: '',
           capabilities: agentData.capabilities || [],
           tools_enabled: ['chat', 'analysis'],
-          temperature: agentData.settings?.temperature?.toString() || '0.7',
+          temperature: typeof agentData.settings?.temperature === 'number' 
+            ? agentData.settings.temperature 
+            : parseFloat(agentData.settings?.temperature?.toString() || '0.7'),
           max_tokens: agentData.settings?.maxTokens || 4000,
           timeout_seconds: 300,
           is_public: false,
-          is_system: false
+          is_system: false,
+          // ✅ NEW: Include local configuration if available
+          ...(localConfig && {
+            is_local_model: true,
+            local_config: localConfig
+          })
         };
       } else {
         // Child Agent - match backend ChildAgentCreateRequest schema
@@ -479,6 +533,7 @@ const AgentPage: React.FC = () => {
           model_provider: agentData.llmConfig?.provider || 'openai',
           model_name: agentData.llmConfig?.model || 'gpt-4',
           api_key: agentData.llmConfig?.apiKey || '',
+          api_endpoint: apiEndpoint, // ✅ NEW: Include calculated endpoint
           system_prompt: `You are a specialized child agent trained for ${agentData.type || 'general'} tasks.`,
           capabilities: agentData.capabilities || [],
           tools_enabled: ['chat', 'analysis'],
@@ -486,10 +541,17 @@ const AgentPage: React.FC = () => {
           max_tokens: agentData.settings?.maxTokens || 2048,
           timeout_seconds: 300,
           is_system: false,
-          is_local_model: false,
-          local_config: null
+          // ✅ NEW: Include local configuration
+          is_local_model: agentData.llmConfig?.deployment === 'local',
+          local_config: localConfig
         };
       }
+
+      console.log('📤 Sending agent request to backend:', {
+        agentRequest,
+        isEditing,
+        builderType
+      });
 
       let result;
       if (isEditing && editingAgent) {
@@ -509,7 +571,13 @@ const AgentPage: React.FC = () => {
         });
         
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          const errorText = await response.text();
+          console.error('❌ Update failed:', {
+            status: response.status,
+            statusText: response.statusText,
+            errorText
+          });
+          throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
         }
         
         result = await response.json();
@@ -518,6 +586,8 @@ const AgentPage: React.FC = () => {
         // Create new agent
         const token = localStorage.getItem('access_token');
         const createUrl = configUtils.getApiUrl(builderType === 'child' ? '/agents/child' : '/agents');
+        console.log('🆕 Creating agent via:', createUrl);
+        
         const response = await fetch(createUrl, {
           method: 'POST',
           headers: {
@@ -528,7 +598,13 @@ const AgentPage: React.FC = () => {
         });
         
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          const errorText = await response.text();
+          console.error('❌ Creation failed:', {
+            status: response.status,
+            statusText: response.statusText,
+            errorText
+          });
+          throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
         }
         
         result = await response.json();
@@ -545,8 +621,8 @@ const AgentPage: React.FC = () => {
           ? `${builderType === 'main' ? 'Main' : 'Child'} Agent Updated`
           : `${builderType === 'main' ? 'Main' : 'Child'} Agent Created`,
         isEditing 
-          ? `"${agentData.name}" updated successfully!`
-          : `"${agentData.name}" created successfully!`
+          ? `"${agentData.name}" updated successfully with ${apiEndpoint ? 'local' : 'online'} configuration!`
+          : `"${agentData.name}" created successfully with ${apiEndpoint ? 'local' : 'online'} configuration!`
       );
 
       // Force immediate reload
@@ -594,31 +670,96 @@ const AgentPage: React.FC = () => {
       
       if (result.success) {
         const fullAgentData = result.data;
-        console.log('📋 Full agent data loaded:', fullAgentData);
+        console.log('📋 Full agent data loaded from backend:', fullAgentData);
         
-        // Convert API data to match AgentData interface
-        const editingData: AgentData = {
+        // ✅ NEW: Determine deployment type from backend data
+        let deployment: 'online' | 'local' = 'online';
+        let localConfig = {
+          host: 'localhost',
+          port: '8080',
+          endpoint: '/v1/chat/completions'
+        };
+        
+        // Check if this is a local deployment
+        if (fullAgentData.is_local_model || fullAgentData.local_config || 
+            (fullAgentData.api_endpoint && fullAgentData.api_endpoint.includes('localhost'))) {
+          deployment = 'local';
+          
+          // Parse local config from stored data
+          if (fullAgentData.local_config) {
+            console.log('🏠 Found local_config in backend:', fullAgentData.local_config);
+            localConfig = {
+              host: fullAgentData.local_config.host || 'localhost',
+              port: fullAgentData.local_config.port || '8080',
+              endpoint: fullAgentData.local_config.endpoint || '/v1/chat/completions'
+            };
+          } else if (fullAgentData.api_endpoint) {
+            // Parse from api_endpoint URL
+            console.log('🔗 Parsing from api_endpoint:', fullAgentData.api_endpoint);
+            try {
+              const url = new URL(fullAgentData.api_endpoint);
+              localConfig = {
+                host: url.hostname,
+                port: url.port || '8080',
+                endpoint: url.pathname
+              };
+            } catch (e) {
+              console.warn('⚠️ Failed to parse api_endpoint, using defaults');
+            }
+          }
+        }
+        
+        console.log('🎯 Determined configuration:', {
+          deployment,
+          localConfig,
+          api_endpoint: fullAgentData.api_endpoint,
+          is_local_model: fullAgentData.is_local_model
+        });
+        
+        // ✅ NEW: Convert backend data to AgentFormData format with complete llmConfig
+        const editingData: AgentData & { llmConfig: AgentFormData['llmConfig']; settings: AgentFormData['settings'] } = {
           id: fullAgentData.id,
           name: fullAgentData.name,
-          description: fullAgentData.description,
+          description: fullAgentData.description || '',
           status: fullAgentData.status,
           type: isChild ? 'child' : 'main',
           tasks: fullAgentData.tasks_completed || 0,
           performance: (fullAgentData.performance_score || 100) + '%',
           llmProvider: fullAgentData.model_provider,
           llmModel: fullAgentData.model_name,
-          // Add new properties for editing
+          // Basic properties for editing
           apiKey: fullAgentData.api_key || '',
-          temperature: fullAgentData.temperature || '0.7',
+          temperature: fullAgentData.temperature?.toString() || '0.7',
           maxTokens: fullAgentData.max_tokens || 4000,
           capabilities: fullAgentData.capabilities || [],
           parentAgent: fullAgentData.parent_agent_name,
-          // Add child-specific properties
+          // Child-specific properties
           specialization: fullAgentData.specialization || 'general',
           learningEnabled: fullAgentData.learning_enabled || true,
-          autonomyLevel: fullAgentData.autonomy_level || 'supervised'
+          autonomyLevel: fullAgentData.autonomy_level || 'supervised',
+          
+          // ✅ NEW: Complete LLM Configuration
+          llmConfig: {
+            provider: fullAgentData.model_provider || 'openai',
+            model: fullAgentData.model_name || 'gpt-4',
+            deployment: deployment, // ✅ Based on backend data
+            apiKey: fullAgentData.api_key || '',
+            localConfig: localConfig // ✅ Parsed from backend
+          },
+          
+          // ✅ NEW: Settings from backend
+          settings: {
+            autoResponse: fullAgentData.auto_response || false,
+            learning: fullAgentData.learning_enabled || true,
+            maxConcurrency: fullAgentData.max_concurrency || 1,
+            temperature: typeof fullAgentData.temperature === 'number' 
+              ? fullAgentData.temperature 
+              : parseFloat(fullAgentData.temperature?.toString() || '0.7'),
+            maxTokens: fullAgentData.max_tokens || 4000
+          }
         };
         
+        console.log('✅ Final editing data prepared:', editingData);
         return editingData;
       } else {
         console.error('❌ Failed to load agent data:', result.message);
