@@ -548,9 +548,13 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       const db = getDatabase();
       const id = randomBytes(8).toString('hex');
 
+      // Auto-activate if this is the user's first avatar
+      const existingCount = db.prepare('SELECT COUNT(*) as count FROM user_avatars WHERE user_id = ?').get(userId) as { count: number };
+      const isActive = existingCount.count === 0 ? 1 : 0;
+
       db.prepare(`
         INSERT INTO user_avatars (id, user_id, name, source, glb_url, preview_url, bg_color, bg_scene, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id, userId,
         name || 'New Avatar',
@@ -558,7 +562,8 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
         glbUrl || null,
         previewUrl || null,
         bgColor || '#0a0a0a',
-        bgScene || 'none'
+        bgScene || 'none',
+        isActive
       );
 
       const avatar = db.prepare(`
@@ -731,10 +736,14 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       const localGlbPath = `/avatars/user/${userId}/${id}/${glbFilename}`;
 
       const db = getDatabase();
+      // Auto-activate if this is the user's first avatar
+      const existingCount = db.prepare('SELECT COUNT(*) as count FROM user_avatars WHERE user_id = ?').get(userId) as { count: number };
+      const isActive = existingCount.count === 0 ? 1 : 0;
+
       db.prepare(`
         INSERT INTO user_avatars (id, user_id, name, source, local_glb_path, is_active)
-        VALUES (?, ?, ?, 'upload', ?, 0)
-      `).run(id, userId, name || data.filename || 'Uploaded Avatar', localGlbPath);
+        VALUES (?, ?, ?, 'upload', ?, ?)
+      `).run(id, userId, name || data.filename || 'Uploaded Avatar', localGlbPath, isActive);
 
       const avatar = db.prepare(`
         SELECT id, user_id as userId, name, source, glb_url as glbUrl,
@@ -848,10 +857,14 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       }
 
       const db = getDatabase();
+      // Auto-activate if this is the user's first avatar
+      const existingCount = db.prepare('SELECT COUNT(*) as count FROM user_avatars WHERE user_id = ?').get(userId) as { count: number };
+      const isActive = existingCount.count === 0 ? 1 : 0;
+
       db.prepare(`
         INSERT INTO user_avatars (id, user_id, name, source, local_glb_path, preview_url, is_active)
-        VALUES (?, ?, ?, 'url', ?, ?, 0)
-      `).run(id, userId, name || 'Downloaded Avatar', localGlbPath, localPreviewUrl);
+        VALUES (?, ?, ?, 'url', ?, ?, ?)
+      `).run(id, userId, name || 'Downloaded Avatar', localGlbPath, localPreviewUrl, isActive);
 
       const avatar = db.prepare(`
         SELECT id, user_id as userId, name, source, glb_url as glbUrl,
