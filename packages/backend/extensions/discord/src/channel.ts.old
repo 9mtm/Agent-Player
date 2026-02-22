@@ -1,0 +1,22 @@
+/**
+ * Discord Channel Implementation
+ */
+
+import type { ChannelPlugin, Message, SendOptions } from '../../../src/channels/types.js';
+
+export const discordChannel: ChannelPlugin = {
+  id: 'discord',
+  name: 'Discord',
+
+  async initialize(config: Record<string, any>) {
+    console.log('[Discord] Initializing with config:', config);
+  },
+
+  async sendMessage(channelId: string, content: string, options?: SendOptions): Promise<void> {
+    console.log(`[Discord] Sending to ${channelId}:`, content);
+  },
+
+  async receiveMessage(message: Message): Promise<void> {
+    console.log('[Discord] Received:', message);
+  },
+};

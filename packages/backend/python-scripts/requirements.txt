@@ -1,0 +1,20 @@
+# ─── Agent Player — Python Tools ─────────────────────────────────────────────
+# Install: pip install -r requirements.txt
+
+# ── TTS (tools/tts.py) ────────────────────────────────────────────────────────
+edge-tts>=7.0.0          # Microsoft Edge neural TTS — free, no API key
+
+# ── STT (tools/stt.py) ────────────────────────────────────────────────────────
+faster-whisper>=1.0.0    # Local Whisper — fast CPU/GPU, multilingual
+
+# ── Audio editing (tools/audio_edit.py) ──────────────────────────────────────
+pydub>=0.25.1            # merge / trim / normalize / convert
+# NOTE: ffmpeg must be installed separately: https://ffmpeg.org/download.html
+
+# ── Video editing (tools/video_edit.py) ──────────────────────────────────────
+moviepy>=1.0.3           # merge / trim / extract audio
+Pillow>=10.0.0           # thumbnail frames
+
+# ── Optional: GPU acceleration for STT ───────────────────────────────────────
+# torch>=2.0.0           # NVIDIA GPU — uncomment if available
+# torchaudio>=2.0.0

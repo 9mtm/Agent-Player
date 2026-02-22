@@ -1,0 +1,147 @@
+/**
+ * Gemini CLI Tool
+ *
+ * Sends a prompt to the locally-installed Google Gemini CLI (`gemini`)
+ * and returns the response. The CLI handles authentication via the local
+ * ~/.gemini config — no API key needed from Agent Player.
+ *
+ * Capabilities exposed via this bridge:
+ *   - Web search (Gemini CLI has Google Search built-in)
+ *   - Code generation / explanation
+ *   - File summarization (pass file content in the prompt)
+ *   - Any task that benefits from Gemini 2.0+ models
+ */
+import { execFile, exec } from 'node:child_process';
+import { promisify } from 'node:util';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
+const execFileAsync = promisify(execFile);
+const execAsync = promisify(exec);
+// npm global bin dirs — checked in priority order
+const NODE_BIN_DIRS_WIN = [
+    path.join('C:', 'Program Files', 'nodejs'),
+    path.join(os.homedir(), 'AppData', 'Roaming', 'npm'),
+    path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'nodejs'),
+];
+async function findGeminiExecutable() {
+    if (process.platform === 'win32') {
+        const candidates = NODE_BIN_DIRS_WIN.flatMap(d => [
+            path.join(d, 'gemini.cmd'),
+            path.join(d, 'gemini'),
+        ]).concat(['gemini']);
+        for (const bin of candidates) {
+            try {
+                await fs.access(bin);
+                return bin;
+            }
+            catch { /* next */ }
+        }
+    }
+    else {
+        const candidates = [
+            'gemini',
+            '/usr/local/bin/gemini',
+            path.join(os.homedir(), '.local', 'bin', 'gemini'),
+        ];
+        for (const bin of candidates) {
+            try {
+                await fs.access(bin);
+                return bin;
+            }
+            catch { /* next */ }
+        }
+    }
+    // Fall back to PATH — execFile will throw ENOENT if not found
+    return 'gemini';
+}
+export const geminiCliTool = {
+    name: 'gemini_cli',
+    description: 'Send a prompt to the locally-installed Google Gemini CLI and get the response. ' +
+        'Gemini CLI has Google Search built-in, so use this for web search, real-time information, ' +
+        'or to get a second opinion from Gemini models. ' +
+        'Requires `gemini` CLI to be installed (`npm install -g @google/gemini-cli`).',
+    input_schema: {
+        type: 'object',
+        properties: {
+            prompt: {
+                type: 'string',
+                description: 'The prompt / question to send to Gemini CLI.',
+            },
+            model: {
+                type: 'string',
+                description: 'Gemini model to use (optional). Examples: "gemini-2.0-flash", "gemini-2.5-pro". ' +
+                    'Leave empty to use the CLI default.',
+            },
+            timeout: {
+                type: 'number',
+                description: 'Timeout in milliseconds (default: 120000 = 2 minutes).',
+            },
+        },
+        required: ['prompt'],
+    },
+    async execute(params) {
+        const { prompt, model, timeout = 120_000 } = params;
+        console.log(`[GeminiCLI] 🚀 Sending prompt (${prompt.length} chars)`);
+        if (model)
+            console.log(`[GeminiCLI]   Model: ${model}`);
+        const gemini = await findGeminiExecutable();
+        // Build args: gemini [-m model] -p "prompt"
+        const args = [];
+        if (model) {
+            args.push('-m', model);
+        }
+        args.push('-p', prompt);
+        const childEnv = {
+            ...process.env,
+            NO_COLOR: '1',
+            TERM: 'dumb',
+        };
+        try {
+            let stdout;
+            let stderr;
+            if (process.platform === 'win32' && gemini.endsWith('.cmd')) {
+                // On Windows, .cmd files need exec() (shell) — use the command name so PATH is used
+                const binName = path.basename(gemini, '.cmd');
+                const shellArgs = args.map(a => (a.includes(' ') ? `"${a.replace(/"/g, '\\"')}"` : a)).join(' ');
+                const shellCmd = `${binName} ${shellArgs}`;
+                console.log(`[GeminiCLI] Shell cmd: ${shellCmd}`);
+                ({ stdout, stderr } = await execAsync(shellCmd, {
+                    timeout,
+                    maxBuffer: 1024 * 1024 * 10,
+                    cwd: os.homedir(),
+                    env: childEnv,
+                }));
+            }
+            else {
+                ({ stdout, stderr } = await execFileAsync(gemini, args, {
+                    timeout,
+                    maxBuffer: 1024 * 1024 * 10,
+                    cwd: os.homedir(),
+                    env: childEnv,
+                }));
+            }
+            const output = (stdout || stderr || '(no output)').trim();
+            console.log(`[GeminiCLI] ✅ Response length: ${output.length} chars`);
+            return {
+                content: [{ type: 'text', text: output }],
+                details: { model: model || 'default', promptLength: prompt.length },
+            };
+        }
+        catch (err) {
+            const msg = err.killed
+                ? `Gemini CLI timed out after ${timeout}ms`
+                : err.stderr || err.message;
+            console.error(`[GeminiCLI] ❌ Error:`, msg);
+            // Only show install hint when the binary itself is missing (ENOENT), not for API errors
+            const notFound = err.code === 'ENOENT';
+            const hint = notFound
+                ? '\n\nGemini CLI is not installed. Run: npm install -g @google/gemini-cli'
+                : '';
+            return {
+                content: [{ type: 'text', text: `❌ Gemini CLI error: ${msg}${hint}` }],
+                error: msg,
+            };
+        }
+    },
+};

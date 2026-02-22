@@ -1,0 +1,110 @@
+# Dependencies
+node_modules/
+**/node_modules/
+.pnpm-store
+pnpm-lock.yaml
+package-lock.json
+bun.lock
+bun.lockb
+
+# Build outputs
+dist/
+.next/
+.tsbuildinfo
+*.bun-build
+bin/
+
+# Environment files (NEVER COMMIT)
+.env
+.env.local
+.env.*.local
+**/.env
+packages/backend/.env
+
+# Database files (NEVER COMMIT)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+packages/backend/.data/
+.data/
+
+# Security & Credentials (NEVER COMMIT)
+/memory/
+.agent/*.json
+!.agent/workflows/
+/local/
+*.key
+*.pem
+*.cert
+secrets/
+
+# Local development
+.local/
+docs/.local/
+.DS_Store
+**/.DS_Store
+.idea/
+.vscode/
+*.log
+*.tmp
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Testing
+coverage/
+ui/src/ui/__screenshots__/
+ui/playwright-report/
+ui/test-results/
+
+# Documentation archives
+/docs/dev
+docs/*.zip
+
+# Large files (GitHub 100MB limit)
+agent_player_last.zip
+/public/multiverse/system/test-world.glb
+/packages/backend/rhubarb/rhubarb.zip
+
+# Android build artifacts
+apps/android/.gradle/
+apps/android/app/build/
+apps/android/.cxx/
+
+# iOS build artifacts
+apps/ios/*.xcodeproj/
+apps/ios/*.xcworkspace/
+apps/ios/.swiftpm/
+apps/ios/.local-signing.xcconfig
+apps/ios/LocalSigning.xcconfig
+apps/ios/Clawdbot.xcodeproj/
+apps/ios/*.ipa
+apps/ios/*.dSYM.zip
+apps/ios/*.mobileprovision
+apps/ios/*.xcfilelist
+
+# Vendor build artifacts
+vendor/
+vendor/a2ui/renderers/lit/dist/
+src/canvas-host/a2ui/*.bundle.js
+src/canvas-host/a2ui/*.map
+.bundle.hash
+
+# Fastlane (iOS)
+apps/ios/fastlane/README.md
+apps/ios/fastlane/report.xml
+apps/ios/fastlane/Preview.html
+apps/ios/fastlane/screenshots/
+apps/ios/fastlane/test_output/
+apps/ios/fastlane/logs/
+apps/ios/fastlane/.env
+
+# Local tooling
+.serena/
+.worktrees/
+docker-compose.extra.yml
+.tgz

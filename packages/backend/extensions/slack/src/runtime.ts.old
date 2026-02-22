@@ -1,0 +1,13 @@
+/**
+ * Slack Runtime
+ */
+
+let runtime: any = null;
+
+export function setSlackRuntime(r: any) {
+  runtime = r;
+}
+
+export function getSlackRuntime() {
+  return runtime;
+}

@@ -1,0 +1,7 @@
+-- Migration 019: Extended user profile fields
+ALTER TABLE users ADD COLUMN bio TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN company TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN location TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN website TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC';
+ALTER TABLE users ADD COLUMN profile_picture_url TEXT;

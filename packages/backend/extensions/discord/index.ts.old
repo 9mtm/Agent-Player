@@ -1,0 +1,31 @@
+/**
+ * Discord Extension
+ *
+ * Provides Discord messaging channel for Agent Player
+ */
+
+import type { AgentPlayerPluginApi } from '../../src/plugins/types.js';
+import { discordChannel } from './src/channel.js';
+import { setDiscordRuntime } from './src/runtime.js';
+
+const plugin = {
+  id: 'discord',
+  name: 'Discord',
+  description: 'Discord messaging channel',
+  version: '1.0.0',
+
+  register(api: AgentPlayerPluginApi) {
+    setDiscordRuntime(api.runtime);
+    api.registerChannel({ plugin: discordChannel });
+  },
+
+  async onEnable() {
+    console.log('[Discord] Extension enabled');
+  },
+
+  async onDisable() {
+    console.log('[Discord] Extension disabled');
+  },
+};
+
+export default plugin;

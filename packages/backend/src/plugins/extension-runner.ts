@@ -1,0 +1,207 @@
+/**
+ * Extension Runner
+ * Loads, initializes, and manages extensions at runtime
+ */
+
+import type { FastifyInstance } from 'fastify';
+import type { PluginManifest } from './types.js';
+import { createExtensionApi } from './sdk.js';
+import { getDatabase } from '../db/index.js';
+import { readdirSync, existsSync, readFileSync } from 'fs';
+import { resolve, join } from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+/**
+ * Extension with register() hook
+ */
+interface Extension {
+  id: string;
+  name: string;
+  version: string;
+
+  // Lifecycle hooks
+  register?(api: any): Promise<void>;
+  onEnable?(api: any): Promise<void>;
+  onDisable?(api: any): Promise<void>;
+}
+
+/**
+ * Extension Runner
+ * Scans extensions directory, loads enabled extensions, calls register() hooks
+ */
+export class ExtensionRunner {
+  private loadedExtensions = new Map<string, Extension>();
+  private extensionsDir: string;
+
+  constructor(extensionsDir: string = './extensions') {
+    this.extensionsDir = resolve(extensionsDir);
+  }
+
+  /**
+   * Initialize all enabled extensions
+   * Called at server startup before fastify.listen()
+   */
+  async initialize(fastify: FastifyInstance, cronEngine: any) {
+    console.log('[ExtensionRunner] 🔌 Loading extensions...\n');
+
+    const db = getDatabase();
+
+    // Ensure extensions directory exists
+    if (!existsSync(this.extensionsDir)) {
+      console.log('[ExtensionRunner] ℹ️  No extensions directory found, skipping...\n');
+      return;
+    }
+
+    // Scan for extension directories
+    const extensionDirs = readdirSync(this.extensionsDir, { withFileTypes: true })
+      .filter((dirent) => dirent.isDirectory())
+      .map((dirent) => dirent.name);
+
+    console.log(`[ExtensionRunner] Found ${extensionDirs.length} extension(s): ${extensionDirs.join(', ')}\n`);
+
+    for (const dirName of extensionDirs) {
+      try {
+        await this.loadExtension(dirName, fastify, cronEngine);
+      } catch (error: any) {
+        console.error(`[ExtensionRunner] ❌ Failed to load extension "${dirName}":`, error.message);
+      }
+    }
+
+    console.log(`[ExtensionRunner] ✅ Loaded ${this.loadedExtensions.size} extension(s)\n`);
+  }
+
+  /**
+   * Load a single extension
+   */
+  private async loadExtension(
+    dirName: string,
+    fastify: FastifyInstance,
+    cronEngine: any
+  ) {
+    const extensionPath = join(this.extensionsDir, dirName);
+
+    // Try both manifest filename formats (new and old)
+    let manifestPath = join(extensionPath, 'agentplayer.plugin.json');
+    if (!existsSync(manifestPath)) {
+      manifestPath = join(extensionPath, 'agent-player.plugin.json');
+    }
+
+    // Read manifest
+    if (!existsSync(manifestPath)) {
+      console.warn(`[ExtensionRunner] ⚠️  No manifest found for "${dirName}", skipping...`);
+      return;
+    }
+
+    const manifest: PluginManifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+    const { id, name, version, main } = manifest;
+
+    const db = getDatabase();
+
+    // Check if enabled
+    const configRow = db
+      .prepare('SELECT enabled FROM extension_configs WHERE extension_id = ?')
+      .get(id) as { enabled: number } | undefined;
+
+    const isEnabled = configRow?.enabled === 1;
+
+    if (!isEnabled) {
+      console.log(`[ExtensionRunner] ⏭️  Extension "${name}" (${id}) is disabled, skipping...`);
+      return;
+    }
+
+    // Load extension module
+    const entryPath = join(extensionPath, main);
+    if (!existsSync(entryPath)) {
+      throw new Error(`Entry point not found: ${entryPath}`);
+    }
+
+    // Dynamic import (ESM)
+    const extensionModule = await import(`file://${entryPath}`);
+    const extension: Extension = extensionModule.default || extensionModule;
+
+    // Create Extension API (SECURITY: pass extensionPath for path validation - H-04)
+    const api = createExtensionApi(id, fastify, db, cronEngine, extensionPath) as any;
+
+    // Call register() hook
+    if (extension.register) {
+      console.log(`[ExtensionRunner] 🔧 Registering extension: ${name} (${id})`);
+      await extension.register(api);
+    }
+
+    // Register routes (collected during register() call)
+    const routesToRegister = api.__getRoutesToRegister();
+    for (const { fn, prefix } of routesToRegister) {
+      const fullPrefix = `/api/ext/${id}${prefix || ''}`;
+      await fastify.register(async (scope) => {
+        await fn(scope);
+      }, { prefix: fullPrefix });
+      console.log(`[ExtensionRunner] ✅ Routes registered under: ${fullPrefix}`);
+    }
+
+    // Store loaded extension
+    this.loadedExtensions.set(id, extension);
+    console.log(`[ExtensionRunner] ✅ Extension loaded: ${name} v${version}\n`);
+  }
+
+  /**
+   * Enable an extension at runtime (requires restart for routes)
+   */
+  async enableExtension(extensionId: string) {
+    const db = getDatabase();
+
+    db.prepare(
+      `INSERT INTO extension_configs (extension_id, enabled, updated_at)
+       VALUES (?, 1, datetime('now'))
+       ON CONFLICT(extension_id) DO UPDATE SET
+         enabled = 1,
+         updated_at = datetime('now')`
+    ).run(extensionId);
+
+    console.log(`[ExtensionRunner] ✅ Extension "${extensionId}" enabled (restart required for routes)`);
+  }
+
+  /**
+   * Disable an extension at runtime
+   */
+  async disableExtension(extensionId: string) {
+    const db = getDatabase();
+
+    db.prepare(
+      `UPDATE extension_configs
+       SET enabled = 0, updated_at = datetime('now')
+       WHERE extension_id = ?`
+    ).run(extensionId);
+
+    // Call onDisable() hook if extension is loaded
+    const extension = this.loadedExtensions.get(extensionId);
+    if (extension?.onDisable) {
+      const api = createExtensionApi(extensionId, {} as any, db, {} as any);
+      await extension.onDisable(api);
+    }
+
+    this.loadedExtensions.delete(extensionId);
+
+    console.log(`[ExtensionRunner] ❌ Extension "${extensionId}" disabled`);
+  }
+
+  /**
+   * Get all loaded extensions
+   */
+  getLoadedExtensions(): Map<string, Extension> {
+    return this.loadedExtensions;
+  }
+}
+
+// Singleton instance
+let extensionRunner: ExtensionRunner | null = null;
+
+export function getExtensionRunner(): ExtensionRunner {
+  if (!extensionRunner) {
+    extensionRunner = new ExtensionRunner();
+  }
+  return extensionRunner;
+}

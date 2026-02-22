@@ -1,0 +1,44 @@
+{
+  "id": "telegram",
+  "name": "Telegram",
+  "description": "Telegram bot integration - send and receive messages via Telegram Bot API",
+  "version": "2.0.0",
+  "type": "channel",
+  "author": "Agent Player Team",
+  "main": "index.js",
+  "permissions": ["network", "database", "tools"],
+  "settingsUI": {
+    "type": "form",
+    "title": "Telegram Bot Configuration",
+    "description": "Configure your Telegram bot connection",
+    "fields": [
+      {
+        "type": "input",
+        "name": "bot_token",
+        "label": "Bot Token",
+        "placeholder": "Enter Telegram Bot Token",
+        "helpText": "Get from @BotFather on Telegram - /newbot command",
+        "inputType": "password",
+        "required": true
+      },
+      {
+        "type": "input",
+        "name": "webhook_url",
+        "label": "Webhook URL",
+        "placeholder": "https://yourdomain.com/api/ext/telegram/webhook",
+        "helpText": "Public URL where Telegram will send updates"
+      },
+      {
+        "type": "input",
+        "name": "allowed_users",
+        "label": "Allowed Users (Optional)",
+        "placeholder": "123456789,987654321",
+        "helpText": "Comma-separated list of Telegram user IDs allowed to interact with bot"
+      }
+    ],
+    "submitButton": {
+      "label": "Save Telegram Settings",
+      "variant": "default"
+    }
+  }
+}

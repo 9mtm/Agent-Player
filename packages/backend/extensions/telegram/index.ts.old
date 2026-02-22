@@ -1,0 +1,31 @@
+/**
+ * Telegram Extension
+ *
+ * Provides Telegram messaging channel for Agent Player
+ */
+
+import type { AgentPlayerPluginApi } from '../../src/plugins/types.js';
+import { telegramChannel } from './src/channel.js';
+import { setTelegramRuntime } from './src/runtime.js';
+
+const plugin = {
+  id: 'telegram',
+  name: 'Telegram',
+  description: 'Telegram messaging channel',
+  version: '1.0.0',
+
+  register(api: AgentPlayerPluginApi) {
+    setTelegramRuntime(api.runtime);
+    api.registerChannel({ plugin: telegramChannel });
+  },
+
+  async onEnable() {
+    console.log('[Telegram] Extension enabled');
+  },
+
+  async onDisable() {
+    console.log('[Telegram] Extension disabled');
+  },
+};
+
+export default plugin;

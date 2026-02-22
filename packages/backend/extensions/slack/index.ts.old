@@ -1,0 +1,31 @@
+/**
+ * Slack Extension
+ *
+ * Provides Slack messaging channel for Agent Player
+ */
+
+import type { AgentPlayerPluginApi } from '../../src/plugins/types.js';
+import { slackChannel } from './src/channel.js';
+import { setSlackRuntime } from './src/runtime.js';
+
+const plugin = {
+  id: 'slack',
+  name: 'Slack',
+  description: 'Slack messaging channel',
+  version: '1.0.0',
+
+  register(api: AgentPlayerPluginApi) {
+    setSlackRuntime(api.runtime);
+    api.registerChannel({ plugin: slackChannel });
+  },
+
+  async onEnable() {
+    console.log('[Slack] Extension enabled');
+  },
+
+  async onDisable() {
+    console.log('[Slack] Extension disabled');
+  },
+};
+
+export default plugin;

@@ -1,0 +1,44 @@
+{
+  "id": "discord",
+  "name": "Discord",
+  "description": "Discord messaging integration - send and receive messages via Discord bot",
+  "version": "2.0.0",
+  "type": "channel",
+  "author": "Agent Player Team",
+  "main": "index.js",
+  "permissions": ["network", "database", "tools"],
+  "settingsUI": {
+    "type": "form",
+    "title": "Discord Bot Configuration",
+    "description": "Configure your Discord bot connection",
+    "fields": [
+      {
+        "type": "input",
+        "name": "bot_token",
+        "label": "Bot Token",
+        "placeholder": "Enter Discord Bot Token",
+        "helpText": "Get this from Discord Developer Portal → Bot → Token",
+        "inputType": "password",
+        "required": true
+      },
+      {
+        "type": "input",
+        "name": "client_id",
+        "label": "Client ID",
+        "placeholder": "Enter Application Client ID",
+        "helpText": "Found in Discord Developer Portal → OAuth2 → Client ID"
+      },
+      {
+        "type": "input",
+        "name": "guild_id",
+        "label": "Guild ID (Optional)",
+        "placeholder": "Enter Server ID",
+        "helpText": "Right-click your server → Copy ID (enable Developer Mode first)"
+      }
+    ],
+    "submitButton": {
+      "label": "Save Discord Settings",
+      "variant": "default"
+    }
+  }
+}

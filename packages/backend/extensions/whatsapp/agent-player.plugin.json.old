@@ -1,0 +1,31 @@
+{
+  "id": "whatsapp",
+  "name": "WhatsApp",
+  "description": "WhatsApp messaging channel for Agent Player",
+  "version": "1.0.0",
+  "author": "Agent Player Team",
+  "channels": ["whatsapp"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["phone_number_id", "access_token"],
+    "properties": {
+      "phone_number_id": {
+        "type": "string",
+        "description": "WhatsApp Business Phone Number ID"
+      },
+      "access_token": {
+        "type": "string",
+        "description": "Meta Access Token"
+      },
+      "webhook_verify_token": {
+        "type": "string",
+        "description": "Webhook verification token"
+      },
+      "business_account_id": {
+        "type": "string",
+        "description": "WhatsApp Business Account ID"
+      }
+    }
+  }
+}

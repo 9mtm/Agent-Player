@@ -1,0 +1,31 @@
+/**
+ * WhatsApp Extension
+ *
+ * Provides WhatsApp Business messaging channel for Agent Player
+ */
+
+import type { AgentPlayerPluginApi } from '../../src/plugins/types.js';
+import { whatsappChannel } from './src/channel.js';
+import { setWhatsAppRuntime } from './src/runtime.js';
+
+const plugin = {
+  id: 'whatsapp',
+  name: 'WhatsApp',
+  description: 'WhatsApp Business messaging channel',
+  version: '1.0.0',
+
+  register(api: AgentPlayerPluginApi) {
+    setWhatsAppRuntime(api.runtime);
+    api.registerChannel({ plugin: whatsappChannel });
+  },
+
+  async onEnable() {
+    console.log('[WhatsApp] Extension enabled');
+  },
+
+  async onDisable() {
+    console.log('[WhatsApp] Extension disabled');
+  },
+};
+
+export default plugin;

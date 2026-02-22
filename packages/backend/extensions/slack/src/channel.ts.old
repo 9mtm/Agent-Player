@@ -1,0 +1,22 @@
+/**
+ * Slack Channel Implementation
+ */
+
+import type { ChannelPlugin, Message, SendOptions } from '../../../src/channels/types.js';
+
+export const slackChannel: ChannelPlugin = {
+  id: 'slack',
+  name: 'Slack',
+
+  async initialize(config: Record<string, any>) {
+    console.log('[Slack] Initializing with config:', config);
+  },
+
+  async sendMessage(channelId: string, content: string, options?: SendOptions): Promise<void> {
+    console.log(`[Slack] Sending to ${channelId}:`, content);
+  },
+
+  async receiveMessage(message: Message): Promise<void> {
+    console.log('[Slack] Received:', message);
+  },
+};

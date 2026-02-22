@@ -1,0 +1,30 @@
+/**
+ * Telegram Channel Implementation
+ */
+
+import type { ChannelPlugin, Message, SendOptions } from '../../../src/channels/types.js';
+
+export const telegramChannel: ChannelPlugin = {
+  id: 'telegram',
+  name: 'Telegram',
+
+  async initialize(config: Record<string, any>) {
+    // Initialize Telegram bot
+    console.log('[Telegram] Initializing with config:', config);
+  },
+
+  async sendMessage(chatId: string, content: string, options?: SendOptions): Promise<void> {
+    // Send message via Telegram API
+    console.log(`[Telegram] Sending to ${chatId}:`, content);
+  },
+
+  async receiveMessage(message: Message): Promise<void> {
+    // Handle incoming message
+    console.log('[Telegram] Received:', message);
+  },
+
+  async handleCallback(callbackQuery: any): Promise<void> {
+    // Handle inline keyboard callbacks
+    console.log('[Telegram] Callback:', callbackQuery);
+  },
+};

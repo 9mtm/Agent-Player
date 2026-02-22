@@ -1,0 +1,22 @@
+/**
+ * WhatsApp Channel Implementation
+ */
+
+import type { ChannelPlugin, Message, SendOptions } from '../../../src/channels/types.js';
+
+export const whatsappChannel: ChannelPlugin = {
+  id: 'whatsapp',
+  name: 'WhatsApp',
+
+  async initialize(config: Record<string, any>) {
+    console.log('[WhatsApp] Initializing with config:', config);
+  },
+
+  async sendMessage(chatId: string, content: string, options?: SendOptions): Promise<void> {
+    console.log(`[WhatsApp] Sending to ${chatId}:`, content);
+  },
+
+  async receiveMessage(message: Message): Promise<void> {
+    console.log('[WhatsApp] Received:', message);
+  },
+};
