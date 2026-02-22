@@ -154,10 +154,10 @@ export default async function setupRoutes(fastify: FastifyInstance) {
         });
       }
 
-      if (password.length < 8) {
+      if (password.length < 12) {
         return reply.status(400).send({
           error: 'Invalid password',
-          message: 'Password must be at least 8 characters long'
+          message: 'Password must be at least 12 characters long (include uppercase, lowercase, number, special character)'
         });
       }
 
@@ -190,10 +190,10 @@ export default async function setupRoutes(fastify: FastifyInstance) {
       // Create username from email
       const username = email.split('@')[0];
 
-      // Create admin user
+      // Create admin user with active status and verified email
       const stmt = db.prepare(`
-        INSERT INTO users (id, email, username, password_hash, full_name, role, created_at, updated_at, token_version)
-        VALUES (?, ?, ?, ?, ?, 'admin', datetime('now'), datetime('now'), 1)
+        INSERT INTO users (id, email, username, password_hash, full_name, role, status, email_verified, created_at, updated_at, token_version)
+        VALUES (?, ?, ?, ?, ?, 'admin', 'active', 1, datetime('now'), datetime('now'), 1)
       `);
 
       stmt.run(userId, email, username, passwordHash, name);

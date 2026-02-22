@@ -132,8 +132,29 @@ export default function SetupPage() {
       return;
     }
 
-    if (adminForm.password.length < 8) {
-      toast.error('Password must be at least 8 characters');
+    if (adminForm.password.length < 12) {
+      toast.error('Password must be at least 12 characters');
+      return;
+    }
+
+    // Validate password strength
+    if (!/[A-Z]/.test(adminForm.password)) {
+      toast.error('Password must contain at least one uppercase letter');
+      return;
+    }
+
+    if (!/[a-z]/.test(adminForm.password)) {
+      toast.error('Password must contain at least one lowercase letter');
+      return;
+    }
+
+    if (!/[0-9]/.test(adminForm.password)) {
+      toast.error('Password must contain at least one number');
+      return;
+    }
+
+    if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(adminForm.password)) {
+      toast.error('Password must contain at least one special character');
       return;
     }
 
@@ -332,9 +353,12 @@ export default function SetupPage() {
                   value={adminForm.password}
                   onChange={(e) => setAdminForm({ ...adminForm, password: e.target.value })}
                   className="w-full px-4 py-3 text-gray-900 bg-white border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder:text-gray-400"
-                  placeholder="Min. 8 characters"
+                  placeholder="Min. 12 chars, uppercase, lowercase, number, special"
                   required
                 />
+                <p className="mt-1 text-xs text-gray-600">
+                  Must include: uppercase, lowercase, number, and special character (!@#$%...)
+                </p>
               </div>
 
               <div>
