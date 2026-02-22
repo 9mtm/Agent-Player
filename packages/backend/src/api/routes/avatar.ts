@@ -371,7 +371,8 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       }
 
       // Ensure logos directory exists
-      const logosDir = path.join(process.cwd(), '.data', 'logos');
+      const projectRoot = path.join(process.cwd(), '..', '..');
+      const logosDir = path.join(projectRoot, 'public', 'storage', 'logos');
       if (!fs.existsSync(logosDir)) fs.mkdirSync(logosDir, { recursive: true });
 
       // Generate unique filename with original extension
@@ -383,7 +384,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       const buffer = await data.toBuffer();
       fs.writeFileSync(filePath, buffer);
 
-      const url = `/api/avatar/logo/${filename}`;
+      const url = `/storage/logos/${filename}`;
       fastify.log.info(`[Avatar] Logo uploaded: ${filename}`);
       return reply.send({ success: true, url, filename });
     } catch (error: any) {
@@ -401,7 +402,8 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       if (filename.includes('..') || filename.includes('/')) {
         return reply.status(400).send({ error: 'Invalid filename' });
       }
-      const filePath = path.join(process.cwd(), '.data', 'logos', filename);
+      const projectRoot = path.join(process.cwd(), '..', '..');
+      const filePath = path.join(projectRoot, 'public', 'storage', 'logos', filename);
       if (!fs.existsSync(filePath)) return reply.status(404).send({ error: 'Not found' });
 
       const ext = path.extname(filename).toLowerCase();
@@ -725,7 +727,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
 
       const id = randomBytes(8).toString('hex');
       const projectRoot = path.join(process.cwd(), '..', '..');
-      const avatarDir = path.join(projectRoot, 'public', 'avatars', 'user', userId, id);
+      const avatarDir = path.join(projectRoot, 'public', 'storage', 'avatars', 'user', userId, id);
       fs.mkdirSync(avatarDir, { recursive: true });
 
       const glbFilename = 'avatar' + ext;
@@ -733,7 +735,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       const buffer = await data.toBuffer();
       fs.writeFileSync(glbPath, buffer);
 
-      const localGlbPath = `/avatars/user/${userId}/${id}/${glbFilename}`;
+      const localGlbPath = `/storage/avatars/user/${userId}/${id}/${glbFilename}`;
 
       const db = getDatabase();
       // Auto-activate if this is the user's first avatar
@@ -777,7 +779,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       if (!avatar.glbUrl) return reply.status(400).send({ error: 'No remote URL to download' });
 
       const projectRoot = path.join(process.cwd(), '..', '..');
-      const avatarDir = path.join(projectRoot, 'public', 'avatars', 'user', avatar.userId, id);
+      const avatarDir = path.join(projectRoot, 'public', 'storage', 'avatars', 'user', avatar.userId, id);
       fs.mkdirSync(avatarDir, { recursive: true });
 
       // Download GLB
@@ -785,7 +787,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       if (!glbResponse.ok) throw new Error(`Failed to download GLB: HTTP ${glbResponse.status}`);
       const glbBuffer = await glbResponse.arrayBuffer();
       fs.writeFileSync(path.join(avatarDir, 'avatar.glb'), Buffer.from(glbBuffer));
-      const localGlbPath = `/avatars/user/${avatar.userId}/${id}/avatar.glb`;
+      const localGlbPath = `/storage/avatars/user/${avatar.userId}/${id}/avatar.glb`;
 
       // Try preview (RPM)
       let localPreviewUrl: string | null = null;
@@ -796,7 +798,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
           if (previewRes.ok) {
             const previewBuf = await previewRes.arrayBuffer();
             fs.writeFileSync(path.join(avatarDir, 'preview.png'), Buffer.from(previewBuf));
-            localPreviewUrl = `/avatars/user/${avatar.userId}/${id}/preview.png`;
+            localPreviewUrl = `/storage/avatars/user/${avatar.userId}/${id}/preview.png`;
           }
         } catch {}
       }
@@ -832,7 +834,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
 
       const id = randomBytes(8).toString('hex');
       const projectRoot = path.join(process.cwd(), '..', '..');
-      const avatarDir = path.join(projectRoot, 'public', 'avatars', 'user', userId, id);
+      const avatarDir = path.join(projectRoot, 'public', 'storage', 'avatars', 'user', userId, id);
       fs.mkdirSync(avatarDir, { recursive: true });
 
       // Download GLB file
@@ -840,7 +842,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       if (!glbResponse.ok) throw new Error(`Failed to download GLB: HTTP ${glbResponse.status}`);
       const glbBuffer = await glbResponse.arrayBuffer();
       fs.writeFileSync(path.join(avatarDir, 'avatar.glb'), Buffer.from(glbBuffer));
-      const localGlbPath = `/avatars/user/${userId}/${id}/avatar.glb`;
+      const localGlbPath = `/storage/avatars/user/${userId}/${id}/avatar.glb`;
 
       // Try to download preview image (auto-detect RPM avatars)
       let localPreviewUrl: string | null = null;
@@ -851,7 +853,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
           if (previewRes.ok) {
             const previewBuf = await previewRes.arrayBuffer();
             fs.writeFileSync(path.join(avatarDir, 'preview.png'), Buffer.from(previewBuf));
-            localPreviewUrl = `/avatars/user/${userId}/${id}/preview.png`;
+            localPreviewUrl = `/storage/avatars/user/${userId}/${id}/preview.png`;
           }
         } catch {} // preview is optional
       }
@@ -918,7 +920,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
         }
 
         const projectRoot = path.join(process.cwd(), '..', '..');
-        const bgDir = path.join(projectRoot, 'public', 'backgrounds', userId);
+        const bgDir = path.join(projectRoot, 'public', 'storage', 'backgrounds', userId);
         fs.mkdirSync(bgDir, { recursive: true });
 
         const filename = `bg-${Date.now()}${ext}`;
@@ -926,7 +928,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
         const buffer = await data.toBuffer();
         fs.writeFileSync(filePath, buffer);
 
-        const webPath = `/backgrounds/${userId}/${filename}`;
+        const webPath = `/storage/backgrounds/${userId}/${filename}`;
         fastify.log.info(`[Avatar] Background uploaded: ${webPath}`);
         return reply.send({ success: true, url: webPath });
       } catch (error: any) {

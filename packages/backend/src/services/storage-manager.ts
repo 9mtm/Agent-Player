@@ -108,10 +108,11 @@ export class StorageManager {
     if (provider instanceof LocalStorageProvider) {
       const dirs = [
         'cache/audio', 'cache/screenshots', 'cache/web',
-        'cdn/avatars', 'cdn/images', 'cdn/files', 'cdn/data',
+        'cdn/avatars', 'cdn/images', 'cdn/files', 'cdn/data', 'cdn/worlds',
       ];
       for (const dir of dirs) {
-        const absPath = path.join(process.cwd(), '.data', 'storage', dir);
+        const projectRoot = path.join(process.cwd(), '..', '..');
+        const absPath = path.join(projectRoot, 'public', 'storage', dir);
         if (!fs.existsSync(absPath)) fs.mkdirSync(absPath, { recursive: true });
       }
     }

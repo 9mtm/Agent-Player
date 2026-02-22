@@ -166,14 +166,14 @@ export async function profileRoutes(fastify: FastifyInstance) {
       }
 
       const projectRoot = path.join(process.cwd(), '..', '..');
-      const uploadDir = path.join(projectRoot, 'public', 'profile-pictures');
+      const uploadDir = path.join(projectRoot, 'public', 'storage', 'profiles');
       fs.mkdirSync(uploadDir, { recursive: true });
 
       const filename = `user-${userId}-${randomBytes(4).toString('hex')}${ext}`;
       const buffer = await data.toBuffer();
       fs.writeFileSync(path.join(uploadDir, filename), buffer);
 
-      const picUrl = `/profile-pictures/${filename}`;
+      const picUrl = `/storage/profiles/${filename}`;
 
       const db = getDatabase();
       db.prepare(`UPDATE users SET profile_picture_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
