@@ -104,7 +104,8 @@ export default function SetupPage() {
     try {
       const response = await fetch('http://localhost:41522/api/setup/database', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
       });
 
       if (!response.ok) {
@@ -174,7 +175,8 @@ export default function SetupPage() {
     try {
       const response = await fetch('http://localhost:41522/api/setup/complete', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
       });
 
       if (!response.ok) {
