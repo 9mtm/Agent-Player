@@ -70,6 +70,24 @@ agent_player_last.zip
 /public/multiverse/system/test-world.glb
 /packages/backend/rhubarb/rhubarb.zip
 
+# User-uploaded files in unified storage (NEVER COMMIT)
+/public/storage/avatars/user/
+/public/storage/backgrounds/
+/public/storage/profiles/
+/public/storage/logos/
+/public/storage/cache/
+/public/storage/cdn/
+/public/storage/temp/
+/public/storage/files/
+/public/storage/images/
+/public/storage/worlds/user/
+/public/storage/data/
+
+# Keep old paths ignored too (backward compatibility)
+/public/avatars/user/
+/public/backgrounds/
+/public/profile-pictures/
+
 # Android build artifacts
 apps/android/.gradle/
 apps/android/app/build/
