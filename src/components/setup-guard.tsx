@@ -4,48 +4,103 @@ import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 
+// Global flag to prevent multiple checks across all instances
+let globalCheckInProgress = false;
+let globalSetupStatus: { complete: boolean; checked: boolean } = {
+  complete: false,
+  checked: false
+};
+
 export function SetupGuard({ children }: { children: React.ReactNode }) {
-  const [isChecking, setIsChecking] = useState(true);
-  const [setupComplete, setSetupComplete] = useState(false);
+  const [isChecking, setIsChecking] = useState(!globalSetupStatus.checked);
+  const [setupComplete, setSetupComplete] = useState(globalSetupStatus.complete);
   const router = useRouter();
   const pathname = usePathname();
 
   useEffect(() => {
-    checkSetupStatus();
-  }, []);
+    let mounted = true;
 
-  const checkSetupStatus = async () => {
-    try {
-      const response = await fetch('http://localhost:41522/api/setup/status');
-
-      if (!response.ok) {
-        // If backend is not running, allow access (development mode)
-        setSetupComplete(true);
+    const checkSetupStatus = async () => {
+      // Use global status if already checked
+      if (globalSetupStatus.checked) {
+        console.log('[SetupGuard] Using cached setup status:', globalSetupStatus.complete);
+        setSetupComplete(globalSetupStatus.complete);
         setIsChecking(false);
+
+        // Handle redirects based on cached status
+        if (globalSetupStatus.complete && pathname === '/setup') {
+          console.log('[SetupGuard] Redirecting to /login (setup already complete)');
+          router.push('/login');
+        } else if (!globalSetupStatus.complete && pathname !== '/setup') {
+          console.log('[SetupGuard] Redirecting to /setup (setup not complete)');
+          router.push('/setup');
+        }
         return;
       }
 
-      const data = await response.json();
-
-      setSetupComplete(data.setupComplete);
-      setIsChecking(false);
-
-      // If setup is not complete and we're not on the setup page, redirect
-      if (!data.setupComplete && pathname !== '/setup') {
-        router.push('/setup');
+      // Prevent multiple simultaneous checks
+      if (globalCheckInProgress) {
+        console.log('[SetupGuard] Check already in progress, waiting...');
+        return;
       }
 
-      // If setup is complete and we're on the setup page, redirect to home
-      if (data.setupComplete && pathname === '/setup') {
-        router.push('/');
+      globalCheckInProgress = true;
+
+      try {
+        console.log('[SetupGuard] Checking setup status...');
+        const response = await fetch('http://localhost:41522/api/setup/status', {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          cache: 'no-cache'
+        });
+
+        if (!response.ok) {
+          console.log('[SetupGuard] Backend not responding, allowing access');
+          globalSetupStatus = { complete: true, checked: true };
+          if (mounted) {
+            setSetupComplete(true);
+            setIsChecking(false);
+          }
+          globalCheckInProgress = false;
+          return;
+        }
+
+        const data = await response.json();
+        console.log('[SetupGuard] Setup status:', data);
+
+        globalSetupStatus = { complete: data.setupComplete, checked: true };
+
+        if (mounted) {
+          setSetupComplete(data.setupComplete);
+          setIsChecking(false);
+
+          // Handle redirects
+          if (data.setupComplete && pathname === '/setup') {
+            console.log('[SetupGuard] Redirecting to /login (setup already complete)');
+            router.push('/login');
+          } else if (!data.setupComplete && pathname !== '/setup') {
+            console.log('[SetupGuard] Redirecting to /setup (setup not complete)');
+            router.push('/setup');
+          }
+        }
+      } catch (error) {
+        console.error('[SetupGuard] Setup status check failed:', error);
+        globalSetupStatus = { complete: true, checked: true };
+        if (mounted) {
+          setSetupComplete(true);
+          setIsChecking(false);
+        }
+      } finally {
+        globalCheckInProgress = false;
       }
-    } catch (error) {
-      console.error('Setup status check failed:', error);
-      // On error, allow access (assume setup is complete or backend is offline)
-      setSetupComplete(true);
-      setIsChecking(false);
-    }
-  };
+    };
+
+    checkSetupStatus();
+
+    return () => {
+      mounted = false;
+    };
+  }, [pathname, router]);
 
   // Show loading screen while checking setup status
   if (isChecking) {
