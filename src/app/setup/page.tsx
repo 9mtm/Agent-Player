@@ -55,14 +55,27 @@ export default function SetupPage() {
   });
 
   useEffect(() => {
-    checkSystemRequirements();
+    let isMounted = true;
+
+    const runCheck = async () => {
+      if (isMounted) {
+        await checkSystemRequirements();
+      }
+    };
+
+    runCheck();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const checkSystemRequirements = async () => {
+    console.log('[Setup] Starting system requirements check...');
+
     try {
       const response = await fetch('http://localhost:41522/api/setup/check', {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' }
+        method: 'GET'
       });
 
       if (!response.ok) {
@@ -70,6 +83,7 @@ export default function SetupPage() {
       }
 
       const data = await response.json();
+      console.log('[Setup] System check response:', data);
 
       setSystemCheck({
         node: data.node || false,
@@ -79,14 +93,18 @@ export default function SetupPage() {
       });
 
       const allChecksPass = Object.values(data).every(v => v === true);
+      console.log('[Setup] All checks pass:', allChecksPass);
 
       updateStepStatus(0, allChecksPass ? 'complete' : 'error');
 
       if (allChecksPass) {
-        setTimeout(() => setCurrentStep(1), 1000);
+        setTimeout(() => {
+          console.log('[Setup] Moving to step 1...');
+          setCurrentStep(1);
+        }, 1500);
       }
     } catch (error) {
-      console.error('System check failed:', error);
+      console.error('[Setup] System check failed:', error);
       updateStepStatus(0, 'error');
       toast.error('Failed to check system requirements. Make sure backend is running on port 41522.');
     }
