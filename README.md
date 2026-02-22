@@ -34,7 +34,7 @@ pnpm dev
 # → http://localhost:41521
 ```
 
-**Login:** `admin@example.com` / `AdminPass123!@#`
+**First Run:** Visit `/setup` to create your admin account
 
 ---
 
