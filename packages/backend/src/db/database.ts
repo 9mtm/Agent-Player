@@ -139,6 +139,33 @@ export class DatabaseManager {
 
       console.log('[Database] ✅ Demo user created (ID: 1)');
     }
+
+    // Create default admin user for easy login
+    const existingAdmin = this.db.prepare('SELECT id FROM users WHERE email = ?').get('owner@localhost');
+
+    if (!existingAdmin) {
+      console.log('[Database] Creating default admin user...');
+
+      const adminPasswordHash = await bcrypt.default.hash('admin123', 12);
+      const adminUserId = Date.now().toString();
+
+      this.db.prepare(`
+        INSERT INTO users (id, email, username, password_hash, full_name, role, status, email_verified, token_version, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      `).run(
+        adminUserId,
+        'owner@localhost',
+        'owner',
+        adminPasswordHash,
+        'Admin Owner',
+        'admin',
+        'active',
+        1,
+        1
+      );
+
+      console.log('[Database] ✅ Default admin user created (owner@localhost / admin123)');
+    }
   }
 
   /**
