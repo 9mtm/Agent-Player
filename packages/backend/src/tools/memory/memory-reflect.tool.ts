@@ -52,6 +52,18 @@ Parameters:
       },
     },
     required: ['userId'],
+    examples: [
+      {
+        userId: 'user-123',
+        lookbackCount: 30,
+        description: 'Analyze patterns from last 30 memories',
+      },
+      {
+        userId: 'user-123',
+        focus: 'coding preferences',
+        description: 'Reflect on coding-related patterns',
+      },
+    ],
   },
 
   async execute(params: Record<string, any>): Promise<ToolResult> {

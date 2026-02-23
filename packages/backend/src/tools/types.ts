@@ -16,6 +16,7 @@ export interface ToolParameters {
   type: 'object';
   properties: Record<string, ToolParameter>;
   required?: string[];
+  examples?: Array<Record<string, any>>; // Professional examples for better AI understanding
 }
 
 export interface ToolResult {
@@ -36,7 +37,7 @@ export interface Tool {
   name: string;
   description: string;
   input_schema: ToolParameters;
-  execute: (params: Record<string, any>) => Promise<ToolResult>;
+  execute: (params: Record<string, any>, context?: ToolExecutionContext) => Promise<ToolResult>;
   extensionId?: string; // Optional: tracks which extension registered this tool
 }
 

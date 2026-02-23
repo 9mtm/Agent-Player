@@ -83,6 +83,23 @@ Returns extracted data in a structured format.`,
       },
     },
     required: ['url', 'extract'],
+    examples: [
+      {
+        url: 'https://news.ycombinator.com',
+        extract: { type: 'text', selector: '.titleline' },
+        description: 'Extract all post titles from Hacker News',
+      },
+      {
+        url: 'https://github.com/trending',
+        extract: { type: 'links', container: '.Box' },
+        description: 'Extract all repository links from GitHub trending page',
+      },
+      {
+        url: 'https://example.com',
+        extract: { type: 'html', selector: 'article' },
+        description: 'Extract article HTML content',
+      },
+    ],
   },
 
   async execute(params: BrowserExtractParams): Promise<ToolResult> {

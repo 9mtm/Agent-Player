@@ -59,6 +59,23 @@ You can optionally wait for specific elements to load or take a screenshot.`,
       },
     },
     required: ['url'],
+    examples: [
+      {
+        url: 'https://github.com/trending',
+        extractInfo: true,
+        description: 'Navigate to GitHub trending page and extract page information',
+      },
+      {
+        url: 'https://news.ycombinator.com',
+        waitFor: '.itemlist',
+        description: 'Open Hacker News and wait for posts to load',
+      },
+      {
+        url: 'https://example.com',
+        screenshot: true,
+        description: 'Navigate to example.com and take a screenshot',
+      },
+    ],
   },
 
   async execute(params: BrowserNavigateParams): Promise<ToolResult> {

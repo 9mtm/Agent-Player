@@ -36,6 +36,21 @@ export const storageSearchTool: Tool = {
       },
     },
     required: [],
+    examples: [
+      {
+        query: 'screenshot',
+        description: 'Search for files containing "screenshot" in name or metadata',
+      },
+      {
+        zone: 'cdn',
+        category: 'images',
+        limit: 20,
+        description: 'List all images in CDN zone (max 20)',
+      },
+      {
+        description: 'List all stored files (default limit: 10)',
+      },
+    ],
   },
 
   async execute(params: Record<string, unknown>): Promise<ToolResult> {

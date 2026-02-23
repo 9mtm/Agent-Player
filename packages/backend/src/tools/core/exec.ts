@@ -144,6 +144,32 @@ export const execTool: Tool = {
       },
     },
     required: ['command'],
+    examples: [
+      {
+        command: 'curl -s wttr.in/London?format=3',
+        description: 'Get current weather for London in simple format',
+      },
+      {
+        command: 'git status',
+        description: 'Check git repository status and pending changes',
+      },
+      {
+        command: 'npm list --depth=0',
+        description: 'List installed npm packages (top-level only)',
+      },
+      {
+        command: 'gh pr list --state open',
+        description: 'List all open pull requests using GitHub CLI',
+      },
+      {
+        command: 'python --version',
+        description: 'Check installed Python version',
+      },
+      {
+        command: 'docker ps',
+        description: 'List running Docker containers',
+      },
+    ],
   },
 
   async execute(params): Promise<ToolResult> {

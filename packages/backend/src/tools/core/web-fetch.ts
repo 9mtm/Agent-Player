@@ -32,8 +32,35 @@ export const webFetchTool: Tool = {
         type: 'string',
         description: 'Request body (for POST, PUT, etc.)',
       },
+      maxLength: {
+        type: 'number',
+        description: 'Maximum content length in characters. Content will be truncated if longer (default: no limit)',
+      },
+      extractText: {
+        type: 'boolean',
+        description: 'Strip HTML tags and extract only text content (default: false)',
+      },
     },
     required: ['url'],
+    examples: [
+      {
+        url: 'https://api.github.com/users/octocat',
+        description: 'Fetch GitHub user information as JSON',
+      },
+      {
+        url: 'https://en.wikipedia.org/wiki/Artificial_intelligence',
+        maxLength: 5000,
+        extractText: true,
+        description: 'Fetch Wikipedia article, extract text only, limit to 5000 characters',
+      },
+      {
+        url: 'https://httpbin.org/post',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"test": "data"}',
+        description: 'Send POST request with JSON data',
+      },
+    ],
   },
 
   async execute(params): Promise<ToolResult> {
@@ -42,6 +69,8 @@ export const webFetchTool: Tool = {
       method = 'GET',
       headers = {},
       body,
+      maxLength,
+      extractText = false,
     } = params;
 
     try {
@@ -88,9 +117,29 @@ export const webFetchTool: Tool = {
         content = await response.text();
       }
 
-      // Truncate if too long
+      // ENHANCEMENT: Smart filtering
+      // 1. Extract text only (remove HTML tags) if requested
+      if (extractText && contentType.includes('html')) {
+        content = content
+          .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '') // Remove scripts
+          .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')   // Remove styles
+          .replace(/<[^>]+>/g, '')                                             // Remove HTML tags
+          .replace(/&nbsp;/g, ' ')                                             // Replace &nbsp;
+          .replace(/&amp;/g, '&')                                              // Replace &amp;
+          .replace(/&lt;/g, '<')                                               // Replace &lt;
+          .replace(/&gt;/g, '>')                                               // Replace &gt;
+          .replace(/\n\s*\n/g, '\n\n')                                         // Remove multiple newlines
+          .trim();
+      }
+
+      // 2. Apply custom maxLength if specified (before system limit)
+      if (maxLength && content.length > maxLength) {
+        content = content.substring(0, maxLength) + '\n\n... [Content truncated to ' + maxLength + ' characters]';
+      }
+
+      // 3. Apply system limit (5MB)
       if (content.length > MAX_CONTENT_LENGTH) {
-        content = content.substring(0, MAX_CONTENT_LENGTH) + '\n\n... (truncated)';
+        content = content.substring(0, MAX_CONTENT_LENGTH) + '\n\n... (truncated to system limit)';
       }
 
       console.log(`[WebFetchTool] ✅ Fetch successful`);

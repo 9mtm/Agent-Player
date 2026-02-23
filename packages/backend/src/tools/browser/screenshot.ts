@@ -71,6 +71,24 @@ Returns the path to the saved screenshot image.`,
       },
     },
     required: ['url'],
+    examples: [
+      {
+        url: 'https://github.com',
+        fullPage: true,
+        description: 'Capture full-page screenshot of GitHub homepage',
+      },
+      {
+        url: 'https://tailwindcss.com',
+        element: '.hero',
+        description: 'Capture screenshot of hero section only',
+      },
+      {
+        url: 'https://example.com',
+        width: 375,
+        height: 667,
+        description: 'Capture mobile viewport screenshot (iPhone size)',
+      },
+    ],
   },
 
   async execute(params: BrowserScreenshotParams): Promise<ToolResult> {

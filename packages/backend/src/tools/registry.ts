@@ -72,7 +72,7 @@ export class ToolsRegistry {
       console.log(`[ToolsRegistry] 🔧 Executing tool: ${toolName}`);
       console.log(`[ToolsRegistry]   Params:`, JSON.stringify(params, null, 2));
 
-      const result = await tool.execute(params);
+      const result = await tool.execute(params, this.context);
 
       console.log(`[ToolsRegistry] ✅ Tool executed successfully`);
       return result;

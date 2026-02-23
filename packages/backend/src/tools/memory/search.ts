@@ -93,6 +93,26 @@ Returns:
       },
     },
     required: ['query', 'userId'],
+    examples: [
+      {
+        query: 'user preferences',
+        userId: 'user-123',
+        description: 'Search for user preferences in memory',
+      },
+      {
+        query: 'authentication discussion',
+        type: 'conversation',
+        userId: 'user-123',
+        description: 'Find conversations about authentication',
+      },
+      {
+        query: 'API keys',
+        tags: ['security', 'credentials'],
+        limit: 5,
+        userId: 'user-123',
+        description: 'Search for API key related memories with tags',
+      },
+    ],
   },
 
   async execute(params: MemorySearchParams): Promise<ToolResult> {

@@ -31,6 +31,24 @@ export const readTool: Tool = {
       },
     },
     required: ['path'],
+    examples: [
+      {
+        path: 'package.json',
+        description: 'Read package.json to check dependencies and scripts',
+      },
+      {
+        path: 'src/config/settings.ts',
+        description: 'Read application settings configuration file',
+      },
+      {
+        path: '.env.example',
+        description: 'Read environment variables template',
+      },
+      {
+        path: 'README.md',
+        description: 'Read project documentation',
+      },
+    ],
   },
 
   async execute(params): Promise<ToolResult> {

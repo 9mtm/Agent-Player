@@ -36,6 +36,12 @@ Use this before memory_reflect or memory_search to understand what you know.`,
       },
     },
     required: ['userId'],
+    examples: [
+      {
+        userId: 'user-123',
+        description: 'Get overview of stored memories and knowledge base',
+      },
+    ],
   },
 
   async execute(params: Record<string, any>): Promise<ToolResult> {

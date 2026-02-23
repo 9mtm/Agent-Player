@@ -61,6 +61,7 @@
     "puppeteer": "^24.37.3",
     "twilio": "^5.12.2",
     "uuid": "^13.0.0",
+    "vm2": "^3.10.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {

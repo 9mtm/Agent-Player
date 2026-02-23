@@ -47,6 +47,24 @@ export const storageSaveTool: Tool = {
       },
     },
     required: ['source'],
+    examples: [
+      {
+        source: 'https://example.com/image.png',
+        description: 'Download and save image from URL',
+      },
+      {
+        source: 'file:///path/to/document.pdf',
+        category: 'documents',
+        zone: 'cdn',
+        description: 'Save local PDF file to CDN storage',
+      },
+      {
+        source: 'data:text/plain;base64,SGVsbG8gV29ybGQ=',
+        metadata: '{"purpose": "test"}',
+        ttl: '24h',
+        description: 'Save base64 data with 24h expiry',
+      },
+    ],
   },
 
   async execute(params: Record<string, string>): Promise<ToolResult> {

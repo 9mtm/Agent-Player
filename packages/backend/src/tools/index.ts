@@ -28,6 +28,7 @@ import {
   readTool,
   writeTool,
   webFetchTool,
+  executeCodeTool,
 } from './core/index.js';
 
 import {
@@ -115,6 +116,7 @@ export function createToolsRegistry(context: ToolExecutionContext): ToolsRegistr
   registry.register(readTool);
   registry.register(writeTool);
   registry.register(webFetchTool);
+  registry.register(executeCodeTool);
 
   // Register browser tools
   registry.register(browserNavigateTool);
@@ -151,11 +153,11 @@ export function createToolsRegistry(context: ToolExecutionContext): ToolsRegistr
     registry.register(tool);
   }
 
-  const coreToolsCount = 18;  // Reduced from 20 (removed CLI tools)
+  const coreToolsCount = 19;  // Increased from 18 (added execute_code)
   const totalToolsCount = coreToolsCount + extensionTools.length;
 
   console.log(`[Tools] 🔧 Tools registry created with ${totalToolsCount} tools`);
-  console.log('  ├── Core: 4 tools (exec, read, write, web_fetch)');
+  console.log('  ├── Core: 5 tools (exec, read, write, web_fetch, execute_code)');
   console.log('  ├── Browser: 4 tools (navigate, screenshot, extract, interact)');
   console.log('  ├── Memory: 4 tools (save, search, reflect, stats)');
   console.log('  ├── Desktop: 1 tool (desktop_control)');

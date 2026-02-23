@@ -46,6 +46,26 @@ The credential will be encrypted using AES-256-GCM before storage.`,
       },
     },
     required: ['service', 'name', 'value'],
+    examples: [
+      {
+        service: 'github',
+        name: 'api_token',
+        value: 'ghp_xxxxxxxxxxxx',
+        description: 'Store GitHub API token securely',
+      },
+      {
+        service: 'database',
+        name: 'postgres_password',
+        value: 'super_secret_pass',
+        description: 'Production database password',
+      },
+      {
+        service: 'openai',
+        name: 'api_key',
+        value: 'sk-xxxxxxxxxxxx',
+        description: 'Store OpenAI API key',
+      },
+    ],
   },
 
   async execute(params, context): Promise<ToolResult> {

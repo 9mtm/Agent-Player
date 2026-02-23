@@ -64,6 +64,28 @@ export const createReminderTool: Tool = {
       },
     },
     required: ['title', 'schedule_type', 'schedule_time'],
+    examples: [
+      {
+        title: 'Team Meeting',
+        message: 'Weekly sync with development team',
+        schedule_type: 'once',
+        schedule_time: '2024-12-25T14:00:00Z',
+        description: 'Create one-time reminder for specific date and time',
+      },
+      {
+        title: 'Daily Standup',
+        schedule_type: 'daily',
+        schedule_time: '09:00',
+        description: 'Create daily recurring reminder at 9 AM',
+      },
+      {
+        title: 'Weekly Review',
+        message: 'Review progress and plan next week',
+        schedule_type: 'weekly',
+        schedule_time: 'Friday 16:00',
+        description: 'Create weekly reminder every Friday at 4 PM',
+      },
+    ],
   },
 
   async execute(params): Promise<ToolResult> {

@@ -93,6 +93,27 @@ Examples:
       },
     },
     required: ['content', 'userId'],
+    examples: [
+      {
+        content: 'User prefers dark mode and concise responses',
+        type: 'preference',
+        userId: 'user-123',
+        description: 'Save user preference to memory',
+      },
+      {
+        content: 'Discussed implementing authentication using JWT tokens',
+        type: 'conversation',
+        tags: ['auth', 'jwt', 'security'],
+        userId: 'user-123',
+        description: 'Save conversation topic with tags',
+      },
+      {
+        content: 'User birthday is March 15th',
+        type: 'fact',
+        userId: 'user-123',
+        description: 'Save personal fact about user',
+      },
+    ],
   },
 
   async execute(params: MemorySaveParams): Promise<ToolResult> {

@@ -19,6 +19,12 @@ export const storageDeleteTool: Tool = {
       },
     },
     required: ['id'],
+    examples: [
+      {
+        id: 'abc123def456',
+        description: 'Delete file by storage ID',
+      },
+    ],
   },
 
   async execute(params: Record<string, string>): Promise<ToolResult> {

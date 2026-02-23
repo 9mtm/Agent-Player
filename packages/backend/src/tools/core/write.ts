@@ -35,6 +35,23 @@ export const writeTool: Tool = {
       },
     },
     required: ['path', 'content'],
+    examples: [
+      {
+        path: 'notes/meeting-2024.md',
+        content: '# Meeting Notes\n\n## Attendees\n- John\n- Jane\n\n## Topics\n...',
+        description: 'Create a new markdown file with meeting notes',
+      },
+      {
+        path: 'config/api-keys.json',
+        content: '{\n  "openai": "sk-...",\n  "claude": "sk-..."\n}',
+        description: 'Save API configuration as JSON file',
+      },
+      {
+        path: 'scripts/deploy.sh',
+        content: '#!/bin/bash\nnpm run build\nnpm run deploy',
+        description: 'Create a shell script for deployment',
+      },
+    ],
   },
 
   async execute(params): Promise<ToolResult> {

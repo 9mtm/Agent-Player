@@ -129,6 +129,26 @@ Returns the session ID if keepAlive is true, allowing you to continue interactin
       },
     },
     required: ['actions'],
+    examples: [
+      {
+        url: 'https://www.google.com',
+        actions: [
+          { type: 'fill', selector: 'input[name="q"]', value: 'OpenAI GPT' },
+          { type: 'click', selector: 'input[type="submit"]' },
+          { type: 'wait', duration: 2000 },
+        ],
+        description: 'Search for "OpenAI GPT" on Google',
+      },
+      {
+        url: 'https://github.com/login',
+        actions: [
+          { type: 'fill', selector: '#login_field', value: 'username' },
+          { type: 'fill', selector: '#password', value: 'password' },
+          { type: 'click', selector: 'input[type="submit"]' },
+        ],
+        description: 'Fill GitHub login form and submit',
+      },
+    ],
   },
 
   async execute(params: BrowserInteractParams): Promise<ToolResult> {

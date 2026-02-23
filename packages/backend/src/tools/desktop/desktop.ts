@@ -224,6 +224,28 @@ Multi-monitor workflow:
       },
     },
     required: ['action'],
+    examples: [
+      {
+        action: 'screenshot',
+        description: 'Capture full screen screenshot',
+      },
+      {
+        action: 'click',
+        x: 500,
+        y: 300,
+        description: 'Click at specific coordinates (500, 300)',
+      },
+      {
+        action: 'type',
+        text: 'Hello World',
+        description: 'Type text using keyboard',
+      },
+      {
+        action: 'open_app',
+        app: 'notepad',
+        description: 'Open Notepad application',
+      },
+    ],
   },
 
   async execute(params): Promise<ToolResult> {
