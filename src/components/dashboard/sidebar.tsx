@@ -57,7 +57,6 @@ const navigation = [
     { name: 'Public Chat', href: '/dashboard/public-chat', icon: MessagesSquare },
     // { name: 'Email', href: '/dashboard/email', icon: Mail }, // Moved to email-client extension
     { name: 'Tasks', href: '/dashboard/tasks', icon: ListTodo },
-    { name: 'Storage', href: '/dashboard/storage', icon: HardDrive },
     { name: 'Workflows', href: '/dashboard/workflows', icon: Workflow },
     { name: 'Scheduler', href: '/dashboard/scheduler', icon: Clock },
     { name: 'Calendar', href: '/dashboard/calendar', icon: Calendar },
@@ -74,6 +73,7 @@ const settingsSubmenu = [
     { name: 'Skills', href: '/dashboard/skills', icon: Puzzle },
     { name: 'Extensions', href: '/dashboard/extensions', icon: PackagePlus },
     { name: 'Voice Settings', href: '/settings/voice', icon: Volume2 },
+    { name: 'Storage', href: '/dashboard/storage', icon: HardDrive },
 ];
 
 const developerMenu = [
@@ -112,7 +112,8 @@ export function Sidebar() {
         pathname?.startsWith('/dashboard/agent') ||
         pathname?.startsWith('/dashboard/skills') ||
         pathname?.startsWith('/dashboard/extensions') ||
-        pathname?.startsWith('/settings/voice')
+        pathname?.startsWith('/settings/voice') ||
+        pathname?.startsWith('/dashboard/storage')
     );
     const [showCustomize, setShowCustomize] = useReactState(false);
     const [hiddenItems, setHiddenItems] = useReactState<string[]>([]);
