@@ -26,9 +26,11 @@ export async function worldGeneratorRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      const { prompt, agent_id } = request.body as {
+      const { prompt, agent_id, is_public, max_players } = request.body as {
         prompt: string;
         agent_id: string;
+        is_public?: number;
+        max_players?: number;
       };
 
       if (!prompt || !agent_id) {
@@ -166,8 +168,8 @@ Generate the 3D world JSON description:`,
         worldData.name,
         worldData.description || `AI-generated world from prompt: ${prompt.substring(0, 100)}`,
         fileId,
-        0, // private by default
-        1, // single player by default
+        is_public ?? 0, // use provided value or default to private
+        max_players ?? 10, // use provided value or default to 10
         0, 0, 0 // spawn at origin
       );
 

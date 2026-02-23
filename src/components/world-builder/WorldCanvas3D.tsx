@@ -6,6 +6,8 @@ import { OrbitControls, PerspectiveCamera, Grid, useGLTF } from '@react-three/dr
 import * as THREE from 'three';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { Loader2 } from 'lucide-react';
+import { BotController, type BotData } from './BotController';
+import { config } from '@/lib/config';
 
 interface WorldCanvas3DProps {
   objects: any[];
@@ -13,6 +15,7 @@ interface WorldCanvas3DProps {
   groundColor: string;
   worldSize: number;
   avatarUrl?: string;
+  worldId?: string | null;
   onGroundClick?: (position: [number, number, number]) => void;
   selectedTool?: string | null;
   onObjectDelete?: (objectId: string) => void;
@@ -73,6 +76,81 @@ function Avatar({ avatarUrl }: { avatarUrl: string }) {
       rotation={[0, 0, 0]}
       scale={1}
     />
+  );
+}
+
+// Bot Component - renders and animates a bot using BotController
+function Bot({ botData, avatarUrl, controller }: {
+  botData: BotData;
+  avatarUrl: string;
+  controller: BotController;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const groupRef = useRef<THREE.Group>(null);
+  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+
+  const { scene, animations } = useGLTF(avatarUrl, undefined, undefined, (err) => {
+    console.error('[Bot] Failed to load GLB:', err);
+    setError(err.message);
+  });
+
+  const cloned = useMemo(() => {
+    if (!scene) return null;
+
+    try {
+      const clonedScene = SkeletonUtils.clone(scene);
+      console.log(`[Bot ${botData.id}] Scene cloned successfully`);
+
+      // Store animations on the cloned scene for the mixer
+      if (animations && animations.length > 0) {
+        (clonedScene as any).animations = animations;
+        console.log(`[Bot ${botData.id}] Attached ${animations.length} animations to cloned scene`);
+      }
+
+      return clonedScene;
+    } catch (err) {
+      console.error(`[Bot ${botData.id}] Failed to clone scene:`, err);
+      return null;
+    }
+  }, [scene, animations, botData.id]);
+
+  // Initialize bot in controller when mesh and animations are ready
+  useEffect(() => {
+    if (!cloned || !groupRef.current) return;
+
+    console.log(`[Bot ${botData.id}] Initializing in controller...`);
+
+    // Create animation mixer
+    const mixer = new THREE.AnimationMixer(cloned);
+    mixerRef.current = mixer;
+
+    // Add bot to controller
+    controller.addBot(botData, groupRef.current, mixer);
+
+    return () => {
+      // Cleanup when component unmounts
+      controller.removeBot(botData.id);
+      mixer?.stopAllAction();
+    };
+  }, [cloned, botData, controller]);
+
+  if (error || !cloned) {
+    // Fallback: Show a simple cube for bots that fail to load
+    return (
+      <mesh
+        position={[botData.position_x, botData.position_y + 0.5, botData.position_z]}
+        rotation={[0, (botData.rotation_y * Math.PI) / 180, 0]}
+      >
+        <boxGeometry args={[1, 2, 1]} />
+        <meshStandardMaterial color="#ff6b6b" />
+      </mesh>
+    );
+  }
+
+  return (
+    <group ref={groupRef}>
+      <primitive object={cloned} />
+    </group>
   );
 }
 
@@ -503,7 +581,86 @@ function ClickablePlane({ size, onGroundClick, selectedTool }: {
 }
 
 // Main Scene
-function Scene({ objects, groundType, groundColor, worldSize, avatarUrl, onGroundClick, selectedTool, onObjectDelete }: WorldCanvas3DProps) {
+function Scene({ objects, groundType, groundColor, worldSize, avatarUrl, worldId, onGroundClick, selectedTool, onObjectDelete }: WorldCanvas3DProps) {
+  const [bots, setBots] = useState<BotData[]>([]);
+  const [botsLoading, setBotsLoading] = useState(false);
+  const controllerRef = useRef<BotController | null>(null);
+  const clockRef = useRef<THREE.Clock>(new THREE.Clock());
+
+  // Initialize BotController once
+  useEffect(() => {
+    if (!controllerRef.current) {
+      controllerRef.current = new BotController();
+      console.log('[Scene] BotController initialized');
+    }
+  }, []);
+
+  // Fetch bots when worldId changes
+  useEffect(() => {
+    if (!worldId) {
+      console.log('[Scene] ⚠️ No worldId - save the world first to load bots');
+      setBots([]);
+      return;
+    }
+
+    const fetchBots = async () => {
+      try {
+        setBotsLoading(true);
+        console.log(`[Scene] 🤖 Fetching bots for world ${worldId}...`);
+
+        const authToken = localStorage.getItem('auth_token');
+        const headers: Record<string, string> = {};
+        if (authToken) {
+          headers['Authorization'] = `Bearer ${authToken}`;
+        }
+
+        const res = await fetch(`${config.backendUrl}/api/multiverse/${worldId}/bots`, {
+          headers,
+        });
+
+        if (!res.ok) {
+          console.error('[Scene] ❌ Failed to fetch bots:', res.status);
+          return;
+        }
+
+        const data = await res.json();
+        console.log(`[Scene] ✅ Fetched ${data.bots?.length || 0} bots:`, data.bots);
+
+        if (data.bots && data.bots.length > 0) {
+          console.log('[Scene] 🎮 Bot details:');
+          data.bots.forEach((bot: any) => {
+            console.log(`  - ${bot.agent_name}: behavior=${bot.behavior_type}, pos=(${bot.position_x}, ${bot.position_z}), speed=${bot.movement_speed}`);
+          });
+        } else {
+          console.log('[Scene] 💡 No bots in this world. Add one from the Bots tab!');
+        }
+
+        setBots(data.bots || []);
+      } catch (err) {
+        console.error('[Scene] ❌ Error fetching bots:', err);
+      } finally {
+        setBotsLoading(false);
+      }
+    };
+
+    fetchBots();
+  }, [worldId]);
+
+  // Update bots on every frame
+  useFrame(() => {
+    if (controllerRef.current && bots.length > 0) {
+      const deltaTime = clockRef.current.getDelta();
+      controllerRef.current.update(bots, deltaTime);
+    }
+  });
+
+  // Log when bots change
+  useEffect(() => {
+    if (bots.length > 0) {
+      console.log(`[Scene] 🎮 ${bots.length} bots loaded and ready to move!`);
+    }
+  }, [bots.length]);
+
   return (
     <>
       {/* Camera */}
@@ -571,6 +728,41 @@ function Scene({ objects, groundType, groundColor, worldSize, avatarUrl, onGroun
           <boxGeometry args={[1, 2, 1]} />
           <meshStandardMaterial color="#4a90e2" />
         </mesh>
+      )}
+
+      {/* Bots - render if we have any and controller is ready */}
+      {controllerRef.current && bots.length > 0 && (
+        <Suspense fallback={null}>
+          {bots.map((botData) => {
+            // Use agent's avatar URL, or user's avatar as fallback
+            const botAvatarUrl = botData.agent_avatar_url || avatarUrl;
+
+            // Skip rendering if no valid avatar URL
+            if (!botAvatarUrl || !botAvatarUrl.startsWith('http')) {
+              console.warn(`[Scene] Bot ${botData.id} has no valid avatar URL, rendering fallback cube`);
+              return (
+                <mesh
+                  key={botData.id}
+                  position={[botData.position_x, botData.position_y + 0.5, botData.position_z]}
+                  rotation={[0, (botData.rotation_y * Math.PI) / 180, 0]}
+                  castShadow
+                >
+                  <boxGeometry args={[1, 2, 1]} />
+                  <meshStandardMaterial color="#00d4ff" />
+                </mesh>
+              );
+            }
+
+            return (
+              <Bot
+                key={botData.id}
+                botData={botData}
+                avatarUrl={botAvatarUrl}
+                controller={controllerRef.current!}
+              />
+            );
+          })}
+        </Suspense>
       )}
 
       {/* Scene Objects */}

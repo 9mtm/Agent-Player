@@ -58,7 +58,7 @@ interface Agent {
   avatar_url: string | null;
 }
 
-type TabType = 'my-worlds' | 'ai-generator' | 'world-builder' | 'bots';
+type TabType = 'my-worlds' | 'explore' | 'system' | 'world-builder' | 'bots';
 
 function authHeaders(): Record<string, string> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
@@ -88,6 +88,8 @@ export default function WorldsPage() {
 
   // Worlds state
   const [worlds, setWorlds] = useState<World[]>([]);
+  const [publicWorlds, setPublicWorlds] = useState<World[]>([]);
+  const [systemWorlds, setSystemWorlds] = useState<World[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNewWorldForm, setShowNewWorldForm] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -95,15 +97,9 @@ export default function WorldsPage() {
   // New world form state
   const [newWorldName, setNewWorldName] = useState('');
   const [newWorldDesc, setNewWorldDesc] = useState('');
-  const [newWorldFile, setNewWorldFile] = useState<File | null>(null);
-  const [newWorldThumb, setNewWorldThumb] = useState<File | null>(null);
   const [newWorldIsPublic, setNewWorldIsPublic] = useState(false);
-  const [newWorldMaxPlayers, setNewWorldMaxPlayers] = useState(1);
+  const [newWorldMaxPlayers, setNewWorldMaxPlayers] = useState(10);
 
-  // AI Generator state
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [aiAgentId, setAiAgentId] = useState('');
-  const [generating, setGenerating] = useState(false);
 
   // Bot management state
   const [selectedWorldForBots, setSelectedWorldForBots] = useState<string | null>(null);
@@ -143,6 +139,40 @@ export default function WorldsPage() {
       }
     } catch (err) {
       console.error('[Multiverse] ❌ Error fetching worlds:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const fetchPublicWorlds = useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await fetch(`${config.backendUrl}/api/multiverse?is_public=1`);
+      if (res.ok) {
+        const data = await res.json();
+        // Sort by newest first
+        const sorted = (data.worlds ?? []).sort((a: World, b: World) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+        setPublicWorlds(sorted);
+      }
+    } catch (err) {
+      console.error('[Multiverse] Error fetching public worlds:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const fetchSystemWorlds = useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await fetch(`${config.backendUrl}/api/multiverse/system`);
+      if (res.ok) {
+        const data = await res.json();
+        setSystemWorlds(data.worlds ?? []);
+      }
+    } catch (err) {
+      console.error('[Multiverse] Error fetching system worlds:', err);
     } finally {
       setLoading(false);
     }
@@ -301,58 +331,16 @@ export default function WorldsPage() {
   };
 
   const handleUploadWorld = async () => {
-    if (!newWorldName.trim() || !newWorldFile) {
-      toast.error('Please provide a name and GLB file');
+    if (!newWorldName.trim()) {
+      toast.error('Please provide a name for your world');
       return;
     }
 
     try {
       setUploading(true);
 
-      // Upload GLB file
-      const glbFormData = new FormData();
-      glbFormData.append('file', newWorldFile);
-      glbFormData.append('zone', 'cdn');
-      glbFormData.append('category', 'worlds');
-      glbFormData.append('description', `World: ${newWorldName}`);
-      glbFormData.append('ttl', 'persistent');
-
-      const glbRes = await fetch(`${config.backendUrl}/api/storage/upload`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: glbFormData,
-      });
-
-      if (!glbRes.ok) {
-        throw new Error('Failed to upload GLB file');
-      }
-
-      const glbData = await glbRes.json();
-      let thumbFileId = null;
-
-      // Upload thumbnail if provided
-      if (newWorldThumb) {
-        const thumbFormData = new FormData();
-        thumbFormData.append('file', newWorldThumb);
-        thumbFormData.append('zone', 'cdn');
-        thumbFormData.append('category', 'thumbnails');
-        thumbFormData.append('description', `Thumbnail: ${newWorldName}`);
-        thumbFormData.append('ttl', 'persistent');
-
-        const thumbRes = await fetch(`${config.backendUrl}/api/storage/upload`, {
-          method: 'POST',
-          headers: authHeaders(),
-          body: thumbFormData,
-        });
-
-        if (thumbRes.ok) {
-          const thumbData = await thumbRes.json();
-          thumbFileId = thumbData.file.id;
-        }
-      }
-
-      // Create world record
-      const worldRes = await fetch(`${config.backendUrl}/api/multiverse`, {
+      // Create empty world record (user will build it manually)
+      const res = await fetch(`${config.backendUrl}/api/multiverse`, {
         method: 'POST',
         headers: {
           ...authHeaders(),
@@ -360,33 +348,27 @@ export default function WorldsPage() {
         },
         body: JSON.stringify({
           name: newWorldName,
-          description: newWorldDesc,
-          glb_file_id: glbData.file.id,
-          thumbnail_file_id: thumbFileId,
+          description: newWorldDesc || '',
+          glb_file_id: null, // Empty - will be created in World Builder
           is_public: newWorldIsPublic ? 1 : 0,
           max_players: newWorldMaxPlayers,
         }),
       });
 
-      if (!worldRes.ok) {
-        throw new Error('Failed to create world');
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Failed to create world');
       }
 
-      // Reset form
-      setNewWorldName('');
-      setNewWorldDesc('');
-      setNewWorldFile(null);
-      setNewWorldThumb(null);
-      setNewWorldIsPublic(false);
-      setNewWorldMaxPlayers(1);
-      setShowNewWorldForm(false);
+      const data = await res.json();
+      const worldId = data.world.id;
 
-      // Refresh list
-      fetchWorlds();
-      toast.success('World uploaded successfully!');
+      toast.success('World created! Opening builder...');
+
+      // Open World Builder with this world ID
+      window.location.href = `/world-builder?id=${worldId}`;
     } catch (err: any) {
-      toast.error(err.message || 'Failed to upload world');
-    } finally {
+      toast.error(err.message || 'Failed to create world');
       setUploading(false);
     }
   };
@@ -416,52 +398,6 @@ export default function WorldsPage() {
     window.open(`/avatar-viewer?world=${worldId}`, '_blank');
   };
 
-  const handleGenerateWorld = async () => {
-    if (!aiPrompt.trim() || !aiAgentId) {
-      toast.error('Please provide a prompt and select an agent');
-      return;
-    }
-
-    try {
-      setGenerating(true);
-      toast.info('Generating world with AI...');
-
-      const res = await fetch(`${config.backendUrl}/api/world-generator/ai`, {
-        method: 'POST',
-        headers: {
-          ...authHeaders(),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          prompt: aiPrompt,
-          agent_id: aiAgentId,
-        }),
-      });
-
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Failed to generate world');
-      }
-
-      const data = await res.json();
-
-      // Reset form
-      setAiPrompt('');
-      setAiAgentId('');
-
-      // Refresh worlds list
-      await fetchWorlds();
-
-      // Switch to My Worlds tab to see the result
-      setActiveTab('my-worlds');
-
-      toast.success(`World "${data.world.name}" generated successfully!`);
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to generate world');
-    } finally {
-      setGenerating(false);
-    }
-  };
 
   return (
     <div className="p-6 space-y-6">
@@ -492,16 +428,34 @@ export default function WorldsPage() {
           My Worlds
         </button>
         <button
-          onClick={() => setActiveTab('ai-generator')}
+          onClick={() => {
+            setActiveTab('explore');
+            fetchPublicWorlds();
+          }}
           className={`flex items-center gap-2 px-4 py-2 border-b-2 transition-colors ${
-            activeTab === 'ai-generator'
+            activeTab === 'explore'
               ? 'border-purple-500 text-purple-500 font-semibold'
               : 'border-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
-          <Sparkles className="h-4 w-4" />
-          AI Generator
+          <Globe className="h-4 w-4" />
+          Explore
         </button>
+        {/* System tab - hidden for now, will be enabled later */}
+        {/* <button
+          onClick={() => {
+            setActiveTab('system');
+            fetchSystemWorlds();
+          }}
+          className={`flex items-center gap-2 px-4 py-2 border-b-2 transition-colors ${
+            activeTab === 'system'
+              ? 'border-cyan-500 text-cyan-500 font-semibold'
+              : 'border-transparent text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <Mountain className="h-4 w-4" />
+          System
+        </button> */}
         <button
           onClick={() => setActiveTab('world-builder')}
           className={`flex items-center gap-2 px-4 py-2 border-b-2 transition-colors ${
@@ -567,31 +521,8 @@ export default function WorldsPage() {
                     id="world-desc"
                     value={newWorldDesc}
                     onChange={(e) => setNewWorldDesc(e.target.value)}
-                    placeholder="A beautiful mountain landscape with interactive terrain..."
+                    placeholder="Optional description for your world..."
                     rows={3}
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="world-glb">GLB File *</Label>
-                  <Input
-                    id="world-glb"
-                    type="file"
-                    accept=".glb"
-                    onChange={(e) => setNewWorldFile(e.target.files?.[0] || null)}
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Upload a .glb file containing your 3D world
-                  </p>
-                </div>
-
-                <div>
-                  <Label htmlFor="world-thumb">Thumbnail (optional)</Label>
-                  <Input
-                    id="world-thumb"
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => setNewWorldThumb(e.target.files?.[0] || null)}
                   />
                 </div>
 
@@ -615,7 +546,7 @@ export default function WorldsPage() {
                       id="world-players"
                       type="number"
                       min={1}
-                      max={10}
+                      max={100}
                       value={newWorldMaxPlayers}
                       onChange={(e) => setNewWorldMaxPlayers(parseInt(e.target.value))}
                       className="w-20"
@@ -625,18 +556,18 @@ export default function WorldsPage() {
 
                 <Button
                   onClick={handleUploadWorld}
-                  disabled={uploading || !newWorldName || !newWorldFile}
+                  disabled={uploading || !newWorldName.trim()}
                   className="w-full"
                 >
                   {uploading ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Uploading...
+                      Creating...
                     </>
                   ) : (
                     <>
-                      <Upload className="h-4 w-4 mr-2" />
-                      Upload World
+                      <Plus className="h-4 w-4 mr-2" />
+                      Create World
                     </>
                   )}
                 </Button>
@@ -756,88 +687,107 @@ export default function WorldsPage() {
       )}
 
       {/* AI GENERATOR TAB */}
-      {activeTab === 'ai-generator' && (
-        <div className="max-w-3xl mx-auto space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Sparkles className="h-5 w-5 text-purple-500" />
-                AI World Generator
-              </CardTitle>
-              <p className="text-sm text-muted-foreground">
-                Describe your dream world and let AI generate it for you
-              </p>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Agent Selector */}
-              <div>
-                <Label htmlFor="ai-agent">Select Agent *</Label>
-                <select
-                  id="ai-agent"
-                  value={aiAgentId}
-                  onChange={(e) => setAiAgentId(e.target.value)}
-                  className="w-full p-2 border rounded-md bg-background"
-                >
-                  <option value="">-- Choose an agent --</option>
-                  {agents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.emoji} {agent.name}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-muted-foreground mt-1">
-                  The agent will analyze your prompt and generate the world
-                </p>
-              </div>
-
-              {/* Prompt Input */}
-              <div>
-                <Label htmlFor="ai-prompt">Describe Your World *</Label>
-                <Textarea
-                  id="ai-prompt"
-                  value={aiPrompt}
-                  onChange={(e) => setAiPrompt(e.target.value)}
-                  placeholder="Create a modern tech office with glass walls, multiple workstations with monitors, a central meeting table, indoor plants, and warm lighting..."
-                  rows={6}
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  Be specific about objects, layout, colors, and atmosphere
-                </p>
-              </div>
-
-              {/* Example Prompts */}
-              <div className="bg-muted/50 p-4 rounded-lg space-y-2">
-                <p className="text-sm font-semibold">Example Prompts:</p>
-                <ul className="text-xs space-y-1 text-muted-foreground">
-                  <li>• Modern startup office with standing desks and wall-mounted monitors</li>
-                  <li>• Cozy coffee shop with wooden tables, pendant lights, and a barista counter</li>
-                  <li>• Outdoor park with benches, trees, walking paths, and a fountain</li>
-                  <li>• Futuristic spaceship interior with control panels and holographic displays</li>
-                </ul>
-              </div>
-
-              {/* Generate Button */}
-              <Button
-                onClick={handleGenerateWorld}
-                disabled={generating || !aiPrompt.trim() || !aiAgentId}
-                className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
-              >
-                {generating ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Generating World...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="h-4 w-4 mr-2" />
-                    Generate World
-                  </>
-                )}
-              </Button>
-            </CardContent>
-          </Card>
+      {/* EXPLORE TAB - Public Worlds */}
+      {activeTab === 'explore' && (
+        <div className="space-y-6">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+          ) : publicWorlds.length === 0 ? (
+            <div className="text-center py-12">
+              <Globe className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-xl font-semibold mb-2">No Public Worlds Yet</h3>
+              <p className="text-muted-foreground">Be the first to create a public world!</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {publicWorlds.map((world) => (
+                <Card key={world.id} className="overflow-hidden hover:shadow-lg transition-shadow">
+                  {/* Thumbnail */}
+                  <div className="relative h-48 bg-muted">
+                    {world.thumbnail_url ? (
+                      <img src={world.thumbnail_url} alt={world.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <Globe className="h-16 w-16 text-muted-foreground" />
+                      </div>
+                    )}
+                    <div className="absolute top-2 right-2 bg-black/70 text-white px-2 py-1 rounded-lg text-xs flex items-center gap-1">
+                      <Users className="h-3 w-3" />
+                      <span>Max {world.max_players}</span>
+                    </div>
+                  </div>
+                  {/* Content */}
+                  <CardContent className="p-4">
+                    <h3 className="text-lg font-semibold mb-2 truncate">{world.name}</h3>
+                    {world.description && (
+                      <p className="text-sm text-muted-foreground mb-3 line-clamp-2">{world.description}</p>
+                    )}
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground mb-4">
+                      <span>By {world.owner_name}</span>
+                      <span>•</span>
+                      <span>{new Date(world.created_at).toLocaleDateString()}</span>
+                    </div>
+                    <Button
+                      onClick={() => window.open(`/avatar-viewer?world=${world.id}`, '_blank')}
+                      className="w-full"
+                    >
+                      <Eye className="h-4 w-4 mr-2" />
+                      Join World
+                    </Button>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
         </div>
       )}
+
+      {/* SYSTEM TAB - Hidden for now, will be enabled later */}
+      {/* {activeTab === 'system' && (
+        <div className="space-y-6">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+          ) : systemWorlds.length === 0 ? (
+            <div className="text-center py-12">
+              <Mountain className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-xl font-semibold mb-2">No System Worlds</h3>
+              <p className="text-muted-foreground">System worlds will appear here</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {systemWorlds.map((world) => (
+                <Card key={world.id} className="overflow-hidden hover:shadow-lg transition-shadow">
+                  <div className="relative h-48 bg-muted">
+                    <div className="w-full h-full flex items-center justify-center">
+                      <Mountain className="h-16 w-16 text-cyan-500" />
+                    </div>
+                    <div className="absolute top-2 left-2 bg-cyan-500/90 text-white px-2 py-1 rounded-lg text-xs font-semibold">
+                      SYSTEM
+                    </div>
+                  </div>
+                  <CardContent className="p-4">
+                    <h3 className="text-lg font-semibold mb-2">{world.name}</h3>
+                    {world.description && (
+                      <p className="text-sm text-muted-foreground mb-4 line-clamp-2">{world.description}</p>
+                    )}
+                    <Button
+                      onClick={() => window.open(`/avatar-viewer?world=${world.id}`, '_blank')}
+                      className="w-full bg-cyan-600 hover:bg-cyan-700"
+                    >
+                      <Eye className="h-4 w-4 mr-2" />
+                      Enter World
+                    </Button>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      )} */}
 
       {/* WORLD BUILDER TAB */}
       {activeTab === 'world-builder' && (

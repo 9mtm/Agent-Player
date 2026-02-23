@@ -66,7 +66,6 @@ const navigation = [
 
 const avatarSubmenu = [
     { name: 'Avatar Viewer', href: '/avatar-viewer', icon: Eye },
-    { name: 'Explore Worlds', href: '/dashboard/explore', icon: Compass },
     { name: 'Multiverse', href: '/dashboard/multiverse', icon: Globe },
 ];
 
@@ -107,7 +106,6 @@ export function Sidebar() {
     const [hasChannels, setHasChannels] = useReactState(false);
     const [avatarOpen, setAvatarOpen] = useState(
         pathname?.startsWith('/avatar-viewer') ||
-        pathname?.startsWith('/dashboard/explore') ||
         pathname?.startsWith('/dashboard/multiverse')
     );
     const [settingsOpen, setSettingsOpen] = useState(

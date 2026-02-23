@@ -11,7 +11,8 @@ import {
   Hammer, Save, Eye, Download, Box, Circle, Square,
   CircleDot, Image as ImageIcon, Home, Trees, Sparkles,
   Trash2, Move, RotateCw, Maximize2, Loader2, Palette,
-  Grid3x3, Mountain, Waves, Wind, Droplet, Triangle, Flower2
+  Grid3x3, Mountain, Waves, Wind, Droplet, Triangle, Flower2,
+  Bot, Plus, Edit, MapPin, Zap, Activity
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { config } from '@/lib/config';
@@ -44,6 +45,16 @@ export default function WorldBuilderPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // Sidebar resize state
+  const [sidebarWidth, setSidebarWidth] = useState(288); // 72 * 4 = 288px (w-72)
+  const [isResizing, setIsResizing] = useState(false);
+
+  // Bot management state
+  const [bots, setBots] = useState<any[]>([]);
+  const [agents, setAgents] = useState<any[]>([]);
+  const [botsLoading, setBotsLoading] = useState(false);
+  const [selectedBotId, setSelectedBotId] = useState<string | null>(null);
+
   // World settings
   const [groundType, setGroundType] = useState<'color' | 'grid' | 'terrain' | 'sea' | 'desert'>('grid');
   const [groundColor, setGroundColor] = useState('#2a2a2a');
@@ -62,7 +73,7 @@ export default function WorldBuilderPage() {
   const [avatarUrl, setAvatarUrl] = useState<string>('');
 
   // Sidebar tabs
-  const [activeTab, setActiveTab] = useState<'tools' | 'ground' | 'size' | 'controls'>('tools');
+  const [activeTab, setActiveTab] = useState<'tools' | 'ground' | 'size' | 'controls' | 'bots'>('tools');
 
   // Preview mode
   const [previewMode, setPreviewMode] = useState(false);
@@ -74,10 +85,16 @@ export default function WorldBuilderPage() {
     if (worldId) {
       console.log('[World Builder] World ID found in URL:', worldId);
       loadWorld(worldId);
+      loadBots(worldId);
     } else {
       console.log('[World Builder] No world ID - starting fresh');
     }
   }, [worldId]);
+
+  // Load agents list for bot creation
+  useEffect(() => {
+    loadAgents();
+  }, []);
 
   // Load user's avatar (using same method as Avatar Settings page)
   useEffect(() => {
@@ -180,6 +197,123 @@ export default function WorldBuilderPage() {
     }
   };
 
+  const loadBots = async (id: string) => {
+    try {
+      setBotsLoading(true);
+      const res = await fetch(`${config.backendUrl}/api/multiverse/${id}/bots`, {
+        headers: authHeaders(),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setBots(data.bots || []);
+      }
+    } catch (err) {
+      console.error('Failed to load bots:', err);
+    } finally {
+      setBotsLoading(false);
+    }
+  };
+
+  const loadAgents = async () => {
+    try {
+      const res = await fetch(`${config.backendUrl}/api/agents`, {
+        headers: authHeaders(),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setAgents(data.agents || []);
+      }
+    } catch (err) {
+      console.error('Failed to load agents:', err);
+    }
+  };
+
+  const handleAddBot = async (agentId: string) => {
+    if (!worldId) {
+      toast.error('Please save the world first');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${config.backendUrl}/api/multiverse/${worldId}/bots`, {
+        method: 'POST',
+        headers: {
+          ...authHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          agent_id: agentId,
+          position_x: 3,
+          position_y: 0,
+          position_z: 3,
+          rotation_y: 0,
+          behavior_type: 'idle',
+          movement_speed: 1.0,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to add bot');
+      }
+
+      const data = await res.json();
+      setBots([...bots, data.bot]);
+      toast.success('Bot added successfully');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to add bot');
+    }
+  };
+
+  const handleUpdateBot = async (botId: string, updates: any) => {
+    if (!worldId) return;
+
+    try {
+      const res = await fetch(`${config.backendUrl}/api/multiverse/${worldId}/bots/${botId}`, {
+        method: 'PUT',
+        headers: {
+          ...authHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updates),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to update bot');
+      }
+
+      const data = await res.json();
+      setBots(bots.map(b => b.id === botId ? data.bot : b));
+      toast.success('Bot updated successfully');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update bot');
+    }
+  };
+
+  const handleDeleteBot = async (botId: string) => {
+    if (!worldId) return;
+
+    if (!confirm('Delete this bot?')) return;
+
+    try {
+      const res = await fetch(`${config.backendUrl}/api/multiverse/${worldId}/bots/${botId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to delete bot');
+      }
+
+      setBots(bots.filter(b => b.id !== botId));
+      setSelectedBotId(null);
+      toast.success('Bot deleted successfully');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to delete bot');
+    }
+  };
+
   const tools = [
     // Basic Shapes
     { id: 'cube', name: 'Box', icon: Box, color: 'bg-blue-500' },
@@ -258,17 +392,56 @@ export default function WorldBuilderPage() {
     console.log('[World Builder] Deleted object:', objectId);
   };
 
-  const handleAICommand = () => {
+  const handleAICommand = async () => {
     if (!aiCommand.trim()) {
       toast.error('Please enter a command');
       return;
     }
 
-    // Add to history
-    setAiHistory([...aiHistory, `✓ ${aiCommand}`]);
+    try {
+      // Add to history
+      setAiHistory([...aiHistory, `⏳ ${aiCommand}`]);
+      toast.info('🤖 AI is processing your command...');
 
-    toast.info('AI command executed (placeholder)');
-    setAiCommand('');
+      // Get first available agent
+      if (agents.length === 0) {
+        toast.error('No agents available. Please create an agent first.');
+        return;
+      }
+
+      const defaultAgent = agents[0];
+
+      // Call AI world generator
+      const res = await fetch(`${config.backendUrl}/api/world-generator/ai`, {
+        method: 'POST',
+        headers: {
+          ...authHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: aiCommand,
+          agent_id: defaultAgent.id,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to generate from AI command');
+      }
+
+      const data = await res.json();
+
+      // Update history with success
+      setAiHistory(prev => [...prev.slice(0, -1), `✓ ${aiCommand}`]);
+
+      // TODO: Parse AI response and add objects to scene
+      // For now, just show success
+      toast.success('✨ AI command executed! (Objects generation coming soon)');
+      setAiCommand('');
+    } catch (err: any) {
+      // Update history with error
+      setAiHistory(prev => [...prev.slice(0, -1), `❌ ${aiCommand}`]);
+      toast.error(err.message || 'Failed to execute AI command');
+    }
   };
 
   const handleSave = async () => {
@@ -415,6 +588,33 @@ export default function WorldBuilderPage() {
     // TODO: Export to GLB file
   };
 
+  // Sidebar resize handlers
+  const startResizing = () => {
+    setIsResizing(true);
+  };
+
+  const stopResizing = () => {
+    setIsResizing(false);
+  };
+
+  const resize = (e: MouseEvent) => {
+    if (isResizing) {
+      const newWidth = e.clientX;
+      if (newWidth >= 200 && newWidth <= 600) {
+        setSidebarWidth(newWidth);
+      }
+    }
+  };
+
+  useEffect(() => {
+    window.addEventListener('mousemove', resize);
+    window.addEventListener('mouseup', stopResizing);
+    return () => {
+      window.removeEventListener('mousemove', resize);
+      window.removeEventListener('mouseup', stopResizing);
+    };
+  }, [isResizing]);
+
   return (
     <div className="h-screen flex flex-col bg-background">
       {/* Header */}
@@ -460,10 +660,13 @@ export default function WorldBuilderPage() {
       <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar - Tabbed Interface (hidden in preview mode) */}
         {!previewMode && (
-        <div className="w-72 md:w-80 lg:w-72 border-r flex flex-col bg-background">
+        <div
+          className="border-r flex flex-col bg-background relative"
+          style={{ width: `${sidebarWidth}px` }}
+        >
           {/* Tabs Header */}
-          <div className="border-b border-border">
-            <div className="flex">
+          <div className="border-b border-border overflow-x-auto scrollbar-thin">
+            <div className="flex min-w-max">
               <button
                 onClick={() => setActiveTab('tools')}
                 className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
@@ -514,6 +717,32 @@ export default function WorldBuilderPage() {
                 <div className="flex items-center justify-center gap-2">
                   <Move className="h-4 w-4" />
                   <span className="hidden md:inline">Edit</span>
+                </div>
+              </button>
+              <button
+                onClick={() => setActiveTab('bots')}
+                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                  activeTab === 'bots'
+                    ? 'border-b-2 border-cyan-500 text-cyan-600 dark:text-cyan-400 bg-cyan-50 dark:bg-cyan-950/30'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                }`}
+              >
+                <div className="flex items-center justify-center gap-2">
+                  <Bot className="h-4 w-4" />
+                  <span className="hidden md:inline">Bots</span>
+                </div>
+              </button>
+              <button
+                onClick={() => setActiveTab('ai')}
+                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                  activeTab === 'ai'
+                    ? 'border-b-2 border-purple-500 text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/30'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                }`}
+              >
+                <div className="flex items-center justify-center gap-2">
+                  <Sparkles className="h-4 w-4" />
+                  <span className="hidden md:inline">AI</span>
                 </div>
               </button>
             </div>
@@ -729,6 +958,220 @@ export default function WorldBuilderPage() {
                 </Button>
               </div>
             )}
+
+            {/* TAB 5: Bots */}
+            {activeTab === 'bots' && (
+              <div className="space-y-4">
+                {!worldId ? (
+                  <div className="text-sm text-muted-foreground p-3 bg-muted/30 rounded-lg">
+                    Save the world first to add bots
+                  </div>
+                ) : (
+                  <>
+                    {/* Add Bot Section */}
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">Add Bot</Label>
+                      {agents.length === 0 ? (
+                        <div className="text-xs text-muted-foreground p-2 bg-muted/30 rounded">
+                          No agents available
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {agents.map((agent) => (
+                            <button
+                              key={agent.id}
+                              onClick={() => handleAddBot(agent.id)}
+                              className="w-full p-2 rounded-lg border-2 border-transparent hover:border-cyan-500 hover:bg-cyan-50 dark:hover:bg-cyan-950/30 transition-all text-left"
+                            >
+                              <div className="flex items-center gap-2">
+                                <Bot className="h-4 w-4 text-cyan-500" />
+                                <span className="text-sm font-medium">{agent.name}</span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="border-t border-border"></div>
+
+                    {/* Bots List */}
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">
+                        Bots in World ({bots.length})
+                      </Label>
+                      {botsLoading ? (
+                        <div className="flex items-center justify-center p-4">
+                          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                        </div>
+                      ) : bots.length === 0 ? (
+                        <div className="text-xs text-muted-foreground p-2 bg-muted/30 rounded">
+                          No bots yet. Add one above!
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {bots.map((bot) => (
+                            <div
+                              key={bot.id}
+                              className={`p-3 rounded-lg border-2 transition-all ${
+                                selectedBotId === bot.id
+                                  ? 'border-cyan-500 bg-cyan-50 dark:bg-cyan-950/30'
+                                  : 'border-transparent hover:border-gray-300'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  <Activity className="h-4 w-4 text-cyan-500" />
+                                  <span className="text-sm font-medium">{bot.agent_name}</span>
+                                </div>
+                                <button
+                                  onClick={() => handleDeleteBot(bot.id)}
+                                  className="p-1 hover:bg-red-100 dark:hover:bg-red-950/30 rounded"
+                                >
+                                  <Trash2 className="h-3 w-3 text-red-500" />
+                                </button>
+                              </div>
+
+                              <div className="space-y-1 text-xs text-muted-foreground">
+                                <div className="flex items-center gap-1">
+                                  <MapPin className="h-3 w-3" />
+                                  <span>
+                                    Position: ({bot.position_x.toFixed(1)}, {bot.position_z.toFixed(1)})
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <Zap className="h-3 w-3" />
+                                  <span>Behavior: {bot.behavior_type || 'static'}</span>
+                                </div>
+                              </div>
+
+                              {selectedBotId === bot.id && (
+                                <div className="mt-3 pt-3 border-t space-y-2">
+                                  <Label className="text-xs">Behavior Type</Label>
+                                  <select
+                                    className="w-full p-2 text-xs rounded border"
+                                    value={bot.behavior_type || 'static'}
+                                    onChange={(e) =>
+                                      handleUpdateBot(bot.id, { behavior_type: e.target.value })
+                                    }
+                                  >
+                                    <option value="static">Static</option>
+                                    <option value="idle">Idle</option>
+                                    <option value="random_walk">Random Walk</option>
+                                    <option value="patrol">Patrol</option>
+                                    <option value="interactive">Interactive</option>
+                                  </select>
+
+                                  <Label className="text-xs">Speed</Label>
+                                  <Input
+                                    type="number"
+                                    step="0.1"
+                                    min="0.1"
+                                    max="5"
+                                    value={bot.movement_speed || 1.0}
+                                    onChange={(e) =>
+                                      handleUpdateBot(bot.id, {
+                                        movement_speed: parseFloat(e.target.value),
+                                      })
+                                    }
+                                    className="text-xs"
+                                  />
+                                </div>
+                              )}
+
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="w-full mt-2"
+                                onClick={() =>
+                                  setSelectedBotId(selectedBotId === bot.id ? null : bot.id)
+                                }
+                              >
+                                <Edit className="h-3 w-3 mr-1" />
+                                {selectedBotId === bot.id ? 'Close' : 'Edit'}
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* AI Assistant Tab */}
+            {activeTab === 'ai' && (
+              <div className="space-y-4">
+                <Card>
+                  <CardContent className="p-4">
+                    <p className="text-sm text-muted-foreground mb-2">
+                      Quick commands:
+                    </p>
+                    <ul className="text-xs space-y-1 text-muted-foreground">
+                      <li>• "Add a red cube at position 0,0,0"</li>
+                      <li>• "Change the ground color to green"</li>
+                      <li>• "Create a desk in the center"</li>
+                      <li>• "Add 5 trees randomly"</li>
+                    </ul>
+                  </CardContent>
+                </Card>
+
+                {/* History */}
+                {aiHistory.length > 0 && (
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-semibold">History</h3>
+                    <div className="space-y-1 max-h-40 overflow-y-auto">
+                      {aiHistory.map((item, idx) => (
+                        <div
+                          key={idx}
+                          className="text-xs bg-muted p-2 rounded"
+                        >
+                          {item}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* AI Input */}
+                <div className="space-y-2">
+                  <Label htmlFor="ai-command" className="text-sm font-medium">
+                    AI Command
+                  </Label>
+                  <Textarea
+                    id="ai-command"
+                    value={aiCommand}
+                    onChange={(e) => setAiCommand(e.target.value)}
+                    placeholder="Type a command like 'Add a red cube'"
+                    rows={3}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && e.ctrlKey) {
+                        handleAICommand();
+                      }
+                    }}
+                  />
+                  <Button
+                    onClick={handleAICommand}
+                    className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                  >
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    Execute Command
+                  </Button>
+                  <p className="text-xs text-muted-foreground text-center">
+                    Press Ctrl+Enter to execute
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Resize Handle */}
+          <div
+            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-blue-500 transition-colors group"
+            onMouseDown={startResizing}
+          >
+            <div className="absolute top-1/2 right-0 -translate-y-1/2 w-1 h-16 bg-border group-hover:bg-blue-500 transition-colors" />
           </div>
         </div>
         )}
@@ -742,6 +1185,7 @@ export default function WorldBuilderPage() {
               groundColor={groundColor}
               worldSize={worldSize}
               avatarUrl={avatarUrl}
+              worldId={worldId}
               onGroundClick={handleGroundClick}
               selectedTool={selectedTool}
               onObjectDelete={handleObjectDelete}
@@ -754,6 +1198,9 @@ export default function WorldBuilderPage() {
             <div>Ground: {groundType.charAt(0).toUpperCase() + groundType.slice(1)}</div>
             <div>Size: {worldSize}m × {worldSize}m</div>
             <div>Objects: {objects.length}</div>
+            <div className={bots.length > 0 ? 'text-cyan-400' : 'text-gray-400'}>
+              Bots: {bots.length}
+            </div>
             <div className={avatarUrl ? 'text-green-400' : 'text-yellow-400'}>
               Avatar: {avatarUrl ? (avatarUrl.startsWith('http') ? 'Loaded' : 'Fallback (invalid URL)') : 'Fallback (no avatar)'}
             </div>
@@ -781,75 +1228,7 @@ export default function WorldBuilderPage() {
           )}
         </div>
 
-        {/* Right Sidebar - AI Assistant (hidden in preview mode) */}
-        {!previewMode && (
-        <div className="w-80 border-l p-4 flex flex-col">
-          <h2 className="font-semibold mb-4 flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-purple-500" />
-            AI Assistant
-          </h2>
-
-          <div className="flex-1 overflow-y-auto mb-4">
-            <Card className="mb-4">
-              <CardContent className="p-4">
-                <p className="text-sm text-muted-foreground mb-2">
-                  Quick commands:
-                </p>
-                <ul className="text-xs space-y-1 text-muted-foreground">
-                  <li>• "Add a red cube at position 0,0,0"</li>
-                  <li>• "Change the ground color to green"</li>
-                  <li>• "Create a desk in the center"</li>
-                  <li>• "Add 5 trees randomly"</li>
-                </ul>
-              </CardContent>
-            </Card>
-
-            {/* History */}
-            {aiHistory.length > 0 && (
-              <div className="space-y-2 mb-4">
-                <h3 className="text-sm font-semibold">History</h3>
-                <div className="space-y-1">
-                  {aiHistory.map((item, idx) => (
-                    <div
-                      key={idx}
-                      className="text-xs bg-muted p-2 rounded"
-                    >
-                      {item}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* AI Input */}
-          <div className="space-y-2">
-            <Label htmlFor="ai-command">AI Command</Label>
-            <Textarea
-              id="ai-command"
-              value={aiCommand}
-              onChange={(e) => setAiCommand(e.target.value)}
-              placeholder="Type a command like 'Add a red cube'"
-              rows={3}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && e.ctrlKey) {
-                  handleAICommand();
-                }
-              }}
-            />
-            <Button
-              onClick={handleAICommand}
-              className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
-            >
-              <Sparkles className="h-4 w-4 mr-2" />
-              Execute Command
-            </Button>
-            <p className="text-xs text-muted-foreground text-center">
-              Press Ctrl+Enter to execute
-            </p>
-          </div>
-        </div>
-        )}
+        {/* Right Sidebar - Removed (AI Assistant moved to left sidebar) */}
       </div>
 
       {/* Bottom Status Bar (hidden in preview mode) */}
