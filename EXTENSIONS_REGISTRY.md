@@ -253,14 +253,48 @@ npm run ext:sync
 
 ## الإضافات الرسمية
 
-| الإضافة | النوع | الوصف |
-|---------|-------|-------|
-| `public-chat` | app | غرف دردشة عامة مع دعم الـ AI والـ Avatar |
-| `email-client` | app | عميل بريد إلكتروني متكامل |
-| `discord` | channel | تكامل مع Discord |
-| `slack` | channel | تكامل مع Slack |
-| `telegram` | channel | تكامل مع Telegram |
-| `whatsapp` | channel | تكامل مع WhatsApp |
+### ✅ Active Extensions (شغالة)
+
+| الإضافة | النوع | الوصف | الحالة |
+|---------|-------|-------|--------|
+| `waf-security` | tool | WAF Security Scanner - فحص أمان تطبيقات الويب | ✅ **Active** |
+| `public-chat` | app | غرف دردشة عامة مع دعم الـ AI والـ Avatar | ✅ **Active** |
+| `email-client` | app | عميل بريد إلكتروني متكامل (IMAP/SMTP + OAuth) | ✅ **Active** |
+
+### ⚠️ Extensions Needing Migration (محتاجة تحديث)
+
+| الإضافة | النوع | الوصف | الحالة | المطلوب |
+|---------|-------|-------|--------|---------|
+| `discord` | channel | تكامل مع Discord | ⚠️ **Needs Migration** | Convert to new SDK format |
+| `slack` | channel | تكامل مع Slack | ⚠️ **Needs Migration** | Convert to new SDK format |
+| `telegram` | channel | تكامل مع Telegram | ⚠️ **Needs Migration** | Convert to new SDK format |
+| `whatsapp` | channel | تكامل مع WhatsApp | ⚠️ **Needs Migration** | Convert to new SDK format |
+
+### 📋 Migration Checklist for Old Extensions
+
+**الإضافات الأربعة (Discord, Slack, Telegram, WhatsApp) تحتاج:**
+
+- [ ] تحديث الـ Manifest:
+  - من `agent-player.plugin.json` → `agentplayer.plugin.json`
+  - إضافة `capabilities` object
+  - تحديث `frontend.pages` structure
+
+- [ ] تحويل TypeScript إلى JavaScript:
+  - ملف `index.js` يجب يكون pure JavaScript
+  - لا TypeScript syntax في الـ entry point
+  - يمكن استخدام TypeScript في باقي الملفات
+
+- [ ] تحديث الـ API Integration:
+  - استخدام ExtensionApi من SDK
+  - `api.fastify.register()` للـ routes
+  - `api.registerTool()` للأدوات
+
+- [ ] اختبار Integration:
+  - تثبيت الإضافة محلياً
+  - اختبار الـ activation/deactivation
+  - التأكد من الـ migrations شغالة
+
+**وقت تقديري:** 1 يوم لكل إضافة (4 أيام للكل)
 
 ---
 
@@ -292,6 +326,93 @@ npx agentplayer-cli ext:validate ./my-extension
 
 ---
 
+## 📋 TODO: Extensions Migration Roadmap
+
+### 🟡 Phase 1: Channel Extensions (4 إضافات - 4 أيام)
+
+#### 1. Discord Extension ⚠️ **Priority: Medium**
+**Time:** 1 day
+**Status:** Needs migration to new SDK
+
+**Tasks:**
+- [ ] Update manifest (`agent-player.plugin.json` → `agentplayer.plugin.json`)
+- [ ] Convert `index.ts` to `index.js` (pure JavaScript)
+- [ ] Update to use new ExtensionApi
+- [ ] Test bot connectivity and message handling
+- [ ] Update dashboard integration
+
+#### 2. Slack Extension ⚠️ **Priority: Medium**
+**Time:** 1 day
+**Status:** Needs migration to new SDK
+
+**Tasks:**
+- [ ] Update manifest format
+- [ ] Convert TypeScript to JavaScript
+- [ ] Update OAuth flow to new SDK
+- [ ] Test workspace integration
+- [ ] Update slash commands handling
+
+#### 3. Telegram Extension ⚠️ **Priority: Medium**
+**Time:** 1 day
+**Status:** Needs migration to new SDK
+
+**Tasks:**
+- [ ] Update manifest format
+- [ ] Convert TypeScript to JavaScript
+- [ ] Update bot token handling
+- [ ] Test message polling/webhooks
+- [ ] Update command handlers
+
+#### 4. WhatsApp Extension ⚠️ **Priority: Medium**
+**Time:** 1 day
+**Status:** Needs migration to new SDK
+
+**Tasks:**
+- [ ] Update manifest format
+- [ ] Convert TypeScript to JavaScript
+- [ ] Update Twilio integration
+- [ ] Test message sending/receiving
+- [ ] Update webhook handling
+
+---
+
+### 🎯 Migration vs AI Systems Priority
+
+**Important Note:** Extensions migration is **lower priority** than AI Systems development.
+
+| Category | Priority | Reason |
+|----------|----------|--------|
+| **AI Systems** (Multi-Tier Memory, Self-Evolution) | 🔴 **HIGH** | Improves agent intelligence for ALL channels |
+| **Extensions Migration** (Discord, Slack, etc.) | 🟡 **MEDIUM** | Adds new channels but doesn't improve intelligence |
+
+**Recommendation:**
+1. Complete AI Systems first (Multi-Tier Memory + Self-Evolution)
+2. Then migrate extensions when needed
+
+This ensures the agent is smarter on ALL platforms before adding more platforms.
+
+---
+
+### 📊 Extension Migration Summary
+
+| Extension | Type | Status | Priority | Est. Time |
+|-----------|------|--------|----------|-----------|
+| waf-security | tool | ✅ Active | - | Done |
+| public-chat | app | ✅ Active | - | Done |
+| email-client | app | ✅ Active | - | Done |
+| discord | channel | ⚠️ Needs Migration | 🟡 Medium | 1 day |
+| slack | channel | ⚠️ Needs Migration | 🟡 Medium | 1 day |
+| telegram | channel | ⚠️ Needs Migration | 🟡 Medium | 1 day |
+| whatsapp | channel | ⚠️ Needs Migration | 🟡 Medium | 1 day |
+
+**Total Active:** 3 extensions ✅
+**Needs Migration:** 4 extensions ⚠️
+**Total Time for Migration:** 4 days
+
+---
+
 <div align="center">
   <sub>Built with ❤️ by the Agent Player community</sub>
+  <br>
+  <sub>Last Updated: 2026-02-23</sub>
 </div>
