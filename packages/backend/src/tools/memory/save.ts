@@ -123,6 +123,21 @@ Examples:
       // Validate importance
       const importance = Math.max(1, Math.min(10, params.importance || 5));
 
+      // Determine memory layer based on importance (Multi-Tier Memory System)
+      let memoryLayer: 'working' | 'experiential' | 'factual' = 'working';
+      let expiryTimestamp: number | null = Date.now() + (24 * 60 * 60 * 1000); // 24h default
+
+      if (importance >= 8) {
+        // High importance → Factual (permanent)
+        memoryLayer = 'factual';
+        expiryTimestamp = null; // Never expires
+      } else if (importance >= 6) {
+        // Medium importance → Experiential (90 days)
+        memoryLayer = 'experiential';
+        expiryTimestamp = Date.now() + (90 * 24 * 60 * 60 * 1000);
+      }
+      // Low importance stays in working memory (24h expiry)
+
       // Create memory object
       const memory: Memory = {
         id: uuidv4(),
@@ -130,36 +145,37 @@ Examples:
         type: params.type || 'conversation',
         content: params.content,
         importance: importance as ImportanceLevel,
+        importanceScore: importance / 10, // Convert 1-10 to 0-1
+        memoryLayer,
+        consolidationStatus: 'pending',
+        expiryTimestamp,
         metadata: {
           ...params.metadata,
           tags: params.tags || [],
           source: 'agent',
           savedAt: new Date().toISOString(),
         },
-        layer: 'session', // Will be promoted to higher layers based on importance
         status: 'active',
         createdAt: new Date(),
+        lastAccessedAt: Date.now(),
         accessCount: 0,
       };
 
       // Save to storage
       await storage.save(memory);
 
-      // Determine memory layer based on importance
-      let layer = 'session';
-      if (importance >= 8) {
-        layer = 'permanent';
-      } else if (importance >= 6) {
-        layer = 'weekly';
-      } else if (importance >= 4) {
-        layer = 'daily';
-      }
+      // Layer display name
+      const layerDisplay = memoryLayer === 'working'
+        ? 'Working (24h)'
+        : memoryLayer === 'experiential'
+        ? 'Experiential (90 days)'
+        : 'Factual (permanent)';
 
       return {
         content: [
           {
             type: 'text',
-            text: `✓ Memory saved successfully!\n\nContent: ${params.content}\nType: ${memory.type}\nImportance: ${importance}/10 (${layer} layer)\nID: ${memory.id}${
+            text: `✓ Memory saved successfully!\n\nContent: ${params.content}\nType: ${memory.type}\nImportance: ${importance}/10 (${layerDisplay})\nID: ${memory.id}${
               params.tags && params.tags.length > 0 ? `\nTags: ${params.tags.join(', ')}` : ''
             }\n\nThis information will be recalled automatically in future relevant conversations.`,
           },
@@ -169,7 +185,8 @@ Examples:
           memoryId: memory.id,
           type: memory.type,
           importance,
-          layer,
+          memoryLayer,
+          expiryTimestamp,
         },
       };
     } catch (error: any) {

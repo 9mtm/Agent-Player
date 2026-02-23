@@ -78,6 +78,7 @@ import { registerDashboardRoutes } from './routes/dashboard.js';
 import { registerCalendarRoutes } from './routes/calendar.js';
 import { registerPublicChatRoutes } from './routes/public-chat.js';
 import { registerCostAnalyticsRoutes } from './routes/cost-analytics.js';
+import evolutionRoutes from './routes/evolution.js';
 import setupRoutes from './routes/setup.js';
 import { processScheduledNotifications } from '../services/notification-service.js';
 import { startCalendarSyncScheduler } from '../services/calendar-sync.js';
@@ -267,6 +268,7 @@ await fastify.register(registerDashboardRoutes); // 📊 Customizable Dashboard 
 await fastify.register(registerCalendarRoutes);  // 📅 Calendar System (Events + Google Calendar Sync)
 await fastify.register(registerPublicChatRoutes); // 💬 Public Chat Rooms (Multi-User Chat with AI Agents)
 await fastify.register(registerCostAnalyticsRoutes); // 💰 Cost Analytics (Model Usage & Savings Tracking)
+await fastify.register(evolutionRoutes);        // 🧬 Agent Evolution System (Self-Learning & Adaptation)
 
 // Start server
 async function start() {
@@ -430,6 +432,17 @@ async function start() {
     // Initialize Calendar Sync Scheduler
     startCalendarSyncScheduler();
     console.log('[Server] ✅ Calendar sync scheduler started\n');
+
+    // Initialize Multi-Tier Memory Consolidation Scheduler
+    const { getConsolidationService } = await import('../services/memory-consolidation.js');
+    const consolidationService = getConsolidationService();
+    consolidationService.startScheduler();
+    console.log('[Server] ✅ Memory consolidation scheduler started (runs daily at 3 AM)\n');
+
+    // Initialize Agent Evolution Scheduler
+    const { initializeEvolutionScheduler } = await import('../services/agent-evolution-scheduler.js');
+    await initializeEvolutionScheduler();
+    console.log('[Server] ✅ Agent evolution scheduler initialized\n');
 
     // Initialize Extension System
     const { getExtensionRunner } = await import('../plugins/extension-runner.js');

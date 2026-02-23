@@ -119,8 +119,9 @@ Parameters:
           tagCounts[tag] = (tagCounts[tag] || 0) + 1;
         }
 
-        // Track high-importance memories
-        if (mem.importance >= 7) {
+        // Track high-importance memories (use new importanceScore or legacy importance)
+        const importance = mem.importanceScore ? mem.importanceScore * 10 : (mem.importance || 5);
+        if (importance >= 7) {
           highImportance.push(mem);
         }
       }
@@ -168,7 +169,8 @@ Parameters:
         lines.push('');
         lines.push('## High-Priority Facts');
         for (const mem of highImportance.slice(0, 5)) {
-          lines.push(`- [${mem.type}, importance:${mem.importance}] ${mem.content.slice(0, 100)}`);
+          const imp = mem.importanceScore ? Math.round(mem.importanceScore * 10) : (mem.importance || 5);
+          lines.push(`- [${mem.type}, importance:${imp}/10] ${mem.content.slice(0, 100)}`);
         }
       }
 
@@ -183,22 +185,26 @@ Parameters:
 
       const reflectionContent = lines.join('\n');
 
-      // Save reflection as a new memory
+      // Save reflection as a new memory (Multi-Tier Memory: experiential layer)
       const reflectionMemory: Memory = {
         id: uuidv4(),
         userId,
         type: 'fact',
         content: reflectionContent,
         importance: 6,
+        importanceScore: 0.6,
+        memoryLayer: 'experiential', // Reflections are medium-term insights
+        consolidationStatus: 'consolidated', // Already consolidated by nature
+        expiryTimestamp: Date.now() + (90 * 24 * 60 * 60 * 1000), // 90 days
         metadata: {
           tags: ['reflection', 'analysis', ...(focus ? [focus] : [])],
           source: 'memory_reflect',
           analyzedCount: targetMemories.length,
           generatedAt: new Date().toISOString(),
         },
-        layer: 'weekly',
         status: 'active',
         createdAt: new Date(),
+        lastAccessedAt: Date.now(),
         accessCount: 0,
       };
 

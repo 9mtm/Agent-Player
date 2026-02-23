@@ -16,12 +16,24 @@ export type MemoryType =
   | 'relationship' // Entity relationships
   | 'task';       // User tasks and todos
 
-/** Memory temporal layer */
+/** Memory temporal layer (legacy) */
 export type MemoryLayer =
   | 'session'     // Current session (volatile)
   | 'daily'       // Today's memories
   | 'weekly'      // This week's memories
   | 'archive';    // Long-term storage
+
+/** Multi-Tier Memory Layer (new system) */
+export type MultiTierLayer =
+  | 'working'      // Temporary, current session only
+  | 'experiential' // Medium-term learned patterns
+  | 'factual';     // Permanent verified knowledge
+
+/** Consolidation status for experiential memories */
+export type ConsolidationStatus =
+  | 'pending'      // Not yet consolidated
+  | 'consolidated' // Processed by consolidation
+  | 'promoted';    // Promoted to higher tier
 
 /** Memory importance level (1-10) */
 export type ImportanceLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
@@ -45,18 +57,24 @@ export interface Memory {
   summary?: string;
   /** Vector embedding */
   embedding?: number[];
-  /** Current temporal layer */
-  layer: MemoryLayer;
-  /** Importance score (1-10) */
-  importance: ImportanceLevel;
+  /** Current temporal layer (legacy) */
+  layer?: MemoryLayer;
+  /** Multi-Tier Memory Layer (new system) */
+  memoryLayer?: MultiTierLayer;
+  /** Importance score (1-10, legacy) */
+  importance?: ImportanceLevel;
+  /** Importance score (0-1, new system) */
+  importanceScore?: number;
   /** Original importance (before decay) */
   originalImportance?: ImportanceLevel;
   /** Status */
   status: MemoryStatus;
   /** Creation timestamp */
   createdAt: Date;
-  /** Last accessed */
+  /** Last accessed (legacy) */
   lastAccessed?: Date;
+  /** Last accessed timestamp (new system, Unix epoch ms) */
+  lastAccessedAt?: number | null;
   /** Access count */
   accessCount: number;
   /** Decay factor (0-1, lower = more decay) */
@@ -67,8 +85,12 @@ export interface Memory {
   tags?: string[];
   /** Source (session ID, file, etc.) */
   source?: string;
-  /** Expires at (for temporary memories) */
+  /** Expires at (legacy) */
   expiresAt?: Date;
+  /** Expiry timestamp (new system, Unix epoch ms) */
+  expiryTimestamp?: number | null;
+  /** Consolidation status (new system) */
+  consolidationStatus?: ConsolidationStatus;
   /** Custom metadata */
   metadata: Record<string, unknown>;
 }
@@ -121,12 +143,16 @@ export interface MemorySearchQuery {
   userId: string;
   /** Filter by memory types */
   types?: MemoryType[];
-  /** Filter by layers */
+  /** Filter by layers (legacy) */
   layers?: MemoryLayer[];
+  /** Filter by Multi-Tier Memory layer (new system) */
+  layer?: MultiTierLayer;
   /** Filter by tags */
   tags?: string[];
-  /** Minimum importance */
+  /** Minimum importance (legacy) */
   minImportance?: ImportanceLevel;
+  /** Minimum importance score (new system, 0-1) */
+  minImportanceScore?: number;
   /** Date range start */
   fromDate?: Date;
   /** Date range end */
@@ -269,7 +295,7 @@ export interface IMemoryStorage {
   initialize(): Promise<void>;
   save(memory: Memory): Promise<void>;
   get(id: string): Promise<Memory | null>;
-  getByUser(userId: string): Promise<Memory[]>;
+  getByUser(userId: string, layer?: string): Promise<Memory[]>;
   update(id: string, updates: Partial<Memory>): Promise<void>;
   delete(id: string): Promise<void>;
   search(query: MemorySearchQuery): Promise<MemorySearchResult[]>;
