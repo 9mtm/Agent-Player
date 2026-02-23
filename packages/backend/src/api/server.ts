@@ -77,6 +77,7 @@ import { agentFilesRoutes } from './routes/agent-files.js';
 import { registerDashboardRoutes } from './routes/dashboard.js';
 import { registerCalendarRoutes } from './routes/calendar.js';
 import { registerPublicChatRoutes } from './routes/public-chat.js';
+import { registerCostAnalyticsRoutes } from './routes/cost-analytics.js';
 import setupRoutes from './routes/setup.js';
 import { processScheduledNotifications } from '../services/notification-service.js';
 import { startCalendarSyncScheduler } from '../services/calendar-sync.js';
@@ -253,9 +254,9 @@ await fastify.register(registerTeamRoutes);     // 👥 Team Management (Teams, 
 // await fastify.register(emailComposeRoutes);     // ✉️  Email Compose (Send, Reply, Forward)
 // await fastify.register(emailAttachmentsRoutes); // 📎 Email Attachments (Upload, Download)
 // await fastify.register(emailDraftsRoutes);      // 📝 Email Drafts (Auto-Save, CRUD)
-await fastify.register(worldsRoutes);           // 🌍 Interactive 3D Worlds (Upload + Explore)
-await fastify.register(multiverseRoutes);    // 🪐 System Multiverse (Default Worlds)
-await fastify.register(worldBotsRoutes);     // 🤖 World Bots (AI Agents in Worlds)
+// await fastify.register(worldsRoutes);           // 🌍 Interactive 3D Worlds (DEPRECATED - merged into multiverseRoutes)
+await fastify.register(multiverseRoutes);    // 🪐 Multiverse (Worlds + Bots + System Worlds)
+// await fastify.register(worldBotsRoutes);     // 🤖 World Bots (DEPRECATED - merged into multiverseRoutes)
 await fastify.register(worldGeneratorRoutes); // ✨ AI World Generator (Prompt-based Generation)
 await fastify.register(worldBuilderRoutes);     // 🏗️  World Builder (Manual Building + Save/Load)
 await fastify.register(extensionsRoutes);    // 🔌 Extensions Management (SDK-based)
@@ -265,6 +266,7 @@ await fastify.register(agentFilesRoutes);    // 📝 Agent Files (PERSONALITY.md
 await fastify.register(registerDashboardRoutes); // 📊 Customizable Dashboard (Widgets + Layouts)
 await fastify.register(registerCalendarRoutes);  // 📅 Calendar System (Events + Google Calendar Sync)
 await fastify.register(registerPublicChatRoutes); // 💬 Public Chat Rooms (Multi-User Chat with AI Agents)
+await fastify.register(registerCostAnalyticsRoutes); // 💰 Cost Analytics (Model Usage & Savings Tracking)
 
 // Start server
 async function start() {

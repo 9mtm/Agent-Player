@@ -15,6 +15,8 @@ import { geminiCliTool } from '../../tools/cli/gemini-cli.js';
 import { claudeCliTool } from '../../tools/cli/claude-cli.js';
 import { getJsonRenderPrompt } from './json-render-prompt.js';
 import { readPersonality, readMemory } from '../../services/agent-files.js';
+import { createModelRouter, ModelRouter } from '../../services/model-router.js';
+import { CostTracker } from '../../services/cost-tracker.js';
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'qwen2.5:7b';
@@ -343,10 +345,47 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
     ollamaMessages[0].content = finalSystemPrompt;
   }
 
+  // 💰 COST OPTIMIZATION: Smart model routing based on task complexity
+  let selectedModel = model;
+  let routingAnalysis = null;
+
+  if (provider === 'claude' || provider === undefined) {
+    const router = createModelRouter({
+      costOptimizationEnabled: true, // Enable by default - can make configurable later
+    });
+
+    // Analyze task and get recommended model
+    const toolNames = tools.map((t: any) => t.name);
+    routingAnalysis = router.analyzeAndRoute(userMessage, history, toolNames);
+
+    // Convert tier to actual Claude model name
+    selectedModel = ModelRouter.getModelName(routingAnalysis.recommendedModel);
+
+    console.log('[Cost Optimizer] 🎯 Task analysis:');
+    console.log('[Cost Optimizer]   Complexity:', routingAnalysis.complexity);
+    console.log('[Cost Optimizer]   Recommended model:', routingAnalysis.recommendedModel, `(${selectedModel})`);
+    console.log('[Cost Optimizer]   Reasoning:', routingAnalysis.reasoning);
+    console.log('[Cost Optimizer]   Estimated savings:', `${routingAnalysis.estimatedCostSavings}%`);
+
+    // Log usage to cost tracker (async, don't block response)
+    CostTracker.logUsage({
+      user_id: userId,
+      session_id: sessionId,
+      timestamp: Date.now(),
+      model_used: routingAnalysis.recommendedModel,
+      task_complexity: routingAnalysis.complexity,
+      message_length: userMessage.length,
+      tools_used: toolNames.join(','),
+      estimated_savings_percent: routingAnalysis.estimatedCostSavings || 0,
+    }).catch((err) => {
+      console.error('[Cost Optimizer] ⚠️ Failed to log usage:', err);
+    });
+  }
+
   // Route to the correct provider
   if (provider === 'claude' && apiKey) {
     console.log('[Chat] 🤖 Using Claude API (agent api_key)');
-    return streamChatClaude(reply, apiKey, model, ollamaMessages, finalSystemPrompt, tools, temperature, userId, sessionId, chatContext);
+    return streamChatClaude(reply, apiKey, selectedModel, ollamaMessages, finalSystemPrompt, tools, temperature, userId, sessionId, chatContext);
   }
 
   // Fallback: check global settings for claude
@@ -357,7 +396,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
     return streamChatClaude(
       reply,
       settings.claude.apiKey,
-      model || settings.claude.model || 'claude-sonnet-4-5-20250929',
+      selectedModel || settings.claude.model || 'claude-sonnet-4-5-20250929',
       ollamaMessages,
       finalSystemPrompt,
       tools,
