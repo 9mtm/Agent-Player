@@ -30,6 +30,16 @@ import { createMixedStreamParser, applySpecPatch } from '@/lib/ui-web4/core';
 import type { Spec, SpecStreamLine } from '@/lib/ui-web4/core';
 import { SpecRenderer } from '@/lib/json-render/renderer';
 
+// ─── Helper Functions ─────────────────────────────────────────────────────────
+
+/**
+ * Remove [ANIM:...] tags from text to avoid duplication in chat display
+ * The avatar system still receives these tags via the full message content
+ */
+function removeAnimationTags(text: string): string {
+    return text.replace(/\[ANIM:[^\]]+\]\s*/g, '');
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Agent {
@@ -134,7 +144,7 @@ function MessageContent({ message, isStreaming }: { message: Message; isStreamin
                     if (block.type === 'text') {
                         return block.text ? (
                             <div key={i} className="whitespace-pre-wrap break-words">
-                                {block.text}
+                                {removeAnimationTags(block.text)}
                             </div>
                         ) : null;
                     }
@@ -149,7 +159,7 @@ function MessageContent({ message, isStreaming }: { message: Message; isStreamin
             </div>
         );
     }
-    return <div className="whitespace-pre-wrap break-words">{message.content}</div>;
+    return <div className="whitespace-pre-wrap break-words">{removeAnimationTags(message.content)}</div>;
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
@@ -537,7 +547,7 @@ function ChatPageInner({ params }: { params: Promise<{ sessionId: string }> }) {
                                         {/* Voice Player for assistant messages */}
                                         {m.role === 'assistant' && m.content && (
                                             <VoicePlayer
-                                                text={m.content}
+                                                text={removeAnimationTags(m.content)}
                                                 backendUrl={config.backendUrl}
                                                 voice="alloy"
                                                 autoPlay={false}
