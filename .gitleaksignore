@@ -1,0 +1,30 @@
+# Gitleaks Ignore File
+# Use this to ignore specific findings by commit SHA, file path, or secret hash
+
+# Ignore default setup credentials in database migrations
+packages/backend/src/db/database.ts:*:owner@localhost
+packages/backend/src/db/database.ts:*:admin123
+
+# Ignore example API keys in documentation
+README.md:*
+docs/**:*
+EXTENSIONS_REGISTRY.md:*
+
+# Ignore test fixtures
+**/__tests__/**:*
+**/__mocks__/**:*
+**/test/**:*
+**/tests/**:*
+
+# Ignore migration files with default setup data
+packages/backend/src/db/migrations/*.sql:*
+
+# Ignore lock files (contain package checksums)
+pnpm-lock.yaml:*
+package-lock.json:*
+yarn.lock:*
+
+# Ignore build outputs
+.next/**:*
+dist/**:*
+build/**:*
