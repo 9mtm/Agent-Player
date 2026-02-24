@@ -1,0 +1,1017 @@
+=== قاعدة البيانات - جميع الجداول ===
+
+إجمالي الجداول: 62
+
+
+📋 جدول: agent_activity
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. agent_id                       TEXT           
+  3. task_id                        TEXT           
+  4. session_id                     TEXT           
+  5. action_type                    TEXT            NOT NULL
+  6. tool_name                      TEXT           
+  7. summary                        TEXT           
+  8. metadata                       TEXT           
+  9. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: agent_capability_usage
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. agent_id                       TEXT            NOT NULL
+  3. capability_name                TEXT            NOT NULL
+  4. usage_count                    INTEGER         DEFAULT 0
+  5. success_count                  INTEGER         DEFAULT 0
+  6. failure_count                  INTEGER         DEFAULT 0
+  7. avg_execution_time_ms          REAL            DEFAULT 0
+  8. last_used_at                   DATETIME       
+  9. first_used_at                  DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: agent_evolution_config
+────────────────────────────────────────────────────────────────────────────────
+  1. agent_id                       TEXT            🔑 PRIMARY KEY
+  2. enabled                        BOOLEAN         DEFAULT TRUE
+  3. min_confidence_threshold       REAL            DEFAULT 0.7
+  4. min_sample_size                INTEGER         DEFAULT 10
+  5. evolution_frequency            TEXT            DEFAULT 'daily'
+  6. allowed_evolutions             TEXT            DEFAULT '["prompt_update","capability_added"]'
+  7. max_evolutions_per_cycle       INTEGER         DEFAULT 3
+  8. rollback_on_degradation        BOOLEAN         DEFAULT TRUE
+  9. degradation_threshold          REAL            DEFAULT 0.1
+  10. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  11. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 1
+
+📋 جدول: agent_evolution_history
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. agent_id                       TEXT            NOT NULL
+  3. evolution_type                 TEXT            NOT NULL
+  4. change_description             TEXT            NOT NULL
+  5. before_value                   TEXT           
+  6. after_value                    TEXT           
+  7. trigger_reason                 TEXT            NOT NULL
+  8. insight_ids                    TEXT           
+  9. performance_before             REAL           
+  10. performance_after              REAL           
+  11. status                         TEXT            DEFAULT 'active'
+  12. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  13. rolled_back_at                 DATETIME       
+
+  📊 عدد السجلات: 0
+
+📋 جدول: agent_learning
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. context                        TEXT            NOT NULL
+  3. error                          TEXT           
+  4. success                        INTEGER         NOT NULL
+  5. lesson                         TEXT           
+  6. solution                       TEXT           
+  7. applied                        INTEGER         DEFAULT 0
+  8. applied_at                     DATETIME       
+  9. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: agent_learning_insights
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. agent_id                       TEXT            NOT NULL
+  3. insight_type                   TEXT            NOT NULL
+  4. title                          TEXT            NOT NULL
+  5. description                    TEXT            NOT NULL
+  6. confidence                     REAL            DEFAULT 0.5
+  7. evidence                       TEXT           
+  8. applied                        BOOLEAN         DEFAULT FALSE
+  9. applied_at                     DATETIME       
+  10. impact_score                   REAL           
+  11. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: agent_performance_metrics
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. agent_id                       TEXT            NOT NULL
+  3. metric_type                    TEXT            NOT NULL
+  4. value                          REAL            NOT NULL
+  5. sample_size                    INTEGER         DEFAULT 0
+  6. period_start                   DATETIME        NOT NULL
+  7. period_end                     DATETIME        NOT NULL
+  8. metadata                       TEXT           
+  9. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: agents_config
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. name                           TEXT            NOT NULL
+  3. description                    TEXT            DEFAULT ''
+  4. emoji                          TEXT            DEFAULT '🤖'
+  5. system_prompt                  TEXT            DEFAULT ''
+  6. model                          TEXT            DEFAULT 'claude-sonnet-4-5-20250929'
+  7. provider                       TEXT            DEFAULT 'claude'
+  8. is_primary                     INTEGER         DEFAULT 0
+  9. temperature                    REAL            DEFAULT 0.7
+  10. max_tokens                     INTEGER         DEFAULT 4096
+  11. capabilities                   TEXT            DEFAULT '{"webSearch":true,"fileOperations":true,"memory":true,"executeCommands":false}'
+  12. created_at                     TEXT            DEFAULT datetime('now')
+  13. updated_at                     TEXT            DEFAULT datetime('now')
+  14. api_key                        TEXT            DEFAULT ''
+  15. cron_schedule                  TEXT           
+  16. cron_enabled                   INTEGER         DEFAULT 0
+  17. auto_approve_tasks             INTEGER         DEFAULT 0
+  18. last_heartbeat                 DATETIME       
+
+  📊 عدد السجلات: 2
+
+📋 جدول: app_settings
+────────────────────────────────────────────────────────────────────────────────
+  1. key                            TEXT            🔑 PRIMARY KEY
+  2. value                          TEXT            NOT NULL
+  3. updated_at                     INTEGER         NOT NULL
+
+  📊 عدد السجلات: 0
+
+📋 جدول: approval_rules
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. user_id                        TEXT            NOT NULL
+  3. source_type                    TEXT           
+  4. action_pattern                 TEXT           
+  5. risk_level                     TEXT           
+  6. auto_approve                   BOOLEAN         DEFAULT 0
+  7. auto_deny                      BOOLEAN         DEFAULT 0
+  8. priority                       INTEGER         DEFAULT 5
+  9. name                           TEXT            NOT NULL
+  10. description                    TEXT           
+  11. enabled                        BOOLEAN         DEFAULT 1
+  12. times_applied                  INTEGER         DEFAULT 0
+  13. confidence_score               REAL            DEFAULT 0.0
+  14. created_at                     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP
+  15. updated_at                     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: audit_logs
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             INTEGER         🔑 PRIMARY KEY
+  2. created_at                     TIMESTAMP       DEFAULT CURRENT_TIMESTAMP
+  3. event_type                     TEXT            NOT NULL
+  4. event_category                 TEXT            NOT NULL
+  5. severity                       TEXT            NOT NULL DEFAULT 'info'
+  6. user_id                        TEXT           
+  7. username                       TEXT           
+  8. ip_address                     TEXT           
+  9. user_agent                     TEXT           
+  10. request_method                 TEXT           
+  11. request_path                   TEXT           
+  12. resource_type                  TEXT           
+  13. resource_id                    TEXT           
+  14. action                         TEXT           
+  15. success                        INTEGER         NOT NULL DEFAULT 1
+  16. error_message                  TEXT           
+  17. metadata                       TEXT           
+
+  📊 عدد السجلات: 2
+
+📋 جدول: avatar_settings
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY DEFAULT lower(hex(randomblob(16)))
+  2. user_id                        TEXT            NOT NULL
+  3. rpm_avatar_url                 TEXT           
+  4. voice_provider                 TEXT            DEFAULT 'openai'
+  5. voice_id                       TEXT            DEFAULT 'alloy'
+  6. language_preference            TEXT            DEFAULT 'auto'
+  7. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  8. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  9. bg_color                       TEXT            DEFAULT '#09090b'
+  10. bg_scene                       TEXT            DEFAULT 'none'
+  11. wall_text                      TEXT            DEFAULT ''
+  12. wall_logo_url                  TEXT            DEFAULT ''
+  13. wall_video_url                 TEXT            DEFAULT ''
+  14. wall_layout                    TEXT            DEFAULT '{}'
+  15. wall_spotify_url               TEXT            DEFAULT ''
+
+  📊 عدد السجلات: 0
+
+📋 جدول: calendar_events
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. user_id                        TEXT            NOT NULL
+  3. calendar_source_id             TEXT           
+  4. title                          TEXT            NOT NULL
+  5. description                    TEXT           
+  6. location                       TEXT           
+  7. start_time                     TEXT            NOT NULL
+  8. end_time                       TEXT            NOT NULL
+  9. is_all_day                     INTEGER         DEFAULT 0
+  10. timezone                       TEXT            DEFAULT 'UTC'
+  11. recurrence_rule                TEXT           
+  12. recurrence_exception           TEXT           
+  13. parent_event_id                TEXT           
+  14. attendees                      TEXT           
+  15. organizer                      TEXT           
+  16. status                         TEXT            DEFAULT 'confirmed'
+  17. event_type                     TEXT            DEFAULT 'event'
+  18. reminders                      TEXT           
+  19. external_id                    TEXT           
+  20. external_url                   TEXT           
+  21. external_etag                  TEXT           
+  22. created_at                     TEXT            DEFAULT datetime('now')
+  23. updated_at                     TEXT            DEFAULT datetime('now')
+
+  📊 عدد السجلات: 0
+
+📋 جدول: calendar_sources
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. user_id                        TEXT            NOT NULL
+  3. name                           TEXT            NOT NULL
+  4. type                           TEXT            NOT NULL
+  5. url                            TEXT           
+  6. color                          TEXT            DEFAULT '#3b82f6'
+  7. is_enabled                     INTEGER         DEFAULT 1
+  8. is_primary                     INTEGER         DEFAULT 0
+  9. google_calendar_id             TEXT           
+  10. google_access_token            TEXT           
+  11. google_refresh_token           TEXT           
+  12. google_token_expiry            TEXT           
+  13. sync_enabled                   INTEGER         DEFAULT 1
+  14. sync_interval                  INTEGER         DEFAULT 300
+  15. last_synced_at                 TEXT           
+  16. sync_status                    TEXT            DEFAULT 'pending'
+  17. sync_error                     TEXT           
+  18. created_at                     TEXT            DEFAULT datetime('now')
+  19. updated_at                     TEXT            DEFAULT datetime('now')
+  20. description                    TEXT           
+  21. permission                     TEXT            DEFAULT 'read_write'
+  22. allow_agent_access             INTEGER         DEFAULT 1
+
+  📊 عدد السجلات: 0
+
+📋 جدول: calendar_sync_log
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. calendar_source_id             TEXT            NOT NULL
+  3. started_at                     TEXT            DEFAULT datetime('now')
+  4. completed_at                   TEXT           
+  5. status                         TEXT            DEFAULT 'running'
+  6. error_message                  TEXT           
+  7. events_added                   INTEGER         DEFAULT 0
+  8. events_updated                 INTEGER         DEFAULT 0
+  9. events_deleted                 INTEGER         DEFAULT 0
+
+  📊 عدد السجلات: 0
+
+📋 جدول: call_messages
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY DEFAULT lower(hex(randomblob(16)))
+  2. call_session_id                TEXT            NOT NULL
+  3. role                           TEXT            NOT NULL
+  4. content                        TEXT            NOT NULL
+  5. timestamp                      TEXT            NOT NULL DEFAULT datetime('now')
+  6. audio_url                      TEXT           
+
+  📊 عدد السجلات: 0
+
+📋 جدول: call_points
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY DEFAULT lower(hex(randomblob(16)))
+  2. name                           TEXT            NOT NULL
+  3. description                    TEXT           
+  4. phone_number_id                TEXT           
+  5. agent_id                       TEXT           
+  6. workflow_id                    TEXT           
+  7. voice_provider                 TEXT            DEFAULT 'openai'
+  8. voice_id                       TEXT            DEFAULT 'alloy'
+  9. language_preference            TEXT            DEFAULT 'auto'
+  10. greeting_message               TEXT            DEFAULT 'Hello, how can I help you?'
+  11. ivr_menu                       TEXT           
+  12. max_call_duration              INTEGER         DEFAULT 600
+  13. record_calls                   INTEGER         DEFAULT 1
+  14. transcription_provider         TEXT            DEFAULT 'whisper'
+  15. business_hours                 TEXT           
+  16. after_hours_message            TEXT            DEFAULT 'We are currently closed. Please call back during business hours.'
+  17. transfer_number                TEXT           
+  18. enabled                        INTEGER         DEFAULT 1
+  19. created_at                     TEXT            DEFAULT datetime('now')
+  20. updated_at                     TEXT            DEFAULT datetime('now')
+
+  📊 عدد السجلات: 0
+
+📋 جدول: call_sessions
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY DEFAULT lower(hex(randomblob(16)))
+  2. call_point_id                  TEXT           
+  3. direction                      TEXT            NOT NULL
+  4. from_number                    TEXT            NOT NULL
+  5. to_number                      TEXT            NOT NULL
+  6. caller_name                    TEXT           
+  7. call_sid                       TEXT           
+  8. provider                       TEXT            DEFAULT 'twilio'
+  9. status                         TEXT            DEFAULT 'queued'
+  10. started_at                     TEXT           
+  11. answered_at                    TEXT           
+  12. ended_at                       TEXT           
+  13. duration_seconds               INTEGER        
+  14. recording_url                  TEXT           
+  15. recording_file_id              TEXT           
+  16. transcript                     TEXT           
+  17. agent_id                       TEXT           
+  18. workflow_execution_id          TEXT           
+  19. conversation_summary           TEXT           
+  20. created_at                     TEXT            DEFAULT datetime('now')
+
+  📊 عدد السجلات: 0
+
+📋 جدول: camera_sessions
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. room_id                        TEXT            NOT NULL DEFAULT ''
+  3. user_id                        TEXT            NOT NULL DEFAULT 'local'
+  4. agent_id                       TEXT            NOT NULL DEFAULT ''
+  5. mode                           TEXT            NOT NULL DEFAULT 'vision'
+  6. started_at                     TEXT            NOT NULL
+  7. ended_at                       TEXT           
+  8. duration_s                     INTEGER        
+  9. file_id                        TEXT           
+  10. frame_count                    INTEGER         NOT NULL DEFAULT 0
+  11. notes                          TEXT            NOT NULL DEFAULT ''
+  12. created_at                     TEXT            NOT NULL DEFAULT datetime('now')
+
+  📊 عدد السجلات: 0
+
+📋 جدول: channel_messages
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. session_id                     TEXT            NOT NULL
+  3. channel_id                     TEXT            NOT NULL
+  4. user_id                        TEXT            NOT NULL
+  5. role                           TEXT            NOT NULL
+  6. content                        TEXT            NOT NULL
+  7. delivered                      INTEGER         DEFAULT 0
+  8. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: chat_messages
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. session_id                     TEXT            NOT NULL
+  3. role                           TEXT            NOT NULL
+  4. content                        TEXT            NOT NULL
+  5. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 43
+
+📋 جدول: chat_sessions
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. user_id                        TEXT            NOT NULL
+  3. title                          TEXT           
+  4. model                          TEXT            NOT NULL
+  5. system_prompt                  TEXT           
+  6. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  7. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 30
+
+📋 جدول: cost_analytics
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             INTEGER         🔑 PRIMARY KEY
+  2. user_id                        TEXT            NOT NULL
+  3. session_id                     TEXT            NOT NULL
+  4. timestamp                      INTEGER         NOT NULL
+  5. model_used                     TEXT            NOT NULL
+  6. task_complexity                TEXT            NOT NULL
+  7. message_length                 INTEGER         NOT NULL DEFAULT 0
+  8. tools_used                     TEXT            NOT NULL DEFAULT ''
+  9. estimated_savings_percent      INTEGER         NOT NULL DEFAULT 0
+  10. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 1
+
+📋 جدول: credentials
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. name                           TEXT            NOT NULL
+  3. type                           TEXT            NOT NULL
+  4. encrypted_value                TEXT            NOT NULL
+  5. iv                             TEXT            NOT NULL
+  6. auth_tag                       TEXT            NOT NULL
+  7. description                    TEXT           
+  8. skill_id                       TEXT           
+  9. user_id                        TEXT           
+  10. refresh_token                  TEXT           
+  11. expires_at                     TEXT           
+  12. scopes                         TEXT           
+  13. created_at                     TEXT            NOT NULL
+  14. updated_at                     TEXT            NOT NULL
+  15. last_used                      TEXT           
+
+  📊 عدد السجلات: 0
+
+📋 جدول: cron_jobs
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. name                           TEXT            NOT NULL
+  3. description                    TEXT           
+  4. cron_expression                TEXT            NOT NULL
+  5. action_type                    TEXT            NOT NULL
+  6. action_data                    TEXT            NOT NULL
+  7. enabled                        INTEGER         NOT NULL DEFAULT 1
+  8. last_run                       DATETIME       
+  9. next_run                       DATETIME       
+  10. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  11. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 1
+
+📋 جدول: dashboard_widgets
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. name                           TEXT            NOT NULL
+  3. description                    TEXT           
+  4. component_type                 TEXT            NOT NULL
+  5. extension_id                   TEXT           
+  6. default_size                   TEXT            DEFAULT 'medium'
+  7. icon                           TEXT           
+  8. category                       TEXT           
+  9. data_endpoint                  TEXT           
+  10. refresh_interval               INTEGER         DEFAULT 60000
+  11. settings_schema                TEXT           
+  12. created_at                     TEXT            DEFAULT datetime('now')
+
+  📊 عدد السجلات: 10
+
+📋 جدول: extension_configs
+────────────────────────────────────────────────────────────────────────────────
+  1. extension_id                   TEXT            🔑 PRIMARY KEY
+  2. config_json                    TEXT            NOT NULL DEFAULT '{}'
+  3. enabled                        INTEGER         NOT NULL DEFAULT 0
+  4. installed_at                   TEXT            NOT NULL DEFAULT datetime('now')
+  5. updated_at                     TEXT            NOT NULL DEFAULT datetime('now')
+
+  📊 عدد السجلات: 0
+
+📋 جدول: extension_migrations
+────────────────────────────────────────────────────────────────────────────────
+  1. extension_id                   TEXT            🔑 PRIMARY KEY NOT NULL
+  2. filename                       TEXT            🔑 PRIMARY KEY NOT NULL
+  3. ran_at                         TEXT            NOT NULL DEFAULT datetime('now')
+
+  📊 عدد السجلات: 0
+
+📋 جدول: extensions
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. name                           TEXT            NOT NULL
+  3. version                        TEXT            NOT NULL DEFAULT '1.0.0'
+  4. description                    TEXT           
+  5. type                           TEXT            NOT NULL
+  6. enabled                        INTEGER         DEFAULT 1
+  7. file_path                      TEXT            NOT NULL
+  8. config                         TEXT           
+  9. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  10. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: gateway_sessions
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. user_id                        TEXT            NOT NULL
+  3. active_channels                TEXT            NOT NULL
+  4. context                        TEXT           
+  5. sync_enabled                   INTEGER         DEFAULT 1
+  6. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  7. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  8. expires_at                     DATETIME       
+
+  📊 عدد السجلات: 0
+
+📋 جدول: inbox_messages
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. user_id                        TEXT            NOT NULL
+  3. source_type                    TEXT            NOT NULL
+  4. source_id                      TEXT           
+  5. message                        TEXT            NOT NULL
+  6. metadata                       JSON            DEFAULT '{}'
+  7. status                         TEXT            NOT NULL DEFAULT 'pending'
+  8. risk_level                     TEXT           
+  9. auto_executed                  BOOLEAN         DEFAULT 0
+  10. approval_needed                BOOLEAN         DEFAULT 0
+  11. approval_status                TEXT           
+  12. approved_by                    TEXT           
+  13. approved_at                    DATETIME       
+  14. result                         JSON           
+  15. error                          TEXT           
+  16. received_at                    DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP
+  17. processed_at                   DATETIME       
+  18. completed_at                   DATETIME       
+
+  📊 عدد السجلات: 0
+
+📋 جدول: job_executions
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             INTEGER         🔑 PRIMARY KEY
+  2. job_id                         TEXT            NOT NULL
+  3. success                        INTEGER         NOT NULL
+  4. output                         TEXT           
+  5. error                          TEXT           
+  6. executed_at                    DATETIME        NOT NULL
+  7. duration                       INTEGER        
+
+  📊 عدد السجلات: 1
+
+📋 جدول: login_attempts
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             INTEGER         🔑 PRIMARY KEY
+  2. email                          TEXT            NOT NULL
+  3. ip_address                     TEXT           
+  4. user_agent                     TEXT           
+  5. attempted_at                   TIMESTAMP       DEFAULT CURRENT_TIMESTAMP
+  6. success                        INTEGER         NOT NULL DEFAULT 0
+
+  📊 عدد السجلات: 2
+
+📋 جدول: memories
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. user_id                        TEXT            NOT NULL
+  3. type                           TEXT            NOT NULL
+  4. content                        TEXT            NOT NULL
+  5. embedding                      TEXT           
+  6. memory_layer                   TEXT            DEFAULT 'factual'
+  7. status                         TEXT            DEFAULT 'active'
+  8. metadata                       TEXT           
+  9. importance_score               REAL            DEFAULT 0.5
+  10. tags                           TEXT           
+  11. created_at                     TEXT            NOT NULL
+  12. last_accessed_at               INTEGER        
+  13. access_count                   INTEGER         DEFAULT 0
+  14. expiry_timestamp               INTEGER        
+  15. consolidation_status           TEXT            DEFAULT 'pending'
+
+  📊 عدد السجلات: 0
+
+📋 جدول: memory_entries
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. user_id                        TEXT            NOT NULL
+  3. type                           TEXT            NOT NULL
+  4. key                            TEXT            NOT NULL
+  5. value                          TEXT            NOT NULL
+  6. importance                     REAL            DEFAULT 0.5
+  7. embeddings                     BLOB           
+  8. metadata                       TEXT           
+  9. accessed_count                 INTEGER         DEFAULT 0
+  10. last_accessed_at               DATETIME       
+  11. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  12. expires_at                     DATETIME       
+
+  📊 عدد السجلات: 0
+
+📋 جدول: migrations
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. name                           TEXT            NOT NULL
+  3. applied_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 36
+
+📋 جدول: notification_schedules
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY DEFAULT lower(hex(randomblob(8)))
+  2. user_id                        TEXT            NOT NULL
+  3. title                          TEXT            NOT NULL
+  4. body                           TEXT            NOT NULL DEFAULT ''
+  5. type                           TEXT            NOT NULL DEFAULT 'reminder'
+  6. schedule_type                  TEXT            NOT NULL DEFAULT 'daily'
+  7. schedule_time                  TEXT            NOT NULL DEFAULT '09:00'
+  8. schedule_days                  TEXT           
+  9. schedule_date                  TEXT           
+  10. channels                       TEXT            NOT NULL DEFAULT '["in_app"]'
+  11. is_active                      INTEGER         NOT NULL DEFAULT 1
+  12. last_fired_at                  DATETIME       
+  13. next_fire_at                   DATETIME       
+  14. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: notification_settings
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY DEFAULT lower(hex(randomblob(8)))
+  2. user_id                        TEXT            NOT NULL
+  3. channel_in_app                 INTEGER         NOT NULL DEFAULT 1
+  4. channel_email                  INTEGER         NOT NULL DEFAULT 0
+  5. channel_push                   INTEGER         NOT NULL DEFAULT 0
+  6. channel_whatsapp               INTEGER         NOT NULL DEFAULT 0
+  7. channel_sound                  INTEGER         NOT NULL DEFAULT 1
+  8. email_address                  TEXT           
+  9. email_digest                   TEXT            NOT NULL DEFAULT 'realtime'
+  10. whatsapp_phone                 TEXT           
+  11. dnd_enabled                    INTEGER         NOT NULL DEFAULT 0
+  12. dnd_start                      TEXT            NOT NULL DEFAULT '22:00'
+  13. dnd_end                        TEXT            NOT NULL DEFAULT '08:00'
+  14. notify_task_complete           INTEGER         NOT NULL DEFAULT 1
+  15. notify_agent_error             INTEGER         NOT NULL DEFAULT 1
+  16. notify_skill_exec              INTEGER         NOT NULL DEFAULT 0
+  17. notify_workflow                INTEGER         NOT NULL DEFAULT 1
+  18. notify_security                INTEGER         NOT NULL DEFAULT 1
+  19. notify_system                  INTEGER         NOT NULL DEFAULT 1
+  20. push_subscription              TEXT           
+  21. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: notifications
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY DEFAULT lower(hex(randomblob(8)))
+  2. user_id                        TEXT            NOT NULL
+  3. title                          TEXT            NOT NULL
+  4. body                           TEXT            NOT NULL DEFAULT ''
+  5. type                           TEXT            NOT NULL DEFAULT 'info'
+  6. channel                        TEXT            NOT NULL DEFAULT 'in_app'
+  7. is_read                        INTEGER         NOT NULL DEFAULT 0
+  8. action_url                     TEXT           
+  9. meta                           TEXT           
+  10. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: phone_numbers
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY DEFAULT lower(hex(randomblob(16)))
+  2. phone_number                   TEXT            NOT NULL
+  3. friendly_name                  TEXT           
+  4. country_code                   TEXT           
+  5. capabilities                   TEXT           
+  6. provider                       TEXT            DEFAULT 'twilio'
+  7. provider_sid                   TEXT           
+  8. status                         TEXT            DEFAULT 'active'
+  9. monthly_cost                   REAL           
+  10. purchased_at                   TEXT           
+  11. created_at                     TEXT            DEFAULT datetime('now')
+  12. updated_at                     TEXT            DEFAULT datetime('now')
+
+  📊 عدد السجلات: 0
+
+📋 جدول: public_chat_messages
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. room_id                        TEXT            NOT NULL
+  3. user_id                        TEXT           
+  4. username                       TEXT            NOT NULL
+  5. role                           TEXT            NOT NULL
+  6. content                        TEXT            NOT NULL
+  7. created_at                     TEXT            DEFAULT datetime('now')
+
+  📊 عدد السجلات: 0
+
+📋 جدول: public_chat_participants
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. room_id                        TEXT            NOT NULL
+  3. user_id                        TEXT           
+  4. username                       TEXT            NOT NULL
+  5. joined_at                      TEXT            DEFAULT datetime('now')
+  6. last_seen_at                   TEXT            DEFAULT datetime('now')
+
+  📊 عدد السجلات: 0
+
+📋 جدول: public_chat_rooms
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. name                           TEXT            NOT NULL
+  3. description                    TEXT           
+  4. owner_user_id                  TEXT            NOT NULL
+  5. model                          TEXT            DEFAULT 'claude-sonnet-4.5'
+  6. system_prompt                  TEXT           
+  7. agent_id                       TEXT           
+  8. workflow_id                    TEXT           
+  9. skills                         TEXT           
+  10. avatar_url                     TEXT           
+  11. avatar_gender                  TEXT            DEFAULT 'female'
+  12. bg_color                       TEXT            DEFAULT '#09090b'
+  13. bg_scene                       TEXT            DEFAULT 'none'
+  14. wall_text                      TEXT           
+  15. wall_logo_url                  TEXT           
+  16. wall_video_url                 TEXT           
+  17. wall_layout                    TEXT           
+  18. fx_state                       TEXT           
+  19. is_public                      INTEGER         DEFAULT 1
+  20. require_auth                   INTEGER         DEFAULT 0
+  21. allowed_users                  TEXT           
+  22. max_message_length             INTEGER         DEFAULT 1000
+  23. rate_limit_seconds             INTEGER         DEFAULT 5
+  24. enable_voice                   INTEGER         DEFAULT 1
+  25. enable_avatar                  INTEGER         DEFAULT 1
+  26. enable_developer_mode          INTEGER         DEFAULT 0
+  27. embed_enabled                  INTEGER         DEFAULT 1
+  28. embed_size                     TEXT            DEFAULT 'medium'
+  29. embed_theme                    TEXT            DEFAULT 'auto'
+  30. message_count                  INTEGER         DEFAULT 0
+  31. participant_count              INTEGER         DEFAULT 0
+  32. created_at                     TEXT            DEFAULT datetime('now')
+  33. updated_at                     TEXT            DEFAULT datetime('now')
+
+  📊 عدد السجلات: 0
+
+📋 جدول: scheduled_jobs
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. user_id                        TEXT            NOT NULL
+  3. name                           TEXT            NOT NULL
+  4. description                    TEXT           
+  5. cron_expression                TEXT            NOT NULL
+  6. enabled                        INTEGER         DEFAULT 1
+  7. workflow_id                    TEXT           
+  8. action                         TEXT            NOT NULL
+  9. last_run_at                    DATETIME       
+  10. next_run_at                    DATETIME       
+  11. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  12. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: settings
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. user_id                        TEXT           
+  3. category                       TEXT            NOT NULL
+  4. key                            TEXT            NOT NULL
+  5. value                          TEXT            NOT NULL
+  6. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  7. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: skill_secrets
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. skill_id                       TEXT            NOT NULL
+  3. user_id                        TEXT            NOT NULL
+  4. key                            TEXT            NOT NULL
+  5. encrypted_value                TEXT            NOT NULL
+  6. iv                             TEXT            NOT NULL
+  7. auth_tag                       TEXT            NOT NULL
+  8. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  9. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: skill_settings
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. skill_id                       TEXT            NOT NULL
+  3. user_id                        TEXT            NOT NULL
+  4. settings                       TEXT            NOT NULL
+  5. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: skills
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. name                           TEXT            NOT NULL
+  3. version                        TEXT            NOT NULL DEFAULT '1.0.0'
+  4. description                    TEXT           
+  5. enabled                        INTEGER         DEFAULT 1
+  6. source                         TEXT            NOT NULL
+  7. file_path                      TEXT            NOT NULL
+  8. settings_schema                TEXT           
+  9. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  10. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: sqlite_sequence
+────────────────────────────────────────────────────────────────────────────────
+  1. name                                          
+  2. seq                                           
+
+  📊 عدد السجلات: 4
+
+📋 جدول: storage_files
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. zone                           TEXT            NOT NULL
+  3. category                       TEXT            NOT NULL
+  4. filename                       TEXT            NOT NULL
+  5. filepath                       TEXT            NOT NULL
+  6. original_name                  TEXT           
+  7. mime_type                      TEXT           
+  8. size_bytes                     INTEGER         DEFAULT 0
+  9. description                    TEXT           
+  10. tags                           TEXT           
+  11. ttl                            TEXT            NOT NULL DEFAULT 'persistent'
+  12. expires_at                     DATETIME       
+  13. source_url                     TEXT           
+  14. created_by                     TEXT            NOT NULL DEFAULT 'system'
+  15. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  16. last_accessed                  DATETIME       
+  17. access_count                   INTEGER         DEFAULT 0
+
+  📊 عدد السجلات: 56
+
+📋 جدول: team_invitations
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. team_id                        TEXT            NOT NULL
+  3. email                          TEXT            NOT NULL
+  4. role                           TEXT            NOT NULL
+  5. invited_by                     TEXT            NOT NULL
+  6. token                          TEXT            NOT NULL
+  7. status                         TEXT            NOT NULL DEFAULT 'pending'
+  8. expires_at                     DATETIME        NOT NULL
+  9. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: team_members
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. team_id                        TEXT            NOT NULL
+  3. user_id                        TEXT            NOT NULL
+  4. role                           TEXT            NOT NULL
+  5. invited_by                     TEXT           
+  6. joined_at                      DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: teams
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. name                           TEXT            NOT NULL
+  3. description                    TEXT           
+  4. owner_id                       TEXT            NOT NULL
+  5. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  6. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: user_avatars
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY DEFAULT lower(hex(randomblob(16)))
+  2. user_id                        TEXT            NOT NULL
+  3. name                           TEXT            NOT NULL DEFAULT 'Avatar'
+  4. source                         TEXT            NOT NULL DEFAULT 'url'
+  5. glb_url                        TEXT           
+  6. local_glb_path                 TEXT           
+  7. preview_url                    TEXT           
+  8. bg_color                       TEXT            DEFAULT '#0a0a0a'
+  9. bg_scene                       TEXT            DEFAULT 'none'
+  10. is_active                      INTEGER         DEFAULT 0
+  11. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 1
+
+📋 جدول: user_dashboard_layouts
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. user_id                        TEXT            NOT NULL
+  3. layout_name                    TEXT            DEFAULT 'default'
+  4. widgets                        TEXT            NOT NULL
+  5. is_active                      INTEGER         DEFAULT 1
+  6. created_at                     TEXT            DEFAULT datetime('now')
+  7. updated_at                     TEXT            DEFAULT datetime('now')
+
+  📊 عدد السجلات: 0
+
+📋 جدول: user_worlds
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. user_id                        TEXT            NOT NULL
+  3. name                           TEXT            NOT NULL
+  4. description                    TEXT           
+  5. glb_file_id                    TEXT           
+  6. thumbnail_file_id              TEXT           
+  7. is_public                      INTEGER         DEFAULT 0
+  8. max_players                    INTEGER         DEFAULT 1
+  9. spawn_position_x               REAL            DEFAULT 0
+  10. spawn_position_y               REAL            DEFAULT 0
+  11. spawn_position_z               REAL            DEFAULT 5
+  12. created_at                     TEXT            DEFAULT datetime('now')
+  13. updated_at                     TEXT            DEFAULT datetime('now')
+
+  📊 عدد السجلات: 1
+
+📋 جدول: users
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. email                          TEXT            NOT NULL
+  3. username                       TEXT            NOT NULL
+  4. password_hash                  TEXT            NOT NULL
+  5. full_name                      TEXT           
+  6. avatar_url                     TEXT           
+  7. role                           TEXT            NOT NULL DEFAULT 'user'
+  8. status                         TEXT            NOT NULL DEFAULT 'active'
+  9. email_verified                 INTEGER         DEFAULT 0
+  10. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  11. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  12. last_login_at                  DATETIME       
+  13. bio                            TEXT            NOT NULL DEFAULT ''
+  14. company                        TEXT            NOT NULL DEFAULT ''
+  15. location                       TEXT            NOT NULL DEFAULT ''
+  16. website                        TEXT            NOT NULL DEFAULT ''
+  17. timezone                       TEXT            NOT NULL DEFAULT 'UTC'
+  18. profile_picture_url            TEXT           
+  19. token_version                  INTEGER         NOT NULL DEFAULT 1
+  20. locked_until                   TIMESTAMP      
+  21. failed_attempts                INTEGER         NOT NULL DEFAULT 0
+
+  📊 عدد السجلات: 3
+
+📋 جدول: voice_messages
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY DEFAULT lower(hex(randomblob(16)))
+  2. session_id                     TEXT            NOT NULL
+  3. message_id                     TEXT            NOT NULL
+  4. audio_url                      TEXT           
+  5. language                       TEXT           
+  6. transcript                     TEXT           
+  7. duration_seconds               REAL           
+  8. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: waf_scans
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. target_url                     TEXT            NOT NULL
+  3. scan_type                      TEXT            NOT NULL DEFAULT 'external'
+  4. waf_detected                   INTEGER         NOT NULL DEFAULT 0
+  5. waf_type                       TEXT           
+  6. waf_confidence                 INTEGER         NOT NULL DEFAULT 0
+  7. total_payloads                 INTEGER         NOT NULL DEFAULT 0
+  8. blocked_count                  INTEGER         NOT NULL DEFAULT 0
+  9. passed_count                   INTEGER         NOT NULL DEFAULT 0
+  10. bypass_rate                    REAL            NOT NULL DEFAULT 0
+  11. risk_level                     TEXT           
+  12. results_json                   TEXT           
+  13. status                         TEXT            NOT NULL DEFAULT 'pending'
+  14. started_at                     TEXT            NOT NULL
+  15. ended_at                       TEXT           
+  16. created_at                     TEXT            NOT NULL DEFAULT datetime('now')
+
+  📊 عدد السجلات: 0
+
+📋 جدول: workflow_executions
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. workflow_id                    TEXT            NOT NULL
+  3. status                         TEXT            NOT NULL
+  4. started_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  5. completed_at                   DATETIME       
+  6. error                          TEXT           
+  7. logs                           TEXT           
+
+  📊 عدد السجلات: 0
+
+📋 جدول: workflows
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. user_id                        TEXT            NOT NULL
+  3. name                           TEXT            NOT NULL
+  4. description                    TEXT           
+  5. enabled                        INTEGER         DEFAULT 1
+  6. nodes                          TEXT            NOT NULL
+  7. edges                          TEXT            NOT NULL
+  8. created_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+  9. updated_at                     DATETIME        DEFAULT CURRENT_TIMESTAMP
+
+  📊 عدد السجلات: 0
+
+📋 جدول: world_bots
+────────────────────────────────────────────────────────────────────────────────
+  1. id                             TEXT            🔑 PRIMARY KEY
+  2. world_id                       TEXT            NOT NULL
+  3. agent_id                       TEXT            NOT NULL
+  4. position_x                     REAL            NOT NULL DEFAULT 0
+  5. position_y                     REAL            NOT NULL DEFAULT 0
+  6. position_z                     REAL            NOT NULL DEFAULT 0
+  7. rotation_y                     REAL            NOT NULL DEFAULT 0
+  8. animation_url                  TEXT           
+  9. is_active                      INTEGER         NOT NULL DEFAULT 1
+  10. created_at                     TEXT            NOT NULL DEFAULT datetime('now')
+  11. updated_at                     TEXT            NOT NULL DEFAULT datetime('now')
+  12. behavior_type                  TEXT            NOT NULL DEFAULT 'static'
+  13. patrol_path                    TEXT           
+  14. movement_speed                 REAL            NOT NULL DEFAULT 1.0
+  15. animation_state                TEXT            NOT NULL DEFAULT 'idle'
+  16. interaction_radius             REAL            NOT NULL DEFAULT 3.0
+  17. current_waypoint               INTEGER         NOT NULL DEFAULT 0
+
+  📊 عدد السجلات: 0
+
+================================================================================
