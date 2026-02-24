@@ -42,15 +42,21 @@ export default {
 EOF
 ```
 
-## Installed Extensions
+## Installed Extensions (11 Total)
 
 | Extension | Type | Status | Description |
 |-----------|------|--------|-------------|
 | **WAF Security** | tool | ✅ Active | Test WAF protection + self-audit |
-| **Discord** | channel | ✅ Migrated | Discord messaging (new SDK) |
-| **Slack** | channel | ✅ Migrated | Slack workspace integration (new SDK) |
-| **Telegram** | channel | ✅ Migrated | Telegram bot API (new SDK) |
-| **WhatsApp** | channel | ✅ Migrated | WhatsApp Business via Twilio (new SDK) |
+| **Discord** | channel | ✅ Active | Discord messaging (new SDK) |
+| **Slack** | channel | ✅ Active | Slack workspace integration (new SDK) |
+| **Telegram** | channel | ✅ Active | Telegram bot API (new SDK) |
+| **WhatsApp** | channel | ✅ Active | WhatsApp Business via Twilio (new SDK) |
+| **Call Center** | integration | ✅ Active | Phone call handling system |
+| **Email Client** | app | ✅ Active | Multi-account email (Gmail, Outlook, IMAP) |
+| **SEO Tools** | tool | ✅ Active | SEO analysis and optimization |
+| **Calendar** 🆕 | app | ✅ Active | Google Calendar + iCal sync, events |
+| **Team** 🆕 | app | ✅ Active | Team collaboration, members, invitations |
+| **Public Chat** 🆕 | app | ✅ Active | Multi-user chat rooms with AI agents |
 
 ## What You Can Build
 
@@ -102,12 +108,42 @@ my-extension/
 
 ### 4. Frontend Integration (Optional)
 
-Add dashboard page in main app:
+**🆕 Dynamic Routing (Recommended)** - Routes auto-appear/disappear in sidebar:
+
+Add `frontendRoutes` to your manifest:
+```json
+{
+  "frontendRoutes": [
+    {
+      "path": "/dashboard/my-extension",
+      "name": "My Extension",
+      "icon": "Puzzle",
+      "position": "main"
+    }
+  ]
+}
+```
+
+Then create the page:
 ```
 src/app/(dashboard)/dashboard/my-extension/page.tsx
 ```
 
-Update sidebar:
+**How it works:**
+- ✅ Enable extension → route appears in sidebar automatically
+- ✅ Disable extension → route disappears from sidebar
+- ✅ No manual sidebar editing needed
+- ✅ Works exactly like Discord/Slack extensions
+
+**Available icons:** Any lucide-react icon name (Calendar, Users, MessagesSquare, Puzzle, etc.)
+
+**Positions:**
+- `"main"` - Main navigation section
+- `"settings"` - Settings submenu
+- `"developer"` - Developer submenu (requires dev mode)
+
+**Legacy Method (Not Recommended):**
+Manually update sidebar:
 ```typescript
 // src/components/dashboard/sidebar.tsx
 { name: 'My Extension', href: '/dashboard/my-extension', icon: Puzzle }
