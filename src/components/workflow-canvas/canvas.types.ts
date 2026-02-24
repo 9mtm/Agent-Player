@@ -1,7 +1,7 @@
 import type { Node, Edge, XYPosition } from '@xyflow/react';
 
 /**
- * Canvas Node Types - inspired by n8n
+ * Canvas Node Types
  */
 export enum NodeType {
   Trigger = 'trigger',

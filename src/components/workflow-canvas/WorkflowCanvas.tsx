@@ -664,7 +664,7 @@ export function WorkflowCanvas({
           deleteKeyCode="Delete" // Delete key removes selected nodes
           selectionMode="partial" // Select nodes that partially intersect with box
           snapToGrid={true} // Enable grid snapping
-          snapGrid={[16, 16]} // Snap to 16px grid (n8n standard)
+          snapGrid={[16, 16]} // Snap to 16px grid
         >
           <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
           <Controls />
@@ -779,7 +779,7 @@ export function WorkflowCanvas({
           }}
         />
 
-        {/* Floating Action Buttons (n8n style) */}
+        {/* Floating Action Buttons */}
         <FloatingActionButtons
           onAddNode={() => setIsNodeCreatorOpen(true)}
           onSearch={() => setIsSearchPanelOpen(true)}

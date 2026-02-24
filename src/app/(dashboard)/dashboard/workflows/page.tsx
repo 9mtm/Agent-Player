@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Play, Edit, Trash2, Loader2, Download, Upload } from "lucide-react";
+import { Plus, Play, Edit, Trash2, Loader2 } from "lucide-react";
 import { toast } from 'sonner';
 
 interface Workflow {
@@ -77,36 +77,6 @@ export default function WorkflowsPage() {
         }
     };
 
-    const handleImportN8n = async () => {
-        const fileInput = document.createElement('input');
-        fileInput.type = 'file';
-        fileInput.accept = '.json';
-        fileInput.onchange = async (e: any) => {
-            const file = e.target.files[0];
-            if (!file) return;
-
-            try {
-                const text = await file.text();
-                const response = await fetch(`${BACKEND_URL}/api/workflows/import/n8n`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ n8nWorkflow: text })
-                });
-
-                if (response.ok) {
-                    toast.success('n8n workflow imported successfully!');
-                    fetchWorkflows();
-                } else {
-                    const error = await response.json();
-                    toast.error(`Import failed: ${error.error}`);
-                }
-            } catch (error) {
-                toast.error('Failed to import n8n workflow');
-            }
-        };
-        fileInput.click();
-    };
-
     if (isLoading) {
         return (
             <div className="flex items-center justify-center h-96">
@@ -124,18 +94,12 @@ export default function WorkflowsPage() {
                         Create and manage automation workflows
                     </p>
                 </div>
-                <div className="flex gap-2">
-                    <Button variant="outline" onClick={handleImportN8n}>
-                        <Upload className="mr-2 h-4 w-4" />
-                        Import n8n
+                <Link href="/dashboard/workflows/new">
+                    <Button>
+                        <Plus className="mr-2 h-4 w-4" />
+                        New Workflow
                     </Button>
-                    <Link href="/dashboard/workflows/new">
-                        <Button>
-                            <Plus className="mr-2 h-4 w-4" />
-                            New Workflow
-                        </Button>
-                    </Link>
-                </div>
+                </Link>
             </div>
 
             {workflows.length === 0 ? (
@@ -148,18 +112,12 @@ export default function WorkflowsPage() {
                         <p className="text-muted-foreground text-center mb-4">
                             Get started by creating your first automation workflow
                         </p>
-                        <div className="flex gap-2">
-                            <Link href="/dashboard/workflows/new">
-                                <Button>
-                                    <Plus className="mr-2 h-4 w-4" />
-                                    Create Workflow
-                                </Button>
-                            </Link>
-                            <Button variant="outline" onClick={handleImportN8n}>
-                                <Upload className="mr-2 h-4 w-4" />
-                                Import n8n
+                        <Link href="/dashboard/workflows/new">
+                            <Button>
+                                <Plus className="mr-2 h-4 w-4" />
+                                Create Workflow
                             </Button>
-                        </div>
+                        </Link>
                     </CardContent>
                 </Card>
             ) : (

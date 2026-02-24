@@ -1,6 +1,5 @@
 /**
- * Canvas constants - Matching n8n exactly
- * Based on: packages/frontend/editor-ui/src/app/utils/nodeViewUtils.ts
+ * Canvas constants
  */
 
 export const GRID_SIZE = 16;

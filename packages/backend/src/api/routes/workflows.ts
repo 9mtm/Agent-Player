@@ -7,7 +7,6 @@ import { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { randomUUID } from 'crypto';
 import { WorkflowExecutor } from '../../workflows/executor.js';
-import { N8nImporter } from '../../workflows/n8n-importer.js';
 import { handleError } from '../error-handler.js';
 
 interface WorkflowNode {
@@ -412,62 +411,6 @@ export async function workflowRoutes(fastify: FastifyInstance) {
             console.error('Error fetching executions:', error);
             // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
             return handleError(reply, error, 'internal', '[Workflows] Get executions failed');
-        }
-    });
-
-    // Import n8n workflow
-    fastify.post('/api/workflows/import/n8n', async (request, reply) => {
-        try {
-            const { n8nWorkflow } = request.body as { n8nWorkflow: string };
-
-            if (!n8nWorkflow) {
-                return reply.status(400).send({ error: 'n8nWorkflow JSON is required' });
-            }
-
-            // Parse and convert n8n workflow
-            const converted = N8nImporter.parse(n8nWorkflow);
-
-            const user_id = getUserId();
-            const id = randomUUID();
-            const now = new Date().toISOString();
-
-            // Save to database
-            db.getDb().prepare(`
-                INSERT INTO workflows (id, user_id, name, description, enabled, nodes, edges, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
-                id,
-                user_id,
-                converted.name,
-                converted.description,
-                converted.enabled ? 1 : 0,
-                JSON.stringify(converted.nodes),
-                JSON.stringify(converted.edges),
-                now,
-                now
-            );
-
-            const workflow = {
-                id,
-                user_id,
-                name: converted.name,
-                description: converted.description,
-                enabled: converted.enabled,
-                nodes: converted.nodes,
-                edges: converted.edges,
-                created_at: now,
-                updated_at: now
-            };
-
-            return reply.status(201).send({
-                success: true,
-                message: 'n8n workflow imported successfully',
-                workflow
-            });
-        } catch (error: any) {
-            console.error('Error importing n8n workflow:', error);
-            // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
-            return handleError(reply, error, 'internal', '[Workflows] Import n8n failed');
         }
     });
 

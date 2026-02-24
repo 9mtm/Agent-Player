@@ -1,14 +1,13 @@
 /**
- * Workflow Canvas Theme - Matching n8n exactly
- * Based on n8n design system (var.scss and Canvas.vue)
+ * Workflow Canvas Theme
  */
 
 :root {
-  /* n8n Primary Colors */
-  --n8n-color-primary: #ff6d5a;
-  --n8n-color-primary-shade-1: #ff5240;
-  --n8n-color-primary-tint-1: #ff8374;
-  --n8n-color-secondary: #7747f0;
+  /* Primary Colors */
+  --workflow-color-primary: #ff6d5a;
+  --workflow-color-primary-shade-1: #ff5240;
+  --workflow-color-primary-tint-1: #ff8374;
+  --workflow-color-secondary: #7747f0;
 
   /* Canvas Background - Light Mode */
   --canvas-background: #f9fafb;
@@ -134,7 +133,7 @@
 
 /* Running Edge State - faster animation with primary color */
 .react-flow__edge.running path {
-  stroke: var(--n8n-color-secondary);
+  stroke: var(--workflow-color-secondary);
   stroke-width: 2.5px;
   stroke-dasharray: 8 4;
   animation: dashdraw-running 0.3s linear infinite;
@@ -261,7 +260,7 @@
 
 /* Connection line styling during drag */
 .react-flow__connection-path {
-  stroke: var(--n8n-color-secondary);
+  stroke: var(--workflow-color-secondary);
   stroke-width: 2px;
   stroke-dasharray: 5;
   animation: dashdraw 0.3s linear infinite;
@@ -359,8 +358,8 @@
 }
 
 .edge-button:hover {
-  background: var(--n8n-color-secondary);
-  border-color: var(--n8n-color-secondary);
+  background: var(--workflow-color-secondary);
+  border-color: var(--workflow-color-secondary);
   transform: scale(1.2);
 }
 
