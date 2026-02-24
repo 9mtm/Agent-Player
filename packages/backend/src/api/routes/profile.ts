@@ -185,4 +185,42 @@ export async function profileRoutes(fastify: FastifyInstance) {
       return handleError(reply, error, 'internal', '[Profile] Upload picture failed');
     }
   });
+
+  // DELETE /api/profile/picture — remove profile picture
+  fastify.delete('/api/profile/picture', async (request, reply) => {
+    try {
+      const userId = getUserIdFromRequest(request, reply);
+      if (!userId) {
+        return reply.status(401).send({ error: 'Unauthorized' });
+      }
+
+      const db = getDatabase();
+
+      // Get current picture URL to delete file
+      const user = db.prepare('SELECT profile_picture_url FROM users WHERE id = ?').get(userId) as { profile_picture_url: string | null } | undefined;
+
+      // Delete file if exists
+      if (user?.profile_picture_url) {
+        try {
+          const projectRoot = path.join(process.cwd(), '..', '..');
+          const filePath = path.join(projectRoot, 'public', user.profile_picture_url);
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        } catch (err) {
+          // File deletion failed - continue anyway to update database
+          fastify.log.warn('[Profile] Failed to delete file:', err);
+        }
+      }
+
+      // Update database
+      db.prepare('UPDATE users SET profile_picture_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .run(userId);
+
+      return reply.send({ success: true });
+    } catch (error: any) {
+      // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
+      return handleError(reply, error, 'internal', '[Profile] Delete picture failed');
+    }
+  });
 }

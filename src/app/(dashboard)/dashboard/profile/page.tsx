@@ -103,6 +103,20 @@ export default function ProfilePage() {
     finally { setUploadingPic(false); }
   };
 
+  const removePicture = async () => {
+    try {
+      const res = await fetch(`${config.backendUrl}/api/profile/picture`, {
+        method: 'DELETE',
+        headers: authHeaders()
+      });
+      const data = await res.json();
+      if (data.success) {
+        setProfile(prev => ({ ...prev, profilePictureUrl: null }));
+        updateUser({ avatar: null });
+      }
+    } catch {}
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -154,7 +168,7 @@ export default function ProfilePage() {
                   Upload
                 </Button>
                 {profile.profilePictureUrl && (
-                  <Button variant="ghost" size="sm" onClick={() => setProfile(prev => ({ ...prev, profilePictureUrl: null }))}>
+                  <Button variant="ghost" size="sm" onClick={removePicture}>
                     Remove
                   </Button>
                 )}

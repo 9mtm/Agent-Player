@@ -3,6 +3,7 @@
 import { Bell, Search, User, LogOut, Bot, Settings, UserCircle, Shield, Moon, Sun, Monitor } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -28,6 +29,12 @@ export function Header() {
 
     const handleLogout = async () => {
         await logout();
+    };
+
+    // Get first letter for avatar fallback
+    const getInitial = (name?: string) => {
+        if (!name) return 'U';
+        return name.trim()[0].toUpperCase();
     };
 
     return (
@@ -71,24 +78,24 @@ export function Header() {
                 <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                         <Button variant="ghost" size="sm" className="gap-2">
-                            {user?.avatar ? (
-                                <img src={user.avatar} alt="" className="h-6 w-6 rounded-full object-cover" />
-                            ) : (
-                                <UserCircle className="h-5 w-5" />
-                            )}
+                            <Avatar className="h-6 w-6">
+                                <AvatarImage src={user?.avatar || undefined} alt={user?.name || 'User'} />
+                                <AvatarFallback className="text-xs">
+                                    {getInitial(user?.name)}
+                                </AvatarFallback>
+                            </Avatar>
                             <span className="text-sm">{user?.name || 'User'}</span>
                         </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-64">
                         <DropdownMenuLabel>
                             <div className="flex items-center gap-2">
-                                {user?.avatar ? (
-                                    <img src={user.avatar} alt="" className="h-8 w-8 rounded-full object-cover shrink-0" />
-                                ) : (
-                                    <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center shrink-0">
-                                        <User className="h-4 w-4 text-muted-foreground" />
-                                    </div>
-                                )}
+                                <Avatar className="h-8 w-8">
+                                    <AvatarImage src={user?.avatar || undefined} alt={user?.name || 'User'} />
+                                    <AvatarFallback className="text-sm">
+                                        {getInitial(user?.name)}
+                                    </AvatarFallback>
+                                </Avatar>
                                 <div className="flex flex-col min-w-0">
                                     <p className="text-sm font-medium truncate">{user?.name || 'User'}</p>
                                     <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
