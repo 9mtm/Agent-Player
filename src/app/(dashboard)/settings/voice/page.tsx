@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { Volume2, Play, Loader2, Check, X, Plus, Key, Mic, User, Users, Eye, EyeOff, Globe } from 'lucide-react';
+import { Volume2, Play, Loader2, Check, X, Plus, Key, Mic, User, Users, Eye, EyeOff, Globe, Upload, Sparkles } from 'lucide-react';
 import { config } from '@/lib/config';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -37,7 +37,7 @@ const PROVIDERS: TtsProvider[] = [
     id: 'edge-tts',
     name: 'Microsoft Edge TTS',
     logo: null,
-    description: 'Free, high-quality voices powered by Microsoft — no API key needed.',
+    description: 'RECOMMENDED: Free, high-quality voices powered by Microsoft — Fast (2-3s) and no API key needed.',
     type: 'local',
     requiresKey: false,
     voices: [
@@ -51,6 +51,27 @@ const PROVIDERS: TtsProvider[] = [
       { id: 'fr-FR-DeniseNeural',  name: 'Denise (FR)',     lang: 'fr-FR', gender: 'female' },
       { id: 'de-DE-KatjaNeural',   name: 'Katja (DE)',      lang: 'de-DE', gender: 'female' },
       { id: 'es-ES-ElviraNeural',  name: 'Elvira (ES)',     lang: 'es-ES', gender: 'female' },
+    ],
+  },
+  {
+    id: 'qwen',
+    name: 'Qwen3-TTS',
+    logo: null,
+    description: 'ADVANCED: FREE professional TTS by Alibaba — Voice cloning, emotional control, 10 languages. ⚠️ Requires GPU for fast generation (7-10s), very slow on CPU (150+s).',
+    type: 'local',
+    requiresKey: false,
+    voices: [
+      { id: 'qwen-default-en-f', name: 'Default English (F)', lang: 'en', gender: 'female' },
+      { id: 'qwen-default-en-m', name: 'Default English (M)', lang: 'en', gender: 'male' },
+      { id: 'qwen-default-ar-f', name: 'Default Arabic (F)',  lang: 'ar', gender: 'female' },
+      { id: 'qwen-default-ar-m', name: 'Default Arabic (M)',  lang: 'ar', gender: 'male' },
+      { id: 'qwen-default-zh-f', name: 'Default Chinese (F)', lang: 'zh', gender: 'female' },
+      { id: 'qwen-default-zh-m', name: 'Default Chinese (M)', lang: 'zh', gender: 'male' },
+      { id: 'qwen-default-fr-f', name: 'Default French (F)',  lang: 'fr', gender: 'female' },
+      { id: 'qwen-default-de-f', name: 'Default German (F)',  lang: 'de', gender: 'female' },
+      { id: 'qwen-default-es-f', name: 'Default Spanish (F)', lang: 'es', gender: 'female' },
+      { id: 'qwen-default-ja-f', name: 'Default Japanese (F)',lang: 'ja', gender: 'female' },
+      { id: 'clone',             name: 'Voice Clone',        lang: 'multi', gender: 'neutral' },
     ],
   },
   {
@@ -130,39 +151,199 @@ export default function VoiceSettingsPage() {
   const [previewing, setPreviewing]         = useState(false);
   const [saving, setSaving]                 = useState(false);
   const [saved, setSaved]                   = useState(false);
+  const [cloneFile, setCloneFile]           = useState<File | null>(null);
+  const [cloneUploading, setCloneUploading] = useState(false);
+  const [cloneAudioUrl, setCloneAudioUrl]   = useState<string | null>(null);
+  const [emotion, setEmotion]               = useState('');
+  const [loading, setLoading]               = useState(true);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const provider = PROVIDERS.find((p) => p.id === activeProvider)!;
   const voices   = provider?.voices ?? [];
 
-  // Auto-select first voice when switching provider
+  // Preview text samples for each language
+  const PREVIEW_TEXTS: Record<string, string> = {
+    'en': 'Hello! I am your AI assistant. How can I help you today?',
+    'en-US': 'Hello! I am your AI assistant. How can I help you today?',
+    'en-GB': 'Hello! I am your AI assistant. How may I help you today?',
+    'en-AU': 'G\'day! I am your AI assistant. How can I help you today?',
+    'ar': 'مرحباً! أنا مساعدك الذكي. كيف يمكنني مساعدتك اليوم؟',
+    'ar-SA': 'مرحباً! أنا مساعدك الذكي. كيف يمكنني مساعدتك اليوم؟',
+    'ar-EG': 'أهلاً! أنا مساعدك الذكي. إزاي أقدر أساعدك النهاردة؟',
+    'fr': 'Bonjour! Je suis votre assistant IA. Comment puis-je vous aider aujourd\'hui?',
+    'fr-FR': 'Bonjour! Je suis votre assistant IA. Comment puis-je vous aider aujourd\'hui?',
+    'de': 'Hallo! Ich bin Ihr KI-Assistent. Wie kann ich Ihnen heute helfen?',
+    'de-DE': 'Hallo! Ich bin Ihr KI-Assistent. Wie kann ich Ihnen heute helfen?',
+    'es': '¡Hola! Soy tu asistente de IA. ¿Cómo puedo ayudarte hoy?',
+    'es-ES': '¡Hola! Soy tu asistente de IA. ¿Cómo puedo ayudarte hoy?',
+    'zh': '你好！我是您的人工智能助手。今天我能为您做些什么？',
+    'ja': 'こんにちは！私はあなたのAIアシスタントです。今日はどのようにお手伝いできますか？',
+    'multi': 'Hello! I am your AI assistant. How can I help you today?',
+  };
+
+  // Auto-update preview text when voice changes
   useEffect(() => {
+    const currentVoice = voices.find((v) => v.id === selectedVoice);
+    if (currentVoice) {
+      const lang = currentVoice.lang;
+      const newPreviewText = PREVIEW_TEXTS[lang] || PREVIEW_TEXTS['en'];
+      setPreviewText(newPreviewText);
+    }
+  }, [selectedVoice, voices]);
+
+  // Load saved settings on mount
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const res = await fetch(`${config.backendUrl}/api/avatar/settings?userId=1`);
+        if (!res.ok) {
+          setLoading(false);
+          return;
+        }
+        const data = await res.json();
+        if (data.settings) {
+          const { voiceProvider, voiceId, languagePreference } = data.settings;
+          if (voiceProvider) setActiveProvider(voiceProvider);
+          if (voiceId) setSelectedVoice(voiceId);
+          if (languagePreference) {
+            if (languagePreference === 'auto') {
+              setAutoDetectLang(true);
+            } else {
+              setAutoDetectLang(false);
+              setDefaultLang(languagePreference);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load voice settings:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadSettings();
+  }, []);
+
+  // Auto-select first voice when switching provider (only after initial load)
+  useEffect(() => {
+    if (loading) return; // Don't auto-select during initial load
     const firstVoice = PROVIDERS.find((p) => p.id === activeProvider)?.voices[0];
     if (firstVoice) setSelectedVoice(firstVoice.id);
-  }, [activeProvider]);
+  }, [activeProvider, loading]);
+
+  const handleCloneUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setCloneFile(file);
+    setCloneUploading(true);
+
+    try {
+      // Upload reference audio to backend
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await fetch(`${config.backendUrl}/api/storage/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!res.ok) throw new Error('Upload failed');
+      const data = await res.json();
+
+      if (data.file?.filepath) {
+        setCloneAudioUrl(data.file.filepath);
+      }
+    } catch (err) {
+      console.error('Clone upload failed:', err);
+      setCloneFile(null);
+    } finally {
+      setCloneUploading(false);
+    }
+  };
 
   const handlePreview = async () => {
     setPreviewing(true);
     try {
+      console.log('[Preview] Starting TTS generation...', {
+        provider: activeProvider,
+        voice: selectedVoice,
+        language: autoDetectLang ? 'auto' : defaultLang,
+        hasEmotion: !!emotion,
+        hasReference: !!cloneAudioUrl,
+      });
+
       const res = await fetch(`${config.backendUrl}/api/audio/tts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: previewText,
           voice: selectedVoice,
-          language: autoDetectLang ? undefined : defaultLang,
+          language: autoDetectLang ? 'auto' : defaultLang,
           provider: activeProvider,
+          emotion: emotion || undefined,
+          referenceAudio: cloneAudioUrl || undefined,
         }),
       });
-      if (!res.ok) throw new Error('Preview failed');
-      const data = await res.json();
-      if (data.audioUrl) {
-        if (audioRef.current) audioRef.current.pause();
-        audioRef.current = new Audio(`${config.backendUrl}${data.audioUrl}`);
-        audioRef.current.play();
-        audioRef.current.onended = () => setPreviewing(false);
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error('[Preview] TTS failed:', res.status, errorText);
+        alert(`Preview failed (${res.status}): ${errorText}`);
+        setPreviewing(false);
+        return;
       }
-    } catch {
+
+      const data = await res.json();
+      console.log('[Preview] TTS response:', data);
+
+      if (data.audioUrl) {
+        const fullAudioUrl = `${config.backendUrl}${data.audioUrl}`;
+        console.log('[Preview] Fetching audio:', fullAudioUrl);
+
+        // Fetch audio as blob to avoid CORS issues (same pattern as Avatar Viewer)
+        const audioRes = await fetch(fullAudioUrl);
+        if (!audioRes.ok) {
+          throw new Error(`Failed to fetch audio: ${audioRes.status}`);
+        }
+
+        const blob = await audioRes.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        console.log('[Preview] Playing audio from blob:', blobUrl);
+
+        if (audioRef.current) {
+          audioRef.current.pause();
+          // Revoke old blob URL to prevent memory leaks
+          if (audioRef.current.src.startsWith('blob:')) {
+            URL.revokeObjectURL(audioRef.current.src);
+          }
+          audioRef.current = null;
+        }
+
+        audioRef.current = new Audio(blobUrl);
+
+        audioRef.current.onerror = (e) => {
+          console.error('[Preview] Audio playback error:', e);
+          alert('Failed to play audio. Check console for details.');
+          setPreviewing(false);
+        };
+
+        audioRef.current.onended = () => {
+          console.log('[Preview] Audio playback finished');
+          setPreviewing(false);
+          // Revoke blob URL after playback
+          URL.revokeObjectURL(blobUrl);
+        };
+
+        await audioRef.current.play();
+        console.log('[Preview] Audio playing...');
+      } else {
+        console.error('[Preview] No audioUrl in response');
+        alert('No audio URL returned from server');
+        setPreviewing(false);
+      }
+    } catch (err) {
+      console.error('[Preview] Error:', err);
+      alert(`Preview error: ${err instanceof Error ? err.message : String(err)}`);
       setPreviewing(false);
     }
   };
@@ -171,10 +352,10 @@ export default function VoiceSettingsPage() {
     setSaving(true);
     try {
       await fetch(`${config.backendUrl}/api/avatar/settings`, {
-        method: 'PUT',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: 1,
+          userId: '1',
           voiceProvider: activeProvider,
           voiceId: selectedVoice,
           languagePreference: autoDetectLang ? 'auto' : defaultLang,
@@ -303,6 +484,92 @@ export default function VoiceSettingsPage() {
               ))}
             </div>
           </div>
+
+          {/* Voice Cloning (Qwen3-TTS only) */}
+          {activeProvider === 'qwen' && selectedVoice === 'clone' && (
+            <div className="border-t pt-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-purple-500" />
+                <Label className="text-xs font-medium">Voice Cloning (3+ seconds required)</Label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Upload a clear audio sample (3-10 seconds) to clone any voice. Works in any language!
+              </p>
+              <div className="flex flex-col gap-2">
+                <label htmlFor="clone-upload" className="cursor-pointer">
+                  <div className="border-2 border-dashed rounded-lg p-4 hover:border-purple-500 transition-colors text-center">
+                    <Upload className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
+                    <p className="text-sm font-medium">
+                      {cloneFile ? cloneFile.name : 'Click to upload audio (MP3, WAV, M4A)'}
+                    </p>
+                    {cloneUploading && <Loader2 className="w-4 h-4 mx-auto mt-2 animate-spin" />}
+                  </div>
+                  <input
+                    id="clone-upload"
+                    type="file"
+                    accept="audio/*"
+                    onChange={handleCloneUpload}
+                    className="hidden"
+                  />
+                </label>
+                {cloneFile && (
+                  <Button variant="ghost" size="sm" onClick={() => { setCloneFile(null); setCloneAudioUrl(null); }}>
+                    <X className="w-3 h-3 mr-1" /> Remove
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Emotion Control (Qwen3-TTS only) */}
+          {activeProvider === 'qwen' && selectedVoice !== 'clone' && (
+            <div className="border-t pt-4 space-y-3">
+              <Label className="text-xs font-medium flex items-center gap-1.5">
+                <Sparkles className="w-3 h-3 text-purple-500" /> Emotion/Tone (Optional)
+              </Label>
+
+              {/* Quick emotion presets */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { id: '', label: 'Default', icon: '😐' },
+                  { id: 'cheerful and energetic', label: 'Cheerful', icon: '😊' },
+                  { id: 'professional and calm', label: 'Professional', icon: '💼' },
+                  { id: 'warm and friendly', label: 'Friendly', icon: '🤗' },
+                  { id: 'excited and enthusiastic', label: 'Excited', icon: '🎉' },
+                  { id: 'sad and melancholic', label: 'Sad', icon: '😢' },
+                  { id: 'serious and formal', label: 'Serious', icon: '🎯' },
+                  { id: 'gentle and soothing', label: 'Gentle', icon: '🌸' },
+                ].map((preset) => (
+                  <button
+                    key={preset.id}
+                    onClick={() => setEmotion(preset.id)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-all ${
+                      emotion === preset.id
+                        ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300'
+                        : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                    }`}
+                  >
+                    <span className="text-base">{preset.icon}</span>
+                    <span className="font-medium">{preset.label}</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* Custom emotion input */}
+              <div className="space-y-1.5">
+                <Label className="text-[10px] text-muted-foreground">Or write custom emotion:</Label>
+                <Input
+                  value={emotion}
+                  onChange={(e) => setEmotion(e.target.value)}
+                  placeholder='e.g., "very happy with a British accent", "tired and sleepy"'
+                  className="text-sm"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  AI will adjust tone, prosody, and emotion based on your description.
+                </p>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 

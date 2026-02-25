@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto';
 import { getDatabase } from '../db/index.js';
 import { spawn, execSync } from 'child_process';
 
-type AudioProvider = 'openai' | 'local';
+type AudioProvider = 'openai' | 'local' | 'qwen';
 
 /**
  * Get Python command based on OS
@@ -187,7 +187,7 @@ export class AudioService {
   }
 
   /**
-   * Generate speech from text (OpenAI TTS or Local Coqui)
+   * Generate speech from text (OpenAI TTS or Local Coqui or Qwen3-TTS)
    */
   async textToSpeech(options: {
     text: string;
@@ -195,18 +195,26 @@ export class AudioService {
     language?: string;
     sessionId?: string;
     messageId?: string;
+    provider?: AudioProvider;
+    emotion?: string;
+    referenceAudio?: string;
   }): Promise<{
     audioId: string;
     duration?: number;
   }> {
-    const { text, voice = 'alloy', sessionId, messageId } = options;
+    const { text, voice = 'alloy', sessionId, messageId, provider, emotion, referenceAudio } = options;
+
+    // Use specified provider or fallback to instance provider
+    const activeProvider = provider || this.provider;
 
     // Generate unique audio ID
     const audioId = randomUUID();
     const audioPath = path.join(this.audioDir, `${audioId}.mp3`);
 
-    if (this.provider === 'openai') {
+    if (activeProvider === 'openai') {
       await this.ttsWithOpenAI(text, voice, audioPath);
+    } else if (activeProvider === 'qwen') {
+      await this.ttsWithQwen(text, voice, options.language || 'auto', audioPath, emotion, referenceAudio);
     } else {
       await this.ttsWithLocal(text, voice, options.language || 'auto', audioPath);
     }
@@ -339,6 +347,84 @@ export class AudioService {
           return;
         }
         console.log('[TTS] Success! Output file created:', outputPath);
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * TTS using Qwen3-TTS (Free, Open-Source, Voice Cloning)
+   */
+  private async ttsWithQwen(
+    text: string,
+    voice: string,
+    language: string,
+    outputPath: string,
+    emotion?: string,
+    referenceAudio?: string
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const pythonCmd = getPythonCommand();
+
+      // Write args to JSON file to avoid encoding issues
+      const argsFile = outputPath + '.args.json';
+      fs.writeFileSync(argsFile, JSON.stringify({
+        text,
+        voice,
+        outputPath,
+        language,
+        emotion,
+        referenceAudio
+      }), 'utf8');
+
+      const qwenScriptPath = path.join(process.cwd(), 'python-scripts', 'tools', 'tts', 'qwen-tts.py');
+      console.log('[Qwen3-TTS] Using Python:', pythonCmd);
+      console.log('[Qwen3-TTS] Script path:', qwenScriptPath);
+      console.log('[Qwen3-TTS] Args:', { voice, language, emotion: emotion || 'none', hasReference: !!referenceAudio });
+
+      const python = spawn(pythonCmd, [
+        qwenScriptPath,
+        '--args-file', argsFile
+      ]);
+
+      let errorOutput = '';
+      let stdOutput = '';
+
+      python.stdout.on('data', (data) => {
+        stdOutput += data.toString();
+      });
+
+      python.stderr.on('data', (data) => {
+        errorOutput += data.toString();
+      });
+
+      python.on('error', (err: any) => {
+        try { fs.unlinkSync(argsFile); } catch {}
+        if (err.code === 'ENOENT') {
+          reject(new Error(`Python not found. Command: ${pythonCmd}`));
+        } else {
+          reject(err);
+        }
+      });
+
+      python.on('close', (code) => {
+        console.log('[Qwen3-TTS] Python stdout:', stdOutput);
+        console.log('[Qwen3-TTS] Python stderr:', errorOutput);
+        console.log('[Qwen3-TTS] Exit code:', code);
+        try { fs.unlinkSync(argsFile); } catch {}
+
+        if (code !== 0) {
+          console.error('[Qwen3-TTS] Error:', errorOutput);
+          reject(new Error(`Qwen3-TTS failed (code ${code}): ${errorOutput || stdOutput}`));
+          return;
+        }
+
+        if (!fs.existsSync(outputPath)) {
+          reject(new Error('Qwen3-TTS output file not created'));
+          return;
+        }
+
+        console.log('[Qwen3-TTS] Success! Output file created:', outputPath);
         resolve();
       });
     });

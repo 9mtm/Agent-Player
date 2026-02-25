@@ -55,10 +55,13 @@ export async function registerAudioRoutes(fastify: FastifyInstance) {
       language?: string;
       sessionId?: string;
       messageId?: string;
+      provider?: 'openai' | 'local' | 'qwen';
+      emotion?: string;
+      referenceAudio?: string;
     };
   }>('/api/audio/tts', async (request, reply) => {
     try {
-      const { text, voice = 'alloy', language, sessionId, messageId } = request.body;
+      const { text, voice = 'alloy', language, sessionId, messageId, provider, emotion, referenceAudio } = request.body;
 
       if (!text || text.trim().length === 0) {
         return reply.status(400).send({ error: 'Text is required' });
@@ -75,7 +78,10 @@ export async function registerAudioRoutes(fastify: FastifyInstance) {
         voice,
         language,
         sessionId,
-        messageId
+        messageId,
+        provider,
+        emotion,
+        referenceAudio
       });
 
       return reply.send({
@@ -107,7 +113,8 @@ export async function registerAudioRoutes(fastify: FastifyInstance) {
 
       return reply
         .type('audio/mpeg')
-        .header('Content-Disposition', `attachment; filename="${id}.mp3"`)
+        .header('Content-Disposition', `inline; filename="${id}.mp3"`)
+        .header('Cache-Control', 'public, max-age=3600')
         .send(stream);
     } catch (error: any) {
       fastify.log.error('Audio download error:', error);
