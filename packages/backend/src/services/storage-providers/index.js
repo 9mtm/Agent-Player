@@ -30,7 +30,7 @@ export function getStorageProvider() {
         default: {
             const baseDir = process.env.STORAGE_BASE_DIR
                 ? path.resolve(process.env.STORAGE_BASE_DIR)
-                : path.join(process.cwd(), '.data', 'storage');
+                : path.join(process.cwd(), 'public', 'storage');
             console.log(`[StorageProvider] 💾 Using local storage: ${baseDir}`);
             providerInstance = new LocalStorageProvider(baseDir);
             break;

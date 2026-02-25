@@ -6,7 +6,7 @@
  *   cdn/   — persistent, agent-managed (avatars, images, files, data)
  *
  * Storage backend is selected via STORAGE_PROVIDER env var:
- *   local (default) → .data/storage/  on disk
+ *   local (default) → public/storage/  on disk
  *   s3              → AWS S3 + optional CloudFront
  *   r2              → Cloudflare R2
  *
@@ -62,7 +62,7 @@ export class StorageManager {
                 'cdn/avatars', 'cdn/images', 'cdn/files', 'cdn/data',
             ];
             for (const dir of dirs) {
-                const absPath = path.join(process.cwd(), '.data', 'storage', dir);
+                const absPath = path.join(process.cwd(), 'public', 'storage', dir);
                 if (!fs.existsSync(absPath))
                     fs.mkdirSync(absPath, { recursive: true });
             }
