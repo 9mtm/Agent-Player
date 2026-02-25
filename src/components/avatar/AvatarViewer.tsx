@@ -16,6 +16,7 @@ import {
   ConferenceRoomScene,
   StageScene,
   StudioScene,
+  ClassroomScene,
 } from './scenes';
 
 // ─── Bot Avatar Component (Static NPC) ────────────────────────────────────────
@@ -86,6 +87,7 @@ export type AvatarScene =
   | 'conference'
   | 'stage'
   | 'studio'
+  | 'classroom'
   | (string & {});    // ← allows 'yt_*' and 'custombg_*' dynamically
 
 export const SCENE_OPTIONS: { value: AvatarScene; label: string; emoji: string }[] = [
@@ -95,6 +97,7 @@ export const SCENE_OPTIONS: { value: AvatarScene; label: string; emoji: string }
   { value: 'conference',    label: 'Conference Room', emoji: '🤝' },
   { value: 'stage',         label: 'Stage',           emoji: '🎭' },
   { value: 'studio',        label: 'Studio',          emoji: '📸' },
+  { value: 'classroom',     label: 'Classroom',       emoji: '🎓' },
 ];
 
 // ─── Wall layout — per-panel position / size / sound config ──────────────────
@@ -406,6 +409,12 @@ function SceneBackground({ scene, avatarY, wallText, wallLogoUrl, wallVideoUrl, 
     <>
       <StudioScene y={avatarY} />
       <WallContent {...wallProps} wallZ={-2.85} boardColor="#f0f0f0" textColor="#111111" />
+    </>
+  );
+  if (scene === 'classroom') return (
+    <>
+      <ClassroomScene y={avatarY} />
+      <WallContent {...wallProps} wallZ={-3.4} boardColor="#1a2820" textColor="#ffffff" />
     </>
   );
 
