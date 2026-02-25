@@ -19,6 +19,7 @@
     "backend:install": "cd packages/backend && npm install",
     "backend:build": "cd packages/backend && npm run build",
     "agent": "cd packages/backend && npm run cli --",
+    "cli": "node packages/cli/dist/index.js",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
     "docker:logs": "docker-compose logs -f"

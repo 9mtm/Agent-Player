@@ -5,15 +5,34 @@
  */
 
 import axios, { AxiosInstance } from 'axios';
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+// Load .env from CLI package directory
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+dotenv.config({ path: join(__dirname, '..', '..', '.env') });
 
 export class ApiClient {
   private client: AxiosInstance;
   private baseURL: string;
 
-  constructor(baseURL = 'http://localhost:3001') {
-    this.baseURL = baseURL;
+  constructor(baseURL?: string) {
+    // Read from .env file (no hardcoded fallback)
+    const envBackendUrl = process.env.BACKEND_URL;
+
+    if (!baseURL && !envBackendUrl) {
+      throw new Error(
+        'BACKEND_URL must be set in .env file or passed to constructor.\n' +
+        'Create packages/cli/.env with:\n' +
+        'BACKEND_URL=http://localhost:41522'
+      );
+    }
+
+    this.baseURL = baseURL || envBackendUrl!;
     this.client = axios.create({
-      baseURL,
+      baseURL: this.baseURL,
       timeout: 30000,
       headers: {
         'Content-Type': 'application/json'

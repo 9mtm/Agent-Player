@@ -65,36 +65,26 @@ export async function skillsCommand(
 }
 
 async function listSkills(client: any): Promise<void> {
-  const spinner = ora('Loading skills...').start();
+  console.log('📚 Loading skills...');
 
   try {
     const skills = await client.getSkills();
-    spinner.succeed(`Found ${skills.length} skills`);
+    console.log(`\n✅ Found ${skills.length} skills:\n`);
 
     if (skills.length === 0) {
-      console.log(chalk.gray('\nNo skills installed\n'));
+      console.log('No skills installed\n');
       return;
     }
 
-    header('Installed Skills');
-
-    const table = createTable(['Name', 'Version', 'Status', 'Updated']);
-
-    skills.forEach((skill: any) => {
-      table.push([
-        skill.name,
-        skill.version || '1.0.0',
-        skill.enabled ? chalk.green('✓ Enabled') : chalk.gray('○ Disabled'),
-        formatDate(skill.updatedAt || skill.createdAt)
-      ]);
+    skills.forEach((skill: any, i: number) => {
+      console.log(`${i + 1}. ${skill.name}`);
+      console.log(`   Version: ${skill.version || '1.0.0'}`);
+      console.log(`   Status: ${skill.enabled ? '✓ Enabled' : '○ Disabled'}`);
+      console.log();
     });
 
-    console.log(table.toString());
-    console.log();
-
   } catch (err: any) {
-    spinner.fail('Failed to load skills');
-    error(err.message);
+    console.error('❌ Failed to load skills:', err.message);
   }
 }
 
