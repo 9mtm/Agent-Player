@@ -1,13 +1,15 @@
 'use client';
 
-import { useRef, useMemo, Suspense, useState, useEffect } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { useRef, useMemo, Suspense, useState, useEffect, type ReactNode } from 'react';
+import { Canvas, useFrame, useLoader } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, Grid, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { Loader2 } from 'lucide-react';
 import { BotController, type BotData } from './BotController';
 import { config } from '@/lib/config';
+import { isFbxUrl, normalizeFbxBoneNames } from '@/lib/three-utils/fbx-helpers';
 
 interface WorldCanvas3DProps {
   objects: any[];
@@ -21,60 +23,65 @@ interface WorldCanvas3DProps {
   onObjectDelete?: (objectId: string) => void;
 }
 
+// ─── Format-specific loaders (avoid conditional hook calls) ──────────────────
+function GlbAvatarLoader({ url, children }: { url: string; children: (scene: THREE.Object3D, anims: THREE.AnimationClip[]) => ReactNode }) {
+  const { scene, animations } = useGLTF(url, undefined, undefined, (err) => {
+    console.error('[Avatar] Failed to load GLB:', err);
+  });
+  return <>{children(scene, animations)}</>;
+}
+
+function FbxAvatarLoader({ url, children }: { url: string; children: (scene: THREE.Object3D, anims: THREE.AnimationClip[]) => ReactNode }) {
+  const group = useLoader(FBXLoader, url);
+  useMemo(() => {
+    normalizeFbxBoneNames(group);
+    // Scale is handled by AvatarInner/BotInner — don't modify object.scale here
+    // so bounding box measurement stays in original FBX units (centimeters)
+  }, [group]);
+  return <>{children(group, group.animations || [])}</>;
+}
+
 // Avatar Component
 function Avatar({ avatarUrl }: { avatarUrl: string }) {
-  const [error, setError] = useState<string | null>(null);
+  const isFbx = isFbxUrl(avatarUrl);
+  const Loader = isFbx ? FbxAvatarLoader : GlbAvatarLoader;
 
-  const { scene } = useGLTF(avatarUrl, undefined, undefined, (err) => {
-    console.error('[Avatar] Failed to load GLB:', err);
-    setError(err.message);
-  });
+  return (
+    <Loader url={avatarUrl}>
+      {(scene, _anims) => <AvatarInner scene={scene} isFbx={isFbx} />}
+    </Loader>
+  );
+}
 
-  const cloned = useMemo(() => {
-    if (!scene) {
-      console.log('[Avatar] Scene is null or undefined');
-      return null;
+function AvatarInner({ scene, isFbx }: { scene: THREE.Object3D; isFbx: boolean }) {
+  const prepared = useMemo(() => {
+    if (!scene) return null;
+
+    if (isFbx) {
+      // FBX: use original scene directly — SkeletonUtils.clone breaks FBX skeleton
+      // Compute scale: FBX from Mixamo is in centimeters (height > 50 units)
+      const bbox = new THREE.Box3().setFromObject(scene);
+      const height = bbox.max.y - bbox.min.y;
+      const scale = height > 50 ? 0.01 : 1;
+      return { object: scene, scale };
     }
 
-    console.log('[Avatar] Scene loaded successfully:', scene);
-    console.log('[Avatar] Scene children count:', scene.children.length);
-
+    // GLB: clone with SkeletonUtils (useGLTF shares scene objects)
     try {
-      const clonedScene = SkeletonUtils.clone(scene);
-      console.log('[Avatar] Scene cloned successfully');
-      return clonedScene;
-    } catch (err) {
-      console.error('[Avatar] Failed to clone scene:', err);
-      // Fallback: try regular clone
-      try {
-        const regularClone = scene.clone(true);
-        console.log('[Avatar] Using regular clone as fallback');
-        return regularClone;
-      } catch (err2) {
-        console.error('[Avatar] Regular clone also failed:', err2);
-        return null;
-      }
+      return { object: SkeletonUtils.clone(scene), scale: 1 };
+    } catch {
+      try { return { object: scene.clone(true), scale: 1 }; } catch { return null; }
     }
-  }, [scene]);
+  }, [scene, isFbx]);
 
-  if (error) {
-    console.error('[Avatar] Error state:', error);
-    return null;
-  }
-
-  if (!cloned) {
-    console.log('[Avatar] Cloned scene is null, returning null');
-    return null;
-  }
-
-  console.log('[Avatar] Rendering avatar at position [0, 0, 0] with scale 1');
+  if (!prepared) return null;
 
   return (
     <primitive
-      object={cloned}
+      object={prepared.object}
       position={[0, 0, 0]}
       rotation={[0, 0, 0]}
-      scale={1}
+      scale={prepared.scale}
     />
   );
 }
@@ -85,57 +92,69 @@ function Bot({ botData, avatarUrl, controller }: {
   avatarUrl: string;
   controller: BotController;
 }) {
-  const [error, setError] = useState<string | null>(null);
+  const isFbx = isFbxUrl(avatarUrl);
+  const Loader = isFbx ? FbxAvatarLoader : GlbAvatarLoader;
+
+  return (
+    <Loader url={avatarUrl}>
+      {(scene, animations) => (
+        <BotInner scene={scene} animations={animations} botData={botData} controller={controller} isFbx={isFbx} />
+      )}
+    </Loader>
+  );
+}
+
+function BotInner({ scene, animations, botData, controller, isFbx }: {
+  scene: THREE.Object3D;
+  animations: THREE.AnimationClip[];
+  botData: BotData;
+  controller: BotController;
+  isFbx: boolean;
+}) {
   const groupRef = useRef<THREE.Group>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
 
-  const { scene, animations } = useGLTF(avatarUrl, undefined, undefined, (err) => {
-    console.error('[Bot] Failed to load GLB:', err);
-    setError(err.message);
-  });
+  const { prepared, scale } = useMemo(() => {
+    if (!scene) return { prepared: null, scale: 1 };
 
-  const cloned = useMemo(() => {
-    if (!scene) return null;
+    let obj: THREE.Object3D;
+    let s = 1;
 
-    try {
-      const clonedScene = SkeletonUtils.clone(scene);
-      console.log(`[Bot ${botData.id}] Scene cloned successfully`);
-
-      // Store animations on the cloned scene for the mixer
-      if (animations && animations.length > 0) {
-        (clonedScene as any).animations = animations;
-        console.log(`[Bot ${botData.id}] Attached ${animations.length} animations to cloned scene`);
+    if (isFbx) {
+      // FBX: use original scene — SkeletonUtils.clone breaks FBX skeleton
+      obj = scene;
+      const bbox = new THREE.Box3().setFromObject(scene);
+      const height = bbox.max.y - bbox.min.y;
+      if (height > 50) s = 0.01;
+    } else {
+      // GLB: clone safely
+      try {
+        obj = SkeletonUtils.clone(scene);
+      } catch {
+        return { prepared: null, scale: 1 };
       }
-
-      return clonedScene;
-    } catch (err) {
-      console.error(`[Bot ${botData.id}] Failed to clone scene:`, err);
-      return null;
     }
-  }, [scene, animations, botData.id]);
 
-  // Initialize bot in controller when mesh and animations are ready
+    if (animations && animations.length > 0) {
+      (obj as any).animations = animations;
+    }
+    return { prepared: obj, scale: s };
+  }, [scene, animations, isFbx]);
+
   useEffect(() => {
-    if (!cloned || !groupRef.current) return;
+    if (!prepared || !groupRef.current) return;
 
-    console.log(`[Bot ${botData.id}] Initializing in controller...`);
-
-    // Create animation mixer
-    const mixer = new THREE.AnimationMixer(cloned);
+    const mixer = new THREE.AnimationMixer(prepared);
     mixerRef.current = mixer;
-
-    // Add bot to controller
     controller.addBot(botData, groupRef.current, mixer);
 
     return () => {
-      // Cleanup when component unmounts
       controller.removeBot(botData.id);
       mixer?.stopAllAction();
     };
-  }, [cloned, botData, controller]);
+  }, [prepared, botData, controller]);
 
-  if (error || !cloned) {
-    // Fallback: Show a simple cube for bots that fail to load
+  if (!prepared) {
     return (
       <mesh
         position={[botData.position_x, botData.position_y + 0.5, botData.position_z]}
@@ -148,8 +167,8 @@ function Bot({ botData, avatarUrl, controller }: {
   }
 
   return (
-    <group ref={groupRef}>
-      <primitive object={cloned} />
+    <group ref={groupRef} scale={scale}>
+      <primitive object={prepared} />
     </group>
   );
 }

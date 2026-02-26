@@ -761,6 +761,43 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
     }
   });
 
+  // POST /api/avatars/:id/preview — upload a preview image (PNG) for an avatar
+  fastify.post<{ Params: { id: string } }>('/api/avatars/:id/preview', async (request, reply) => {
+    try {
+      const { id } = request.params;
+      const db = getDatabase();
+
+      const avatar = db.prepare(`
+        SELECT id, user_id as userId, local_glb_path as localGlbPath
+        FROM user_avatars WHERE id = ?
+      `).get(id) as { id: string; userId: string; localGlbPath: string | null } | undefined;
+
+      if (!avatar) return reply.status(404).send({ error: 'Avatar not found' });
+
+      const data = await request.file();
+      if (!data) return reply.status(400).send({ error: 'No file provided' });
+
+      const buffer = await data.toBuffer();
+
+      const projectRoot = path.join(process.cwd(), '..', '..');
+      const avatarDir = path.join(projectRoot, 'public', 'storage', 'avatars', 'user', avatar.userId, id);
+      fs.mkdirSync(avatarDir, { recursive: true });
+
+      const previewPath = path.join(avatarDir, 'preview.png');
+      fs.writeFileSync(previewPath, buffer);
+
+      const previewUrl = `/storage/avatars/user/${avatar.userId}/${id}/preview.png`;
+
+      db.prepare('UPDATE user_avatars SET preview_url = ? WHERE id = ?').run(previewUrl, id);
+
+      fastify.log.info(`[Avatar] Preview saved: ${previewUrl}`);
+      return reply.send({ success: true, previewUrl });
+    } catch (error: any) {
+      fastify.log.error('Avatar preview upload error:', error);
+      return handleError(reply, error, 'internal', '[Avatar] Preview upload failed');
+    }
+  });
+
   // POST /api/avatars/:id/localize — download existing avatar's remote glbUrl to local storage
   fastify.post<{ Params: { id: string } }>('/api/avatars/:id/localize', async (request, reply) => {
     try {

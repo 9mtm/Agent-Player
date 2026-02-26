@@ -395,7 +395,7 @@ export default function WorldsPage() {
   };
 
   const handleOpenWorld = (worldId: string) => {
-    window.open(`/avatar-viewer?world=${worldId}`, '_blank');
+    window.open(`/world-builder?id=${worldId}`, '_blank');
   };
 
 
