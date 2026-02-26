@@ -23,7 +23,8 @@
     "dev": "tsx watch src/api/server.ts",
     "build": "tsc",
     "start": "node dist/api/server.js",
-    "cli": "tsx src/cli/index.ts"
+    "cli": "tsx src/cli/index.ts",
+    "setup:python": "tsx src/services/python-setup-cli.ts"
   },
   "dependencies": {
     "@clack/prompts": "^1.0.1",

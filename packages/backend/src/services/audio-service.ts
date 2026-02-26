@@ -3,44 +3,9 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { getDatabase } from '../db/index.js';
-import { spawn, execSync } from 'child_process';
+import { spawnPython, getPythonPath } from './python-env.js';
 
 type AudioProvider = 'openai' | 'local' | 'qwen';
-
-/**
- * Get Python command based on OS
- * Tries common paths including user-specific installations
- */
-function getPythonCommand(): string {
-  if (process.platform !== 'win32') {
-    return 'python3';
-  }
-
-  // Check common Windows Python paths
-  const possiblePaths = [
-    'python',
-    'py',
-    `${process.env.LOCALAPPDATA}\\Programs\\Python\\Python313\\python.exe`,
-    `${process.env.LOCALAPPDATA}\\Programs\\Python\\Python312\\python.exe`,
-    `${process.env.LOCALAPPDATA}\\Programs\\Python\\Python311\\python.exe`,
-    `${process.env.LOCALAPPDATA}\\Programs\\Python\\Python310\\python.exe`,
-    'C:\\Python313\\python.exe',
-    'C:\\Python312\\python.exe',
-    'C:\\Python311\\python.exe',
-  ];
-
-  // Try to find working Python
-  for (const pyPath of possiblePaths) {
-    try {
-      execSync(`"${pyPath}" --version`, { stdio: 'ignore', timeout: 2000 });
-      return pyPath;
-    } catch {
-      // Try next
-    }
-  }
-
-  return 'python'; // fallback
-}
 
 /**
  * Audio Service
@@ -138,28 +103,25 @@ export class AudioService {
   }> {
     return new Promise((resolve, reject) => {
       // Call Python script
-      const pythonCmd = getPythonCommand();
-      const python = spawn(pythonCmd, [
+      const python = spawnPython(
         path.join(process.cwd(), 'python-scripts', 'tools', 'stt', 'stt.py'),
-        audioPath
-      ], {
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-      });
+        [audioPath]
+      );
 
       let output = '';
       let errorOutput = '';
 
-      python.stdout.on('data', (data) => {
+      python.stdout!.on('data', (data) => {
         output += data.toString();
       });
 
-      python.stderr.on('data', (data) => {
+      python.stderr!.on('data', (data) => {
         errorOutput += data.toString();
       });
 
       python.on('error', (err: any) => {
         if (err.code === 'ENOENT') {
-          reject(new Error(`Python not found. Please install Python and ensure it's in your PATH. Command: ${pythonCmd}`));
+          reject(new Error(`Python not found. Run: npm run setup:python`));
         } else {
           reject(err);
         }
@@ -296,37 +258,32 @@ export class AudioService {
    */
   private async ttsWithLocal(text: string, voice: string, language: string, outputPath: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const pythonCmd = getPythonCommand();
-
       // Write args to a temp JSON file to avoid Windows encoding issues with Unicode CLI args
       const argsFile = outputPath + '.args.json';
       fs.writeFileSync(argsFile, JSON.stringify({ text, voice, outputPath, language }), 'utf8');
 
       const ttsScriptPath = path.join(process.cwd(), 'python-scripts', 'tools', 'tts', 'tts.py');
-      console.log('[TTS] Using Python:', pythonCmd);
+      console.log('[TTS] Using Python:', getPythonPath());
       console.log('[TTS] Script path:', ttsScriptPath);
       console.log('[TTS] Args file:', argsFile);
 
-      const python = spawn(pythonCmd, [
-        ttsScriptPath,
-        '--args-file', argsFile
-      ]);
+      const python = spawnPython(ttsScriptPath, ['--args-file', argsFile]);
 
       let errorOutput = '';
       let stdOutput = '';
 
-      python.stdout.on('data', (data) => {
+      python.stdout!.on('data', (data) => {
         stdOutput += data.toString();
       });
 
-      python.stderr.on('data', (data) => {
+      python.stderr!.on('data', (data) => {
         errorOutput += data.toString();
       });
 
       python.on('error', (err: any) => {
         try { fs.unlinkSync(argsFile); } catch {}
         if (err.code === 'ENOENT') {
-          reject(new Error(`Python not found. Command: ${pythonCmd}`));
+          reject(new Error('Python not found. Run: npm run setup:python'));
         } else {
           reject(err);
         }
@@ -364,8 +321,6 @@ export class AudioService {
     referenceAudio?: string
   ): Promise<void> {
     return new Promise((resolve, reject) => {
-      const pythonCmd = getPythonCommand();
-
       // Write args to JSON file to avoid encoding issues
       const argsFile = outputPath + '.args.json';
       fs.writeFileSync(argsFile, JSON.stringify({
@@ -378,30 +333,27 @@ export class AudioService {
       }), 'utf8');
 
       const qwenScriptPath = path.join(process.cwd(), 'python-scripts', 'tools', 'tts', 'qwen-tts.py');
-      console.log('[Qwen3-TTS] Using Python:', pythonCmd);
+      console.log('[Qwen3-TTS] Using Python:', getPythonPath());
       console.log('[Qwen3-TTS] Script path:', qwenScriptPath);
       console.log('[Qwen3-TTS] Args:', { voice, language, emotion: emotion || 'none', hasReference: !!referenceAudio });
 
-      const python = spawn(pythonCmd, [
-        qwenScriptPath,
-        '--args-file', argsFile
-      ]);
+      const python = spawnPython(qwenScriptPath, ['--args-file', argsFile]);
 
       let errorOutput = '';
       let stdOutput = '';
 
-      python.stdout.on('data', (data) => {
+      python.stdout!.on('data', (data) => {
         stdOutput += data.toString();
       });
 
-      python.stderr.on('data', (data) => {
+      python.stderr!.on('data', (data) => {
         errorOutput += data.toString();
       });
 
       python.on('error', (err: any) => {
         try { fs.unlinkSync(argsFile); } catch {}
         if (err.code === 'ENOENT') {
-          reject(new Error(`Python not found. Command: ${pythonCmd}`));
+          reject(new Error('Python not found. Run: npm run setup:python'));
         } else {
           reject(err);
         }

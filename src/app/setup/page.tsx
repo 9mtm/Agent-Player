@@ -51,8 +51,12 @@ export default function SetupPage() {
     node: false,
     python: false,
     ports: false,
-    directories: false
+    directories: false,
+    pythonVersion: null as string | null,
+    pythonSource: null as string | null,
+    pythonSetupComplete: false
   });
+  const [pythonInstalling, setPythonInstalling] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -89,13 +93,17 @@ export default function SetupPage() {
         node: data.node || false,
         python: data.python || false,
         ports: data.ports || false,
-        directories: data.directories || false
+        directories: data.directories || false,
+        pythonVersion: data.pythonVersion || null,
+        pythonSource: data.pythonSource || null,
+        pythonSetupComplete: data.pythonSetupComplete || false
       });
 
-      const allChecksPass = Object.values(data).every(v => v === true);
-      console.log('[Setup] All checks pass:', allChecksPass);
+      // Core checks: node, ports, directories are required. Python is optional (can install later).
+      const coreChecksPass = data.node && data.ports && data.directories;
+      console.log('[Setup] Core checks pass:', coreChecksPass, '| Python:', data.python ? `${data.pythonVersion} (${data.pythonSource})` : 'not found');
 
-      updateStepStatus(0, allChecksPass ? 'complete' : 'error');
+      updateStepStatus(0, coreChecksPass ? 'complete' : 'error');
 
       // Don't auto-advance - let user click button
       // if (allChecksPass) {
@@ -253,10 +261,53 @@ export default function SetupPage() {
                 loading={steps[0].status === 'loading'}
               />
               <CheckItem
-                label="Python Environment"
+                label={
+                  systemCheck.pythonVersion
+                    ? `Python ${systemCheck.pythonVersion} (${systemCheck.pythonSource === 'embedded' ? 'Portable' : systemCheck.pythonSource === 'venv' ? 'Virtual Env' : 'System'})`
+                    : 'Python Environment'
+                }
                 checked={systemCheck.python}
                 loading={steps[0].status === 'loading'}
               />
+              {!systemCheck.python && steps[0].status !== 'loading' && (
+                <div className="ml-8 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                  <p className="text-sm text-amber-800 mb-2">
+                    Python is not configured. Run this command to set up a portable Python automatically:
+                  </p>
+                  <code className="block px-3 py-2 bg-amber-100 text-amber-900 rounded text-sm font-mono">
+                    cd packages/backend && npm run setup:python
+                  </code>
+                  <button
+                    onClick={async () => {
+                      setPythonInstalling(true);
+                      try {
+                        const res = await fetch('http://localhost:41522/api/setup/python', { method: 'POST' });
+                        if (res.ok) {
+                          toast.success('Python environment installed!');
+                          await checkSystemRequirements();
+                        } else {
+                          const err = await res.json().catch(() => ({}));
+                          toast.error(err.message || 'Python setup failed. Try running the command manually.');
+                        }
+                      } catch {
+                        toast.error('Could not reach backend. Run the command manually in terminal.');
+                      }
+                      setPythonInstalling(false);
+                    }}
+                    disabled={pythonInstalling}
+                    className="mt-3 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors flex items-center gap-2 text-sm"
+                  >
+                    {pythonInstalling ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Installing Python...
+                      </>
+                    ) : (
+                      'Install Python Automatically'
+                    )}
+                  </button>
+                </div>
+              )}
               <CheckItem
                 label="Ports Available (41521, 41522)"
                 checked={systemCheck.ports}

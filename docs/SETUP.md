@@ -28,6 +28,16 @@ PORT=41522
 FRONTEND_URL=http://localhost:41521
 ```
 
+### Python Setup (Audio/Desktop features)
+
+```bash
+cd packages/backend
+npm run setup:python
+```
+
+Downloads a portable Python with all required packages. No pre-installed Python needed.
+See [PYTHON_ENVIRONMENT.md](./PYTHON_ENVIRONMENT.md) for details.
+
 ### Run the Application
 
 **Terminal 1 - Backend:**

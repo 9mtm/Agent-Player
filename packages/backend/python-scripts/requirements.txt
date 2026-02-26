@@ -13,7 +13,14 @@ pydub>=0.25.1            # merge / trim / normalize / convert
 
 # ── Video editing (tools/video_edit.py) ──────────────────────────────────────
 moviepy>=1.0.3           # merge / trim / extract audio
-Pillow>=10.0.0           # thumbnail frames
+Pillow>=10.0.0           # thumbnail frames, screenshots
+
+# ── Desktop control (tools/desktop/desktop.py) ──────────────────────────────
+pyautogui>=0.9.54        # mouse, keyboard, screen automation
+# NOTE: pywin32 is installed separately on Windows by setup:python
+
+# ── TTS fallback ─────────────────────────────────────────────────────────────
+gTTS>=2.5.0              # Google TTS — reliable fallback for edge-tts
 
 # ── Optional: GPU acceleration for STT ───────────────────────────────────────
 # torch>=2.0.0           # NVIDIA GPU — uncomment if available

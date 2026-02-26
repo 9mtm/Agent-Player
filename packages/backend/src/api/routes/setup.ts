@@ -39,15 +39,17 @@ export default async function setupRoutes(fastify: FastifyInstance) {
         console.error('Node.js check failed:', error);
       }
 
-      // Check Python
+      // Check Python (uses centralized python-env for portable/system detection)
       try {
-        const pythonPath = process.env.PYTHON_PATH || 'C:\\Users\\Dpro GmbH\\AppData\\Local\\Programs\\Python\\Python312\\python.exe';
-        const { stdout } = await execAsync(`"${pythonPath}" --version`);
-        checks.python = stdout.includes('Python');
+        const { getStatus } = await import('../../services/python-env.js');
+        const pyStatus = getStatus();
+        checks.python = pyStatus.installed;
+        (checks as any).pythonVersion = pyStatus.version;
+        (checks as any).pythonSource = pyStatus.source;
+        (checks as any).pythonSetupComplete = pyStatus.setupComplete;
       } catch (error) {
         console.error('Python check failed:', error);
-        // Python is optional, so we'll mark it as true anyway
-        checks.python = true;
+        checks.python = false;
       }
 
       // Check ports (assume available - actual port binding will fail if not)
@@ -242,6 +244,24 @@ export default async function setupRoutes(fastify: FastifyInstance) {
       console.error('Setup completion error:', error);
       return reply.status(500).send({
         error: 'Setup completion failed',
+        message: error.message
+      });
+    }
+  });
+
+  // Install portable Python environment
+  fastify.post('/api/setup/python', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { setupPythonEnvironment } = await import('../../services/python-setup.js');
+      await setupPythonEnvironment();
+      return reply.send({
+        success: true,
+        message: 'Python environment installed successfully'
+      });
+    } catch (error: any) {
+      console.error('Python setup error:', error);
+      return reply.status(500).send({
+        error: 'Python setup failed',
         message: error.message
       });
     }

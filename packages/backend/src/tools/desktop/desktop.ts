@@ -12,41 +12,11 @@
  *   # Windows also needs: pip install pywin32
  */
 
-import { spawn, execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { Tool, ToolResult } from '../types.js';
-
-// ─── Python detection (same logic as audio-service) ──────────────────────────
-
-function getPythonCommand(): string {
-  if (process.platform !== 'win32') return 'python3';
-
-  const localApp = process.env.LOCALAPPDATA ?? '';
-  const possiblePaths = [
-    'python',
-    'py',
-    `${localApp}\\Programs\\Python\\Python313\\python.exe`,
-    `${localApp}\\Programs\\Python\\Python312\\python.exe`,
-    `${localApp}\\Programs\\Python\\Python311\\python.exe`,
-    `${localApp}\\Programs\\Python\\Python310\\python.exe`,
-    'C:\\Python313\\python.exe',
-    'C:\\Python312\\python.exe',
-    'C:\\Python311\\python.exe',
-    'C:\\Python310\\python.exe',
-  ];
-
-  for (const pyPath of possiblePaths) {
-    try {
-      execSync(`"${pyPath}" --version`, { stdio: 'ignore', timeout: 2000 });
-      return pyPath;
-    } catch {
-      // try next
-    }
-  }
-  return 'python'; // last-resort fallback
-}
+import { spawnPython } from '../../services/python-env.js';
 
 // ─── Python script runner ─────────────────────────────────────────────────────
 
@@ -68,16 +38,13 @@ function runDesktopScript(args: Record<string, unknown>): Promise<Record<string,
       return reject(new Error(`Failed to write args file: ${writeErr.message}`));
     }
 
-    const pythonCmd = getPythonCommand();
-    const child = spawn(pythonCmd, [SCRIPT_PATH, '--args-file', argsFile], {
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-    });
+    const child = spawnPython(SCRIPT_PATH, ['--args-file', argsFile]);
 
     let stdout = '';
     let stderr = '';
 
-    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
-    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+    child.stdout!.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
+    child.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
 
     child.on('close', (code) => {
       try { fs.unlinkSync(argsFile); } catch { /* ignore */ }

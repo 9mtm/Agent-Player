@@ -50,7 +50,8 @@
       "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIxNzcyMDA5NzY4OTQ3IiwidG9rZW5WZXJzaW9uIjoxLCJpYXQiOjE3NzIxMDAxODUsImV4cCI6MTc3MjcwNDk4NX0.-RypKXucYPf8Uqhw6KhBZa3vyOMxtwQ7p6XG2ZB1iv0\")",
       "Bash(py --version)",
       "Bash(py -c \"import json; print\\(json.dumps\\({''status'': ''ok'', ''message'': ''Python is working!''}\\)\\)\")",
-      "Bash(py -c \":*)"
+      "Bash(py -c \":*)",
+      "Bash(npm run setup:python)"
     ]
   }
 }
