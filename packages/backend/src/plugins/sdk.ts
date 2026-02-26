@@ -10,7 +10,7 @@ import { registerExtensionTool, unregisterExtensionTool } from '../tools/index.j
 import { getDatabase } from '../db/index.js';
 import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
+import { dirname, resolve, sep } from 'path';
 
 /**
  * Extension SDK API Interface
@@ -144,7 +144,7 @@ export function createExtensionApi(
         const normalizedExtensionDir = resolve(extensionDir);
 
         // Path traversal protection: ensure the resolved path is within the extension directory
-        if (!absolutePath.startsWith(normalizedExtensionDir + require('path').sep) &&
+        if (!absolutePath.startsWith(normalizedExtensionDir + sep) &&
             absolutePath !== normalizedExtensionDir) {
           throw new Error(
             `SECURITY: Migration file outside extension directory rejected: ${resolvedPath}\n` +

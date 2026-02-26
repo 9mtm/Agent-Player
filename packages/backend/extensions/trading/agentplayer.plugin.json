@@ -1,0 +1,191 @@
+{
+  "id": "trading",
+  "name": "Stock & Crypto Trading",
+  "description": "Trade stocks and cryptocurrencies with AI-powered strategies. Supports Paper Trading, Live Trading, and automated trading bots.",
+  "version": "1.0.0",
+  "type": "app",
+  "author": "Agent Player Team",
+  "main": "index.js",
+  "permissions": [
+    "database",
+    "routes",
+    "tools",
+    "cron",
+    "credentials",
+    "network"
+  ],
+  "capabilities": {
+    "database": true,
+    "routes": true,
+    "tools": true,
+    "cron": true,
+    "frontend": true
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/trading/accounts",
+      "description": "List user's trading accounts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/trading/accounts",
+      "description": "Connect new trading account"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/trading/accounts/:id",
+      "description": "Update account settings"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/trading/accounts/:id",
+      "description": "Remove trading account"
+    },
+    {
+      "method": "POST",
+      "path": "/api/trading/accounts/:id/activate",
+      "description": "Set as active account"
+    },
+    {
+      "method": "GET",
+      "path": "/api/trading/portfolio",
+      "description": "Get portfolio snapshot"
+    },
+    {
+      "method": "GET",
+      "path": "/api/trading/positions",
+      "description": "Get current holdings"
+    },
+    {
+      "method": "POST",
+      "path": "/api/trading/sync",
+      "description": "Manually sync portfolio data"
+    },
+    {
+      "method": "GET",
+      "path": "/api/trading/orders",
+      "description": "Get order history"
+    },
+    {
+      "method": "POST",
+      "path": "/api/trading/orders",
+      "description": "Place new order (buy/sell)"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/trading/orders/:id",
+      "description": "Cancel pending order"
+    },
+    {
+      "method": "GET",
+      "path": "/api/trading/quote/:symbol",
+      "description": "Get real-time stock quote"
+    },
+    {
+      "method": "GET",
+      "path": "/api/trading/bars/:symbol",
+      "description": "Get historical price data for charts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/trading/watchlist",
+      "description": "Get user's watchlist"
+    },
+    {
+      "method": "POST",
+      "path": "/api/trading/watchlist",
+      "description": "Add symbol to watchlist"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/trading/watchlist/:symbol",
+      "description": "Remove from watchlist"
+    },
+    {
+      "method": "GET",
+      "path": "/api/trading/strategies",
+      "description": "List trading strategies"
+    },
+    {
+      "method": "POST",
+      "path": "/api/trading/strategies",
+      "description": "Create new trading strategy"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/trading/strategies/:id",
+      "description": "Update strategy"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/trading/strategies/:id",
+      "description": "Delete strategy"
+    },
+    {
+      "method": "POST",
+      "path": "/api/trading/strategies/:id/start",
+      "description": "Start strategy execution"
+    },
+    {
+      "method": "POST",
+      "path": "/api/trading/strategies/:id/stop",
+      "description": "Stop strategy execution"
+    },
+    {
+      "method": "GET",
+      "path": "/api/trading/signals",
+      "description": "Get pending trading signals"
+    },
+    {
+      "method": "POST",
+      "path": "/api/trading/signals/:id/execute",
+      "description": "Execute a trading signal"
+    },
+    {
+      "method": "POST",
+      "path": "/api/trading/signals/:id/reject",
+      "description": "Reject a trading signal"
+    }
+  ],
+  "cron": [
+    {
+      "schedule": "* * * * *",
+      "handler": "syncPortfolios",
+      "description": "Sync portfolio data every 1 minute"
+    },
+    {
+      "schedule": "* * * * *",
+      "handler": "runStrategies",
+      "description": "Run active trading strategies every 1 minute"
+    }
+  ],
+  "settings": {
+    "sync_interval": {
+      "type": "number",
+      "default": 60,
+      "description": "Portfolio sync interval in seconds (default: 1 min)"
+    },
+    "enable_market_hours_only": {
+      "type": "boolean",
+      "default": false,
+      "description": "Only sync/trade during market hours (9:30 AM - 4:00 PM ET)"
+    },
+    "max_concurrent_strategies": {
+      "type": "number",
+      "default": 5,
+      "description": "Maximum number of strategies running simultaneously"
+    }
+  },
+  "frontendRoutes": [
+    {
+      "path": "/dashboard/trading",
+      "name": "Trading",
+      "icon": "TrendingUp",
+      "position": "main"
+    }
+  ],
+  "dependencies": {
+    "@alpacahq/alpaca-trade-api": "^3.0.0"
+  }
+}

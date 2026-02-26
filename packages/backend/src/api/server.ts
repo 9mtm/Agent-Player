@@ -279,6 +279,8 @@ async function start() {
     const { initializeDatabase, getDatabase } = await import('../db/index.js');
     await initializeDatabase();
     const db = getDatabase();
+    // Decorate Fastify instance with database for extensions to use
+    fastify.decorate('db', db);
     console.log('[Server] ✅ Database initialized\n');
 
     // Seed database in development mode

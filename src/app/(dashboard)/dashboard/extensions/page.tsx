@@ -65,6 +65,11 @@ export default function ExtensionsPage() {
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
   const [extensionToSettings, setExtensionToSettings] = useState<Extension | null>(null);
 
+  const authHeaders = () => {
+    const token = localStorage.getItem('auth_token');
+    return token ? { 'Authorization': `Bearer ${token}` } : {};
+  };
+
   const fetchExtensions = async () => {
     try {
       setLoading(true);
@@ -143,7 +148,10 @@ export default function ExtensionsPage() {
 
   const restartBackend = async () => {
     try {
-      await fetch(`${API_URL}/api/system/restart`, { method: 'POST' });
+      await fetch(`${API_URL}/api/system/restart`, {
+        method: 'POST',
+        headers: authHeaders()
+      });
       setRestartRequired(false);
       toast.info('Backend restarting... Refresh page in 5 seconds.');
     } catch (err: any) {
