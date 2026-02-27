@@ -404,6 +404,57 @@ export async function registerTradingRoutes(fastify) {
   });
 
   /**
+   * GET /api/ext/trading/portfolio/snapshots
+   * Get portfolio historical snapshots for analytics
+   * Query params: days=90 (number of days to look back)
+   */
+  fastify.get('/portfolio/snapshots', async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const days = parseInt(request.query('days') || '90', 10);
+
+      // Get active account
+      const account = db
+        .prepare(
+          `
+        SELECT id
+        FROM trading_accounts
+        WHERE user_id = ? AND is_default = 1 AND is_active = 1
+        LIMIT 1
+      `
+        )
+        .get(userId);
+
+      if (!account) {
+        return reply.send({ error: 'No active trading account found' }, 404);
+      }
+
+      // Calculate date threshold
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - days);
+      const cutoffISO = cutoffDate.toISOString();
+
+      // Fetch snapshots
+      const snapshots = db
+        .prepare(
+          `
+        SELECT
+          id, trading_account_id, cash, portfolio_value, equity, buying_power, snapshot_at as created_at
+        FROM trading_portfolio_snapshots
+        WHERE trading_account_id = ? AND snapshot_at >= ?
+        ORDER BY snapshot_at ASC
+      `
+        )
+        .all(account.id, cutoffISO);
+
+      return reply.send({ snapshots, account_id: account.id, days });
+    } catch (error) {
+      console.error('[Trading]', `Failed to fetch portfolio snapshots: ${error.message}`);
+      return reply.send({ error: 'Failed to fetch portfolio snapshots' }, 500);
+    }
+  });
+
+  /**
    * POST /api/ext/trading/sync
    * Manually sync portfolio data
    */
@@ -1634,8 +1685,8 @@ export async function registerTradingRoutes(fastify) {
         .all(account.id);
 
       const watchlist = db
-        .prepare('SELECT DISTINCT symbol FROM trading_watchlist WHERE trading_account_id = ?')
-        .all(account.id);
+        .prepare('SELECT DISTINCT symbol FROM trading_watchlist WHERE user_id = ?')
+        .all(userId);
 
       const symbols = [
         ...positions.map(p => p.symbol),
@@ -1681,5 +1732,5 @@ export async function registerTradingRoutes(fastify) {
     }
   });
 
-  console.log('[Trading] ✅ 26 trading routes registered (including WebSocket stream)');
+  console.log('[Trading] ✅ 27 trading routes registered (including portfolio snapshots + WebSocket stream)');
 }
