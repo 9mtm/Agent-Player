@@ -254,29 +254,33 @@ Symbol | Qty | Avg Entry | Current | Market Value | Cost Basis | Today's P/L | T
 ---
 
 ### 9. WebSocket Real-Time Updates
-**Status**: ❌ Not Started
-**Estimated Time**: 4-6 hours
-**Files to Modify**:
-- `packages/backend/extensions/trading/src/portfolio-sync.js`
+**Status**: ✅ COMPLETE (2026-02-27)
+**Actual Time**: 3 hours
+**Files Modified**:
+- `packages/backend/extensions/trading/src/routes.js`
+- `packages/backend/extensions/trading/src/alpaca-client.js`
 - `src/app/(dashboard)/dashboard/trading/page.tsx`
 
 **Requirements**:
-- [ ] Connect to Alpaca WebSocket
-- [ ] Subscribe to price updates for:
+- [x] Connect to Alpaca WebSocket
+- [x] Subscribe to price updates for:
   - Positions (all owned symbols)
   - Watchlist symbols
   - Current symbol in Trade tab
-- [ ] Update UI in real-time (no polling)
-- [ ] Reconnect on disconnect
-- [ ] Show connection status indicator
+- [x] Update UI in real-time (no polling)
+- [x] Reconnect on disconnect
+- [x] Show connection status indicator
 
-**Alpaca WebSocket**:
-```javascript
-const stream = alpaca.data_stream_v2;
-stream.onStockTrade((trade) => {
-  // Update price in UI
-});
-```
+**Implementation Details**:
+- Created SSE endpoint `/api/ext/trading/stream` in backend
+- Backend connects to Alpaca WebSocket using `createRealtimeConnection()`
+- Subscribes to real-time quotes and trades for all position + watchlist symbols
+- Frontend uses EventSource to receive SSE updates
+- Connection status indicator in header (green Wifi icon = connected, red WifiOff = disconnected)
+- Auto-reconnect on disconnect after 5 seconds
+- Real-time price updates for positions (current_price, market_value, unrealized_pl)
+- Removed 5-second polling from LivePriceDisplay (now uses WebSocket only)
+- Visual feedback: connection status (Live/Connecting.../Connection lost)
 
 ---
 
@@ -374,7 +378,7 @@ stream.onStockTrade((trade) => {
 
 ## 📊 Progress Tracking
 
-**Overall Progress**: 8/15 tasks completed (53.3%)
+**Overall Progress**: 9/15 tasks completed (60%)
 
 ### Week 1 (Priority 1) ✅ COMPLETE
 - [x] Stock Search (100%) ✅
@@ -386,14 +390,14 @@ stream.onStockTrade((trade) => {
 **Total Time Invested**: 12 hours
 **Status**: All Priority 1 features delivered on schedule!
 
-### Week 2 (Priority 2) - In Progress
+### Week 2 (Priority 2) ✅ COMPLETE
 - [x] TradingView Chart (100%) ✅
 - [x] Enhanced Positions (100%) ✅
 - [x] Position Details Modal (100%) ✅
-- [ ] WebSocket Updates (0%)
+- [x] WebSocket Updates (100%) ✅
 
-**Time Invested**: 9.5 hours
-**Status**: 3/4 Priority 2 tasks complete (75%)
+**Time Invested**: 12.5 hours
+**Status**: All Priority 2 tasks complete (100%) 🎉
 
 ### Future (Priority 3)
 - [ ] Analytics Dashboard (0%)

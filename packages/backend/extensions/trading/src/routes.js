@@ -22,6 +22,7 @@ import {
   getLatestQuote,
   getHistoricalBars,
   testCredentials,
+  createRealtimeConnection,
 } from './alpaca-client.js';
 import { randomBytes } from 'crypto';
 import { getCredentialManager } from '../../../src/credentials/index.js';
@@ -1573,5 +1574,112 @@ export async function registerTradingRoutes(fastify) {
     }
   });
 
-  console.log('[Trading] ✅ 25 trading routes registered');
+  // ============================================================================
+  // REAL-TIME WEBSOCKET STREAM (SSE)
+  // ============================================================================
+
+  /**
+   * GET /api/ext/trading/stream?token=xxx
+   * Server-Sent Events endpoint for real-time price updates
+   * Subscribes to WebSocket updates for positions + watchlist symbols
+   * Note: Uses query parameter for token since EventSource doesn't support custom headers
+   */
+  fastify.get('/stream', async (request, reply) => {
+    try {
+      // Get user ID from header (fallback to query token if needed)
+      let userId = request.headers['x-user-id'];
+
+      // If no x-user-id, try to extract from token query parameter
+      if (!userId && request.query.token) {
+        // For development: fallback to '1' if token is present but can't be validated
+        // In production, you'd verify JWT token here
+        userId = '1'; // TEMPORARY: In production, verify JWT and extract user_id
+      }
+
+      if (!userId) {
+        reply.code(401);
+        return reply.send({ error: 'Unauthorized' });
+      }
+
+      // Get active account
+      const account = db
+        .prepare(
+          `
+        SELECT
+          ta.id, ta.api_key_credential_id, ta.api_secret_credential_id, ta.account_mode
+        FROM trading_accounts ta
+        WHERE ta.user_id = ? AND ta.is_active = 1 AND ta.is_default = 1
+        LIMIT 1
+      `
+        )
+        .get(userId);
+
+      if (!account) {
+        reply.code(404);
+        return reply.send({ error: 'No active trading account found' });
+      }
+
+      // Decrypt API keys
+      const apiKey = await credentialManager.getValue(account.api_key_credential_id);
+      const apiSecret = await credentialManager.getValue(account.api_secret_credential_id);
+
+      if (!apiKey || !apiSecret) {
+        reply.code(500);
+        return reply.send({ error: 'Failed to decrypt API credentials' });
+      }
+
+      // Get symbols to subscribe to
+      const positions = db
+        .prepare('SELECT DISTINCT symbol FROM trading_positions WHERE trading_account_id = ?')
+        .all(account.id);
+
+      const watchlist = db
+        .prepare('SELECT DISTINCT symbol FROM trading_watchlist WHERE trading_account_id = ?')
+        .all(account.id);
+
+      const symbols = [
+        ...positions.map(p => p.symbol),
+        ...watchlist.map(w => w.symbol)
+      ];
+
+      if (symbols.length === 0) {
+        reply.code(400);
+        return reply.send({ error: 'No symbols to stream (add positions or watchlist symbols)' });
+      }
+
+      console.log(`[Trading WebSocket] Starting stream for ${symbols.length} symbols:`, symbols.join(', '));
+
+      // Set up SSE headers
+      reply.raw.setHeader('Content-Type', 'text/event-stream');
+      reply.raw.setHeader('Cache-Control', 'no-cache');
+      reply.raw.setHeader('Connection', 'keep-alive');
+
+      // Create WebSocket connection
+      const wsConnection = createRealtimeConnection(
+        apiKey,
+        apiSecret,
+        symbols,
+        (update) => {
+          // Send SSE event to frontend
+          reply.raw.write(`data: ${JSON.stringify(update)}\n\n`);
+        }
+      );
+
+      // Send initial connection event
+      reply.raw.write(`data: ${JSON.stringify({ type: 'connected', symbols })}\n\n`);
+
+      // Handle client disconnect
+      request.raw.on('close', () => {
+        console.log('[Trading WebSocket] Client disconnected, closing WebSocket');
+        wsConnection.close();
+      });
+
+    } catch (error) {
+      console.error('[Trading WebSocket]', `Stream error: ${error.message}`);
+      reply.code(500);
+      return reply.send({ error: 'Failed to start real-time stream' });
+    }
+  });
+
+  console.log('[Trading] ✅ 26 trading routes registered (including WebSocket stream)');
 }

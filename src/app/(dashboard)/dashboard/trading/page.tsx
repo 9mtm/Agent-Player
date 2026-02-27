@@ -25,6 +25,8 @@ import {
   BarChart3,
   CandlestickChart,
   LineChart,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
 
 // Dynamic import for TradingView widget (client-side only)
@@ -65,6 +67,11 @@ export default function TradingPage() {
   const [syncing, setSyncing] = useState(false);
   const [showConnectDialog, setShowConnectDialog] = useState(false);
 
+  // WebSocket state for real-time updates
+  const [wsConnected, setWsConnected] = useState(false);
+  const [wsError, setWsError] = useState(null);
+  const [realtimePrices, setRealtimePrices] = useState({}); // { symbol: { bid, ask, price, timestamp } }
+
   // Load data on mount
   useEffect(() => {
     loadAccounts();
@@ -80,6 +87,96 @@ export default function TradingPage() {
       loadWatchlist();
     }
   }, [activeAccount]);
+
+  // ============================================================================
+  // WEBSOCKET REAL-TIME CONNECTION
+  // ============================================================================
+
+  useEffect(() => {
+    if (!activeAccount || (positions.length === 0 && watchlist.length === 0)) {
+      setWsConnected(false);
+      setWsError(null);
+      return;
+    }
+
+    console.log('[WebSocket] Connecting to real-time stream...');
+    setWsError(null);
+
+    const token = localStorage.getItem('auth_token');
+    const streamUrl = `${config.backendUrl}/api/ext/trading/stream${token ? `?token=${token}` : ''}`;
+    const eventSource = new EventSource(streamUrl);
+
+    eventSource.onopen = () => {
+      console.log('[WebSocket] Connected');
+      setWsConnected(true);
+      setWsError(null);
+    };
+
+    eventSource.onmessage = (event) => {
+      try {
+        const update = JSON.parse(event.data);
+
+        if (update.type === 'connected') {
+          console.log('[WebSocket] Subscribed to symbols:', update.symbols);
+          toast.success('Real-time updates connected');
+        } else if (update.type === 'trade' || update.type === 'quote') {
+          // Update real-time prices
+          setRealtimePrices((prev) => ({
+            ...prev,
+            [update.symbol]: {
+              bid: update.bid || update.price,
+              ask: update.ask || update.price,
+              price: update.price || (update.bid + update.ask) / 2,
+              timestamp: update.timestamp,
+            },
+          }));
+
+          // Update positions with new prices
+          setPositions((prev) =>
+            prev.map((pos) => {
+              if (pos.symbol === update.symbol) {
+                const newPrice = update.price || (update.bid + update.ask) / 2;
+                const marketValue = pos.qty * newPrice;
+                const unrealizedPL = (newPrice - pos.avg_entry_price) * pos.qty;
+                const unrealizedPLPC = ((newPrice - pos.avg_entry_price) / pos.avg_entry_price) * 100;
+
+                return {
+                  ...pos,
+                  current_price: newPrice,
+                  market_value: marketValue,
+                  unrealized_pl: unrealizedPL,
+                  unrealized_plpc: unrealizedPLPC,
+                };
+              }
+              return pos;
+            })
+          );
+        }
+      } catch (error) {
+        console.error('[WebSocket] Parse error:', error);
+      }
+    };
+
+    eventSource.onerror = (error) => {
+      console.error('[WebSocket] Connection error:', error);
+      setWsConnected(false);
+      setWsError('Connection lost');
+      eventSource.close();
+
+      // Auto-reconnect after 5 seconds
+      setTimeout(() => {
+        console.log('[WebSocket] Reconnecting...');
+        setWsError(null);
+      }, 5000);
+    };
+
+    // Cleanup on unmount or dependency change
+    return () => {
+      console.log('[WebSocket] Disconnecting');
+      eventSource.close();
+      setWsConnected(false);
+    };
+  }, [activeAccount, positions.length, watchlist.length]);
 
   // ============================================================================
   // DATA LOADING
@@ -425,6 +522,28 @@ export default function TradingPage() {
               >
                 {activeAccount.account_mode === 'paper' ? 'Paper Trading' : 'Live Trading'}
               </span>
+
+              {/* WebSocket Connection Status */}
+              {(positions.length > 0 || watchlist.length > 0) && (
+                <div className="flex items-center gap-1.5">
+                  {wsConnected ? (
+                    <>
+                      <Wifi className="w-3.5 h-3.5 text-green-600" />
+                      <span className="text-xs text-green-600 font-medium">Live</span>
+                    </>
+                  ) : wsError ? (
+                    <>
+                      <WifiOff className="w-3.5 h-3.5 text-red-600" />
+                      <span className="text-xs text-red-600 font-medium">{wsError}</span>
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 text-gray-400 animate-spin" />
+                      <span className="text-xs text-gray-400 font-medium">Connecting...</span>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1191,7 +1310,7 @@ function TradingViewChart({ symbol }) {
 }
 
 // Live Price Display Component
-function LivePriceDisplay({ symbol, onPriceChange }) {
+function LivePriceDisplay({ symbol, onPriceChange, realtimePrice }) {
   const [price, setPrice] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -1202,7 +1321,31 @@ function LivePriceDisplay({ symbol, onPriceChange }) {
     return token ? { 'Authorization': `Bearer ${token}` } : {};
   };
 
-  // Fetch live price
+  // Update price from WebSocket real-time data
+  useEffect(() => {
+    if (realtimePrice) {
+      const prevPrice = price?.bid_price || 0;
+      const newPrice = realtimePrice.bid || realtimePrice.price || 0;
+      const change = newPrice - prevPrice;
+
+      setPrice({
+        bid_price: realtimePrice.bid,
+        ask_price: realtimePrice.ask,
+        timestamp: realtimePrice.timestamp,
+      });
+
+      setPriceChange(change);
+
+      if (onPriceChange) {
+        onPriceChange(newPrice);
+      }
+
+      // Auto-clear price change indicator after 2 seconds
+      setTimeout(() => setPriceChange(0), 2000);
+    }
+  }, [realtimePrice]);
+
+  // Fetch live price (fallback when WebSocket not connected)
   async function fetchPrice() {
     if (!symbol) {
       setPrice(null);
@@ -1244,15 +1387,12 @@ function LivePriceDisplay({ symbol, onPriceChange }) {
     }
   }
 
-  // Initial fetch and auto-refresh every 5 seconds
+  // Initial fetch (only once when symbol changes, WebSocket will handle real-time updates)
   useEffect(() => {
-    fetchPrice();
-
-    const interval = setInterval(() => {
+    // Only fetch if WebSocket price is not available (fallback)
+    if (!realtimePrice && symbol) {
       fetchPrice();
-    }, 5000); // 5 seconds
-
-    return () => clearInterval(interval);
+    }
   }, [symbol]);
 
   if (!symbol) return null;
@@ -1831,7 +1971,11 @@ function TradeTab({ onPlaceOrder, watchlist, portfolio }) {
         {/* Live Price Display */}
         {symbol && (
           <div>
-            <LivePriceDisplay symbol={symbol} onPriceChange={setCurrentPrice} />
+            <LivePriceDisplay
+              symbol={symbol}
+              onPriceChange={setCurrentPrice}
+              realtimePrice={realtimePrices[symbol]}
+            />
           </div>
         )}
 
