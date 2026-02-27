@@ -35,6 +35,9 @@ const TradingViewWidget = dynamic(
   { ssr: false }
 );
 
+// Analytics Tab Component
+import { AnalyticsTab } from './analytics-tab';
+
 /**
  * Trading Dashboard Page
  *
@@ -58,11 +61,12 @@ export default function TradingPage() {
   const [activeAccount, setActiveAccount] = useState(null);
   const [portfolio, setPortfolio] = useState(null);
   const [positions, setPositions] = useState([]);
+  const [portfolioSnapshots, setPortfolioSnapshots] = useState([]);
   const [orders, setOrders] = useState([]);
   const [strategies, setStrategies] = useState([]);
   const [signals, setSignals] = useState([]);
   const [watchlist, setWatchlist] = useState([]);
-  const [activeTab, setActiveTab] = useState('positions'); // positions, trade, orders, strategies
+  const [activeTab, setActiveTab] = useState('positions'); // positions, trade, orders, strategies, analytics
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [showConnectDialog, setShowConnectDialog] = useState(false);
@@ -80,6 +84,7 @@ export default function TradingPage() {
   useEffect(() => {
     if (activeAccount) {
       loadPortfolio();
+      loadPortfolioSnapshots();
       loadPositions();
       loadOrders();
       loadStrategies();
@@ -217,6 +222,21 @@ export default function TradingPage() {
       setPortfolio(data.portfolio);
     } catch (error) {
       console.error('Load portfolio error:', error);
+    }
+  }
+
+  async function loadPortfolioSnapshots() {
+    try {
+      const res = await fetch(`${config.backendUrl}/api/ext/trading/portfolio/snapshots?days=90`, {
+        headers: authHeaders(),
+      });
+
+      if (!res.ok) throw new Error('Failed to load portfolio history');
+
+      const data = await res.json();
+      setPortfolioSnapshots(data.snapshots || []);
+    } catch (error) {
+      console.error('Load portfolio snapshots error:', error);
     }
   }
 
@@ -632,7 +652,7 @@ export default function TradingPage() {
       {/* Tabs */}
       <div className="border-b border-gray-200">
         <div className="flex space-x-8">
-          {['positions', 'trade', 'orders', 'strategies'].map((tab) => (
+          {['positions', 'trade', 'orders', 'strategies', 'analytics'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -665,6 +685,13 @@ export default function TradingPage() {
             onStopStrategy={handleStopStrategy}
             onExecuteSignal={handleExecuteSignal}
             onRejectSignal={handleRejectSignal}
+          />
+        )}
+        {activeTab === 'analytics' && (
+          <AnalyticsTab
+            positions={positions}
+            portfolioSnapshots={portfolioSnapshots}
+            portfolio={portfolio}
           />
         )}
       </div>
