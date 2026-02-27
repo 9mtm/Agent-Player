@@ -429,6 +429,101 @@ const MOCK_SPEC: Spec = {
             children: [],
         },
 
+        // ── Trading Charts ───────────────────────────────────────────────────
+        'grid-trading-charts': { type: 'Grid', props: { columns: 2, gap: 'md' }, children: ['card-candlestick', 'card-options', 'card-portfolio-perf', 'card-allocation'] },
+
+        'card-candlestick': { type: 'Card', props: { title: 'Stock Candlestick Chart', description: 'Professional OHLC chart with volume' }, children: ['chart-candlestick'] },
+        'chart-candlestick': {
+            type: 'StockCandlestickChart',
+            props: {
+                symbol: 'AAPL',
+                data: [
+                    { timestamp: '2024-01-01', open: 150.00, high: 155.50, low: 148.20, close: 153.40, volume: 1234567 },
+                    { timestamp: '2024-01-02', open: 153.40, high: 158.90, low: 152.10, close: 156.80, volume: 1456789 },
+                    { timestamp: '2024-01-03', open: 156.80, high: 159.20, low: 154.30, close: 155.60, volume: 1298765 },
+                    { timestamp: '2024-01-04', open: 155.60, high: 157.40, low: 153.80, close: 154.20, volume: 1123456 },
+                    { timestamp: '2024-01-05', open: 154.20, high: 156.70, low: 151.50, close: 156.30, volume: 1567890 },
+                ],
+                timeframe: '1D',
+                showVolume: true,
+                height: 500,
+            },
+            children: [],
+        },
+
+        'card-options': { type: 'Card', props: { title: 'Options Chain', description: 'Calls and Puts with Greeks' }, children: ['chart-options'] },
+        'chart-options': {
+            type: 'OptionsChainTable',
+            props: {
+                symbol: 'AAPL',
+                expirationDate: '2024-03-15',
+                currentPrice: 150.00,
+                chains: [
+                    {
+                        strike: 145,
+                        calls: { bid: 8.20, ask: 8.40, volume: 850, iv: 0.25, delta: 0.75 },
+                        puts: { bid: 0.80, ask: 0.90, volume: 320, iv: 0.22, delta: -0.25 }
+                    },
+                    {
+                        strike: 150,
+                        calls: { bid: 5.20, ask: 5.30, volume: 1200, iv: 0.28, delta: 0.65 },
+                        puts: { bid: 2.10, ask: 2.15, volume: 800, iv: 0.26, delta: -0.35 }
+                    },
+                    {
+                        strike: 155,
+                        calls: { bid: 2.80, ask: 2.90, volume: 650, iv: 0.30, delta: 0.45 },
+                        puts: { bid: 4.50, ask: 4.60, volume: 920, iv: 0.29, delta: -0.55 }
+                    },
+                    {
+                        strike: 160,
+                        calls: { bid: 1.20, ask: 1.30, volume: 420, iv: 0.32, delta: 0.25 },
+                        puts: { bid: 7.80, ask: 7.95, volume: 1100, iv: 0.31, delta: -0.75 }
+                    },
+                ],
+                highlightATM: true,
+                height: 400,
+            },
+            children: [],
+        },
+
+        'card-portfolio-perf': { type: 'Card', props: { title: 'Portfolio Performance', description: 'Portfolio vs S&P 500 benchmark' }, children: ['chart-portfolio-perf'] },
+        'chart-portfolio-perf': {
+            type: 'PortfolioPerformanceChart',
+            props: {
+                data: [
+                    { date: '2024-01-01', portfolioValue: 10000, benchmarkValue: 10000 },
+                    { date: '2024-02-01', portfolioValue: 10500, benchmarkValue: 10200 },
+                    { date: '2024-03-01', portfolioValue: 11200, benchmarkValue: 10400 },
+                    { date: '2024-04-01', portfolioValue: 10800, benchmarkValue: 10500 },
+                    { date: '2024-05-01', portfolioValue: 11500, benchmarkValue: 10700 },
+                    { date: '2024-06-01', portfolioValue: 12300, benchmarkValue: 11000 },
+                ],
+                showBenchmark: true,
+                benchmarkName: 'S&P 500',
+                showDrawdown: false,
+                height: 400,
+            },
+            children: [],
+        },
+
+        'card-allocation': { type: 'Card', props: { title: 'Asset Allocation', description: 'Portfolio distribution by holdings' }, children: ['chart-allocation'] },
+        'chart-allocation': {
+            type: 'AssetAllocationPie',
+            props: {
+                holdings: [
+                    { symbol: 'AAPL', name: 'Apple Inc.', value: 5000, percentage: 25 },
+                    { symbol: 'TSLA', name: 'Tesla Inc.', value: 3000, percentage: 15 },
+                    { symbol: 'MSFT', name: 'Microsoft Corp.', value: 4000, percentage: 20 },
+                    { symbol: 'BTC', name: 'Bitcoin', value: 6000, percentage: 30 },
+                    { symbol: 'ETH', name: 'Ethereum', value: 2000, percentage: 10 },
+                ],
+                showPercentages: true,
+                interactive: true,
+                height: 400,
+            },
+            children: [],
+        },
+
         // ── Callouts ─────────────────────────────────────────────────────────
         'grid-callouts': { type: 'Grid', props: { columns: 2, gap: 'md' }, children: ['callout-info', 'callout-tip', 'callout-warn', 'callout-imp'] },
         'callout-info': { type: 'Callout', props: { type: 'info',      title: 'Info Callout',      content: 'This is an informational message with useful context.' }, children: [] },
@@ -993,6 +1088,10 @@ const COMPONENT_CATALOG = [
     { name: 'BarChart', heading: 'Charts' },
     { name: 'LineChart', heading: 'Charts' },
     { name: 'PieChart', heading: 'Charts' },
+    { name: 'StockCandlestickChart', heading: 'Trading Charts' },
+    { name: 'OptionsChainTable', heading: 'Trading Charts' },
+    { name: 'PortfolioPerformanceChart', heading: 'Trading Charts' },
+    { name: 'AssetAllocationPie', heading: 'Trading Charts' },
     { name: 'AreaChart', heading: 'Revenue' },
     { name: 'Callout', heading: 'Other Components' },
     { name: 'Accordion', heading: 'Other Components' },

@@ -207,6 +207,129 @@ export const chatCatalog = defineCatalog(schema, {
       },
     },
 
+    // ── Trading Charts ────────────────────────────────────────────────────────
+    StockCandlestickChart: {
+      props: z.object({
+        symbol: z.string(),
+        data: z.array(z.object({
+          timestamp: z.string(),
+          open: z.number(),
+          high: z.number(),
+          low: z.number(),
+          close: z.number(),
+          volume: z.number(),
+        })),
+        timeframe: z.enum(['1m', '5m', '15m', '1h', '1D', '1W', '1M']).nullable(),
+        showVolume: z.boolean().nullable(),
+        height: z.number().nullable(),
+      }),
+      description: 'Professional stock candlestick chart with OHLC data and volume bars. For trading applications.',
+      example: {
+        symbol: 'AAPL',
+        data: [
+          { timestamp: '2024-01-01', open: 150, high: 155, low: 148, close: 153, volume: 1000000 },
+          { timestamp: '2024-01-02', open: 153, high: 158, low: 152, close: 156, volume: 1200000 },
+        ],
+        timeframe: '1D',
+        showVolume: true,
+        height: 500,
+      },
+    },
+
+    OptionsChainTable: {
+      props: z.object({
+        symbol: z.string(),
+        expirationDate: z.string(),
+        chains: z.array(z.object({
+          strike: z.number(),
+          calls: z.object({
+            bid: z.number(),
+            ask: z.number(),
+            volume: z.number(),
+            iv: z.number(),
+            delta: z.number(),
+          }),
+          puts: z.object({
+            bid: z.number(),
+            ask: z.number(),
+            volume: z.number(),
+            iv: z.number(),
+            delta: z.number(),
+          }),
+        })),
+        currentPrice: z.number().nullable(),
+        highlightATM: z.boolean().nullable(),
+        height: z.number().nullable(),
+      }),
+      description: 'Options chain table showing Calls and Puts with Greeks. For options trading.',
+      example: {
+        symbol: 'AAPL',
+        expirationDate: '2024-03-15',
+        currentPrice: 150,
+        chains: [
+          {
+            strike: 150,
+            calls: { bid: 5.20, ask: 5.30, volume: 1200, iv: 0.28, delta: 0.65 },
+            puts: { bid: 2.10, ask: 2.15, volume: 800, iv: 0.26, delta: -0.35 },
+          },
+        ],
+        highlightATM: true,
+        height: 600,
+      },
+    },
+
+    PortfolioPerformanceChart: {
+      props: z.object({
+        data: z.array(z.object({
+          date: z.string(),
+          portfolioValue: z.number(),
+          benchmarkValue: z.number().nullable(),
+        })),
+        showBenchmark: z.boolean().nullable(),
+        benchmarkName: z.string().nullable(),
+        showDrawdown: z.boolean().nullable(),
+        height: z.number().nullable(),
+      }),
+      description: 'Portfolio performance chart comparing portfolio value vs benchmark (e.g., S&P 500).',
+      example: {
+        data: [
+          { date: '2024-01-01', portfolioValue: 10000, benchmarkValue: 10000 },
+          { date: '2024-02-01', portfolioValue: 10500, benchmarkValue: 10200 },
+          { date: '2024-03-01', portfolioValue: 11000, benchmarkValue: 10400 },
+        ],
+        showBenchmark: true,
+        benchmarkName: 'S&P 500',
+        showDrawdown: false,
+        height: 400,
+      },
+    },
+
+    AssetAllocationPie: {
+      props: z.object({
+        holdings: z.array(z.object({
+          symbol: z.string(),
+          name: z.string().nullable(),
+          value: z.number(),
+          percentage: z.number(),
+        })),
+        showPercentages: z.boolean().nullable(),
+        interactive: z.boolean().nullable(),
+        height: z.number().nullable(),
+      }),
+      description: 'Asset allocation pie chart showing portfolio distribution by stock/crypto.',
+      example: {
+        holdings: [
+          { symbol: 'AAPL', name: 'Apple Inc.', value: 5000, percentage: 25 },
+          { symbol: 'TSLA', name: 'Tesla Inc.', value: 3000, percentage: 15 },
+          { symbol: 'MSFT', name: 'Microsoft', value: 4000, percentage: 20 },
+          { symbol: 'BTC', name: 'Bitcoin', value: 8000, percentage: 40 },
+        ],
+        showPercentages: true,
+        interactive: true,
+        height: 400,
+      },
+    },
+
     // ── Interactive ───────────────────────────────────────────────────────────
     Tabs: {
       props: z.object({

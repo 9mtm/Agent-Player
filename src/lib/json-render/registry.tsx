@@ -450,6 +450,303 @@ export const { registry } = defineRegistry(chatCatalog, {
       );
     },
 
+    // ── Trading Charts ────────────────────────────────────────────────────────
+    StockCandlestickChart: ({ props }) => {
+      const data = Array.isArray(props.data) ? props.data : [];
+      if (data.length === 0) return <p className="text-sm text-muted-foreground text-center py-4">No data</p>;
+
+      // Transform OHLC data for display
+      const candleData = data.map(item => ({
+        timestamp: item.timestamp,
+        open: item.open,
+        high: item.high,
+        low: item.low,
+        close: item.close,
+        volume: item.volume,
+        change: item.close - item.open,
+        priceRange: [item.low, item.high],
+        bodyRange: [Math.min(item.open, item.close), Math.max(item.open, item.close)],
+        isGreen: item.close >= item.open,
+      }));
+
+      return (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-lg">{props.symbol}</span>
+              <Badge variant="outline">{props.timeframe ?? '1D'}</Badge>
+            </div>
+            {data.length > 0 && (
+              <div className="flex items-center gap-1 text-sm">
+                <span className="font-mono">${data[data.length - 1].close.toFixed(2)}</span>
+                {data[data.length - 1].close >= data[data.length - 1].open ? (
+                  <TrendingUp className="w-4 h-4 text-green-600" />
+                ) : (
+                  <TrendingDown className="w-4 h-4 text-red-600" />
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Candlestick Chart */}
+          <ResponsiveContainer width="100%" height={props.showVolume ? (props.height ?? 500) * 0.7 : (props.height ?? 500)}>
+            <RechartsAreaChart data={candleData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="timestamp" tick={{ fontSize: 11 }} />
+              <YAxis domain={['auto', 'auto']} tick={{ fontSize: 11 }} />
+              <RechartsTooltip
+                content={({ active, payload }) => {
+                  if (!active || !payload?.[0]) return null;
+                  const item = payload[0].payload;
+                  return (
+                    <div className="bg-white border border-gray-200 p-2 rounded shadow-md text-xs">
+                      <p className="font-semibold">{item.timestamp}</p>
+                      <p>Open: <span className="font-mono">${item.open.toFixed(2)}</span></p>
+                      <p>High: <span className="font-mono">${item.high.toFixed(2)}</span></p>
+                      <p>Low: <span className="font-mono">${item.low.toFixed(2)}</span></p>
+                      <p>Close: <span className="font-mono">${item.close.toFixed(2)}</span></p>
+                      <p className={item.isGreen ? 'text-green-600' : 'text-red-600'}>
+                        {item.change >= 0 ? '+' : ''}{item.change.toFixed(2)}
+                      </p>
+                    </div>
+                  );
+                }}
+              />
+              {/* Simple area chart approximation of candlesticks */}
+              <Area type="monotone" dataKey="close" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.2} />
+            </RechartsAreaChart>
+          </ResponsiveContainer>
+
+          {/* Volume Bars */}
+          {props.showVolume && (
+            <ResponsiveContainer width="100%" height={(props.height ?? 500) * 0.25}>
+              <RechartsBarChart data={candleData}>
+                <XAxis dataKey="timestamp" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <RechartsTooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.[0]) return null;
+                    return (
+                      <div className="bg-white border p-2 rounded shadow-md text-xs">
+                        <p>Volume: <span className="font-mono">{payload[0].payload.volume.toLocaleString()}</span></p>
+                      </div>
+                    );
+                  }}
+                />
+                <Bar dataKey="volume">
+                  {candleData.map((entry, index) => (
+                    <Cell key={index} fill={entry.isGreen ? '#10b981' : '#ef4444'} />
+                  ))}
+                </Bar>
+              </RechartsBarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      );
+    },
+
+    OptionsChainTable: ({ props }) => {
+      const chains = Array.isArray(props.chains) ? props.chains : [];
+      if (chains.length === 0) return <p className="text-sm text-muted-foreground text-center py-4">No options data</p>;
+
+      const currentPrice = props.currentPrice ?? 0;
+
+      return (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-lg">{props.symbol}</span>
+              <span className="text-sm text-muted-foreground">Exp: {props.expirationDate}</span>
+            </div>
+            {currentPrice > 0 && (
+              <span className="text-sm">Current: <span className="font-mono font-semibold">${currentPrice.toFixed(2)}</span></span>
+            )}
+          </div>
+
+          <div className="border rounded-lg overflow-hidden" style={{ maxHeight: props.height ?? 600, overflowY: 'auto' }}>
+            <table className="w-full text-xs">
+              <thead className="bg-muted sticky top-0">
+                <tr>
+                  <th colSpan={5} className="text-center py-2 border-b font-semibold">CALLS</th>
+                  <th className="text-center py-2 border-b border-l font-semibold">Strike</th>
+                  <th colSpan={5} className="text-center py-2 border-b border-l font-semibold">PUTS</th>
+                </tr>
+                <tr className="text-muted-foreground">
+                  <th className="px-2 py-1 text-right">Bid</th>
+                  <th className="px-2 py-1 text-right">Ask</th>
+                  <th className="px-2 py-1 text-right">Vol</th>
+                  <th className="px-2 py-1 text-right">IV</th>
+                  <th className="px-2 py-1 text-right">Δ</th>
+                  <th className="px-2 py-1 text-center border-l font-semibold">$</th>
+                  <th className="px-2 py-1 text-right border-l">Bid</th>
+                  <th className="px-2 py-1 text-right">Ask</th>
+                  <th className="px-2 py-1 text-right">Vol</th>
+                  <th className="px-2 py-1 text-right">IV</th>
+                  <th className="px-2 py-1 text-right">Δ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {chains.map((chain, idx) => {
+                  const isATM = props.highlightATM && Math.abs(chain.strike - currentPrice) < 5;
+                  return (
+                    <tr key={idx} className={cn('hover:bg-muted/50', isATM && 'bg-yellow-50')}>
+                      {/* Calls */}
+                      <td className="px-2 py-1 text-right font-mono">{chain.calls.bid.toFixed(2)}</td>
+                      <td className="px-2 py-1 text-right font-mono">{chain.calls.ask.toFixed(2)}</td>
+                      <td className="px-2 py-1 text-right">{chain.calls.volume.toLocaleString()}</td>
+                      <td className="px-2 py-1 text-right font-mono">{(chain.calls.iv * 100).toFixed(1)}%</td>
+                      <td className="px-2 py-1 text-right font-mono">{chain.calls.delta.toFixed(2)}</td>
+                      {/* Strike */}
+                      <td className="px-2 py-1 text-center border-l font-semibold font-mono">{chain.strike.toFixed(2)}</td>
+                      {/* Puts */}
+                      <td className="px-2 py-1 text-right font-mono border-l">{chain.puts.bid.toFixed(2)}</td>
+                      <td className="px-2 py-1 text-right font-mono">{chain.puts.ask.toFixed(2)}</td>
+                      <td className="px-2 py-1 text-right">{chain.puts.volume.toLocaleString()}</td>
+                      <td className="px-2 py-1 text-right font-mono">{(chain.puts.iv * 100).toFixed(1)}%</td>
+                      <td className="px-2 py-1 text-right font-mono">{chain.puts.delta.toFixed(2)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    },
+
+    PortfolioPerformanceChart: ({ props }) => {
+      const data = Array.isArray(props.data) ? props.data : [];
+      if (data.length === 0) return <p className="text-sm text-muted-foreground text-center py-4">No performance data</p>;
+
+      // Calculate percentage change
+      const chartData = data.map((item, idx) => {
+        const firstPortfolio = data[0].portfolioValue;
+        const firstBenchmark = data[0].benchmarkValue ?? firstPortfolio;
+        return {
+          date: item.date,
+          portfolioReturn: ((item.portfolioValue - firstPortfolio) / firstPortfolio) * 100,
+          benchmarkReturn: item.benchmarkValue ? ((item.benchmarkValue - firstBenchmark) / firstBenchmark) * 100 : null,
+        };
+      });
+
+      const lastReturn = chartData[chartData.length - 1].portfolioReturn;
+
+      return (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold">Portfolio Performance</span>
+            <div className="flex items-center gap-2 text-sm">
+              <span>Return:</span>
+              <span className={cn('font-mono font-semibold', lastReturn >= 0 ? 'text-green-600' : 'text-red-600')}>
+                {lastReturn >= 0 ? '+' : ''}{lastReturn.toFixed(2)}%
+              </span>
+              {lastReturn >= 0 ? <TrendingUp className="w-4 h-4 text-green-600" /> : <TrendingDown className="w-4 h-4 text-red-600" />}
+            </div>
+          </div>
+
+          <ResponsiveContainer width="100%" height={props.height ?? 400}>
+            <RechartsLineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} tickFormatter={(val) => `${val.toFixed(1)}%`} />
+              <RechartsTooltip
+                formatter={(value: any) => `${parseFloat(value).toFixed(2)}%`}
+                labelFormatter={(label) => `Date: ${label}`}
+              />
+              <Legend />
+              <Line
+                type="monotone"
+                dataKey="portfolioReturn"
+                name="Portfolio"
+                stroke="#3b82f6"
+                strokeWidth={2}
+                dot={false}
+              />
+              {props.showBenchmark && (
+                <Line
+                  type="monotone"
+                  dataKey="benchmarkReturn"
+                  name={props.benchmarkName ?? 'Benchmark'}
+                  stroke="#9ca3af"
+                  strokeWidth={2}
+                  strokeDasharray="5 5"
+                  dot={false}
+                />
+              )}
+            </RechartsLineChart>
+          </ResponsiveContainer>
+        </div>
+      );
+    },
+
+    AssetAllocationPie: ({ props }) => {
+      const holdings = Array.isArray(props.holdings) ? props.holdings : [];
+      if (holdings.length === 0) return <p className="text-sm text-muted-foreground text-center py-4">No holdings</p>;
+
+      const totalValue = holdings.reduce((sum, h) => sum + h.value, 0);
+
+      return (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold">Asset Allocation</span>
+            <span className="text-sm text-muted-foreground">Total: ${totalValue.toLocaleString()}</span>
+          </div>
+
+          <ResponsiveContainer width="100%" height={props.height ?? 400}>
+            <RechartsPieChart>
+              <Pie
+                data={holdings.map(h => ({
+                  name: h.symbol,
+                  value: h.value,
+                  percentage: h.percentage,
+                }))}
+                cx="50%"
+                cy="50%"
+                innerRadius="40%"
+                outerRadius="70%"
+                paddingAngle={2}
+                dataKey="value"
+                label={props.showPercentages ? ({ name, percentage }) => `${name} ${percentage}%` : undefined}
+              >
+                {holdings.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+              </Pie>
+              <RechartsTooltip
+                formatter={(value: any, name: any, entry: any) => [
+                  `$${parseFloat(value).toLocaleString()} (${entry.payload.percentage}%)`,
+                  name,
+                ]}
+              />
+              <Legend />
+            </RechartsPieChart>
+          </ResponsiveContainer>
+
+          {/* Holdings Table */}
+          <div className="border rounded-lg overflow-hidden">
+            <table className="w-full text-xs">
+              <thead className="bg-muted">
+                <tr className="text-muted-foreground">
+                  <th className="px-3 py-2 text-left">Symbol</th>
+                  <th className="px-3 py-2 text-left">Name</th>
+                  <th className="px-3 py-2 text-right">Value</th>
+                  <th className="px-3 py-2 text-right">%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {holdings.map((holding, idx) => (
+                  <tr key={idx} className="hover:bg-muted/50 border-t">
+                    <td className="px-3 py-2 font-mono font-semibold">{holding.symbol}</td>
+                    <td className="px-3 py-2 text-muted-foreground">{holding.name ?? '-'}</td>
+                    <td className="px-3 py-2 text-right font-mono">${holding.value.toLocaleString()}</td>
+                    <td className="px-3 py-2 text-right font-mono">{holding.percentage}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    },
+
     // ── Interactive ───────────────────────────────────────────────────────────
     Tabs: ({ props, children }) => (
       <Tabs defaultValue={props.defaultValue ?? props.tabs?.[0]?.value}>
