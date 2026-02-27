@@ -22,9 +22,10 @@ Tasks to enhance the Trading Extension UI/UX to match professional trading platf
 - **Result**: Analytics dashboard now successfully loads historical data for charts
 
 **Error 2**: "[WebSocket] Connection error"
-- **Location**: `trading/page.tsx:166` in WebSocket useEffect
+- **Location**: `trading/page.tsx:170` in WebSocket useEffect
 - **Cause 1**: SQL query error - `trading_watchlist` table uses `user_id`, not `trading_account_id`
 - **Cause 2**: Alpaca WebSocket errors were crashing the SSE connection silently
+- **Cause 3**: CORS policy blocking EventSource connections (frontend:41521 → backend:41522)
 - **Fix 1**: Corrected watchlist query in `/stream` endpoint from `trading_account_id` to `user_id`
 - **Fix 2**: Enhanced error handling:
   - Send "connected" event before Alpaca WebSocket creation
@@ -32,11 +33,16 @@ Tasks to enhance the Trading Extension UI/UX to match professional trading platf
   - Wrapped Alpaca connection in try-catch
   - Send error events to frontend instead of crashing
   - Frontend displays Alpaca errors as toast notifications
-- **Result**: WebSocket connects successfully with graceful error handling
+- **Fix 3**: Added CORS headers to SSE endpoint:
+  - `Access-Control-Allow-Origin: *`
+  - `Access-Control-Allow-Methods: GET, OPTIONS`
+  - `Access-Control-Allow-Headers: Content-Type, Authorization, x-user-id`
+- **Result**: WebSocket connects successfully with graceful error handling and CORS support
 
 **Commits**:
 - `bd17cd18d` - "Fix trading extension API errors" (SQL query fix)
 - `f635d61d0` - "Improve WebSocket error handling" (Enhanced error handling)
+- `280633533` - "Fix CORS error for trading WebSocket stream" (CORS headers)
 
 ---
 
