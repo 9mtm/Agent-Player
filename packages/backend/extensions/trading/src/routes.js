@@ -1700,6 +1700,11 @@ export async function registerTradingRoutes(fastify) {
 
       console.log(`[Trading WebSocket] Starting stream for ${symbols.length} symbols:`, symbols.join(', '));
 
+      // Set up CORS headers (required for EventSource from different origin)
+      reply.raw.setHeader('Access-Control-Allow-Origin', '*');
+      reply.raw.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      reply.raw.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-user-id');
+
       // Set up SSE headers
       reply.raw.setHeader('Content-Type', 'text/event-stream');
       reply.raw.setHeader('Cache-Control', 'no-cache');
