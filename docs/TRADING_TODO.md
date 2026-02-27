@@ -709,21 +709,97 @@ Symbol | Qty | Avg Entry | Current | Market Value | Cost Basis | Today's P/L | T
 ---
 
 ### 15. Options Trading (Requires Alpaca Approval)
-**Status**: ❌ Not Started
-**Estimated Time**: 1-2 weeks
+**Status**: ✅ COMPLETE (2026-02-27)
+**Actual Time**: 8 hours
+**Files Created**:
+- Backend:
+  - `packages/backend/extensions/trading/migrations/004_options_trading.sql`
+  - 6 new functions in `packages/backend/extensions/trading/src/alpaca-client.js`
+  - 12 new routes in `packages/backend/extensions/trading/src/routes.js`
+- Frontend (9 components):
+  - `src/app/(dashboard)/dashboard/trading/options-tab.tsx`
+  - `src/app/(dashboard)/dashboard/trading/greeks-calculator.tsx`
+  - `src/app/(dashboard)/dashboard/trading/strategy-builder.tsx`
+  - `src/app/(dashboard)/dashboard/trading/options-order-dialog.tsx`
+  - `src/app/(dashboard)/dashboard/trading/options-orders-history.tsx`
+  - `src/app/(dashboard)/dashboard/trading/options-positions.tsx`
+  - `src/app/(dashboard)/dashboard/trading/options-analytics.tsx`
 
 **Features**:
-- [ ] Options chain display
-- [ ] Call/Put orders
-- [ ] Greeks calculator (Delta, Gamma, Theta, Vega)
-- [ ] Strategy builder (spreads, straddles, etc.)
-- [ ] Options analytics
+- [x] Options chain display (Calls & Puts side-by-side, ITM/OTM/ATM color coding)
+- [x] Call/Put orders (Buy/Sell to Open/Close, Market/Limit orders)
+- [x] Greeks calculator (Delta, Gamma, Theta, Vega, Rho using Black-Scholes)
+- [x] Strategy builder (7 templates: Covered Call, Bull Call Spread, Bear Put Spread, Iron Condor, Long/Short Straddle, Butterfly)
+- [x] Options analytics (Win rate, Total P/L, Most traded symbols, Portfolio Greeks)
+- [x] Options positions tracker (Real-time P/L, Greeks display toggle)
+- [x] Options orders history (Filter by status, view all options trades)
+- [x] Expiration date selector
+- [x] Strike price filtering
+- [x] Implied volatility display
+- [x] Multi-leg strategy P/L calculations (Max profit, Max loss, Net debit/credit)
+
+**Database (Migration 004)**:
+- `trading_options_positions` - Current options holdings with Greeks
+- `trading_options_orders` - Options order history
+- `trading_options_chain_cache` - Cached options chain data
+- `trading_options_strategies` - Saved multi-leg strategies
+- `trading_options_analytics` - Performance analytics snapshots
+- `trading_options_watchlist` - Favorite options contracts
+
+**Backend Implementation**:
+- **Alpaca Functions**:
+  - `getOptionsChain()` - Fetch options contracts for symbol
+  - `getOptionContract()` - Get specific contract details with Greeks
+  - `placeOptionsOrder()` - Execute options trades (Buy/Sell to Open/Close)
+  - `getOptionsPositions()` - Get current options positions
+  - `calculateGreeks()` - Black-Scholes Greeks calculation (fallback when Alpaca doesn't provide)
+  - `getExpirationDates()` - Available expiration dates for symbol
+- **API Routes** (12 endpoints):
+  - `GET /api/ext/trading/options/chain/:symbol` - Options chain
+  - `GET /api/ext/trading/options/expirations/:symbol` - Expiration dates
+  - `GET /api/ext/trading/options/contract/:optionSymbol` - Contract details
+  - `POST /api/ext/trading/options/orders` - Place order
+  - `GET /api/ext/trading/options/orders` - Orders history
+  - `GET /api/ext/trading/options/positions` - Current positions
+  - `POST /api/ext/trading/options/greeks` - Calculate Greeks
+  - `GET /api/ext/trading/options/strategies` - Saved strategies
+  - `POST /api/ext/trading/options/strategies` - Create strategy
+  - `PUT /api/ext/trading/options/strategies/:id` - Update strategy
+  - `DELETE /api/ext/trading/options/strategies/:id` - Delete strategy
+  - `GET /api/ext/trading/options/analytics` - Performance analytics
+
+**Frontend Implementation**:
+- **Options Tab** (4 sub-tabs):
+  - **Chain**: Options chain viewer with expiration selector, strike filter, Greeks toggle
+  - **Positions**: Current options positions with P/L tracking
+  - **Orders**: Options orders history with status filtering
+  - **Analytics**: Performance metrics (win rate, P/L, most traded, portfolio Greeks)
+- **Modals/Dialogs**:
+  - **Greeks Calculator**: Black-Scholes calculator for custom scenarios
+  - **Strategy Builder**: 7 strategy templates with multi-leg builder, P/L calculator
+  - **Order Dialog**: Order placement with 4 side options (Buy/Sell to Open/Close)
+- **Features**:
+  - ITM/OTM/ATM visual indicators (green/yellow/gray)
+  - Greeks display toggle (Delta, Gamma, Theta, Vega, Rho)
+  - Strategy templates: Covered Call, Bull Call Spread, Bear Put Spread, Iron Condor, Straddles, Butterfly
+  - Real-time position updates
+  - Analytics period selection (7d/30d/90d)
+  - Responsive mobile-first design
+
+**Implementation Notes**:
+- Options chain cached in database for performance
+- Greeks calculated server-side using Black-Scholes when not provided by Alpaca
+- Strategy P/L calculations support multi-leg positions
+- All components follow existing Trading Extension design patterns
+- Fully integrated with Alpaca Options Trading API
+- Paper Trading mode fully supported
+- Risk warnings displayed prominently
 
 ---
 
 ## 📊 Progress Tracking
 
-**Overall Progress**: 14/15 tasks completed (93%)
+**Overall Progress**: 15/15 tasks completed (100%) 🎉
 
 ### Week 1 (Priority 1) ✅ COMPLETE
 - [x] Stock Search (100%) ✅
@@ -744,16 +820,16 @@ Symbol | Qty | Avg Entry | Current | Market Value | Cost Basis | Today's P/L | T
 **Time Invested**: 12.5 hours
 **Status**: All Priority 2 tasks complete (100%) 🎉
 
-### Priority 3 (In Progress)
+### Priority 3 ✅ COMPLETE
 - [x] Analytics Dashboard (100%) ✅
 - [x] Advanced Orders (100%) ✅
 - [x] Watchlist Enhancements (100%) ✅
 - [x] News Feed (100%) ✅
 - [x] Mobile Design (100%) ✅
-- [ ] Options Trading (0%)
+- [x] Options Trading (100%) ✅
 
-**Time Invested**: 18 hours (Analytics: 4h, Advanced Orders: 3h, Watchlist: 6h, News: 3h, Mobile: 2h)
-**Status**: 5/6 Priority 3 tasks complete (83%)
+**Time Invested**: 26 hours (Analytics: 4h, Advanced Orders: 3h, Watchlist: 6h, News: 3h, Mobile: 2h, Options: 8h)
+**Status**: All Priority 3 tasks complete (100%) 🎉🎉🎉
 
 ---
 
