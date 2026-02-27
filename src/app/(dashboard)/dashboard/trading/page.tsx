@@ -530,42 +530,42 @@ export default function TradingPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-6 space-y-6">
+    <div className="container mx-auto px-2 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <TrendingUp className="w-8 h-8 text-blue-600" />
-          <div>
-            <h1 className="text-2xl font-bold">Trading</h1>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-sm text-gray-600">{activeAccount.account_name}</span>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
+        <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+          <TrendingUp className="w-6 h-6 sm:w-8 sm:h-8 text-blue-600 flex-shrink-0" />
+          <div className="min-w-0 flex-1">
+            <h1 className="text-xl sm:text-2xl font-bold">Trading</h1>
+            <div className="flex flex-wrap items-center gap-2 mt-1">
+              <span className="text-xs sm:text-sm text-gray-600 truncate">{activeAccount.account_name}</span>
               <span
-                className={`px-2 py-0.5 text-xs font-medium rounded ${
+                className={`px-2 py-0.5 text-xs font-medium rounded flex-shrink-0 ${
                   activeAccount.account_mode === 'paper'
                     ? 'bg-green-100 text-green-800'
                     : 'bg-red-100 text-red-800'
                 }`}
               >
-                {activeAccount.account_mode === 'paper' ? 'Paper Trading' : 'Live Trading'}
+                {activeAccount.account_mode === 'paper' ? 'Paper' : 'Live'}
               </span>
 
               {/* WebSocket Connection Status */}
               {(positions.length > 0 || watchlist.length > 0) && (
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 flex-shrink-0">
                   {wsConnected ? (
                     <>
-                      <Wifi className="w-3.5 h-3.5 text-green-600" />
+                      <Wifi className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-green-600" />
                       <span className="text-xs text-green-600 font-medium">Live</span>
                     </>
                   ) : wsError ? (
                     <>
-                      <WifiOff className="w-3.5 h-3.5 text-red-600" />
-                      <span className="text-xs text-red-600 font-medium">{wsError}</span>
+                      <WifiOff className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-red-600" />
+                      <span className="text-xs text-red-600 font-medium hidden sm:inline">{wsError}</span>
                     </>
                   ) : (
                     <>
-                      <RefreshCw className="w-3.5 h-3.5 text-gray-400 animate-spin" />
-                      <span className="text-xs text-gray-400 font-medium">Connecting...</span>
+                      <RefreshCw className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-gray-400 animate-spin" />
+                      <span className="text-xs text-gray-400 font-medium hidden sm:inline">Connecting...</span>
                     </>
                   )}
                 </div>
@@ -578,17 +578,17 @@ export default function TradingPage() {
           <button
             onClick={handleSync}
             disabled={syncing}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+            className="inline-flex items-center justify-center px-3 sm:px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 flex-1 sm:flex-initial text-sm"
           >
-            <RefreshCw className={`w-4 h-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
-            Sync
+            <RefreshCw className={`w-4 h-4 sm:mr-2 ${syncing ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Sync</span>
           </button>
           <button
             onClick={() => setShowConnectDialog(true)}
-            className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            className="inline-flex items-center justify-center px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex-1 sm:flex-initial text-sm"
           >
-            <Plus className="w-4 h-4 mr-2" />
-            Connect Account
+            <Plus className="w-4 h-4 sm:mr-2" />
+            <span className="hidden sm:inline">Connect Account</span>
           </button>
         </div>
       </div>
@@ -636,19 +636,19 @@ export default function TradingPage() {
 
       {/* Pending Signals Alert */}
       {signals.length > 0 && (
-        <div className="flex items-center justify-between p-4 bg-blue-50 border border-blue-200 rounded-lg">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 bg-blue-50 border border-blue-200 rounded-lg">
           <div className="flex items-center gap-3">
-            <Target className="w-5 h-5 text-blue-600" />
+            <Target className="w-5 h-5 text-blue-600 flex-shrink-0" />
             <div>
-              <p className="font-medium text-blue-900">
+              <p className="font-medium text-blue-900 text-sm sm:text-base">
                 {signals.length} Pending Trading Signal{signals.length > 1 ? 's' : ''}
               </p>
-              <p className="text-sm text-blue-700">AI strategy generated new trading opportunities</p>
+              <p className="text-xs sm:text-sm text-blue-700">AI strategy generated new trading opportunities</p>
             </div>
           </div>
           <button
             onClick={() => setActiveTab('strategies')}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm w-full sm:w-auto"
           >
             Review Signals
           </button>
@@ -656,13 +656,13 @@ export default function TradingPage() {
       )}
 
       {/* Tabs */}
-      <div className="border-b border-gray-200">
-        <div className="flex space-x-8">
+      <div className="border-b border-gray-200 -mx-2 sm:mx-0">
+        <div className="flex space-x-4 sm:space-x-8 overflow-x-auto px-2 sm:px-0 scrollbar-hide">
           {['positions', 'trade', 'orders', 'watchlist', 'news', 'strategies', 'analytics'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
+              className={`pb-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex-shrink-0 ${
                 activeTab === tab
                   ? 'border-blue-600 text-blue-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -675,7 +675,7 @@ export default function TradingPage() {
       </div>
 
       {/* Tab Content */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-3 sm:p-6">
         {activeTab === 'positions' && (
           <PositionsTab positions={positions} onSellPosition={handleSellPosition} />
         )}

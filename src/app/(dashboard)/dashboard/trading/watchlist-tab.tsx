@@ -691,84 +691,86 @@ export function WatchlistTab({ priceUpdates }: { priceUpdates: Record<string, an
 
       {/* Watchlist Items Table */}
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-gray-50 border-b border-gray-200">
-            <tr>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-700">Symbol</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-700">Type</th>
-              <th className="text-right px-4 py-3 text-xs font-semibold text-gray-700">Price</th>
-              <th className="text-right px-4 py-3 text-xs font-semibold text-gray-700">Change</th>
-              <th className="text-right px-4 py-3 text-xs font-semibold text-gray-700">Change %</th>
-              <th className="text-center px-4 py-3 text-xs font-semibold text-gray-700">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {filteredItems.length === 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <td colSpan={6} className="text-center py-12 text-sm text-gray-500">
-                  No symbols in this watchlist. Click "Add Symbol" to get started.
-                </td>
+                <th className="text-left px-2 sm:px-4 py-2 sm:py-3 text-xs font-semibold text-gray-700">Symbol</th>
+                <th className="text-left px-2 sm:px-4 py-2 sm:py-3 text-xs font-semibold text-gray-700 hidden sm:table-cell">Type</th>
+                <th className="text-right px-2 sm:px-4 py-2 sm:py-3 text-xs font-semibold text-gray-700">Price</th>
+                <th className="text-right px-2 sm:px-4 py-2 sm:py-3 text-xs font-semibold text-gray-700 hidden md:table-cell">Change</th>
+                <th className="text-right px-2 sm:px-4 py-2 sm:py-3 text-xs font-semibold text-gray-700">Change %</th>
+                <th className="text-center px-2 sm:px-4 py-2 sm:py-3 text-xs font-semibold text-gray-700"></th>
               </tr>
-            ) : (
-              filteredItems.map((item) => {
-                const isPositive = (item.priceChange || 0) >= 0;
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {filteredItems.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="text-center py-8 sm:py-12 text-xs sm:text-sm text-gray-500">
+                    No symbols in this watchlist. Click "Add Symbol" to get started.
+                  </td>
+                </tr>
+              ) : (
+                filteredItems.map((item) => {
+                  const isPositive = (item.priceChange || 0) >= 0;
 
-                return (
-                  <tr key={item.id} className="hover:bg-gray-50 transition">
-                    <td className="px-4 py-3">
-                      <div>
-                        <p className="font-bold font-mono text-sm">{item.symbol}</p>
-                        {item.name && <p className="text-xs text-gray-500">{item.name}</p>}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="inline-block px-2 py-1 bg-gray-100 rounded text-xs font-medium">
-                        {item.asset_class === 'us_equity'
-                          ? 'Stock'
-                          : item.asset_class === 'crypto'
-                          ? 'Crypto'
-                          : 'ETF'}
-                      </span>
-                    </td>
-                    <td className="text-right px-4 py-3 font-mono text-sm">
-                      {item.currentPrice ? `$${item.currentPrice.toFixed(2)}` : '—'}
-                    </td>
-                    <td className={cn('text-right px-4 py-3 font-mono text-sm font-semibold', isPositive ? 'text-green-600' : 'text-red-600')}>
-                      {item.priceChange !== undefined ? (
-                        <div className="flex items-center justify-end gap-1">
-                          {isPositive ? (
-                            <TrendingUp className="w-3.5 h-3.5" />
-                          ) : (
-                            <TrendingDown className="w-3.5 h-3.5" />
-                          )}
-                          <span>
-                            {isPositive ? '+' : ''}${item.priceChange.toFixed(2)}
-                          </span>
+                  return (
+                    <tr key={item.id} className="hover:bg-gray-50 transition">
+                      <td className="px-2 sm:px-4 py-2 sm:py-3">
+                        <div>
+                          <p className="font-bold font-mono text-xs sm:text-sm">{item.symbol}</p>
+                          {item.name && <p className="text-xs text-gray-500 line-clamp-1">{item.name}</p>}
                         </div>
-                      ) : (
-                        '—'
-                      )}
-                    </td>
-                    <td className={cn('text-right px-4 py-3 font-mono text-sm font-semibold', isPositive ? 'text-green-600' : 'text-red-600')}>
-                      {item.priceChangePercent !== undefined
-                        ? `${isPositive ? '+' : ''}${item.priceChangePercent.toFixed(2)}%`
-                        : '—'}
-                    </td>
-                    <td className="text-center px-4 py-3">
-                      <button
-                        onClick={() => handleRemoveSymbol(item.symbol)}
-                        className="p-1.5 hover:bg-red-100 rounded transition"
-                        title="Remove from watchlist"
-                      >
-                        <Trash2 className="w-4 h-4 text-red-600" />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+                      </td>
+                      <td className="px-2 sm:px-4 py-2 sm:py-3 hidden sm:table-cell">
+                        <span className="inline-block px-2 py-1 bg-gray-100 rounded text-xs font-medium whitespace-nowrap">
+                          {item.asset_class === 'us_equity'
+                            ? 'Stock'
+                            : item.asset_class === 'crypto'
+                            ? 'Crypto'
+                            : 'ETF'}
+                        </span>
+                      </td>
+                      <td className="text-right px-2 sm:px-4 py-2 sm:py-3 font-mono text-xs sm:text-sm">
+                        {item.currentPrice ? `$${item.currentPrice.toFixed(2)}` : '—'}
+                      </td>
+                      <td className={cn('text-right px-2 sm:px-4 py-2 sm:py-3 font-mono text-xs sm:text-sm font-semibold hidden md:table-cell', isPositive ? 'text-green-600' : 'text-red-600')}>
+                        {item.priceChange !== undefined ? (
+                          <div className="flex items-center justify-end gap-1">
+                            {isPositive ? (
+                              <TrendingUp className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                            ) : (
+                              <TrendingDown className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                            )}
+                            <span>
+                              {isPositive ? '+' : ''}${item.priceChange.toFixed(2)}
+                            </span>
+                          </div>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className={cn('text-right px-2 sm:px-4 py-2 sm:py-3 font-mono text-xs sm:text-sm font-semibold whitespace-nowrap', isPositive ? 'text-green-600' : 'text-red-600')}>
+                        {item.priceChangePercent !== undefined
+                          ? `${isPositive ? '+' : ''}${item.priceChangePercent.toFixed(2)}%`
+                          : '—'}
+                      </td>
+                      <td className="text-center px-2 sm:px-4 py-2 sm:py-3">
+                        <button
+                          onClick={() => handleRemoveSymbol(item.symbol)}
+                          className="p-1 sm:p-1.5 hover:bg-red-100 rounded transition touch-manipulation"
+                          title="Remove from watchlist"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-600" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Price Alerts Section */}

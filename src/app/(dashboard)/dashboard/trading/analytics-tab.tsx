@@ -95,47 +95,47 @@ export function AnalyticsTab({ positions, portfolioSnapshots, portfolio }: any) 
   const topLosers = positionsWithPL.filter((p: any) => p.pl < 0).slice(0, 5);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Risk Metrics Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg">
-          <p className="text-sm text-blue-700 font-medium">Sharpe Ratio</p>
-          <p className="text-2xl font-bold text-blue-900">{sharpeRatio.toFixed(2)}</p>
-          <p className="text-xs text-blue-600 mt-1">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+        <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-3 sm:p-4 rounded-lg">
+          <p className="text-xs sm:text-sm text-blue-700 font-medium">Sharpe Ratio</p>
+          <p className="text-xl sm:text-2xl font-bold text-blue-900">{sharpeRatio.toFixed(2)}</p>
+          <p className="text-xs text-blue-600 mt-1 hidden sm:block">
             {sharpeRatio > 1 ? 'Excellent' : sharpeRatio > 0.5 ? 'Good' : 'Poor'} risk-adjusted return
           </p>
         </div>
 
-        <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-lg">
-          <p className="text-sm text-purple-700 font-medium">Beta</p>
-          <p className="text-2xl font-bold text-purple-900">{beta.toFixed(2)}</p>
-          <p className="text-xs text-purple-600 mt-1">
+        <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-3 sm:p-4 rounded-lg">
+          <p className="text-xs sm:text-sm text-purple-700 font-medium">Beta</p>
+          <p className="text-xl sm:text-2xl font-bold text-purple-900">{beta.toFixed(2)}</p>
+          <p className="text-xs text-purple-600 mt-1 hidden sm:block">
             {beta > 1 ? 'More volatile' : 'Less volatile'} than market
           </p>
         </div>
 
-        <div className="bg-gradient-to-br from-red-50 to-red-100 p-4 rounded-lg">
-          <p className="text-sm text-red-700 font-medium">Max Drawdown</p>
-          <p className="text-2xl font-bold text-red-900">-{maxDrawdown.toFixed(2)}%</p>
-          <p className="text-xs text-red-600 mt-1">
+        <div className="bg-gradient-to-br from-red-50 to-red-100 p-3 sm:p-4 rounded-lg">
+          <p className="text-xs sm:text-sm text-red-700 font-medium">Max Drawdown</p>
+          <p className="text-xl sm:text-2xl font-bold text-red-900">-{maxDrawdown.toFixed(2)}%</p>
+          <p className="text-xs text-red-600 mt-1 hidden sm:block">
             Largest peak-to-trough decline
           </p>
         </div>
 
-        <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-4 rounded-lg">
-          <p className="text-sm text-orange-700 font-medium">Volatility</p>
-          <p className="text-2xl font-bold text-orange-900">{volatility.toFixed(2)}%</p>
-          <p className="text-xs text-orange-600 mt-1">
+        <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-3 sm:p-4 rounded-lg">
+          <p className="text-xs sm:text-sm text-orange-700 font-medium">Volatility</p>
+          <p className="text-xl sm:text-2xl font-bold text-orange-900">{volatility.toFixed(2)}%</p>
+          <p className="text-xs text-orange-600 mt-1 hidden sm:block">
             Annualized standard deviation
           </p>
         </div>
       </div>
 
       {/* Charts Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         {/* Portfolio Performance Chart */}
-        <div className="bg-white border border-gray-200 rounded-lg p-6">
-          <h3 className="text-lg font-semibold mb-4">Portfolio Performance</h3>
+        <div className="bg-white border border-gray-200 rounded-lg p-4 sm:p-6">
+          <h3 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4">Portfolio Performance</h3>
           {performanceData.length > 0 ? (
             <div className="text-sm text-gray-500 text-center py-12">
               Chart will render here using PortfolioPerformanceChart component
@@ -146,36 +146,36 @@ export function AnalyticsTab({ positions, portfolioSnapshots, portfolio }: any) 
         </div>
 
         {/* Asset Allocation Pie */}
-        <div className="bg-white border border-gray-200 rounded-lg p-6">
-          <h3 className="text-lg font-semibold mb-4">Asset Allocation</h3>
+        <div className="bg-white border border-gray-200 rounded-lg p-4 sm:p-6">
+          <h3 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4">Asset Allocation</h3>
           {allocationData.length > 0 ? (
-            <div className="text-sm text-gray-500 text-center py-12">
+            <div className="text-xs sm:text-sm text-gray-500 text-center py-8 sm:py-12">
               Chart will render here using AssetAllocationPie component
             </div>
           ) : (
-            <p className="text-sm text-gray-500 text-center py-12">No positions to display</p>
+            <p className="text-xs sm:text-sm text-gray-500 text-center py-8 sm:py-12">No positions to display</p>
           )}
         </div>
       </div>
 
       {/* Top Gainers / Losers */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         {/* Top Gainers */}
-        <div className="bg-white border border-gray-200 rounded-lg p-6">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-green-600" />
+        <div className="bg-white border border-gray-200 rounded-lg p-4 sm:p-6">
+          <h3 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4 flex items-center gap-2">
+            <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5 text-green-600" />
             Top Gainers
           </h3>
           {topGainers.length > 0 ? (
-            <div className="space-y-3">
+            <div className="space-y-2 sm:space-y-3">
               {topGainers.map((pos: any, idx: number) => (
-                <div key={idx} className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
-                  <div>
-                    <p className="font-bold font-mono">{pos.symbol}</p>
-                    <p className="text-xs text-gray-600">{pos.qty} shares @ ${pos.avg_entry_price.toFixed(2)}</p>
+                <div key={idx} className="flex items-center justify-between p-2 sm:p-3 bg-green-50 rounded-lg">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-bold font-mono text-sm sm:text-base">{pos.symbol}</p>
+                    <p className="text-xs text-gray-600 truncate">{pos.qty} shares @ ${pos.avg_entry_price.toFixed(2)}</p>
                   </div>
-                  <div className="text-right">
-                    <p className="font-semibold text-green-600">+${pos.pl.toFixed(2)}</p>
+                  <div className="text-right ml-2">
+                    <p className="font-semibold text-green-600 text-sm sm:text-base whitespace-nowrap">+${pos.pl.toFixed(2)}</p>
                     <p className="text-xs text-green-600">+{pos.plPercent.toFixed(2)}%</p>
                   </div>
                 </div>
@@ -187,47 +187,47 @@ export function AnalyticsTab({ positions, portfolioSnapshots, portfolio }: any) 
         </div>
 
         {/* Top Losers */}
-        <div className="bg-white border border-gray-200 rounded-lg p-6">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <TrendingDown className="w-5 h-5 text-red-600" />
+        <div className="bg-white border border-gray-200 rounded-lg p-4 sm:p-6">
+          <h3 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4 flex items-center gap-2">
+            <TrendingDown className="w-4 h-4 sm:w-5 sm:h-5 text-red-600" />
             Top Losers
           </h3>
           {topLosers.length > 0 ? (
-            <div className="space-y-3">
+            <div className="space-y-2 sm:space-y-3">
               {topLosers.map((pos: any, idx: number) => (
-                <div key={idx} className="flex items-center justify-between p-3 bg-red-50 rounded-lg">
-                  <div>
-                    <p className="font-bold font-mono">{pos.symbol}</p>
-                    <p className="text-xs text-gray-600">{pos.qty} shares @ ${pos.avg_entry_price.toFixed(2)}</p>
+                <div key={idx} className="flex items-center justify-between p-2 sm:p-3 bg-red-50 rounded-lg">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-bold font-mono text-sm sm:text-base">{pos.symbol}</p>
+                    <p className="text-xs text-gray-600 truncate">{pos.qty} shares @ ${pos.avg_entry_price.toFixed(2)}</p>
                   </div>
-                  <div className="text-right">
-                    <p className="font-semibold text-red-600">${pos.pl.toFixed(2)}</p>
+                  <div className="text-right ml-2">
+                    <p className="font-semibold text-red-600 text-sm sm:text-base whitespace-nowrap">${pos.pl.toFixed(2)}</p>
                     <p className="text-xs text-red-600">{pos.plPercent.toFixed(2)}%</p>
                   </div>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-sm text-gray-500 text-center py-8">No losing positions</p>
+            <p className="text-xs sm:text-sm text-gray-500 text-center py-6 sm:py-8">No losing positions</p>
           )}
         </div>
       </div>
 
       {/* Portfolio Summary Table */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-lg font-semibold mb-4">Portfolio Summary</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="bg-white border border-gray-200 rounded-lg p-4 sm:p-6">
+        <h3 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4">Portfolio Summary</h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
           <div>
-            <p className="text-sm text-gray-600">Total Value</p>
-            <p className="text-xl font-bold font-mono">${totalValue.toLocaleString()}</p>
+            <p className="text-xs sm:text-sm text-gray-600">Total Value</p>
+            <p className="text-base sm:text-xl font-bold font-mono">${totalValue.toLocaleString()}</p>
           </div>
           <div>
-            <p className="text-sm text-gray-600">Total Cost</p>
-            <p className="text-xl font-bold font-mono">${totalCost.toLocaleString()}</p>
+            <p className="text-xs sm:text-sm text-gray-600">Total Cost</p>
+            <p className="text-base sm:text-xl font-bold font-mono">${totalCost.toLocaleString()}</p>
           </div>
           <div>
-            <p className="text-sm text-gray-600">Total P/L</p>
-            <p className={cn('text-xl font-bold font-mono', totalPL >= 0 ? 'text-green-600' : 'text-red-600')}>
+            <p className="text-xs sm:text-sm text-gray-600">Total P/L</p>
+            <p className={cn('text-base sm:text-xl font-bold font-mono', totalPL >= 0 ? 'text-green-600' : 'text-red-600')}>
               {totalPL >= 0 ? '+' : ''}${totalPL.toFixed(2)}
             </p>
           </div>
