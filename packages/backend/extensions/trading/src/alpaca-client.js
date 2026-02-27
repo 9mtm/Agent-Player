@@ -176,21 +176,34 @@ export async function cancelOrder(alpaca, orderId) {
  */
 export async function getLatestQuote(alpaca, symbol) {
   try {
-    // Try to get latest bar (works for both stocks and crypto)
-    const bars = await alpaca.getLatestBar(symbol);
+    // Get latest quote (bid/ask prices)
+    const quote = await alpaca.getLatestQuote(symbol);
 
     return {
       symbol,
-      price: parseFloat(bars.c), // Close price
-      high: parseFloat(bars.h),
-      low: parseFloat(bars.l),
-      open: parseFloat(bars.o),
-      volume: bars.v,
-      timestamp: bars.t,
+      bid_price: quote.bp ? parseFloat(quote.bp) : null,
+      bid_size: quote.bs || 0,
+      ask_price: quote.ap ? parseFloat(quote.ap) : null,
+      ask_size: quote.as || 0,
+      timestamp: quote.t,
     };
   } catch (error) {
     console.error(`[Alpaca] Failed to get quote for ${symbol}:`, error);
-    throw new Error(`Alpaca API error: ${error.message}`);
+
+    // Fallback to latest bar if quote fails
+    try {
+      const bar = await alpaca.getLatestBar(symbol);
+      return {
+        symbol,
+        bid_price: parseFloat(bar.c),
+        bid_size: 0,
+        ask_price: parseFloat(bar.c),
+        ask_size: 0,
+        timestamp: bar.t,
+      };
+    } catch (barError) {
+      throw new Error(`Alpaca API error: ${error.message}`);
+    }
   }
 }
 

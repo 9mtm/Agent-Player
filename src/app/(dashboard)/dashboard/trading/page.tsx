@@ -16,6 +16,10 @@ import {
   StopCircle,
   Target,
   AlertCircle,
+  Search,
+  X,
+  Calculator,
+  CheckCircle,
 } from 'lucide-react';
 
 /**
@@ -500,7 +504,7 @@ export default function TradingPage() {
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         {activeTab === 'positions' && <PositionsTab positions={positions} />}
         {activeTab === 'trade' && (
-          <TradeTab onPlaceOrder={handlePlaceOrder} watchlist={watchlist} />
+          <TradeTab onPlaceOrder={handlePlaceOrder} watchlist={watchlist} portfolio={portfolio} />
         )}
         {activeTab === 'orders' && <OrdersTab orders={orders} onCancel={handleCancelOrder} />}
         {activeTab === 'strategies' && (
@@ -602,31 +606,608 @@ function PositionsTab({ positions }) {
   );
 }
 
-function TradeTab({ onPlaceOrder, watchlist }) {
+// Live Price Display Component
+function LivePriceDisplay({ symbol, onPriceChange }) {
+  const [price, setPrice] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [priceChange, setPriceChange] = useState(0);
+
+  const authHeaders = () => {
+    const token = localStorage.getItem('auth_token');
+    return token ? { 'Authorization': `Bearer ${token}` } : {};
+  };
+
+  // Fetch live price
+  async function fetchPrice() {
+    if (!symbol) {
+      setPrice(null);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch(
+        `${config.backendUrl}/api/ext/trading/quote/${symbol}`,
+        { headers: authHeaders() }
+      );
+
+      if (!res.ok) throw new Error('Failed to fetch price');
+
+      const data = await res.json();
+
+      if (data.quote) {
+        // Calculate price change if we have previous price
+        if (price && price.ask_price) {
+          const change = data.quote.ask_price - price.ask_price;
+          setPriceChange(change);
+        }
+
+        setPrice(data.quote);
+
+        // Notify parent component of price change
+        if (onPriceChange && data.quote.ask_price) {
+          onPriceChange(data.quote.ask_price);
+        }
+      }
+    } catch (error) {
+      console.error('Price fetch error:', error);
+      setError('Failed to fetch price');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Initial fetch and auto-refresh every 5 seconds
+  useEffect(() => {
+    fetchPrice();
+
+    const interval = setInterval(() => {
+      fetchPrice();
+    }, 5000); // 5 seconds
+
+    return () => clearInterval(interval);
+  }, [symbol]);
+
+  if (!symbol) return null;
+
+  if (loading && !price) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-gray-500">
+        <RefreshCw className="w-4 h-4 animate-spin" />
+        <span>Loading price...</span>
+      </div>
+    );
+  }
+
+  if (error && !price) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-red-500">
+        <AlertCircle className="w-4 h-4" />
+        <span>{error}</span>
+      </div>
+    );
+  }
+
+  if (!price) return null;
+
+  const isPriceUp = priceChange > 0;
+  const isPriceDown = priceChange < 0;
+
+  return (
+    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-gray-600">Live Price</span>
+          {loading && <RefreshCw className="w-3 h-3 animate-spin text-gray-400" />}
+        </div>
+        <span className="text-xs text-gray-400">Auto-refresh: 5s</span>
+      </div>
+
+      <div className="space-y-2">
+        {/* Current Price (Ask) */}
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-gray-600">Ask Price:</span>
+          <div className="flex items-center gap-2">
+            <span className="text-xl font-bold text-gray-900">
+              ${price.ask_price?.toFixed(2) || 'N/A'}
+            </span>
+            {isPriceUp && (
+              <div className="flex items-center text-green-600">
+                <TrendingUp className="w-4 h-4" />
+                <span className="text-xs ml-1">+${Math.abs(priceChange).toFixed(2)}</span>
+              </div>
+            )}
+            {isPriceDown && (
+              <div className="flex items-center text-red-600">
+                <TrendingDown className="w-4 h-4" />
+                <span className="text-xs ml-1">-${Math.abs(priceChange).toFixed(2)}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Bid/Ask Spread */}
+        <div className="grid grid-cols-2 gap-3 pt-2 border-t border-gray-200">
+          <div>
+            <span className="text-xs text-gray-500">Bid</span>
+            <p className="text-sm font-medium text-gray-900">
+              ${price.bid_price?.toFixed(2) || 'N/A'}
+            </p>
+            <p className="text-xs text-gray-500">
+              Size: {price.bid_size || 0}
+            </p>
+          </div>
+          <div>
+            <span className="text-xs text-gray-500">Ask</span>
+            <p className="text-sm font-medium text-gray-900">
+              ${price.ask_price?.toFixed(2) || 'N/A'}
+            </p>
+            <p className="text-xs text-gray-500">
+              Size: {price.ask_size || 0}
+            </p>
+          </div>
+        </div>
+
+        {/* Timestamp */}
+        {price.timestamp && (
+          <div className="text-xs text-gray-400 pt-2 border-t border-gray-200">
+            Last updated: {new Date(price.timestamp).toLocaleTimeString()}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Stock Search Input with Autocomplete
+function StockSearchInput({ value, onChange, onSelect }) {
+  const [searchQuery, setSearchQuery] = useState(value || '');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [searchTimeout, setSearchTimeout] = useState(null);
+
+  const authHeaders = () => {
+    const token = localStorage.getItem('auth_token');
+    return token ? { 'Authorization': `Bearer ${token}` } : {};
+  };
+
+  // Debounced search function
+  async function searchStocks(query) {
+    if (!query || query.length < 1) {
+      setSearchResults([]);
+      setShowDropdown(false);
+      return;
+    }
+
+    setIsSearching(true);
+    setShowDropdown(true);
+
+    try {
+      // Search via backend (which calls Alpaca API)
+      const res = await fetch(
+        `${config.backendUrl}/api/ext/trading/assets/search?query=${encodeURIComponent(query)}`,
+        { headers: authHeaders() }
+      );
+
+      if (!res.ok) throw new Error('Search failed');
+
+      const data = await res.json();
+      setSearchResults(data.assets || []);
+    } catch (error) {
+      console.error('Stock search error:', error);
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  }
+
+  // Handle input change with debounce
+  function handleInputChange(e) {
+    const query = e.target.value.toUpperCase();
+    setSearchQuery(query);
+    onChange(query);
+
+    // Clear existing timeout
+    if (searchTimeout) clearTimeout(searchTimeout);
+
+    // Set new timeout for search (300ms debounce)
+    const timeout = setTimeout(() => {
+      searchStocks(query);
+    }, 300);
+
+    setSearchTimeout(timeout);
+  }
+
+  // Handle stock selection
+  function handleSelect(asset) {
+    setSearchQuery(asset.symbol);
+    onChange(asset.symbol);
+    onSelect(asset);
+    setShowDropdown(false);
+    setSearchResults([]);
+  }
+
+  // Handle click outside to close dropdown
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (!e.target.closest('.stock-search-container')) {
+        setShowDropdown(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div className="relative stock-search-container">
+      <div className="relative">
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={handleInputChange}
+          onFocus={() => {
+            if (searchResults.length > 0) setShowDropdown(true);
+          }}
+          placeholder="Search stocks (AAPL, TSLA, MSFT...)"
+          className="w-full px-3 py-2 pl-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent uppercase"
+          required
+        />
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => {
+              setSearchQuery('');
+              onChange('');
+              setSearchResults([]);
+              setShowDropdown(false);
+            }}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
+      {/* Dropdown */}
+      {showDropdown && (searchResults.length > 0 || isSearching) && (
+        <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-64 overflow-y-auto">
+          {isSearching ? (
+            <div className="px-4 py-3 text-center text-gray-500">
+              <RefreshCw className="w-4 h-4 animate-spin inline mr-2" />
+              Searching...
+            </div>
+          ) : searchResults.length > 0 ? (
+            <div className="py-1">
+              {searchResults.map((asset) => (
+                <button
+                  key={asset.id}
+                  type="button"
+                  onClick={() => handleSelect(asset)}
+                  className="w-full px-4 py-2 text-left hover:bg-gray-50 flex items-center justify-between"
+                >
+                  <div>
+                    <div className="font-medium text-gray-900">{asset.symbol}</div>
+                    <div className="text-sm text-gray-500">{asset.name}</div>
+                  </div>
+                  <div className="text-xs text-gray-400">{asset.exchange}</div>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="px-4 py-3 text-center text-gray-500">No results found</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * OrderPreviewModal - Confirmation dialog before placing order
+ * Shows complete order details and requires user confirmation
+ */
+function OrderPreviewModal({ isOpen, onClose, onConfirm, preview, submitting }) {
+  if (!isOpen || !preview) return null;
+
+  const hasSufficientFunds = preview.estimated_cost <= preview.buying_power;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
+        {/* Header */}
+        <div className="flex items-center justify-between p-6 border-b border-gray-200">
+          <h3 className="text-lg font-semibold text-gray-900">Confirm Order</h3>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600"
+            disabled={submitting}
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="p-6 space-y-4">
+          {/* Symbol & Asset Name */}
+          <div className="text-center pb-4 border-b border-gray-100">
+            <div className="text-2xl font-bold text-gray-900">{preview.symbol}</div>
+            {preview.asset_name && (
+              <div className="text-sm text-gray-500 mt-1">{preview.asset_name}</div>
+            )}
+          </div>
+
+          {/* Order Details */}
+          <div className="space-y-3">
+            {/* Side & Quantity */}
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Action:</span>
+              <span className={`text-base font-semibold ${
+                preview.side === 'buy' ? 'text-green-600' : 'text-red-600'
+              }`}>
+                {preview.side === 'buy' ? 'BUY' : 'SELL'} {preview.qty} shares
+              </span>
+            </div>
+
+            {/* Order Type */}
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Order Type:</span>
+              <span className="text-base font-medium text-gray-900 capitalize">
+                {preview.order_type}
+                {preview.order_type === 'limit' && preview.limit_price && (
+                  <span className="text-sm text-gray-500 ml-1">
+                    @ ${preview.limit_price.toFixed(2)}
+                  </span>
+                )}
+              </span>
+            </div>
+
+            {/* Time in Force */}
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Duration:</span>
+              <span className="text-base font-medium text-gray-900 uppercase">
+                {preview.time_in_force}
+              </span>
+            </div>
+
+            {/* Current Price */}
+            {preview.current_price && (
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-gray-600">Current Price:</span>
+                <span className="text-base font-medium text-gray-900">
+                  ${preview.current_price.toFixed(2)}
+                </span>
+              </div>
+            )}
+
+            {/* Estimated Cost */}
+            <div className="flex justify-between items-center pt-3 border-t border-gray-100">
+              <span className="text-sm font-medium text-gray-700">Estimated Cost:</span>
+              <span className="text-lg font-bold text-gray-900">
+                ${preview.estimated_cost.toFixed(2)}
+              </span>
+            </div>
+
+            {/* Buying Power */}
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Available Buying Power:</span>
+              <span className="text-sm font-medium text-gray-700">
+                ${preview.buying_power.toFixed(2)}
+              </span>
+            </div>
+
+            {/* Remaining Balance */}
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">After Order:</span>
+              <span className={`text-sm font-semibold ${
+                hasSufficientFunds ? 'text-green-600' : 'text-red-600'
+              }`}>
+                ${(preview.buying_power - preview.estimated_cost).toFixed(2)}
+              </span>
+            </div>
+          </div>
+
+          {/* Warning if insufficient funds */}
+          {!hasSufficientFunds && (
+            <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg p-3">
+              <AlertCircle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+              <div className="text-sm text-red-800">
+                <strong>Insufficient Funds!</strong>
+                <br />
+                You need ${(preview.estimated_cost - preview.buying_power).toFixed(2)} more to place this order.
+              </div>
+            </div>
+          )}
+
+          {/* Info Note */}
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800">
+            <strong>Note:</strong> The actual execution price may differ from the estimated cost,
+            especially for market orders. Limit orders execute only at your specified price or better.
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex gap-3 p-6 border-t border-gray-200">
+          <button
+            onClick={onClose}
+            disabled={submitting}
+            className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={submitting || !hasSufficientFunds}
+            className={`flex-1 px-4 py-2.5 rounded-lg font-medium text-white disabled:opacity-50 ${
+              preview.side === 'buy'
+                ? 'bg-green-600 hover:bg-green-700'
+                : 'bg-red-600 hover:bg-red-700'
+            }`}
+          >
+            {submitting ? 'Placing Order...' : 'Confirm Order'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * OrderCostCalculator - Real-time order cost calculation
+ * Shows: Total Cost, Available Buying Power, Remaining Balance
+ * Warns if insufficient funds
+ */
+function OrderCostCalculator({ qty, price, side, orderType, limitPrice, portfolio }) {
+  // Calculate effective price (market uses current price, limit uses limit price)
+  const effectivePrice = orderType === 'limit' && limitPrice ? parseFloat(limitPrice) : price;
+
+  // Calculate total cost
+  const totalCost = qty && effectivePrice ? parseFloat(qty) * effectivePrice : 0;
+
+  // Get buying power (for buy orders) or equity (for sell orders)
+  const availableFunds = portfolio ? (side === 'buy' ? portfolio.buying_power : portfolio.equity) : 0;
+
+  // Calculate remaining balance after order
+  const remainingBalance = availableFunds - totalCost;
+
+  // Check if user has sufficient funds
+  const hasSufficientFunds = remainingBalance >= 0;
+
+  // Don't show calculator if no price or qty
+  if (!effectivePrice || !qty || qty <= 0) {
+    return null;
+  }
+
+  return (
+    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-4 border border-blue-200">
+      <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+        <Calculator className="w-4 h-4" />
+        Order Cost Estimate
+      </h4>
+
+      <div className="space-y-2.5">
+        {/* Total Cost */}
+        <div className="flex justify-between items-center">
+          <span className="text-sm text-gray-600">Total Cost:</span>
+          <span className="text-base font-bold text-gray-900">
+            ${totalCost.toFixed(2)}
+          </span>
+        </div>
+
+        {/* Calculation breakdown */}
+        <div className="text-xs text-gray-500 border-t border-blue-100 pt-2">
+          {qty} shares × ${effectivePrice.toFixed(2)} = ${totalCost.toFixed(2)}
+        </div>
+
+        {/* Available Funds */}
+        <div className="flex justify-between items-center border-t border-blue-100 pt-2">
+          <span className="text-sm text-gray-600">
+            {side === 'buy' ? 'Buying Power:' : 'Portfolio Value:'}
+          </span>
+          <span className="text-sm font-medium text-gray-700">
+            ${availableFunds.toFixed(2)}
+          </span>
+        </div>
+
+        {/* Remaining Balance */}
+        <div className="flex justify-between items-center pb-2">
+          <span className="text-sm text-gray-600">After Order:</span>
+          <span className={`text-sm font-semibold ${
+            hasSufficientFunds ? 'text-green-600' : 'text-red-600'
+          }`}>
+            ${remainingBalance.toFixed(2)}
+          </span>
+        </div>
+
+        {/* Insufficient Funds Warning */}
+        {!hasSufficientFunds && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-md p-2.5 mt-2">
+            <AlertCircle className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" />
+            <div className="text-xs text-red-800">
+              <strong>Insufficient Funds!</strong>
+              <br />
+              You need ${Math.abs(remainingBalance).toFixed(2)} more to place this order.
+            </div>
+          </div>
+        )}
+
+        {/* Success Indicator */}
+        {hasSufficientFunds && totalCost > 0 && (
+          <div className="flex items-center gap-2 text-xs text-green-700 mt-2">
+            <CheckCircle className="w-3.5 h-3.5" />
+            Sufficient funds available
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TradeTab({ onPlaceOrder, watchlist, portfolio }) {
   const [symbol, setSymbol] = useState('');
+  const [selectedAsset, setSelectedAsset] = useState(null);
   const [qty, setQty] = useState('1');
   const [side, setSide] = useState('buy');
   const [orderType, setOrderType] = useState('market');
   const [limitPrice, setLimitPrice] = useState('');
+  const [timeInForce, setTimeInForce] = useState('day');
   const [submitting, setSubmitting] = useState(false);
+  const [currentPrice, setCurrentPrice] = useState(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [orderPreview, setOrderPreview] = useState(null);
 
+  // Show preview dialog instead of placing order directly
   async function handleSubmit(e) {
     e.preventDefault();
+
+    // Calculate estimated cost
+    const effectivePrice = orderType === 'limit' && limitPrice ? parseFloat(limitPrice) : currentPrice;
+    const estimatedCost = qty && effectivePrice ? parseFloat(qty) * effectivePrice : 0;
+
+    // Build preview data
+    const preview = {
+      symbol: symbol.toUpperCase(),
+      asset_name: selectedAsset?.name || symbol,
+      qty: parseFloat(qty),
+      side,
+      order_type: orderType,
+      time_in_force: timeInForce,
+      limit_price: limitPrice ? parseFloat(limitPrice) : null,
+      current_price: currentPrice,
+      estimated_cost: estimatedCost,
+      buying_power: portfolio?.buying_power || 0,
+    };
+
+    setOrderPreview(preview);
+    setShowPreview(true);
+  }
+
+  // Confirm and place order
+  async function handleConfirmOrder() {
     setSubmitting(true);
+    setShowPreview(false);
 
     try {
       await onPlaceOrder({
-        symbol: symbol.toUpperCase(),
-        qty: parseFloat(qty),
-        side,
-        order_type: orderType,
-        limit_price: limitPrice ? parseFloat(limitPrice) : undefined,
+        symbol: orderPreview.symbol,
+        qty: orderPreview.qty,
+        side: orderPreview.side,
+        order_type: orderPreview.order_type,
+        limit_price: orderPreview.limit_price || undefined,
+        time_in_force: orderPreview.time_in_force,
       });
 
       // Reset form
       setSymbol('');
       setQty('1');
       setLimitPrice('');
+      setTimeInForce('day');
+      setOrderPreview(null);
     } catch (error) {
       // Error already handled by parent
     } finally {
@@ -641,15 +1222,39 @@ function TradeTab({ onPlaceOrder, watchlist }) {
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Symbol</label>
-          <input
-            type="text"
+          <StockSearchInput
             value={symbol}
-            onChange={(e) => setSymbol(e.target.value)}
-            placeholder="AAPL, TSLA, BTCUSD..."
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent uppercase"
-            required
+            onChange={setSymbol}
+            onSelect={(asset) => {
+              setSymbol(asset.symbol);
+              setSelectedAsset(asset);
+            }}
           />
+          {selectedAsset && (
+            <p className="mt-1 text-sm text-gray-500">
+              {selectedAsset.name} ({selectedAsset.exchange})
+            </p>
+          )}
         </div>
+
+        {/* Live Price Display */}
+        {symbol && (
+          <div>
+            <LivePriceDisplay symbol={symbol} onPriceChange={setCurrentPrice} />
+          </div>
+        )}
+
+        {/* Order Cost Calculator */}
+        {symbol && currentPrice && (
+          <OrderCostCalculator
+            qty={qty}
+            price={currentPrice}
+            side={side}
+            orderType={orderType}
+            limitPrice={limitPrice}
+            portfolio={portfolio}
+          />
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -708,6 +1313,52 @@ function TradeTab({ onPlaceOrder, watchlist }) {
           )}
         </div>
 
+        {/* Time in Force */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Time in Force
+            <span className="ml-1 text-xs text-gray-500">(Order Duration)</span>
+          </label>
+          <select
+            value={timeInForce}
+            onChange={(e) => setTimeInForce(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+            <option value="day">Day - Valid until market close</option>
+            <option value="gtc">GTC - Good Till Canceled</option>
+            <option value="ioc">IOC - Immediate or Cancel</option>
+            <option value="fok">FOK - Fill or Kill (all or nothing)</option>
+          </select>
+
+          {/* Help text based on selected option */}
+          <div className="mt-2 text-xs text-gray-600 bg-gray-50 rounded p-2 border border-gray-200">
+            {timeInForce === 'day' && (
+              <p>
+                <strong>Day Order:</strong> Valid only during the current trading session.
+                Automatically canceled if not filled by market close (4:00 PM ET).
+              </p>
+            )}
+            {timeInForce === 'gtc' && (
+              <p>
+                <strong>Good Till Canceled:</strong> Remains active until filled or manually canceled.
+                No automatic expiration. Best for patient limit orders.
+              </p>
+            )}
+            {timeInForce === 'ioc' && (
+              <p>
+                <strong>Immediate or Cancel:</strong> Executes immediately for the available quantity.
+                Any unfilled portion is canceled instantly. Good for large orders.
+              </p>
+            )}
+            {timeInForce === 'fok' && (
+              <p>
+                <strong>Fill or Kill:</strong> Must fill the entire order immediately or cancel completely.
+                All-or-nothing execution. No partial fills allowed.
+              </p>
+            )}
+          </div>
+        </div>
+
         <button
           type="submit"
           disabled={submitting}
@@ -737,6 +1388,15 @@ function TradeTab({ onPlaceOrder, watchlist }) {
           </div>
         </div>
       )}
+
+      {/* Order Preview Modal */}
+      <OrderPreviewModal
+        isOpen={showPreview}
+        onClose={() => setShowPreview(false)}
+        onConfirm={handleConfirmOrder}
+        preview={orderPreview}
+        submitting={submitting}
+      />
     </div>
   );
 }

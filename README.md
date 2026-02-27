@@ -178,11 +178,6 @@ Agent Player is the **next-generation agent platform** you need:
 
 ---
 
-## 📸 Screenshots
-
-### AI Avatar Companion
-![Avatar Viewer](docs/images/avatar-viewer.png)
-*Your personal AI companion with 3D avatar, voice, and interactive notifications*
 
 ### Trading Dashboard
 ![Trading Dashboard](docs/images/alpaca.png)

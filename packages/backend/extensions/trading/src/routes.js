@@ -816,6 +816,77 @@ export async function registerTradingRoutes(fastify) {
     }
   });
 
+  /**
+   * GET /api/ext/trading/assets/search
+   * Search for stocks by symbol or name
+   * Query params: query (search term)
+   */
+  fastify.get('/assets/search', async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const query = request.query.query || '';
+
+      if (!query || query.length < 1) {
+        return reply.send({ assets: [] });
+      }
+
+      // Get active account
+      const account = db
+        .prepare(
+          `
+        SELECT id, platform, account_mode, api_key_credential_id, api_secret_credential_id
+        FROM trading_accounts
+        WHERE user_id = ? AND is_default = 1 AND is_active = 1
+        LIMIT 1
+      `
+        )
+        .get(userId);
+
+      if (!account) {
+        return reply.send({ error: 'No active trading account found' }, 404);
+      }
+
+      // Decrypt credentials
+      const apiKey = await credentialManager.getValue(account.api_key_credential_id);
+      const apiSecret = await credentialManager.getValue(account.api_secret_credential_id);
+
+      // Create Alpaca client
+      const alpaca = createAlpacaClient(apiKey, apiSecret, account.account_mode);
+
+      // Search assets via Alpaca API
+      // GET /v2/assets?status=active&asset_class=us_equity
+      const searchQuery = query.toUpperCase();
+      const assets = await alpaca.getAssets({
+        status: 'active',
+        asset_class: 'us_equity,crypto',
+      });
+
+      // Filter results by symbol or name
+      const filtered = assets
+        .filter((asset) => {
+          const symbolMatch = asset.symbol.includes(searchQuery);
+          const nameMatch = asset.name?.toUpperCase().includes(searchQuery);
+          return symbolMatch || nameMatch;
+        })
+        .slice(0, 10); // Limit to 10 results
+
+      return reply.send({
+        assets: filtered.map((asset) => ({
+          id: asset.id,
+          symbol: asset.symbol,
+          name: asset.name,
+          exchange: asset.exchange,
+          asset_class: asset.class,
+          tradable: asset.tradable,
+          marginable: asset.marginable,
+        }))
+      });
+    } catch (error) {
+      console.error('[Trading]', `Failed to search assets: ${error.message}`);
+      return reply.send({ error: 'Failed to search assets' }, 500);
+    }
+  });
+
   // ============================================================================
   // WATCHLIST
   // ============================================================================
