@@ -1,0 +1,10 @@
+{
+  "id": "my-tool",
+  "name": "My Tool Extension",
+  "version": "1.0.0",
+  "description": "Simple AI tool extension",
+  "author": "Your Name",
+  "type": "tool",
+  "permissions": ["storage"],
+  "entrypoint": "./index.js"
+}

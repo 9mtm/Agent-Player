@@ -7,7 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import type { PluginManifest } from './types.js';
 import { createExtensionApi } from './sdk.js';
 import { getDatabase } from '../db/index.js';
-import { readdirSync, existsSync, readFileSync } from 'fs';
+import { readdirSync, existsSync, readFileSync, watch } from 'fs';
 import { resolve, join } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -47,6 +47,13 @@ export class ExtensionRunner {
    */
   async initialize(fastify: FastifyInstance, cronEngine: any) {
     console.log('[ExtensionRunner] 🔌 Loading extensions...\n');
+
+    // Emergency shutdown: disable all extensions via env variable
+    if (process.env.EXTENSIONS_DISABLED === 'true') {
+      console.log('[ExtensionRunner] 🚨 EMERGENCY SHUTDOWN: All extensions disabled via EXTENSIONS_DISABLED env variable\n');
+      console.log('[ExtensionRunner] ℹ️  To re-enable extensions, remove or set EXTENSIONS_DISABLED=false in .env file\n');
+      return;
+    }
 
     const db = getDatabase();
 
@@ -186,6 +193,37 @@ export class ExtensionRunner {
     this.loadedExtensions.delete(extensionId);
 
     console.log(`[ExtensionRunner] ❌ Extension "${extensionId}" disabled`);
+  }
+
+  /**
+   * Enable hot reload - watch extension files for changes
+   * NOTE: This requires server restart for route changes to take effect
+   */
+  enableHotReload() {
+    if (!existsSync(this.extensionsDir)) {
+      console.log('[ExtensionRunner] ⚠️  Hot reload disabled - no extensions directory');
+      return;
+    }
+
+    console.log('[ExtensionRunner] 🔥 Hot reload enabled - watching for changes...\n');
+
+    watch(this.extensionsDir, { recursive: true }, (eventType, filename) => {
+      if (!filename) return;
+
+      // Only watch .js and .json files
+      if (!filename.endsWith('.js') && !filename.endsWith('.json')) return;
+
+      // Extract extension ID from path
+      const parts = filename.split(/[/\\]/);
+      const extensionId = parts[0];
+
+      // Debounce rapid changes
+      clearTimeout((this as any)[`_hotReload_${extensionId}`]);
+      (this as any)[`_hotReload_${extensionId}`] = setTimeout(() => {
+        console.log(`[ExtensionRunner] 🔄 File changed: ${filename} - restart required for changes`);
+        console.log(`[ExtensionRunner] 💡 Run: npm run restart:backend`);
+      }, 1000);
+    });
   }
 
   /**

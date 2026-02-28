@@ -90,7 +90,7 @@
 
   "frontendRoutes": [
     {
-      "path": "/dashboard/team",
+      "path": "/dashboard/ext/team",
       "name": "Team",
       "icon": "Users",
       "position": "main"

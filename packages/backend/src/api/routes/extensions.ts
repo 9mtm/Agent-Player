@@ -235,13 +235,56 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
       const extensionRunner = getExtensionRunner();
       await extensionRunner.disableExtension(id);
 
-      // 2. Delete extension config
+      // 2. Find and drop all extension tables
+      const tables = db.prepare(`
+        SELECT name FROM sqlite_master
+        WHERE type = 'table'
+        AND name LIKE ? || '_%'
+      `).all(id) as Array<{ name: string }>;
+
+      for (const { name } of tables) {
+        try {
+          // SECURITY: Validate table name to prevent SQL injection
+          const safeName = validateTableName(name);
+          db.prepare(`DROP TABLE IF EXISTS ${safeName}`).run();
+          console.log(`[Extensions API] 🗑️  Dropped table: ${name}`);
+        } catch (err) {
+          console.warn(`[Extensions API] ⚠️  Failed to drop table ${name}:`, err);
+        }
+      }
+
+      // 3. Delete extension config
       db.prepare('DELETE FROM extension_configs WHERE extension_id = ?').run(id);
 
-      // 3. Delete extension migrations history
+      // 4. Delete extension migrations history
       db.prepare('DELETE FROM extension_migrations WHERE extension_id = ?').run(id);
 
-      // 4. Delete extension directory
+      // 5. Delete extension storage files
+      const { getStorageManager } = await import('../../services/storage-manager.js');
+      const storageManager = getStorageManager();
+      const storageFiles = storageManager.search({
+        zone: 'cdn',
+        category: `extensions/${id}`,
+        limit: 10000,
+      });
+
+      let deletedFiles = 0;
+      for (const file of storageFiles) {
+        storageManager.delete(file.id);
+        deletedFiles++;
+      }
+
+      // Also delete extension storage directory from disk
+      const { join: pathJoin } = await import('path');
+      const extensionStorageDir = pathJoin(process.cwd(), '..', '..', 'public', 'storage', 'extensions', id);
+      if (existsSync(extensionStorageDir)) {
+        const { rmSync } = await import('fs');
+        rmSync(extensionStorageDir, { recursive: true, force: true });
+      }
+
+      console.log(`[Extensions API] 🗑️  Deleted ${deletedFiles} storage file(s)`);
+
+      // 6. Delete extension directory
       const extensionPath = resolve(extensionsDir, id);
       if (existsSync(extensionPath)) {
         const { rmSync } = await import('fs');
@@ -250,7 +293,7 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
 
       return {
         success: true,
-        message: `Extension "${id}" deleted. Files, config, migrations, and cron jobs removed.`,
+        message: `Extension "${id}" completely removed. Tables (${tables.length}), storage files (${deletedFiles}), config, migrations, and code deleted.`,
       };
     } catch (error: any) {
       console.error('[Extensions API] ❌ Delete failed:', error);
@@ -298,6 +341,37 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
   });
 
   /**
+   * Validate extension config against manifest schema
+   */
+  function validateExtensionConfig(
+    manifest: any,
+    config: Record<string, any>
+  ): { valid: boolean; errors: string[] } {
+    const errors: string[] = [];
+
+    // For ui-web4 spec format
+    if (manifest.settings?.type === 'ui-web4') {
+      const components = manifest.settings.spec?.components || [];
+      components.forEach((comp: any) => {
+        if (comp.required && !config[comp.id]) {
+          errors.push(`${comp.label || comp.id} is required`);
+        }
+      });
+    }
+
+    // For settingsUI form schema format
+    if (manifest.settingsUI?.type === 'form') {
+      manifest.settingsUI.fields.forEach((field: any) => {
+        if (field.required && !config[field.name]) {
+          errors.push(`${field.label} is required`);
+        }
+      });
+    }
+
+    return { valid: errors.length === 0, errors };
+  }
+
+  /**
    * PUT /api/extensions/:id/config - Update extension configuration
    */
   fastify.put<{ Params: { id: string }; Body: { config: Record<string, any> } }>('/api/extensions/:id/config', {
@@ -329,6 +403,21 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
           success: false,
           error: 'Extension not found',
         });
+      }
+
+      // Validate config against manifest
+      const manifestPath = join(extensionsDir, id, 'agentplayer.plugin.json');
+      if (existsSync(manifestPath)) {
+        const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+        const validation = validateExtensionConfig(manifest, config);
+
+        if (!validation.valid) {
+          return reply.status(400).send({
+            success: false,
+            error: 'Validation failed',
+            details: validation.errors,
+          });
+        }
       }
 
       // Update config
@@ -411,6 +500,147 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
     } catch (error: any) {
       console.error('[Extensions API] ❌ Get enabled routes failed:', error);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
+      return handleError(reply, error, 'internal', '[Extensions]');
+    }
+  });
+
+  /**
+   * GET /api/extensions/:id/status - Check if extension is enabled
+   * Used by frontend catch-all route to determine if page should load
+   */
+  fastify.get('/api/extensions/:id/status', {
+    schema: {
+      tags: ['Extensions'],
+      description: 'Check if an extension is currently enabled',
+    },
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const db = getDatabase();
+
+      const config = db
+        .prepare('SELECT enabled FROM extension_configs WHERE extension_id = ?')
+        .get(id) as { enabled: number } | undefined;
+
+      return {
+        success: true,
+        extensionId: id,
+        enabled: config?.enabled === 1,
+      };
+    } catch (error: any) {
+      console.error(`[Extensions API] ❌ Get status failed for ${(request.params as any).id}:`, error);
+      return handleError(reply, error, 'internal', '[Extensions]');
+    }
+  });
+
+  /**
+   * GET /api/extensions/:id/audit-logs - Get extension audit logs
+   * Returns last 100 audit events for this extension
+   */
+  fastify.get<{ Params: { id: string } }>('/api/extensions/:id/audit-logs', {
+    schema: {
+      tags: ['Extensions'],
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+      },
+    },
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params;
+      const db = getDatabase();
+
+      // Query audit_logs table for extension events
+      const logs = db.prepare(`
+        SELECT
+          id,
+          event_type,
+          event_category,
+          severity,
+          action,
+          resource_type,
+          resource_id,
+          success,
+          error_message,
+          metadata,
+          created_at,
+          ip_address,
+          user_agent
+        FROM audit_logs
+        WHERE event_category = 'extension'
+          AND resource_id = ?
+        ORDER BY created_at DESC
+        LIMIT 100
+      `).all(id) as any[];
+
+      // Parse metadata JSON
+      const parsedLogs = logs.map((log) => ({
+        ...log,
+        success: log.success === 1,
+        metadata: log.metadata ? JSON.parse(log.metadata) : null,
+      }));
+
+      return {
+        success: true,
+        logs: parsedLogs,
+        total: parsedLogs.length,
+      };
+    } catch (error: any) {
+      console.error('[Extensions API] ❌ Get audit logs failed:', error);
+      return handleError(reply, error, 'internal', '[Extensions]');
+    }
+  });
+
+  /**
+   * GET /api/extensions/:id/analytics - Get extension analytics
+   * Returns usage stats, performance metrics, and error tracking
+   */
+  fastify.get<{ Params: { id: string } }>('/api/extensions/:id/analytics', {
+    schema: {
+      tags: ['Extensions'],
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+      },
+    },
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params;
+      const { getExtensionAnalytics } = await import('../services/extension-analytics.js');
+
+      const analytics = getExtensionAnalytics(id);
+
+      return {
+        success: true,
+        analytics,
+      };
+    } catch (error: any) {
+      console.error('[Extensions API] ❌ Get analytics failed:', error);
+      return handleError(reply, error, 'internal', '[Extensions]');
+    }
+  });
+
+  /**
+   * GET /api/extensions/analytics/overview - Get overview analytics for all extensions
+   * Returns aggregate stats across all extensions
+   */
+  fastify.get('/api/extensions/analytics/overview', {
+    schema: {
+      tags: ['Extensions'],
+      description: 'Get analytics overview for all extensions',
+    },
+  }, async (request, reply) => {
+    try {
+      const { getOverviewAnalytics } = await import('../services/extension-analytics.js');
+
+      const overview = getOverviewAnalytics();
+
+      return {
+        success: true,
+        overview,
+      };
+    } catch (error: any) {
+      console.error('[Extensions API] ❌ Get overview analytics failed:', error);
       return handleError(reply, error, 'internal', '[Extensions]');
     }
   });

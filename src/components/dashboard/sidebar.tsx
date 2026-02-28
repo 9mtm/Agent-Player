@@ -19,7 +19,8 @@ import {
     Shield,
     Database,
     Key,
-    // Mail, // Removed - email moved to extension
+    Mail,
+    Phone,
     ChevronDown,
     ChevronRight,
     Clock,
@@ -29,6 +30,7 @@ import {
     HardDrive,
     ListTodo,
     BarChart2,
+    BarChart3,
     History,
     ClipboardList,
     ScanSearch,
@@ -128,6 +130,13 @@ export function Sidebar() {
             Users,
             MessagesSquare,
             Puzzle,
+            Search,
+            BarChart3,
+            Mail,
+            Phone,
+            TrendingUp,
+            Shield,
+            Globe,
             // Add more icons as needed
         };
 

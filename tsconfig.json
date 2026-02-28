@@ -19,7 +19,8 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@extensions/*": ["./packages/backend/extensions/*"]
     }
   },
   "include": [
@@ -28,7 +29,9 @@
     "**/*.tsx",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
-    "**/*.mts"
+    "**/*.mts",
+    "packages/backend/extensions/**/frontend/**/*.ts",
+    "packages/backend/extensions/**/frontend/**/*.tsx"
   ],
   "exclude": ["node_modules", "docs", "extensions", "backend", "skills"]
 }

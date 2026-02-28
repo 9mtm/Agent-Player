@@ -26,5 +26,13 @@
       "telephony.google.credentials_json",
       "telephony.public_url"
     ]
-  }
+  },
+  "frontendRoutes": [
+    {
+      "path": "/dashboard/ext/call-center",
+      "name": "Call Center",
+      "icon": "Phone",
+      "position": "main"
+    }
+  ]
 }

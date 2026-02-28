@@ -80,6 +80,7 @@ import { registerPublicChatRoutes } from './routes/public-chat.js';
 import { registerCostAnalyticsRoutes } from './routes/cost-analytics.js';
 import evolutionRoutes from './routes/evolution.js';
 import setupRoutes from './routes/setup.js';
+import { marketplaceRoutes } from './routes/marketplace.js';
 import { processScheduledNotifications } from '../services/notification-service.js';
 import { startCalendarSyncScheduler } from '../services/calendar-sync.js';
 import { config } from '../config/index.js';
@@ -261,6 +262,7 @@ await fastify.register(multiverseRoutes);    // 🪐 Multiverse (Worlds + Bots +
 await fastify.register(worldGeneratorRoutes); // ✨ AI World Generator (Prompt-based Generation)
 await fastify.register(worldBuilderRoutes);     // 🏗️  World Builder (Manual Building + Save/Load)
 await fastify.register(extensionsRoutes);    // 🔌 Extensions Management (SDK-based)
+await fastify.register(marketplaceRoutes);   // 🛒 Extension Marketplace (Registry, Install, Reviews)
 await fastify.register(registerTelephonyRoutes); // ☎️ Telephony / Assistant Center (Call Center)
 await fastify.register(systemRoutes);        // ⚙️ System Operations (Restart, Shutdown)
 await fastify.register(agentFilesRoutes);    // 📝 Agent Files (PERSONALITY.md + MEMORY.md)
@@ -435,6 +437,17 @@ async function start() {
     startCalendarSyncScheduler();
     console.log('[Server] ✅ Calendar sync scheduler started\n');
 
+    // Initialize Extension Storage Stats Scheduler (hourly updates)
+    const { updateAllExtensionStorageStats } = await import('../services/extension-analytics.js');
+    setInterval(() => {
+      try {
+        updateAllExtensionStorageStats();
+      } catch (err) {
+        console.error('[Extension Analytics] Failed to update storage stats:', err);
+      }
+    }, 60 * 60 * 1000); // Every 60 minutes
+    console.log('[Server] ✅ Extension analytics scheduler started (hourly storage updates)\n');
+
     // Initialize Multi-Tier Memory Consolidation Scheduler
     const { getConsolidationService } = await import('../services/memory-consolidation.js');
     const consolidationService = getConsolidationService();
@@ -450,6 +463,16 @@ async function start() {
     const { getExtensionRunner } = await import('../plugins/extension-runner.js');
     const extensionRunner = getExtensionRunner();
     await extensionRunner.initialize(fastify, cronEngine);
+
+    // Enable hot reload for extensions (development mode)
+    if (process.env.NODE_ENV === 'development') {
+      extensionRunner.enableHotReload();
+    }
+
+    // Register Extension Analytics Middleware
+    const { extensionAnalyticsMiddleware } = await import('../middleware/extension-analytics-middleware.js');
+    fastify.addHook('onRequest', extensionAnalyticsMiddleware());
+    console.log('[Server] ✅ Extension analytics middleware registered\n');
 
     // Email Sync Service moved to email-client extension
     // const { emailSyncService } = await import('../services/email-sync-service.js');

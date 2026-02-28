@@ -109,6 +109,7 @@ export class StorageManager {
       const dirs = [
         'cache/audio', 'cache/screenshots', 'cache/web',
         'cdn/avatars', 'cdn/images', 'cdn/files', 'cdn/data', 'cdn/worlds',
+        'extensions', // Extension-specific folders created on-demand
       ];
       for (const dir of dirs) {
         const projectRoot = path.join(process.cwd(), '..', '..');

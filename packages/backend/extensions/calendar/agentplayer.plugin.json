@@ -92,9 +92,10 @@
 
   "frontendRoutes": [
     {
-      "path": "/dashboard/calendar",
+      "path": "/dashboard/ext/calendar",
       "name": "Calendar",
-      "icon": "Calendar"
+      "icon": "Calendar",
+      "position": "main"
     }
   ],
 

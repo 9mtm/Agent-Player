@@ -57,5 +57,13 @@
         }
       ]
     }
-  }
+  },
+  "frontendRoutes": [
+    {
+      "path": "/dashboard/ext/email",
+      "name": "Email",
+      "icon": "Mail",
+      "position": "main"
+    }
+  ]
 }

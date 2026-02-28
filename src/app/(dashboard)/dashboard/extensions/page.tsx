@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -27,6 +28,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { ExtensionSettingsForm } from '@/components/extensions/ExtensionSettingsForm';
+import { PermissionsBadge } from '@/components/extensions/PermissionsBadge';
 
 const API_URL = config.backendUrl;
 
@@ -181,9 +183,11 @@ export default function ExtensionsPage() {
     setPreviewDialogOpen(true);
   };
 
+  const router = useRouter();
+
   const openSettings = (ext: Extension) => {
-    setExtensionToSettings(ext);
-    setSettingsDialogOpen(true);
+    // Navigate to dedicated settings page
+    router.push(`/dashboard/extensions/${ext.id}/settings`);
   };
 
   const detectCapabilities = (ext: Extension): ExtensionCapabilities => {
@@ -381,21 +385,17 @@ export default function ExtensionsPage() {
                   </div>
                 </CardHeader>
               <CardContent>
-                {ext.permissions.length > 0 && (
-                  <div className="flex items-start gap-2">
-                    <Shield className="h-4 w-4 text-muted-foreground mt-0.5" />
-                    <div className="flex-1">
-                      <p className="text-sm font-medium mb-1">Permissions:</p>
-                      <div className="flex flex-wrap gap-2">
-                        {ext.permissions.map((perm) => (
-                          <Badge key={perm} variant="outline" className="text-xs">
-                            {perm}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
+                <div className="flex items-start gap-2">
+                  <Shield className="h-4 w-4 text-muted-foreground mt-0.5" />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium mb-1">Permissions:</p>
+                    <PermissionsBadge
+                      permissions={ext.permissions as any}
+                      showRisk={true}
+                      compact={false}
+                    />
                   </div>
-                )}
+                </div>
               </CardContent>
             </Card>
           );

@@ -35,7 +35,14 @@ export type AuditEventType =
     | 'security.suspicious.activity'
     | 'security.rate.limit'
     | 'security.csrf.blocked'
-    | 'security.sql.injection.attempt';
+    | 'security.sql.injection.attempt'
+    // Extension events
+    | 'extension.api.call'
+    | 'extension.permission.denied'
+    | 'extension.permission.granted'
+    | 'extension.tool.registered'
+    | 'extension.cron.registered'
+    | 'extension.storage.accessed';
 
 export type AuditCategory =
     | 'authentication'
@@ -43,7 +50,8 @@ export type AuditCategory =
     | 'data_access'
     | 'data_modification'
     | 'system'
-    | 'security';
+    | 'security'
+    | 'extension';
 
 export type AuditSeverity = 'info' | 'warning' | 'error' | 'critical';
 
@@ -168,17 +176,76 @@ export function logDataEvent(
 /**
  * Log security event
  * SECURITY: Tracks security incidents (L-02, L-08)
+ *
+ * Overload 1: With FastifyRequest (for route handlers)
+ * Overload 2: With explicit properties (for background tasks, extensions)
  */
 export function logSecurityEvent(
-    event_type: Extract<AuditEventType, `security.${string}`>,
+    event_type: Extract<AuditEventType, `security.${string}` | `extension.${string}`>,
     request: FastifyRequest,
+    severity?: AuditSeverity,
+    details?: string,
+    metadata?: Record<string, any>
+): void;
+export function logSecurityEvent(params: {
+    event_type: Extract<AuditEventType, `security.${string}` | `extension.${string}`>;
+    severity?: AuditSeverity;
+    user_id?: string | null;
+    ip_address?: string | null;
+    user_agent?: string | null;
+    resource_type?: string;
+    resource_id?: string;
+    action?: string;
+    status?: 'success' | 'blocked';
+    metadata?: Record<string, any>;
+}): void;
+export function logSecurityEvent(
+    eventTypeOrParams: Extract<AuditEventType, `security.${string}` | `extension.${string}`> | {
+        event_type: Extract<AuditEventType, `security.${string}` | `extension.${string}`>;
+        severity?: AuditSeverity;
+        user_id?: string | null;
+        ip_address?: string | null;
+        user_agent?: string | null;
+        resource_type?: string;
+        resource_id?: string;
+        action?: string;
+        status?: 'success' | 'blocked';
+        metadata?: Record<string, any>;
+    },
+    request?: FastifyRequest,
     severity: AuditSeverity = 'warning',
     details?: string,
     metadata?: Record<string, any>
 ): void {
+    // Handle object parameter (new style)
+    if (typeof eventTypeOrParams === 'object') {
+        const params = eventTypeOrParams;
+        const category = params.event_type.startsWith('extension.') ? 'extension' : 'security';
+
+        logAudit({
+            event_type: params.event_type,
+            event_category: category,
+            severity: params.severity || 'info',
+            user_id: params.user_id || undefined,
+            ip_address: params.ip_address || undefined,
+            user_agent: params.user_agent || undefined,
+            resource_type: params.resource_type,
+            resource_id: params.resource_id,
+            action: params.action,
+            success: params.status === 'success',
+            metadata: params.metadata,
+        });
+        return;
+    }
+
+    // Handle original signature (with FastifyRequest)
+    if (!request) {
+        throw new Error('FastifyRequest required when using event_type string parameter');
+    }
+
     logAudit({
-        event_type,
-        event_category: 'security',
+        event_type: eventTypeOrParams,
+        event_category: eventTypeOrParams.startsWith('extension.') ? 'extension' : 'security',
         severity,
         ip_address: request.ip,
         user_agent: request.headers['user-agent'],
@@ -187,6 +254,49 @@ export function logSecurityEvent(
         success: false, // Security events are always "failures" from attacker perspective
         error_message: details,
         metadata,
+    });
+}
+
+/**
+ * Log extension event
+ * Tracks extension API calls, permission checks, and operations
+ */
+export function logExtensionEvent(
+    extensionId: string,
+    action: string,
+    resource?: string,
+    metadata?: Record<string, any>,
+    options?: {
+        severity?: AuditSeverity;
+        status?: 'success' | 'blocked';
+        user_id?: string;
+        ip_address?: string;
+    }
+): Promise<void> {
+    return new Promise<void>((resolve) => {
+        try {
+            const event_type = `extension.${action.replace('_', '.')}` as Extract<AuditEventType, `extension.${string}`>;
+
+            logAudit({
+                event_type,
+                event_category: 'extension',
+                severity: options?.severity || 'info',
+                user_id: options?.user_id,
+                ip_address: options?.ip_address || undefined,
+                resource_type: 'extension',
+                resource_id: extensionId,
+                action,
+                success: options?.status !== 'blocked',
+                metadata: {
+                    ...metadata,
+                    resource,
+                },
+            });
+            resolve();
+        } catch (error) {
+            console.error('[AuditLogger] Failed to log extension event:', error);
+            resolve(); // Don't reject to avoid breaking extension operations
+        }
     });
 }
 

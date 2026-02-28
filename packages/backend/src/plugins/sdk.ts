@@ -11,6 +11,8 @@ import { getDatabase } from '../db/index.js';
 import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, resolve, sep } from 'path';
+import { checkPermissions } from '../middleware/extension-permissions.js';
+import { logSecurityEvent } from '../services/audit-logger.js';
 
 /**
  * Extension SDK API Interface
@@ -55,6 +57,34 @@ export interface ExtensionApi {
   // Logger
   log(level: 'info' | 'warn' | 'error', message: string, data?: unknown): void;
 
+  // Storage API — sandboxed per extension
+  storage: {
+    /**
+     * Save file to extension's isolated storage
+     * Files go to public/storage/extensions/{extensionId}/
+     */
+    save(
+      filename: string,
+      data: Buffer | string,
+      options?: { category?: string; mimeType?: string }
+    ): Promise<{ id: string; url: string }>;
+
+    /**
+     * List all files in extension's storage
+     */
+    list(category?: string): Promise<Array<{ id: string; filename: string; url: string; size: number }>>;
+
+    /**
+     * Delete file from extension's storage
+     */
+    delete(fileId: string): Promise<boolean>;
+
+    /**
+     * Get public URL for a file
+     */
+    getUrl(fileId: string): string;
+  };
+
   // Extension metadata
   extensionId: string;
 }
@@ -74,7 +104,32 @@ export function createExtensionApi(
 
   return {
     extensionId,
-    db,
+
+    // Database access with permission check
+    get db(): Database {
+      const result = checkPermissions(extensionId, ['database']);
+      if (!result.granted) {
+        const error = `Extension "${extensionId}" missing permission: database`;
+        console.error(`[ExtensionApi:${extensionId}] ❌ ${error}`);
+
+        logSecurityEvent({
+          event_type: 'extension.permission.denied',
+          severity: 'high',
+          user_id: null,
+          ip_address: null,
+          user_agent: null,
+          resource_type: 'extension',
+          resource_id: extensionId,
+          action: 'database_access',
+          status: 'blocked',
+          metadata: { missing_permissions: result.missing },
+        }).catch(console.error);
+
+        throw new Error(error);
+      }
+
+      return db;
+    },
 
     // Route Registration (collected, registered later at startup)
     registerRoutes(routesFn, prefix?) {
@@ -84,10 +139,50 @@ export function createExtensionApi(
 
     // Tool Registration (global - available to all sessions)
     registerTool(tool) {
+      // Check permission
+      const result = checkPermissions(extensionId, ['tools']);
+      if (!result.granted) {
+        const error = `Extension "${extensionId}" missing permission: tools`;
+        console.error(`[ExtensionApi:${extensionId}] ❌ ${error}`);
+
+        logSecurityEvent({
+          event_type: 'extension.permission.denied',
+          severity: 'medium',
+          user_id: null,
+          ip_address: null,
+          user_agent: null,
+          resource_type: 'extension',
+          resource_id: extensionId,
+          action: 'register_tool',
+          status: 'blocked',
+          metadata: { tool_name: tool.name, missing_permissions: result.missing },
+        }).catch(console.error);
+
+        throw new Error(error);
+      }
+
       // Tag tool with extensionId for tracking
       const taggedTool = { ...tool, extensionId };
       registerExtensionTool(taggedTool);
       console.log(`[ExtensionApi:${extensionId}] ✅ Tool registered globally: ${tool.name}`);
+
+      // Log successful registration
+      try {
+        logSecurityEvent({
+          event_type: 'extension.tool.registered',
+          severity: 'info',
+          user_id: null,
+          ip_address: null,
+          user_agent: null,
+          resource_type: 'extension',
+          resource_id: extensionId,
+          action: 'register_tool',
+          status: 'success',
+          metadata: { tool_name: tool.name },
+        });
+      } catch (error) {
+        console.error('[ExtensionApi] Failed to log tool registration:', error);
+      }
     },
 
     unregisterTool(name) {
@@ -185,9 +280,45 @@ export function createExtensionApi(
 
     // Cron Job Registration
     registerCronJob(schedule, handler, jobId) {
+      // Check permission
+      const result = checkPermissions(extensionId, ['cron']);
+      if (!result.granted) {
+        const error = `Extension "${extensionId}" missing permission: cron`;
+        console.error(`[ExtensionApi:${extensionId}] ❌ ${error}`);
+
+        logSecurityEvent({
+          event_type: 'extension.permission.denied',
+          severity: 'medium',
+          user_id: null,
+          ip_address: null,
+          user_agent: null,
+          resource_type: 'extension',
+          resource_id: extensionId,
+          action: 'register_cron',
+          status: 'blocked',
+          metadata: { job_id: jobId, schedule, missing_permissions: result.missing },
+        }).catch(console.error);
+
+        throw new Error(error);
+      }
+
       const fullJobId = `ext:${extensionId}:${jobId}`;
       cronEngine.register(fullJobId, schedule, handler);
       console.log(`[ExtensionApi:${extensionId}] ✅ Cron job registered: ${jobId} (${schedule})`);
+
+      // Log successful registration
+      logSecurityEvent({
+        event_type: 'extension.cron.registered',
+        severity: 'info',
+        user_id: null,
+        ip_address: null,
+        user_agent: null,
+        resource_type: 'extension',
+        resource_id: extensionId,
+        action: 'register_cron',
+        status: 'success',
+        metadata: { job_id: jobId, schedule },
+      }).catch(console.error);
     },
 
     unregisterCronJob(jobId) {
@@ -234,6 +365,88 @@ export function createExtensionApi(
           console.error(`${prefix} ❌ ${msg}`);
           break;
       }
+    },
+
+    // Storage API — sandboxed per extension
+    storage: {
+      /**
+       * Save file to extension's isolated storage
+       * Files go to public/storage/extensions/{extensionId}/
+       */
+      async save(
+        filename: string,
+        data: Buffer | string,
+        options?: { category?: string; mimeType?: string }
+      ): Promise<{ id: string; url: string }> {
+        const { getStorageManager } = await import('../services/storage-manager.js');
+        const storageManager = getStorageManager();
+
+        // Force category to be extension-specific
+        const category = `extensions/${extensionId}${options?.category ? `/${options.category}` : ''}`;
+
+        const file = await storageManager.save({
+          zone: 'cdn',
+          category,
+          data,
+          filename,
+          mimeType: options?.mimeType,
+          ttl: 'persistent',
+          createdBy: `extension:${extensionId}`,
+        });
+
+        return {
+          id: file.id,
+          url: storageManager.getPublicUrl(file.id),
+        };
+      },
+
+      /**
+       * List all files in extension's storage
+       */
+      async list(category?: string): Promise<Array<{ id: string; filename: string; url: string; size: number }>> {
+        const { getStorageManager } = await import('../services/storage-manager.js');
+        const storageManager = getStorageManager();
+
+        const cat = category
+          ? `extensions/${extensionId}/${category}`
+          : `extensions/${extensionId}`;
+
+        const files = storageManager.search({ zone: 'cdn', category: cat, limit: 1000 });
+
+        return files.map(f => ({
+          id: f.id,
+          filename: f.filename,
+          url: storageManager.getPublicUrl(f.id),
+          size: f.size || 0,
+        }));
+      },
+
+      /**
+       * Delete file from extension's storage
+       */
+      async delete(fileId: string): Promise<boolean> {
+        const { getStorageManager } = await import('../services/storage-manager.js');
+        const storageManager = getStorageManager();
+
+        // Verify file belongs to this extension before deletion
+        const file = storageManager.getById(fileId);
+        if (!file || !file.category.startsWith(`extensions/${extensionId}`)) {
+          throw new Error('Access denied: file does not belong to this extension');
+        }
+
+        return storageManager.delete(fileId);
+      },
+
+      /**
+       * Get public URL for a file
+       */
+      getUrl(fileId: string): string {
+        // This is synchronous, so we can't use await here
+        // StorageManager's getPublicUrl is synchronous anyway
+        const { getStorageManager } = require('../services/storage-manager.js');
+        const storageManager = getStorageManager();
+        return storageManager.getPublicUrl(fileId);
+      },
     },
 
     // Internal: Get pending routes (used by extension-runner)

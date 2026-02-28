@@ -70,7 +70,7 @@
 
   "frontendRoutes": [
     {
-      "path": "/dashboard/public-chat",
+      "path": "/dashboard/ext/public-chat",
       "name": "Public Chat",
       "icon": "MessagesSquare",
       "position": "main"

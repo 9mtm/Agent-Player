@@ -6,5 +6,13 @@
   "type": "tool",
   "author": "Agent Player",
   "main": "index.js",
-  "permissions": ["network", "database", "tools", "credentials"]
+  "permissions": ["network", "database", "tools", "credentials"],
+  "frontendRoutes": [
+    {
+      "path": "/dashboard/ext/seo",
+      "name": "SEO Tools",
+      "icon": "Search",
+      "position": "main"
+    }
+  ]
 }

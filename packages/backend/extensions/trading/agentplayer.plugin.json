@@ -179,9 +179,9 @@
   },
   "frontendRoutes": [
     {
-      "path": "/dashboard/trading",
+      "path": "/dashboard/ext/trading",
       "name": "Trading",
-      "icon": "TrendingUp",
+      "icon": "BarChart3",
       "position": "main"
     }
   ],

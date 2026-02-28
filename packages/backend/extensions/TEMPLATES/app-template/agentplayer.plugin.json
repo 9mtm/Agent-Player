@@ -1,0 +1,39 @@
+{
+  "id": "my-app",
+  "name": "My App Extension",
+  "version": "1.0.0",
+  "description": "Full-featured app extension with UI and backend",
+  "author": "Your Name",
+  "type": "app",
+  "permissions": ["storage", "database"],
+  "entrypoint": "./index.js",
+  "migrations": ["./migrations/001_init.sql"],
+  "frontendRoutes": [
+    {
+      "path": "/dashboard/my-app",
+      "name": "My App",
+      "icon": "Package",
+      "position": "main"
+    }
+  ],
+  "settings": {
+    "type": "ui-web4",
+    "spec": {
+      "type": "form",
+      "fields": [
+        {
+          "name": "api_key",
+          "label": "API Key",
+          "type": "input",
+          "inputType": "password",
+          "required": true
+        },
+        {
+          "name": "enabled",
+          "label": "Enabled",
+          "type": "switch"
+        }
+      ]
+    }
+  }
+}
