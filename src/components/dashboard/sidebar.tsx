@@ -50,6 +50,7 @@ import {
     Compass,
     Brain,
     Sparkles,
+    Award,
 } from 'lucide-react';
 import { useDeveloperMode } from '@/contexts/developer-context';
 import { useEffect, useState as useReactState } from 'react';
@@ -77,6 +78,7 @@ const settingsSubmenu = [
     { name: 'Extensions', href: '/dashboard/extensions', icon: PackagePlus },
     { name: 'Memory', href: '/dashboard/memory', icon: Brain },
     { name: 'Evolution', href: '/dashboard/evolution', icon: Sparkles },
+    { name: 'Evaluation', href: '/dashboard/evaluation', icon: Award },
     { name: 'Voice Settings', href: '/settings/voice', icon: Volume2 },
     { name: 'Storage', href: '/dashboard/storage', icon: HardDrive },
 ];

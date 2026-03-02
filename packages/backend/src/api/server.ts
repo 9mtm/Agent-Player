@@ -79,6 +79,7 @@ import { registerCalendarRoutes } from './routes/calendar.js';
 import { registerPublicChatRoutes } from './routes/public-chat.js';
 import { registerCostAnalyticsRoutes } from './routes/cost-analytics.js';
 import evolutionRoutes from './routes/evolution.js';
+import evaluationRoutes from './routes/evaluation.js';
 import setupRoutes from './routes/setup.js';
 import { marketplaceRoutes } from './routes/marketplace.js';
 import { processScheduledNotifications } from '../services/notification-service.js';
@@ -271,6 +272,7 @@ await fastify.register(registerCalendarRoutes);  // 📅 Calendar System (Events
 await fastify.register(registerPublicChatRoutes); // 💬 Public Chat Rooms (Multi-User Chat with AI Agents)
 await fastify.register(registerCostAnalyticsRoutes); // 💰 Cost Analytics (Model Usage & Savings Tracking)
 await fastify.register(evolutionRoutes);        // 🧬 Agent Evolution System (Self-Learning & Adaptation)
+await fastify.register(evaluationRoutes);       // 📊 Agent Evaluation Framework (Quality Assessment & Metrics)
 
 // Start server
 async function start() {

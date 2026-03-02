@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -36,6 +36,13 @@ const EVOLUTION_TYPES = [
 export function ConfigPanel({ config, onSave }: ConfigPanelProps) {
     const [localConfig, setLocalConfig] = useState(config);
     const [saving, setSaving] = useState(false);
+
+    // Update local config when parent config changes
+    useEffect(() => {
+        if (config) {
+            setLocalConfig(config);
+        }
+    }, [config]);
 
     const handleSave = async () => {
         setSaving(true);
