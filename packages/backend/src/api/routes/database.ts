@@ -500,5 +500,448 @@ export async function databaseRoutes(fastify: FastifyInstance) {
     }
   });
 
-  console.log('[Database API] ✅ Routes registered');
+  /**
+   * GET /api/database/tables - Get all tables with full details
+   */
+  fastify.get('/api/database/tables', {
+    schema: {
+      tags: ['Database'],
+      description: 'Get all database tables with full details',
+    },
+  }, async (request, reply) => {
+    try {
+      getUserIdFromRequest(request);
+      const db = getDatabase();
+
+      const tablesQuery = db.prepare(`
+        SELECT name, sql
+        FROM sqlite_master
+        WHERE type='table' AND name NOT LIKE 'sqlite_%'
+        ORDER BY name
+      `).all() as Array<{ name: string; sql: string }>;
+
+      const tables = [];
+      for (const table of tablesQuery) {
+        try {
+          const safeName = validateTableName(table.name);
+          const countResult = db.prepare(`SELECT COUNT(*) as count FROM ${safeName}`).get() as { count: number };
+
+          tables.push({
+            name: table.name,
+            rows: countResult.count,
+            sql: table.sql,
+          });
+        } catch (err) {
+          console.error(`Error getting table ${table.name}:`, err);
+        }
+      }
+
+      return { tables };
+    } catch (error: any) {
+      return handleError(reply, error, 'internal', '[Database]');
+    }
+  });
+
+  /**
+   * GET /api/database/table/:name/schema - Get table structure
+   */
+  fastify.get<{ Params: { name: string } }>('/api/database/table/:name/schema', {
+    schema: {
+      tags: ['Database'],
+      description: 'Get table schema (columns, indexes, foreign keys)',
+    },
+  }, async (request, reply) => {
+    try {
+      getUserIdFromRequest(request);
+      const { name } = request.params;
+      const safeName = validateTableName(name);
+      const db = getDatabase();
+
+      // Get columns
+      const columns = db.prepare(`PRAGMA table_info(${safeName})`).all();
+
+      // Get indexes
+      const indexes = db.prepare(`PRAGMA index_list(${safeName})`).all();
+      const indexDetails = indexes.map((idx: any) => {
+        const cols = db.prepare(`PRAGMA index_info(${idx.name})`).all();
+        return { ...idx, columns: cols };
+      });
+
+      // Get foreign keys
+      const foreignKeys = db.prepare(`PRAGMA foreign_key_list(${safeName})`).all();
+
+      // Get table SQL
+      const tableInfo = db.prepare(`
+        SELECT sql FROM sqlite_master WHERE type='table' AND name = ?
+      `).get(name) as { sql: string };
+
+      return {
+        table: name,
+        columns,
+        indexes: indexDetails,
+        foreignKeys,
+        sql: tableInfo?.sql || '',
+      };
+    } catch (error: any) {
+      return handleError(reply, error, 'internal', '[Database]');
+    }
+  });
+
+  /**
+   * GET /api/database/table/:name/data - Get table data with pagination
+   */
+  fastify.get<{
+    Params: { name: string };
+    Querystring: { page?: string; limit?: string; search?: string };
+  }>('/api/database/table/:name/data', {
+    schema: {
+      tags: ['Database'],
+      description: 'Get table data with pagination',
+    },
+  }, async (request, reply) => {
+    try {
+      getUserIdFromRequest(request);
+      const { name } = request.params;
+      const page = parseInt(request.query.page || '1');
+      const limit = parseInt(request.query.limit || '50');
+      const search = request.query.search || '';
+      const offset = (page - 1) * limit;
+
+      const safeName = validateTableName(name);
+      const db = getDatabase();
+
+      // Get total count
+      const countResult = db.prepare(`SELECT COUNT(*) as count FROM ${safeName}`).get() as { count: number };
+      const total = countResult.count;
+
+      // Get data with pagination
+      let query = `SELECT * FROM ${safeName}`;
+      if (search) {
+        query += ` WHERE ${safeName} LIKE '%${search}%'`;
+      }
+      query += ` LIMIT ${limit} OFFSET ${offset}`;
+
+      const rows = db.prepare(query).all();
+
+      return {
+        table: name,
+        data: rows,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      };
+    } catch (error: any) {
+      return handleError(reply, error, 'internal', '[Database]');
+    }
+  });
+
+  /**
+   * POST /api/database/query - Execute SQL query
+   */
+  fastify.post<{ Body: { query: string; mode?: 'read' | 'write' } }>('/api/database/query', {
+    schema: {
+      tags: ['Database'],
+      description: 'Execute SQL query (read or write)',
+    },
+  }, async (request, reply) => {
+    try {
+      getUserIdFromRequest(request);
+      const { query, mode = 'read' } = request.body;
+
+      if (!query || query.trim() === '') {
+        return reply.code(400).send({ error: 'Query is required' });
+      }
+
+      const db = getDatabase();
+      const trimmedQuery = query.trim().toUpperCase();
+
+      // Security check: prevent dangerous operations
+      const dangerousKeywords = ['DROP TABLE', 'DROP DATABASE', 'TRUNCATE'];
+      if (dangerousKeywords.some(keyword => trimmedQuery.includes(keyword))) {
+        return reply.code(403).send({ error: 'Dangerous query not allowed' });
+      }
+
+      try {
+        let result;
+        if (mode === 'write' || trimmedQuery.startsWith('INSERT') ||
+            trimmedQuery.startsWith('UPDATE') || trimmedQuery.startsWith('DELETE')) {
+          const stmt = db.prepare(query);
+          result = stmt.run();
+          return {
+            success: true,
+            changes: result.changes,
+            lastInsertRowid: result.lastInsertRowid,
+            mode: 'write',
+          };
+        } else {
+          result = db.prepare(query).all();
+          return {
+            success: true,
+            rows: result,
+            count: result.length,
+            mode: 'read',
+          };
+        }
+      } catch (sqlError: any) {
+        return reply.code(400).send({
+          error: 'SQL Error',
+          message: sqlError.message,
+        });
+      }
+    } catch (error: any) {
+      return handleError(reply, error, 'internal', '[Database]');
+    }
+  });
+
+  /**
+   * POST /api/database/export - Export table data
+   */
+  fastify.post<{ Body: { table: string; format: 'sql' | 'csv' | 'json' } }>('/api/database/export', {
+    schema: {
+      tags: ['Database'],
+      description: 'Export table data in SQL/CSV/JSON format',
+    },
+  }, async (request, reply) => {
+    try {
+      getUserIdFromRequest(request);
+      const { table, format } = request.body;
+      const safeName = validateTableName(table);
+      const db = getDatabase();
+
+      const rows = db.prepare(`SELECT * FROM ${safeName}`).all();
+
+      if (format === 'json') {
+        reply.header('Content-Type', 'application/json');
+        reply.header('Content-Disposition', `attachment; filename="${table}.json"`);
+        return rows;
+      } else if (format === 'csv') {
+        if (rows.length === 0) {
+          return reply.code(400).send({ error: 'No data to export' });
+        }
+
+        const keys = Object.keys(rows[0]);
+        const csv = [
+          keys.join(','),
+          ...rows.map(row => keys.map(k => JSON.stringify((row as any)[k])).join(','))
+        ].join('\n');
+
+        reply.header('Content-Type', 'text/csv');
+        reply.header('Content-Disposition', `attachment; filename="${table}.csv"`);
+        return csv;
+      } else if (format === 'sql') {
+        const schema = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name = ?`).get(table) as { sql: string };
+        let sql = schema.sql + ';\n\n';
+
+        if (rows.length > 0) {
+          const keys = Object.keys(rows[0]);
+          sql += rows.map(row => {
+            const values = keys.map(k => {
+              const val = (row as any)[k];
+              return val === null ? 'NULL' : typeof val === 'string' ? `'${val.replace(/'/g, "''")}'` : val;
+            }).join(', ');
+            return `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${values});`;
+          }).join('\n');
+        }
+
+        reply.header('Content-Type', 'text/plain');
+        reply.header('Content-Disposition', `attachment; filename="${table}.sql"`);
+        return sql;
+      }
+
+      return reply.code(400).send({ error: 'Invalid format' });
+    } catch (error: any) {
+      return handleError(reply, error, 'internal', '[Database]');
+    }
+  });
+
+  /**
+   * DELETE /api/database/table/:name/row - Delete a single row
+   */
+  fastify.delete<{ Params: { name: string }; Body: { primaryKey: string; primaryValue: any } }>('/api/database/table/:name/row', {
+    schema: {
+      tags: ['Database'],
+      description: 'Delete a single row by primary key',
+    },
+  }, async (request, reply) => {
+    try {
+      getUserIdFromRequest(request);
+      const { name } = request.params;
+      const { primaryKey, primaryValue } = request.body;
+      const safeName = validateTableName(name);
+      const db = getDatabase();
+
+      const stmt = db.prepare(`DELETE FROM ${safeName} WHERE ${primaryKey} = ?`);
+      const result = stmt.run(primaryValue);
+
+      return {
+        success: true,
+        changes: result.changes,
+      };
+    } catch (error: any) {
+      return handleError(reply, error, 'internal', '[Database]');
+    }
+  });
+
+  /**
+   * PUT /api/database/table/:name/row - Update a single row
+   */
+  fastify.put<{ Params: { name: string }; Body: { primaryKey: string; primaryValue: any; data: Record<string, any> } }>('/api/database/table/:name/row', {
+    schema: {
+      tags: ['Database'],
+      description: 'Update a single row by primary key',
+    },
+  }, async (request, reply) => {
+    try {
+      getUserIdFromRequest(request);
+      const { name } = request.params;
+      const { primaryKey, primaryValue, data } = request.body;
+      const safeName = validateTableName(name);
+      const db = getDatabase();
+
+      // Build SET clause
+      const columns = Object.keys(data);
+      const setClause = columns.map(col => `${col} = ?`).join(', ');
+      const values = columns.map(col => data[col]);
+
+      const stmt = db.prepare(`UPDATE ${safeName} SET ${setClause} WHERE ${primaryKey} = ?`);
+      const result = stmt.run(...values, primaryValue);
+
+      return {
+        success: true,
+        changes: result.changes,
+      };
+    } catch (error: any) {
+      return handleError(reply, error, 'internal', '[Database]');
+    }
+  });
+
+  /**
+   * POST /api/database/table/:name/row - Insert a new row
+   */
+  fastify.post<{ Params: { name: string }; Body: { data: Record<string, any> } }>('/api/database/table/:name/row', {
+    schema: {
+      tags: ['Database'],
+      description: 'Insert a new row',
+    },
+  }, async (request, reply) => {
+    try {
+      getUserIdFromRequest(request);
+      const { name } = request.params;
+      const { data } = request.body;
+      const safeName = validateTableName(name);
+      const db = getDatabase();
+
+      const columns = Object.keys(data);
+      const placeholders = columns.map(() => '?').join(', ');
+      const values = columns.map(col => data[col]);
+
+      const stmt = db.prepare(`INSERT INTO ${safeName} (${columns.join(', ')}) VALUES (${placeholders})`);
+      const result = stmt.run(...values);
+
+      return {
+        success: true,
+        changes: result.changes,
+        lastInsertRowid: result.lastInsertRowid,
+      };
+    } catch (error: any) {
+      return handleError(reply, error, 'internal', '[Database]');
+    }
+  });
+
+  /**
+   * POST /api/database/table/:name/rows/delete - Bulk delete rows
+   */
+  fastify.post<{ Params: { name: string }; Body: { primaryKey: string; ids: any[] } }>('/api/database/table/:name/rows/delete', {
+    schema: {
+      tags: ['Database'],
+      description: 'Delete multiple rows by primary keys',
+    },
+  }, async (request, reply) => {
+    try {
+      getUserIdFromRequest(request);
+      const { name } = request.params;
+      const { primaryKey, ids } = request.body;
+      const safeName = validateTableName(name);
+      const db = getDatabase();
+
+      const placeholders = ids.map(() => '?').join(', ');
+      const stmt = db.prepare(`DELETE FROM ${safeName} WHERE ${primaryKey} IN (${placeholders})`);
+      const result = stmt.run(...ids);
+
+      return {
+        success: true,
+        changes: result.changes,
+      };
+    } catch (error: any) {
+      return handleError(reply, error, 'internal', '[Database]');
+    }
+  });
+
+  /**
+   * POST /api/database/table/:name/rows/export - Export selected rows
+   */
+  fastify.post<{ Params: { name: string }; Body: { primaryKey: string; ids: any[]; format: 'sql' | 'csv' | 'json' } }>('/api/database/table/:name/rows/export', {
+    schema: {
+      tags: ['Database'],
+      description: 'Export selected rows in SQL/CSV/JSON format',
+    },
+  }, async (request, reply) => {
+    try {
+      getUserIdFromRequest(request);
+      const { name } = request.params;
+      const { primaryKey, ids, format } = request.body;
+      const safeName = validateTableName(name);
+      const db = getDatabase();
+
+      const placeholders = ids.map(() => '?').join(', ');
+      const rows = db.prepare(`SELECT * FROM ${safeName} WHERE ${primaryKey} IN (${placeholders})`).all(...ids);
+
+      if (format === 'json') {
+        reply.header('Content-Type', 'application/json');
+        reply.header('Content-Disposition', `attachment; filename="${name}_selected.json"`);
+        return rows;
+      } else if (format === 'csv') {
+        if (rows.length === 0) {
+          return reply.code(400).send({ error: 'No data to export' });
+        }
+
+        const keys = Object.keys(rows[0]);
+        const csv = [
+          keys.join(','),
+          ...rows.map(row => keys.map(k => JSON.stringify((row as any)[k])).join(','))
+        ].join('\n');
+
+        reply.header('Content-Type', 'text/csv');
+        reply.header('Content-Disposition', `attachment; filename="${name}_selected.csv"`);
+        return csv;
+      } else if (format === 'sql') {
+        if (rows.length === 0) {
+          return reply.code(400).send({ error: 'No data to export' });
+        }
+
+        let sql = '';
+        const keys = Object.keys(rows[0]);
+        sql += rows.map(row => {
+          const values = keys.map(k => {
+            const val = (row as any)[k];
+            return val === null ? 'NULL' : typeof val === 'string' ? `'${val.replace(/'/g, "''")}'` : val;
+          }).join(', ');
+          return `INSERT INTO ${name} (${keys.join(', ')}) VALUES (${values});`;
+        }).join('\n');
+
+        reply.header('Content-Type', 'text/plain');
+        reply.header('Content-Disposition', `attachment; filename="${name}_selected.sql"`);
+        return sql;
+      }
+
+      return reply.code(400).send({ error: 'Invalid format' });
+    } catch (error: any) {
+      return handleError(reply, error, 'internal', '[Database]');
+    }
+  });
+
+  console.log('[Database API] ✅ Routes registered (including browser endpoints)');
 }
