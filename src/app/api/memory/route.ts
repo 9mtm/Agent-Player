@@ -76,3 +76,47 @@ export async function POST(req: Request) {
     });
     return NextResponse.json(await res.json());
 }
+
+/** PUT /api/memory/:id - Update a memory */
+export async function PUT(req: Request) {
+    const userId = await getUserId();
+    if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const url = new URL(req.url);
+    const id = url.searchParams.get('id');
+    if (!id) return NextResponse.json({ error: 'Memory ID required' }, { status: 400 });
+
+    const body = await req.json();
+
+    try {
+        const res = await fetch(`${BACKEND_URL}/api/memory/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...body, userId }),
+        });
+        const data = await res.json();
+        return NextResponse.json(data);
+    } catch {
+        return NextResponse.json({ error: 'Backend unavailable' }, { status: 502 });
+    }
+}
+
+/** DELETE /api/memory/:id - Delete a memory */
+export async function DELETE(req: Request) {
+    const userId = await getUserId();
+    if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const url = new URL(req.url);
+    const id = url.searchParams.get('id');
+    if (!id) return NextResponse.json({ error: 'Memory ID required' }, { status: 400 });
+
+    try {
+        const res = await fetch(`${BACKEND_URL}/api/memory/${id}?userId=${userId}`, {
+            method: 'DELETE',
+        });
+        const data = await res.json();
+        return NextResponse.json(data);
+    } catch {
+        return NextResponse.json({ error: 'Backend unavailable' }, { status: 502 });
+    }
+}

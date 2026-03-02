@@ -48,6 +48,7 @@ import {
     Lightbulb,
     Globe,
     Compass,
+    Brain,
 } from 'lucide-react';
 import { useDeveloperMode } from '@/contexts/developer-context';
 import { useEffect, useState as useReactState } from 'react';
@@ -57,6 +58,7 @@ import { config } from '@/lib/config';
 const coreNavigation = [
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Chat', href: '/chat', icon: MessageSquare },
+    { name: 'Memory', href: '/dashboard/memory', icon: Brain },
     // { name: 'Email', href: '/dashboard/email', icon: Mail }, // Moved to email-client extension
     { name: 'Tasks', href: '/dashboard/tasks', icon: ListTodo },
     { name: 'Workflows', href: '/dashboard/workflows', icon: Workflow },
