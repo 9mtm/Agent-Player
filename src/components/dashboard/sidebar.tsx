@@ -51,6 +51,7 @@ import {
     Brain,
     Sparkles,
     Award,
+    Share2,
 } from 'lucide-react';
 import { useDeveloperMode } from '@/contexts/developer-context';
 import { useEffect, useState as useReactState } from 'react';
@@ -77,6 +78,7 @@ const settingsSubmenu = [
     { name: 'Skills', href: '/dashboard/skills', icon: Puzzle },
     { name: 'Extensions', href: '/dashboard/extensions', icon: PackagePlus },
     { name: 'Memory', href: '/dashboard/memory', icon: Brain },
+    { name: 'Shared Memory', href: '/dashboard/shared-memory', icon: Share2 },
     { name: 'Evolution', href: '/dashboard/evolution', icon: Sparkles },
     { name: 'Evaluation', href: '/dashboard/evaluation', icon: Award },
     { name: 'Voice Settings', href: '/settings/voice', icon: Volume2 },

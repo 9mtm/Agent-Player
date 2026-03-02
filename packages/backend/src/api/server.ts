@@ -80,6 +80,7 @@ import { registerPublicChatRoutes } from './routes/public-chat.js';
 import { registerCostAnalyticsRoutes } from './routes/cost-analytics.js';
 import evolutionRoutes from './routes/evolution.js';
 import evaluationRoutes from './routes/evaluation.js';
+import memorySharingRoutes from './routes/memory-sharing.js';
 import setupRoutes from './routes/setup.js';
 import { marketplaceRoutes } from './routes/marketplace.js';
 import { processScheduledNotifications } from '../services/notification-service.js';
@@ -273,6 +274,7 @@ await fastify.register(registerPublicChatRoutes); // 💬 Public Chat Rooms (Mul
 await fastify.register(registerCostAnalyticsRoutes); // 💰 Cost Analytics (Model Usage & Savings Tracking)
 await fastify.register(evolutionRoutes);        // 🧬 Agent Evolution System (Self-Learning & Adaptation)
 await fastify.register(evaluationRoutes);       // 📊 Agent Evaluation Framework (Quality Assessment & Metrics)
+await fastify.register(memorySharingRoutes);    // 🤝 Multi-Agent Memory Sharing (Shared Knowledge & Deduplication)
 
 // Start server
 async function start() {

@@ -433,6 +433,8 @@ export default {
 - **Programmatic Tool Calling** - 10x faster multi-step workflows with `execute_code` tool
 - **Self-Evolving Agents** - Agents learn from experience and improve over time
 - **Multi-Tier Memory** - Working, Experiential, and Factual memory layers
+- **Multi-Agent Memory Sharing** - Agents share knowledge and learn from each other's experiences
+- **Memory Deduplication** - Automatic detection and merging of duplicate memories
 - **Cost Optimization** - Intelligent model routing (90% cost savings)
 
 ### 🎭 3D Avatar System
