@@ -81,6 +81,7 @@ import { registerCostAnalyticsRoutes } from './routes/cost-analytics.js';
 import evolutionRoutes from './routes/evolution.js';
 import evaluationRoutes from './routes/evaluation.js';
 import memorySharingRoutes from './routes/memory-sharing.js';
+import memoryQualityRoutes from './routes/memory-quality.js';
 import setupRoutes from './routes/setup.js';
 import { marketplaceRoutes } from './routes/marketplace.js';
 import { processScheduledNotifications } from '../services/notification-service.js';
@@ -275,6 +276,7 @@ await fastify.register(registerCostAnalyticsRoutes); // 💰 Cost Analytics (Mod
 await fastify.register(evolutionRoutes);        // 🧬 Agent Evolution System (Self-Learning & Adaptation)
 await fastify.register(evaluationRoutes);       // 📊 Agent Evaluation Framework (Quality Assessment & Metrics)
 await fastify.register(memorySharingRoutes);    // 🤝 Multi-Agent Memory Sharing (Shared Knowledge & Deduplication)
+await fastify.register(memoryQualityRoutes);    // ✨ High-Quality Memory Content (Quality Scoring & Enrichment)
 
 // Start server
 async function start() {

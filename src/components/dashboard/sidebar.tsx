@@ -73,14 +73,18 @@ const avatarSubmenu = [
     { name: 'Multiverse', href: '/dashboard/multiverse', icon: Globe },
 ];
 
+const brainSubmenu = [
+    { name: 'Memory', href: '/dashboard/memory', icon: Brain },
+    { name: 'Shared Memory', href: '/dashboard/shared-memory', icon: Share2 },
+    { name: 'Memory Insights', href: '/dashboard/memory-insights', icon: Lightbulb },
+    { name: 'Evolution', href: '/dashboard/evolution', icon: Sparkles },
+    { name: 'Evaluation', href: '/dashboard/evaluation', icon: Award },
+];
+
 const settingsSubmenu = [
     { name: 'Agent', href: '/dashboard/agent', icon: Bot },
     { name: 'Skills', href: '/dashboard/skills', icon: Puzzle },
     { name: 'Extensions', href: '/dashboard/extensions', icon: PackagePlus },
-    { name: 'Memory', href: '/dashboard/memory', icon: Brain },
-    { name: 'Shared Memory', href: '/dashboard/shared-memory', icon: Share2 },
-    { name: 'Evolution', href: '/dashboard/evolution', icon: Sparkles },
-    { name: 'Evaluation', href: '/dashboard/evaluation', icon: Award },
     { name: 'Voice Settings', href: '/settings/voice', icon: Volume2 },
     { name: 'Storage', href: '/dashboard/storage', icon: HardDrive },
 ];
@@ -92,8 +96,13 @@ const developerMenu = [
     { name: 'WAF Security', href: '/dashboard/waf-security', icon: Shield },
     { name: 'Claude Code', href: '/dashboard/claude', icon: Bot },
     { name: 'Credentials', href: '/dashboard/settings/credentials', icon: Key },
-    // { name: 'Email Settings', href: '/dashboard/settings/email', icon: Mail }, // Moved to email-client extension
     { name: 'Database', href: '/dashboard/database', icon: Database },
+    // Brain section
+    { name: 'Memory', href: '/dashboard/memory', icon: Brain },
+    { name: 'Shared Memory', href: '/dashboard/shared-memory', icon: Share2 },
+    { name: 'Memory Insights', href: '/dashboard/memory-insights', icon: Lightbulb },
+    { name: 'Evolution', href: '/dashboard/evolution', icon: Sparkles },
+    { name: 'Evaluation', href: '/dashboard/evaluation', icon: Award },
 ];
 
 export function Sidebar() {
@@ -107,7 +116,12 @@ export function Sidebar() {
         pathname?.startsWith('/dashboard/waf-security') ||
         pathname?.startsWith('/dashboard/settings/credentials') ||
         pathname?.startsWith('/dashboard/settings/email') ||
-        pathname?.startsWith('/dashboard/database')
+        pathname?.startsWith('/dashboard/database') ||
+        pathname?.startsWith('/dashboard/memory') ||
+        pathname?.startsWith('/dashboard/shared-memory') ||
+        pathname?.startsWith('/dashboard/memory-insights') ||
+        pathname?.startsWith('/dashboard/evolution') ||
+        pathname?.startsWith('/dashboard/evaluation')
     );
     const [channelsOpen, setChannelsOpen] = useState(
         pathname?.startsWith('/dashboard/channels')
@@ -117,6 +131,13 @@ export function Sidebar() {
     const [avatarOpen, setAvatarOpen] = useState(
         pathname?.startsWith('/avatar-viewer') ||
         pathname?.startsWith('/dashboard/multiverse')
+    );
+    const [brainOpen, setBrainOpen] = useState(
+        pathname?.startsWith('/dashboard/memory') ||
+        pathname?.startsWith('/dashboard/shared-memory') ||
+        pathname?.startsWith('/dashboard/memory-insights') ||
+        pathname?.startsWith('/dashboard/evolution') ||
+        pathname?.startsWith('/dashboard/evaluation')
     );
     const [settingsOpen, setSettingsOpen] = useState(
         pathname?.startsWith('/dashboard/agent') ||
@@ -474,6 +495,58 @@ export function Sidebar() {
                         </div>
                     )}
                 </div>
+
+                {/* Brain with Submenu — only visible when dev mode is on */}
+                {devMode && (
+                    <div className="space-y-1">
+                        <button
+                            onClick={() => setBrainOpen(!brainOpen)}
+                            className={cn(
+                                'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                                collapsed ? 'justify-center' : '',
+                                brainOpen
+                                    ? 'bg-purple-500/15 text-purple-600 dark:text-purple-400'
+                                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                            )}
+                            title={collapsed ? 'Brain' : undefined}
+                        >
+                            <Brain className={cn(collapsed ? 'h-7 w-7' : 'h-5 w-5')} />
+                            {!collapsed && (
+                                <>
+                                    <span className="flex-1 text-left">Brain</span>
+                                    {brainOpen ? (
+                                        <ChevronDown className="h-4 w-4" />
+                                    ) : (
+                                        <ChevronRight className="h-4 w-4" />
+                                    )}
+                                </>
+                            )}
+                        </button>
+
+                        {brainOpen && !collapsed && (
+                            <div className="ml-4 space-y-1 border-l-2 border-purple-500/30 pl-2">
+                                {brainSubmenu.map((item) => {
+                                    const isActive = pathname === item.href;
+                                    return (
+                                        <Link
+                                            key={item.name}
+                                            href={item.href}
+                                            className={cn(
+                                                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                                                isActive
+                                                    ? 'bg-purple-500/15 text-purple-600 dark:text-purple-400'
+                                                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                                            )}
+                                        >
+                                            <item.icon className="h-4 w-4" />
+                                            {item.name}
+                                        </Link>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* Developer section — only visible when dev mode is on */}
                 {devMode && (
