@@ -10,10 +10,81 @@ import {
   selfAudit,
   getPayloadCategories,
   getPayloads,
+  getPayloadsFromDatabase,
+  getPayloadCategoriesFromDatabase,
 } from './engine.js';
+import { WafRateLimiter } from './rate-limiter.js';
+import {
+  createCampaign,
+  getCampaign,
+  listCampaigns,
+  runCampaign,
+  deleteCampaign,
+} from './campaign-service.js';
+import { calculateSecurityScore, generateRecommendations } from './scoring.js';
 import { randomUUID } from 'crypto';
 
+/**
+ * Extract user ID from JWT token
+ * @throws {Error} if token is missing or invalid
+ */
+function getUserIdFromRequest(request) {
+  const authHeader = request.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    throw new Error('Unauthorized: No authorization token provided');
+  }
+
+  try {
+    const token = authHeader.replace('Bearer ', '');
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+    const userId = payload.userId || payload.sub;
+
+    if (!userId) {
+      throw new Error('Unauthorized: Invalid token payload');
+    }
+
+    return userId;
+  } catch (err) {
+    throw new Error('Unauthorized: Invalid token format');
+  }
+}
+
+/**
+ * Validate scan request parameters
+ * @throws {Error} if validation fails
+ */
+function validateScanRequest(body) {
+  const { url, mode, categories } = body;
+
+  if (!url || typeof url !== 'string') {
+    throw new Error('Invalid URL: must be a non-empty string');
+  }
+
+  if (!url.match(/^https?:\/\/.+/)) {
+    throw new Error('Invalid URL: must start with http:// or https://');
+  }
+
+  if (mode && !['quick', 'full'].includes(mode)) {
+    throw new Error('Invalid mode: must be "quick" or "full"');
+  }
+
+  if (categories && !Array.isArray(categories)) {
+    throw new Error('Invalid categories: must be an array');
+  }
+
+  return {
+    url,
+    mode: mode || 'quick',
+    categories: categories || []
+  };
+}
+
 export async function registerWafRoutes(fastify) {
+  // Initialize rate limiter
+  const db = fastify.db || fastify.getDatabase();
+  const rateLimiter = new WafRateLimiter(db);
+
   /**
    * GET /api/ext/waf/payloads - List all payload categories
    */
@@ -23,7 +94,7 @@ export async function registerWafRoutes(fastify) {
       description: 'List all attack payload categories',
     },
   }, async (request, reply) => {
-    const categories = getPayloadCategories();
+    const categories = getPayloadCategories(db); // Load from database
     return { categories };
   });
 
@@ -71,29 +142,39 @@ export async function registerWafRoutes(fastify) {
       },
     },
   }, async (request, reply) => {
-    const { url, categories, mode } = request.body;
-    const scanId = randomUUID();
-    const db = fastify.db || request.server.db;
+    try {
+      // Authentication
+      const userId = getUserIdFromRequest(request);
 
-    // Validate URL
-    if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
-      return reply.status(400).send({ error: 'Invalid URL' });
+      // Validation
+      const validated = validateScanRequest(request.body);
+      const { url, categories, mode } = validated;
+
+      // Rate limiting
+      await rateLimiter.checkLimit(userId);
+
+      const scanId = randomUUID();
+      const db = fastify.db || request.server.db;
+
+      // Create scan record with user_id
+      db.prepare(`
+        INSERT INTO waf_scans (id, target_url, scan_type, status, started_at, user_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(scanId, url, url.includes('localhost') ? 'self' : 'external', 'running', new Date().toISOString(), userId);
+
+      // Run scan in background
+      runScanAsync(scanId, url, categories, mode, db, userId).catch(err => {
+        console.error('[WAF Scan] Error:', err);
+        db.prepare('UPDATE waf_scans SET status = ?, ended_at = ? WHERE id = ?')
+          .run('failed', new Date().toISOString(), scanId);
+        rateLimiter.releaseScan(userId);
+      });
+
+      return { scanId, status: 'started' };
+    } catch (err) {
+      return reply.status(err.message.includes('Unauthorized') ? 401 : err.message.includes('Rate limit') ? 429 : 400)
+        .send({ error: err.message });
     }
-
-    // Create scan record
-    db.prepare(`
-      INSERT INTO waf_scans (id, target_url, scan_type, status, started_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(scanId, url, url.includes('localhost') ? 'self' : 'external', 'running', new Date().toISOString());
-
-    // Run scan in background
-    runScanAsync(scanId, url, categories, mode, db).catch(err => {
-      console.error('[WAF Scan] Error:', err);
-      db.prepare('UPDATE waf_scans SET status = ?, ended_at = ? WHERE id = ?')
-        .run('failed', new Date().toISOString(), scanId);
-    });
-
-    return { scanId, status: 'started' };
   });
 
   /**
@@ -111,22 +192,30 @@ export async function registerWafRoutes(fastify) {
       },
     },
   }, async (request, reply) => {
-    const { id } = request.params;
-    const db = fastify.db || request.server.db;
+    try {
+      // Authentication
+      const userId = getUserIdFromRequest(request);
+      const { id } = request.params;
+      const db = fastify.db || request.server.db;
 
-    const scan = db.prepare('SELECT * FROM waf_scans WHERE id = ?').get(id);
+      // Check ownership
+      const scan = db.prepare('SELECT * FROM waf_scans WHERE id = ? AND user_id = ?').get(id, userId);
 
-    if (!scan) {
-      return reply.status(404).send({ error: 'Scan not found' });
+      if (!scan) {
+        return reply.status(404).send({ error: 'Scan not found' });
+      }
+
+      // Parse results JSON
+      if (scan.results_json) {
+        scan.results = JSON.parse(scan.results_json);
+        delete scan.results_json;
+      }
+
+      return scan;
+    } catch (err) {
+      return reply.status(err.message.includes('Unauthorized') ? 401 : 500)
+        .send({ error: err.message });
     }
-
-    // Parse results JSON
-    if (scan.results_json) {
-      scan.results = JSON.parse(scan.results_json);
-      delete scan.results_json;
-    }
-
-    return scan;
   });
 
   /**
@@ -138,18 +227,27 @@ export async function registerWafRoutes(fastify) {
       description: 'List all WAF scans',
     },
   }, async (request, reply) => {
-    const db = fastify.db || request.server.db;
+    try {
+      // Authentication
+      const userId = getUserIdFromRequest(request);
+      const db = fastify.db || request.server.db;
 
-    const scans = db.prepare(`
-      SELECT id, target_url, scan_type, waf_detected, waf_type, waf_confidence,
-             total_payloads, blocked_count, passed_count, bypass_rate,
-             risk_level, status, started_at, ended_at, created_at
-      FROM waf_scans
-      ORDER BY created_at DESC
-      LIMIT 50
-    `).all();
+      // Filter by user_id
+      const scans = db.prepare(`
+        SELECT id, target_url, scan_type, waf_detected, waf_type, waf_confidence,
+               total_payloads, blocked_count, passed_count, bypass_rate,
+               risk_level, status, started_at, ended_at, created_at
+        FROM waf_scans
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        LIMIT 50
+      `).all(userId);
 
-    return { scans };
+      return { scans };
+    } catch (err) {
+      return reply.status(err.message.includes('Unauthorized') ? 401 : 500)
+        .send({ error: err.message });
+    }
   });
 
   /**
@@ -167,16 +265,24 @@ export async function registerWafRoutes(fastify) {
       },
     },
   }, async (request, reply) => {
-    const { id } = request.params;
-    const db = fastify.db || request.server.db;
+    try {
+      // Authentication
+      const userId = getUserIdFromRequest(request);
+      const { id } = request.params;
+      const db = fastify.db || request.server.db;
 
-    const result = db.prepare('DELETE FROM waf_scans WHERE id = ?').run(id);
+      // Check ownership and delete
+      const result = db.prepare('DELETE FROM waf_scans WHERE id = ? AND user_id = ?').run(id, userId);
 
-    if (result.changes === 0) {
-      return reply.status(404).send({ error: 'Scan not found' });
+      if (result.changes === 0) {
+        return reply.status(404).send({ error: 'Scan not found' });
+      }
+
+      return { success: true };
+    } catch (err) {
+      return reply.status(err.message.includes('Unauthorized') ? 401 : 500)
+        .send({ error: err.message });
     }
-
-    return { success: true };
   });
 
   /**
@@ -194,13 +300,275 @@ export async function registerWafRoutes(fastify) {
     return audit;
   });
 
-  console.log('[WAF Routes] ✅ Registered');
+  // ============================================================================
+  // CAMPAIGN ROUTES - Professional security testing campaigns
+  // ============================================================================
+
+  /**
+   * POST /api/ext/waf/campaigns - Create new campaign
+   */
+  fastify.post('/campaigns', {
+    schema: {
+      tags: ['WAF Campaigns'],
+      description: 'Create a new security testing campaign',
+      body: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          description: { type: 'string' },
+          targetDomain: { type: 'string' },
+          scanMode: { type: 'string', enum: ['quick', 'full'] },
+          categories: { type: 'array', items: { type: 'string' } },
+          scheduleEnabled: { type: 'boolean' },
+          scheduleFrequency: { type: 'string', enum: ['daily', 'weekly', 'monthly'] },
+          scheduleTime: { type: 'string' },
+          scheduleDayOfWeek: { type: 'integer' },
+          scheduleDayOfMonth: { type: 'integer' },
+        },
+        required: ['name', 'targetDomain'],
+      },
+    },
+  }, async (request, reply) => {
+    try {
+      const userId = getUserIdFromRequest(request);
+      const campaign = createCampaign(db, userId, request.body);
+      return campaign;
+    } catch (err) {
+      return reply.status(err.message.includes('Unauthorized') ? 401 : 400)
+        .send({ error: err.message });
+    }
+  });
+
+  /**
+   * GET /api/ext/waf/campaigns - List all campaigns
+   */
+  fastify.get('/campaigns', {
+    schema: {
+      tags: ['WAF Campaigns'],
+      description: 'List all campaigns for current user',
+    },
+  }, async (request, reply) => {
+    try {
+      const userId = getUserIdFromRequest(request);
+      const campaigns = listCampaigns(db, userId);
+      return { campaigns };
+    } catch (err) {
+      return reply.status(err.message.includes('Unauthorized') ? 401 : 500)
+        .send({ error: err.message });
+    }
+  });
+
+  /**
+   * GET /api/ext/waf/campaigns/:id - Get campaign details
+   */
+  fastify.get('/campaigns/:id', {
+    schema: {
+      tags: ['WAF Campaigns'],
+      description: 'Get campaign details with run history',
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    try {
+      const userId = getUserIdFromRequest(request);
+      const { id } = request.params;
+
+      const campaign = getCampaign(db, id);
+
+      if (!campaign) {
+        return reply.status(404).send({ error: 'Campaign not found' });
+      }
+
+      // Check ownership
+      if (campaign.user_id !== userId) {
+        return reply.status(403).send({ error: 'Access denied' });
+      }
+
+      // Get campaign scans
+      const scans = db.prepare(`
+        SELECT * FROM waf_campaign_scans
+        WHERE campaign_id = ?
+        ORDER BY run_number DESC, stage ASC
+      `).all(id);
+
+      // Get comparisons
+      const comparisons = db.prepare(`
+        SELECT * FROM waf_campaign_comparisons
+        WHERE campaign_id = ?
+        ORDER BY created_at DESC
+      `).all(id);
+
+      return {
+        ...campaign,
+        scans,
+        comparisons,
+      };
+    } catch (err) {
+      return reply.status(err.message.includes('Unauthorized') ? 401 : 500)
+        .send({ error: err.message });
+    }
+  });
+
+  /**
+   * POST /api/ext/waf/campaigns/:id/run - Run campaign
+   */
+  fastify.post('/campaigns/:id/run', {
+    schema: {
+      tags: ['WAF Campaigns'],
+      description: 'Execute a campaign (4-stage scan)',
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    try {
+      const userId = getUserIdFromRequest(request);
+      const { id } = request.params;
+
+      const campaign = getCampaign(db, id);
+
+      if (!campaign) {
+        return reply.status(404).send({ error: 'Campaign not found' });
+      }
+
+      // Check ownership
+      if (campaign.user_id !== userId) {
+        return reply.status(403).send({ error: 'Access denied' });
+      }
+
+      // Run campaign in background
+      runCampaign(db, id).catch(err => {
+        console.error('[Campaign Run] Error:', err);
+      });
+
+      return {
+        campaignId: id,
+        status: 'started',
+        message: 'Campaign execution started',
+      };
+    } catch (err) {
+      return reply.status(err.message.includes('Unauthorized') ? 401 : 400)
+        .send({ error: err.message });
+    }
+  });
+
+  /**
+   * DELETE /api/ext/waf/campaigns/:id - Delete campaign
+   */
+  fastify.delete('/campaigns/:id', {
+    schema: {
+      tags: ['WAF Campaigns'],
+      description: 'Delete a campaign',
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    try {
+      const userId = getUserIdFromRequest(request);
+      const { id } = request.params;
+
+      const campaign = getCampaign(db, id);
+
+      if (!campaign) {
+        return reply.status(404).send({ error: 'Campaign not found' });
+      }
+
+      // Check ownership
+      if (campaign.user_id !== userId) {
+        return reply.status(403).send({ error: 'Access denied' });
+      }
+
+      deleteCampaign(db, id);
+
+      return { success: true };
+    } catch (err) {
+      return reply.status(err.message.includes('Unauthorized') ? 401 : 500)
+        .send({ error: err.message });
+    }
+  });
+
+  /**
+   * GET /api/ext/waf/campaigns/:id/score - Get detailed security score
+   */
+  fastify.get('/campaigns/:id/score', {
+    schema: {
+      tags: ['WAF Campaigns'],
+      description: 'Get detailed security score and recommendations',
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    try {
+      const userId = getUserIdFromRequest(request);
+      const { id } = request.params;
+
+      const campaign = getCampaign(db, id);
+
+      if (!campaign) {
+        return reply.status(404).send({ error: 'Campaign not found' });
+      }
+
+      // Check ownership
+      if (campaign.user_id !== userId) {
+        return reply.status(403).send({ error: 'Access denied' });
+      }
+
+      // Get latest verification stage scan
+      const latestScan = db.prepare(`
+        SELECT cs.*, s.results_json
+        FROM waf_campaign_scans cs
+        INNER JOIN waf_scans s ON cs.scan_id = s.id
+        WHERE cs.campaign_id = ? AND cs.stage = 4
+        ORDER BY cs.run_number DESC
+        LIMIT 1
+      `).get(id);
+
+      if (!latestScan || !latestScan.results_json) {
+        return reply.status(404).send({ error: 'No completed scans found' });
+      }
+
+      // Parse results
+      const scanResults = JSON.parse(latestScan.results_json);
+
+      // Calculate score and recommendations
+      const score = calculateSecurityScore(scanResults);
+      const recommendations = generateRecommendations(scanResults, score);
+
+      return {
+        score,
+        recommendations,
+        scanId: latestScan.scan_id,
+        runNumber: latestScan.run_number,
+      };
+    } catch (err) {
+      return reply.status(err.message.includes('Unauthorized') ? 401 : 500)
+        .send({ error: err.message });
+    }
+  });
+
+  console.log('[WAF Routes] ✅ Registered (8 scan routes + 6 campaign routes)');
 }
 
 /**
  * Run scan asynchronously in background
  */
-async function runScanAsync(scanId, url, categories, mode, db) {
+async function runScanAsync(scanId, url, categories, mode, db, userId) {
+  const rateLimiter = new WafRateLimiter(db);
   const results = {
     detection: null,
     tests: [],
@@ -210,16 +578,21 @@ async function runScanAsync(scanId, url, categories, mode, db) {
   const detection = await detectWAF(url);
   results.detection = detection;
 
-  // Step 2: Test payloads
-  const categoriesToTest = categories || getPayloadCategories().map(c => c.id);
+  // Step 2: Test payloads (from database)
+  const categoriesToTest = categories || getPayloadCategories(db).map(c => c.id);
   const selectedCategories = mode === 'quick' ? categoriesToTest.slice(0, 2) : categoriesToTest;
 
   for (const category of selectedCategories) {
-    const payloads = getPayloads(category);
-    const payloadsToTest = mode === 'quick' ? payloads.slice(0, 2) : payloads;
+    // Load payloads from database (returns payload objects)
+    const payloadObjects = getPayloadsFromDatabase(db, category, true);
+    const payloadsToTest = mode === 'quick' ? payloadObjects.slice(0, 3) : payloadObjects;
 
-    for (const payload of payloadsToTest) {
-      const testResult = await testPayload(url, payload, category);
+    for (const payloadObj of payloadsToTest) {
+      const testResult = await testPayload(url, payloadObj.payload, category);
+      // Add additional metadata from database
+      testResult.severity = payloadObj.severity;
+      testResult.description = payloadObj.description;
+      testResult.evasionTechnique = payloadObj.evasion_technique;
       results.tests.push(testResult);
 
       // Brief delay to avoid rate limiting
@@ -268,6 +641,11 @@ async function runScanAsync(scanId, url, categories, mode, db) {
     new Date().toISOString(),
     scanId
   );
+
+  // Release rate limit slot
+  if (userId) {
+    await rateLimiter.releaseScan(userId);
+  }
 
   console.log(`[WAF Scan] ✅ Completed: ${scanId}`);
 }

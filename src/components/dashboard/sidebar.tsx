@@ -92,17 +92,11 @@ const settingsSubmenu = [
 const developerMenu = [
     { name: 'UI Components', href: '/dashboard/developer/ui-components', icon: Layers },
     { name: 'AI Tools', href: '/dashboard/ai-tools', icon: ScanSearch },
-    { name: 'SEO Tools', href: '/dashboard/seo', icon: TrendingUp },
-    { name: 'WAF Security', href: '/dashboard/waf-security', icon: Shield },
+    { name: 'SEO Tools', href: '/dashboard/ext/seo', icon: TrendingUp },
+    { name: 'WAF Security', href: '/dashboard/ext/waf-security', icon: Shield },
     { name: 'Claude Code', href: '/dashboard/claude', icon: Bot },
     { name: 'Credentials', href: '/dashboard/settings/credentials', icon: Key },
     { name: 'Database', href: '/dashboard/database', icon: Database },
-    // Brain section
-    { name: 'Memory', href: '/dashboard/memory', icon: Brain },
-    { name: 'Shared Memory', href: '/dashboard/shared-memory', icon: Share2 },
-    { name: 'Memory Insights', href: '/dashboard/memory-insights', icon: Lightbulb },
-    { name: 'Evolution', href: '/dashboard/evolution', icon: Sparkles },
-    { name: 'Evaluation', href: '/dashboard/evaluation', icon: Award },
 ];
 
 export function Sidebar() {
@@ -112,16 +106,11 @@ export function Sidebar() {
         pathname?.startsWith('/dashboard/developer/') ||
         pathname?.startsWith('/dashboard/claude') ||
         pathname?.startsWith('/dashboard/ai-tools') ||
-        pathname?.startsWith('/dashboard/seo') ||
-        pathname?.startsWith('/dashboard/waf-security') ||
+        pathname?.startsWith('/dashboard/ext/seo') ||
+        pathname?.startsWith('/dashboard/ext/waf-security') ||
         pathname?.startsWith('/dashboard/settings/credentials') ||
         pathname?.startsWith('/dashboard/settings/email') ||
-        pathname?.startsWith('/dashboard/database') ||
-        pathname?.startsWith('/dashboard/memory') ||
-        pathname?.startsWith('/dashboard/shared-memory') ||
-        pathname?.startsWith('/dashboard/memory-insights') ||
-        pathname?.startsWith('/dashboard/evolution') ||
-        pathname?.startsWith('/dashboard/evaluation')
+        pathname?.startsWith('/dashboard/database')
     );
     const [channelsOpen, setChannelsOpen] = useState(
         pathname?.startsWith('/dashboard/channels')

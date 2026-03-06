@@ -11,35 +11,21 @@ import { recordApiCall } from '../services/extension-analytics.js';
  * Attaches to all /api/ext/:extensionId/* routes
  */
 export function extensionAnalyticsMiddleware() {
-  return (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction) => {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
     // Check if this is an extension route
     const pathSegments = request.url.split('/');
     const extIndex = pathSegments.indexOf('ext');
 
     if (extIndex === -1 || !pathSegments[extIndex + 1]) {
       // Not an extension route, skip tracking
-      done();
       return;
     }
 
     const extensionId = pathSegments[extIndex + 1].split('?')[0]; // Remove query params
     const startTime = Date.now();
 
-    // Track response to record success/error
-    reply.addHook('onSend', async (request, reply, payload) => {
-      const responseTime = Date.now() - startTime;
-      const success = reply.statusCode < 400;
-
-      // Record the API call
-      recordApiCall(extensionId, {
-        success,
-        responseTimeMs: responseTime,
-        errorType: success ? undefined : `HTTP ${reply.statusCode}`,
-      });
-
-      return payload;
-    });
-
-    done();
+    // Store start time on request for later access
+    (request as any).__analyticsStartTime = startTime;
+    (request as any).__analyticsExtensionId = extensionId;
   };
 }

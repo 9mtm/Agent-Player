@@ -477,7 +477,27 @@ async function start() {
 
     // Register Extension Analytics Middleware
     const { extensionAnalyticsMiddleware } = await import('../middleware/extension-analytics-middleware.js');
+    const { recordApiCall } = await import('../services/extension-analytics.js');
+
     fastify.addHook('onRequest', extensionAnalyticsMiddleware());
+
+    // Record analytics on response
+    fastify.addHook('onResponse', async (request, reply) => {
+      const extensionId = (request as any).__analyticsExtensionId;
+      const startTime = (request as any).__analyticsStartTime;
+
+      if (!extensionId || !startTime) return;
+
+      const responseTime = Date.now() - startTime;
+      const success = reply.statusCode < 400;
+
+      recordApiCall(extensionId, {
+        success,
+        responseTimeMs: responseTime,
+        errorType: success ? undefined : `HTTP ${reply.statusCode}`,
+      });
+    });
+
     console.log('[Server] ✅ Extension analytics middleware registered\n');
 
     // Email Sync Service moved to email-client extension

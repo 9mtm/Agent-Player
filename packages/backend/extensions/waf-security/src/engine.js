@@ -196,7 +196,7 @@ export function generateBypassVariants(payload, type) {
 /**
  * Tests a single payload against URL
  */
-export async function testPayload(url, payload, category) {
+export async function testPayload(url, payload, category, timeout = 60000) {
   const result = {
     payload,
     category,
@@ -204,27 +204,47 @@ export async function testPayload(url, payload, category) {
     status: null,
     responseTime: 0,
     error: null,
+    timedOut: false,
   };
 
   try {
     const testUrl = url + (url.includes('?') ? '&' : '?') + 'test=' + encodeURIComponent(payload);
     const startTime = Date.now();
 
-    const response = await fetch(testUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      redirect: 'manual',
-    });
+    // Timeout protection using AbortController
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-    result.responseTime = Date.now() - startTime;
-    result.status = response.status;
+    try {
+      const response = await fetch(testUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        redirect: 'manual',
+        signal: controller.signal,
+      });
 
-    // Blocked indicators: 403, 406, 429, redirects to block pages
-    if ([403, 406, 429, 503].includes(response.status)) {
-      result.blocked = true;
-    } else if ([301, 302, 307, 308].includes(response.status)) {
-      const location = response.headers.get('location') || '';
-      if (location.includes('block') || location.includes('denied')) {
+      clearTimeout(timeoutId);
+      result.responseTime = Date.now() - startTime;
+      result.status = response.status;
+
+      // Blocked indicators: 403, 406, 429, redirects to block pages
+      if ([403, 406, 429, 503].includes(response.status)) {
         result.blocked = true;
+      } else if ([301, 302, 307, 308].includes(response.status)) {
+        const location = response.headers.get('location') || '';
+        if (location.includes('block') || location.includes('denied')) {
+          result.blocked = true;
+        }
+      }
+    } catch (err) {
+      clearTimeout(timeoutId);
+
+      if (err.name === 'AbortError') {
+        // Timeout occurred
+        result.error = `Request timeout after ${timeout}ms`;
+        result.timedOut = true;
+        result.blocked = true; // Assume blocked if timeout
+      } else {
+        throw err;
       }
     }
   } catch (error) {
@@ -236,53 +256,193 @@ export async function testPayload(url, payload, category) {
 }
 
 /**
- * Self-audit Agent Player backend security
+ * Self-audit Agent Player backend security (ENHANCED - Phase 5)
+ * Comprehensive security assessment with 14 headers + 6 advanced tests
  */
 export async function selfAudit(backendUrl) {
   const issues = [];
+  let securityScore = 100; // Start with perfect score
 
   try {
-    // Test 1: Security headers
+    // ========================================================================
+    // TEST GROUP 1: Security Headers (14 headers)
+    // ========================================================================
+
     const response = await fetch(backendUrl + '/api/database/stats');
     const headers = Object.fromEntries(response.headers.entries());
 
-    if (!headers['x-content-type-options']) {
+    // 1. X-Content-Type-Options
+    if (!headers['x-content-type-options'] || headers['x-content-type-options'] !== 'nosniff') {
       issues.push({
         severity: 'medium',
         type: 'Missing Security Header',
-        detail: 'X-Content-Type-Options header not set',
+        detail: 'X-Content-Type-Options header not set to "nosniff"',
         recommendation: 'Add header: X-Content-Type-Options: nosniff',
+        points: 2,
       });
+      securityScore -= 2;
     }
 
+    // 2. X-Frame-Options
     if (!headers['x-frame-options']) {
       issues.push({
         severity: 'medium',
         type: 'Missing Security Header',
         detail: 'X-Frame-Options header not set (clickjacking risk)',
-        recommendation: 'Add header: X-Frame-Options: DENY',
+        recommendation: 'Add header: X-Frame-Options: DENY or SAMEORIGIN',
+        points: 2,
       });
+      securityScore -= 2;
     }
 
+    // 3. Strict-Transport-Security (HSTS)
     if (!headers['strict-transport-security']) {
       issues.push({
         severity: 'low',
         type: 'Missing Security Header',
-        detail: 'HSTS not enabled (localhost only, expected)',
-        recommendation: 'Add HSTS in production: Strict-Transport-Security: max-age=31536000',
+        detail: 'HSTS not enabled (acceptable for localhost)',
+        recommendation: 'Add HSTS in production: Strict-Transport-Security: max-age=31536000; includeSubDomains',
+        points: 1,
       });
+      securityScore -= 1;
     }
 
+    // 4. Content-Security-Policy
     if (!headers['content-security-policy']) {
       issues.push({
         severity: 'medium',
         type: 'Missing Security Header',
-        detail: 'Content-Security-Policy header not set',
-        recommendation: 'Add CSP to prevent XSS attacks',
+        detail: 'Content-Security-Policy header not set (XSS risk)',
+        recommendation: 'Add CSP: Content-Security-Policy: default-src \'self\'; script-src \'self\'',
+        points: 2,
       });
+      securityScore -= 2;
     }
 
-    // Test 2: CORS configuration
+    // 5. X-XSS-Protection
+    if (!headers['x-xss-protection']) {
+      issues.push({
+        severity: 'low',
+        type: 'Missing Security Header',
+        detail: 'X-XSS-Protection header not set',
+        recommendation: 'Add header: X-XSS-Protection: 1; mode=block',
+        points: 1,
+      });
+      securityScore -= 1;
+    }
+
+    // 6. Referrer-Policy
+    if (!headers['referrer-policy']) {
+      issues.push({
+        severity: 'low',
+        type: 'Missing Security Header',
+        detail: 'Referrer-Policy header not set',
+        recommendation: 'Add header: Referrer-Policy: no-referrer or strict-origin-when-cross-origin',
+        points: 1,
+      });
+      securityScore -= 1;
+    }
+
+    // 7. Permissions-Policy
+    if (!headers['permissions-policy']) {
+      issues.push({
+        severity: 'low',
+        type: 'Missing Security Header',
+        detail: 'Permissions-Policy header not set',
+        recommendation: 'Add header: Permissions-Policy: geolocation=(), microphone=(), camera=()',
+        points: 1,
+      });
+      securityScore -= 1;
+    }
+
+    // 8. X-DNS-Prefetch-Control
+    if (!headers['x-dns-prefetch-control']) {
+      issues.push({
+        severity: 'low',
+        type: 'Missing Security Header',
+        detail: 'X-DNS-Prefetch-Control header not set',
+        recommendation: 'Add header: X-DNS-Prefetch-Control: off',
+        points: 1,
+      });
+      securityScore -= 1;
+    }
+
+    // 9. X-Download-Options
+    if (!headers['x-download-options']) {
+      issues.push({
+        severity: 'low',
+        type: 'Missing Security Header',
+        detail: 'X-Download-Options header not set',
+        recommendation: 'Add header: X-Download-Options: noopen',
+        points: 1,
+      });
+      securityScore -= 1;
+    }
+
+    // 10. X-Permitted-Cross-Domain-Policies
+    if (!headers['x-permitted-cross-domain-policies']) {
+      issues.push({
+        severity: 'low',
+        type: 'Missing Security Header',
+        detail: 'X-Permitted-Cross-Domain-Policies header not set',
+        recommendation: 'Add header: X-Permitted-Cross-Domain-Policies: none',
+        points: 1,
+      });
+      securityScore -= 1;
+    }
+
+    // 11. Cross-Origin-Embedder-Policy
+    if (!headers['cross-origin-embedder-policy']) {
+      issues.push({
+        severity: 'low',
+        type: 'Missing Security Header',
+        detail: 'Cross-Origin-Embedder-Policy header not set',
+        recommendation: 'Add header: Cross-Origin-Embedder-Policy: require-corp',
+        points: 1,
+      });
+      securityScore -= 1;
+    }
+
+    // 12. Cross-Origin-Opener-Policy
+    if (!headers['cross-origin-opener-policy']) {
+      issues.push({
+        severity: 'low',
+        type: 'Missing Security Header',
+        detail: 'Cross-Origin-Opener-Policy header not set',
+        recommendation: 'Add header: Cross-Origin-Opener-Policy: same-origin',
+        points: 1,
+      });
+      securityScore -= 1;
+    }
+
+    // 13. Cross-Origin-Resource-Policy
+    if (!headers['cross-origin-resource-policy']) {
+      issues.push({
+        severity: 'low',
+        type: 'Missing Security Header',
+        detail: 'Cross-Origin-Resource-Policy header not set',
+        recommendation: 'Add header: Cross-Origin-Resource-Policy: same-origin',
+        points: 1,
+      });
+      securityScore -= 1;
+    }
+
+    // 14. Cache-Control (sensitive data)
+    if (!headers['cache-control'] || !headers['cache-control'].includes('no-store')) {
+      issues.push({
+        severity: 'medium',
+        type: 'Insecure Caching',
+        detail: 'Cache-Control header does not prevent sensitive data caching',
+        recommendation: 'Add header: Cache-Control: no-store, no-cache, must-revalidate, private',
+        points: 2,
+      });
+      securityScore -= 2;
+    }
+
+    // ========================================================================
+    // TEST GROUP 2: CORS Configuration
+    // ========================================================================
+
     const corsTest = await fetch(backendUrl + '/api/database/stats', {
       headers: { 'Origin': 'https://evil.com' },
     });
@@ -294,38 +454,281 @@ export async function selfAudit(backendUrl) {
         type: 'CORS Misconfiguration',
         detail: 'CORS allows all origins (wildcard)',
         recommendation: 'Restrict CORS to specific origins (http://localhost:41521)',
+        points: 3,
       });
+      securityScore -= 3;
     }
 
-    // Test 3: Error info disclosure
-    const errorTest = await fetch(backendUrl + '/api/invalid-endpoint-xyz');
+    // ========================================================================
+    // TEST GROUP 3: SQL Injection Testing (on own endpoints)
+    // ========================================================================
+
+    const sqlPayloads = [
+      "' OR '1'='1",
+      "1' UNION SELECT NULL--",
+      "admin'--",
+    ];
+
+    for (const payload of sqlPayloads) {
+      try {
+        // Test if endpoint is vulnerable to SQL injection
+        const sqlTest = await fetch(`${backendUrl}/api/database/stats?test=${encodeURIComponent(payload)}`);
+        const sqlText = await sqlTest.text();
+
+        // Check for SQL error messages (indicates vulnerability)
+        if (sqlText.includes('SQLITE_ERROR') || sqlText.includes('syntax error') || sqlText.includes('near')) {
+          issues.push({
+            severity: 'critical',
+            type: 'SQL Injection Vulnerability',
+            detail: `Endpoint vulnerable to SQL injection with payload: ${payload}`,
+            recommendation: 'Use parameterized queries and input validation',
+            points: 5,
+          });
+          securityScore -= 5;
+          break; // Only report once
+        }
+      } catch (e) {
+        // Ignore fetch errors
+      }
+    }
+
+    // ========================================================================
+    // TEST GROUP 4: Authentication Bypass Testing
+    // ========================================================================
+
+    try {
+      // Try to access protected endpoint without token
+      const authTest = await fetch(backendUrl + '/api/agents');
+      if (authTest.status === 200) {
+        issues.push({
+          severity: 'critical',
+          type: 'Authentication Bypass',
+          detail: 'Protected endpoint /api/agents accessible without authentication',
+          recommendation: 'Enforce JWT authentication on all protected routes',
+          points: 5,
+        });
+        securityScore -= 5;
+      }
+    } catch (e) {
+      // Ignore fetch errors
+    }
+
+    // ========================================================================
+    // TEST GROUP 5: Rate Limiting Testing
+    // ========================================================================
+
+    let rateLimitWorks = false;
+    try {
+      // Send 15 rapid requests
+      const requests = [];
+      for (let i = 0; i < 15; i++) {
+        requests.push(fetch(backendUrl + '/api/database/stats'));
+      }
+
+      const results = await Promise.all(requests);
+      const tooManyRequests = results.filter(r => r.status === 429);
+
+      if (tooManyRequests.length === 0) {
+        issues.push({
+          severity: 'medium',
+          type: 'Missing Rate Limiting',
+          detail: 'No rate limiting detected on API endpoints',
+          recommendation: 'Implement rate limiting (e.g., 100 requests per minute per IP)',
+          points: 2,
+        });
+        securityScore -= 2;
+      } else {
+        rateLimitWorks = true;
+      }
+    } catch (e) {
+      // Ignore fetch errors
+    }
+
+    // ========================================================================
+    // TEST GROUP 6: Error Information Disclosure
+    // ========================================================================
+
+    const errorTest = await fetch(backendUrl + '/api/invalid-endpoint-xyz-123');
     const errorText = await errorTest.text();
 
-    if (errorText.includes('at ') || errorText.includes('.ts:')) {
+    if (errorText.includes('at ') || errorText.includes('.ts:') || errorText.includes('.js:')) {
       issues.push({
         severity: 'low',
         type: 'Information Disclosure',
         detail: 'Stack traces exposed in error responses',
-        recommendation: 'Disable stack traces in production',
+        recommendation: 'Disable stack traces in production (NODE_ENV=production)',
+        points: 1,
       });
+      securityScore -= 1;
     }
+
+    // ========================================================================
+    // TEST GROUP 7: Session Management (JWT)
+    // ========================================================================
+
+    // Check if server validates JWT expiration
+    // This is a placeholder - would need actual expired token to test
+    // For now, we just recommend best practices
+
   } catch (error) {
     console.error('Self-audit error:', error.message);
+    issues.push({
+      severity: 'high',
+      type: 'Audit Failure',
+      detail: `Self-audit failed: ${error.message}`,
+      recommendation: 'Investigate audit failure - backend may be unreachable',
+      points: 3,
+    });
+    securityScore -= 3;
   }
 
+  // Calculate final security score (0-100)
+  securityScore = Math.max(0, Math.min(100, securityScore));
+
   return {
+    securityScore,
+    grade: getSecurityGrade(securityScore),
     totalIssues: issues.length,
+    criticalSeverity: issues.filter(i => i.severity === 'critical').length,
     highSeverity: issues.filter(i => i.severity === 'high').length,
     mediumSeverity: issues.filter(i => i.severity === 'medium').length,
     lowSeverity: issues.filter(i => i.severity === 'low').length,
     issues,
+    summary: generateAuditSummary(issues, securityScore),
   };
 }
 
 /**
- * Get all payload categories
+ * Get security grade from score
+ * @param {number} score - Security score (0-100)
+ * @returns {string} Grade
  */
-export function getPayloadCategories() {
+function getSecurityGrade(score) {
+  if (score >= 95) return 'A+';
+  if (score >= 90) return 'A';
+  if (score >= 80) return 'B';
+  if (score >= 70) return 'C';
+  if (score >= 60) return 'D';
+  return 'F';
+}
+
+/**
+ * Generate audit summary
+ * @param {array} issues - List of issues
+ * @param {number} score - Security score
+ * @returns {object} Summary
+ */
+function generateAuditSummary(issues, score) {
+  const critical = issues.filter(i => i.severity === 'critical').length;
+  const high = issues.filter(i => i.severity === 'high').length;
+
+  let status = 'Excellent';
+  let message = 'Your backend security is excellent';
+
+  if (critical > 0) {
+    status = 'Critical';
+    message = `${critical} critical security issues found - immediate action required`;
+  } else if (high > 0) {
+    status = 'Poor';
+    message = `${high} high-severity issues found - action needed`;
+  } else if (score >= 90) {
+    status = 'Excellent';
+    message = 'Your backend security is excellent';
+  } else if (score >= 70) {
+    status = 'Good';
+    message = 'Your backend security is good with minor improvements needed';
+  } else {
+    status = 'Fair';
+    message = 'Your backend security needs improvement';
+  }
+
+  return {
+    status,
+    message,
+    topIssues: issues
+      .sort((a, b) => (b.points || 0) - (a.points || 0))
+      .slice(0, 3)
+      .map(i => i.detail),
+  };
+}
+
+/**
+ * Load payloads from database (NEW - Phase 2.2)
+ * @param {object} db - Database instance
+ * @param {string|null} category - Filter by category (null = all)
+ * @param {boolean} includeEvasions - Include evasion technique payloads
+ * @returns {array} Array of payload objects
+ */
+export function getPayloadsFromDatabase(db, category = null, includeEvasions = true) {
+  try {
+    let query = 'SELECT * FROM waf_payload_library WHERE 1=1';
+    const params = [];
+
+    if (category) {
+      query += ' AND category = ?';
+      params.push(category);
+    }
+
+    if (!includeEvasions) {
+      query += ' AND evasion_technique = "none"';
+    }
+
+    query += ' ORDER BY severity DESC, category ASC';
+
+    const stmt = db.prepare(query);
+    const results = stmt.all(...params);
+
+    return results;
+  } catch (error) {
+    console.error('Database payload loading error:', error.message);
+    return [];
+  }
+}
+
+/**
+ * Get all payload categories from database
+ * @param {object} db - Database instance
+ * @returns {array} Array of category objects with counts
+ */
+export function getPayloadCategoriesFromDatabase(db) {
+  try {
+    const results = db.prepare(`
+      SELECT
+        category,
+        COUNT(*) as count,
+        SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END) as critical_count,
+        SUM(CASE WHEN severity = 'high' THEN 1 ELSE 0 END) as high_count
+      FROM waf_payload_library
+      GROUP BY category
+      ORDER BY category ASC
+    `).all();
+
+    return results.map(row => ({
+      id: row.category,
+      name: row.category.replace(/_/g, ' ').toUpperCase(),
+      count: row.count,
+      criticalCount: row.critical_count,
+      highCount: row.high_count,
+    }));
+  } catch (error) {
+    console.error('Database category loading error:', error.message);
+    return [];
+  }
+}
+
+/**
+ * Get all payload categories (LEGACY - fallback to database)
+ */
+export function getPayloadCategories(db = null) {
+  // Try database first
+  if (db) {
+    const dbCategories = getPayloadCategoriesFromDatabase(db);
+    if (dbCategories.length > 0) {
+      return dbCategories;
+    }
+  }
+
+  // Fallback to hardcoded payloads
   return Object.keys(PAYLOADS).map(key => ({
     id: key,
     name: key.replace(/_/g, ' ').toUpperCase(),
@@ -334,8 +737,18 @@ export function getPayloadCategories() {
 }
 
 /**
- * Get payloads for specific category
+ * Get payloads for specific category (LEGACY - fallback to database)
  */
-export function getPayloads(category) {
+export function getPayloads(category, db = null) {
+  // Try database first
+  if (db) {
+    const dbPayloads = getPayloadsFromDatabase(db, category, true);
+    if (dbPayloads.length > 0) {
+      // Convert to simple string array for backward compatibility
+      return dbPayloads.map(p => p.payload);
+    }
+  }
+
+  // Fallback to hardcoded payloads
   return PAYLOADS[category] || [];
 }

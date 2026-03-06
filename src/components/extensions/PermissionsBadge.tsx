@@ -111,8 +111,20 @@ export function PermissionsBadge({
     );
   }
 
+  // Filter out invalid permissions (not in PERMISSION_CONFIG)
+  const validPermissions = permissions.filter((p) => p in PERMISSION_CONFIG);
+
+  if (validPermissions.length === 0) {
+    return (
+      <div className="flex items-center gap-1 text-xs text-muted-foreground">
+        <Info className="h-3 w-3" />
+        <span>No special permissions</span>
+      </div>
+    );
+  }
+
   // Sort by risk level (high → medium → low)
-  const sortedPermissions = [...permissions].sort((a, b) => {
+  const sortedPermissions = [...validPermissions].sort((a, b) => {
     const riskOrder = { high: 0, medium: 1, low: 2 };
     return riskOrder[PERMISSION_CONFIG[a].risk] - riskOrder[PERMISSION_CONFIG[b].risk];
   });
