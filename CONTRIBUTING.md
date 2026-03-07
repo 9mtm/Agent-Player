@@ -1,428 +1,322 @@
 # Contributing to Agent Player
 
-Thank you for your interest in contributing!
+Thank you for your interest in contributing to Agent Player! This document provides guidelines and instructions for contributing.
+
+## Table of Contents
+
+- [Code of Conduct](#code-of-conduct)
+- [Getting Started](#getting-started)
+- [Development Setup](#development-setup)
+- [Project Structure](#project-structure)
+- [Development Guidelines](#development-guidelines)
+- [Extension Development](#extension-development)
+- [Pull Request Process](#pull-request-process)
+- [Reporting Bugs](#reporting-bugs)
+- [Suggesting Features](#suggesting-features)
+
+---
+
+## Code of Conduct
+
+- Be respectful and inclusive
+- Welcome newcomers and help them learn
+- Focus on constructive feedback
+- Respect different viewpoints and experiences
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- **Node.js** 18+ (recommended: 20.x)
+- **pnpm** 8+
+- **Python** 3.12+ (for TTS/STT features)
+- **Git** for version control
+
+### Quick Start
+
+1. **Fork the repository**
+   ```bash
+   # Click "Fork" on GitHub
+   git clone https://github.com/YOUR_USERNAME/Agent-Player.git
+   cd Agent-Player
+   ```
+
+2. **Install dependencies**
+   ```bash
+   pnpm install
+   ```
+
+3. **Set up environment**
+   ```bash
+   # Backend
+   cd packages/backend
+   cp .env.example .env
+   # Edit .env and add your API keys
+   ```
+
+4. **Run development servers**
+   ```bash
+   # Terminal 1 - Frontend (port 41521)
+   pnpm dev
+
+   # Terminal 2 - Backend (port 41522)
+   cd packages/backend
+   pnpm dev
+   ```
+
+5. **Access the app**
+   - Frontend: http://localhost:41521
+   - Backend: http://localhost:41522
 
 ---
 
 ## Development Setup
 
-### Prerequisites
+### Required API Keys
 
-- Node.js 20+
-- pnpm (`npm install -g pnpm`)
-- Git
-- Python 3.12 (for audio features)
+1. **Anthropic Claude API** (required)
+   - Get from: https://console.anthropic.com/
+   - Set `ANTHROPIC_API_KEY` in `.env`
 
-### Initial Setup
+2. **OpenAI API** (optional)
+   - Get from: https://platform.openai.com/
+   - Set `OPENAI_API_KEY` in `.env`
 
+### Database
+
+- SQLite database auto-creates on first run
+- Location: `packages/backend/.data/database.db`
+- Migrations auto-run on startup
+- **NEVER commit `.data/` folder**
+
+### Python Setup (Optional)
+
+For TTS/STT features:
 ```bash
-# 1. Fork the repository on GitHub
-# Click "Fork" button on GitHub
-
-# 2. Clone YOUR fork
-git clone https://github.com/YOUR_USERNAME/Agent-Player.git
-cd Agent-Player
-
-# 3. Add upstream remote
-git remote add upstream https://github.com/Agent-Player/Agent-Player.git
-
-# 4. Install dependencies
-pnpm install
-cd packages/backend
-pnpm install
-cd ../..
-
-# 5. Setup environment
-cd packages/backend
-cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY
+pip install edge-tts faster-whisper
 ```
 
 ---
 
-## Running in Development Mode
+## Project Structure
 
-### Terminal 1 - Backend
-```bash
-cd packages/backend
-pnpm dev
-# Runs on http://localhost:41522
 ```
-
-### Terminal 2 - Frontend
-```bash
-cd agent_player
-pnpm dev
-# Runs on http://localhost:41521
+agent-player/
+├── packages/
+│   └── backend/              # Backend server (Fastify)
+│       ├── src/
+│       │   ├── api/          # API routes
+│       │   ├── services/     # Business logic
+│       │   ├── tools/        # AI agent tools
+│       │   └── db/           # Database & migrations
+│       └── extensions/       # Extension system
+├── src/                      # Frontend (Next.js 15)
+│   ├── app/                  # App router pages
+│   ├── components/           # React components
+│   └── lib/                  # Utilities & ui-web4
+├── public/                   # Static assets
+└── scripts/                  # Development tools
 ```
-
-### Login Credentials
-- Email: `owner@localhost`
-- Password: `admin123`
 
 ---
 
-## Making Changes
+## Development Guidelines
 
-### 1. Create a New Branch
+### Code Style
 
-**ALWAYS create a new branch for your changes:**
+1. **Language**
+   - ✅ All code, comments, commits in **English**
+   - ✅ Conversations with users can be in any language
 
-```bash
-# Get latest code from upstream
-git checkout main
-git pull upstream main
+2. **UI Components**
+   - ✅ **NO emojis in UI code** - use lucide-react icons
+   - ✅ Use Sonner toast (NOT browser alerts)
+   - ❌ Don't use `alert()`, `confirm()` for notifications
 
-# Create new branch
-git checkout -b feature/your-feature-name
-# or
-git checkout -b fix/bug-description
+3. **TypeScript/JavaScript**
+   - Use TypeScript for new frontend code
+   - Use pure JavaScript (.js) for extensions
+   - NO TypeScript syntax in extensions (no `import type`, no `: Type`)
+
+4. **Database**
+   - Always use `getDatabase()` (not direct import)
+   - Use prepared statements (never string concatenation)
+   - All tables indexed on foreign keys
+
+5. **Authentication**
+   - Use `getUserId(request)` to get user from JWT
+   - NEVER hardcode `userId = '1'`
+   - All user-scoped routes must validate JWT
+
+### Commit Messages
+
+Follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+feat: add notification system for extensions
+fix: resolve avatar animation freeze
+docs: update extension development guide
+refactor: extract notification service
+test: add tests for memory deduplication
 ```
 
-**Branch naming:**
-- `feature/` - New features
-- `fix/` - Bug fixes
-- `docs/` - Documentation changes
-- `refactor/` - Code refactoring
-
-### 2. Make Your Changes
-
-- Write clean, readable code
-- Follow existing code style
-- Add comments for complex logic
-- Test your changes thoroughly
-
-### 3. Test Your Changes
+### Testing
 
 ```bash
-# Test backend
-cd packages/backend
+# Run tests
 pnpm test
 
-# Test frontend
-cd ../..
-pnpm test
+# Run linter
+pnpm lint
 
-# Manual testing
-# 1. Run both backend and frontend
-# 2. Test your feature
-# 3. Check browser console for errors
-# 4. Check backend console for errors
-```
-
-### 4. Commit Your Changes
-
-```bash
-# Check what changed
-git status
-
-# Add files
-git add .
-
-# Commit with clear message
-git commit -m "Add feature: description of what you did"
-```
-
-**Good commit messages:**
-- `Add calendar sync feature`
-- `Fix avatar loading bug`
-- `Update documentation for extensions`
-- `Refactor database queries for performance`
-
-**Bad commit messages:**
-- `fix`
-- `update`
-- `changes`
-
-### 5. Push to Your Fork
-
-```bash
-# Push to YOUR fork
-git push origin feature/your-feature-name
+# Type check
+pnpm type-check
 ```
 
 ---
 
-## Submitting a Pull Request
+## Extension Development
 
-### 1. Create Pull Request on GitHub
+**Create a new extension:**
 
-1. Go to **your fork** on GitHub
-2. Click "Compare & pull request" button
-3. **Base repository:** ORIGINAL_OWNER/agent_player
-4. **Base branch:** main
-5. **Head repository:** YOUR_USERNAME/agent_player
-6. **Compare branch:** feature/your-feature-name
+```bash
+# Interactive CLI
+node scripts/create-extension.js
 
-### 2. Fill Pull Request Template
-
-**Title:** Clear description of changes
-```
-Add calendar sync feature
+# Choose template:
+# - app-template: Full-featured app extension
+# - tool-template: Minimal AI tool extension
 ```
 
-**Description:**
+**Documentation:**
+- [Extension Creator Guide](packages/backend/extensions/EXTENSION_CREATOR_GUIDE.md)
+- [Extension Development](packages/backend/extensions/EXTENSION_DEVELOPMENT.md)
+- [Migration Guide](packages/backend/extensions/MIGRATION_GUIDE.md)
+
+**Key Rules:**
+- Pure JavaScript only (no TypeScript syntax)
+- Use JSON Render for UI (61 components available)
+- Auto-tag notifications with extension ID
+- Follow SDK API patterns
+
+---
+
+## Pull Request Process
+
+### Before Submitting
+
+1. ✅ Code follows style guidelines
+2. ✅ All tests pass
+3. ✅ No console errors
+4. ✅ Documentation updated (if needed)
+5. ✅ Commit messages follow conventions
+6. ✅ No hardcoded secrets or API keys
+
+### PR Guidelines
+
+1. **One feature per PR**
+   - Don't mix multiple features
+   - Keep changes focused
+
+2. **Write clear description**
+   ```markdown
+   ## What does this PR do?
+   Brief description of changes
+
+   ## Why?
+   Explain the motivation
+
+   ## How to test?
+   Step-by-step testing instructions
+
+   ## Screenshots (if UI changes)
+   [Add screenshots]
+   ```
+
+3. **Link related issues**
+   ```
+   Closes #123
+   Fixes #456
+   ```
+
+4. **Wait for review**
+   - Address feedback promptly
+   - Don't force-push after review starts
+   - Keep discussions respectful
+
+### Review Process
+
+1. Automated checks run (CI/CD)
+2. Maintainer reviews code
+3. Changes requested (if needed)
+4. Approved and merged
+
+---
+
+## Reporting Bugs
+
+**Before reporting:**
+1. Check existing issues
+2. Test on latest version
+3. Verify it's reproducible
+
+**Bug report template:**
+
 ```markdown
-## What does this PR do?
-- Adds Google Calendar sync functionality
-- Implements iCal import
-- Adds calendar UI in dashboard
+**Describe the bug**
+Clear description of what's wrong
 
-## How to test?
-1. Enable calendar extension
-2. Go to /dashboard/calendar
-3. Add Google Calendar source
-4. Verify events sync
+**To Reproduce**
+Steps to reproduce:
+1. Go to '...'
+2. Click on '...'
+3. See error
 
-## Screenshots
-[If applicable, add screenshots]
+**Expected behavior**
+What should happen
 
-## Checklist
-- [x] Code tested locally
-- [x] No console errors
-- [x] Documentation updated
-- [x] Follows code style guidelines
-```
+**Screenshots**
+[Add screenshots if applicable]
 
-### 3. Wait for Review
+**Environment:**
+- OS: [e.g., Windows 11, macOS 14]
+- Browser: [e.g., Chrome 120]
+- Version: [e.g., v1.3.0]
 
-We will review your pull request and may:
-- ✅ **Approve and merge** - Your changes are good!
-- 💬 **Request changes** - Small fixes needed
-- ❌ **Close** - Does not fit project goals
-
----
-
-## Review Process
-
-### What We Check
-
-1. **Code Quality**
-   - Clean, readable code
-   - Follows project style
-   - No unnecessary changes
-   - Proper error handling
-
-2. **Functionality**
-   - Feature works as described
-   - No bugs introduced
-   - Edge cases handled
-   - Performance acceptable
-
-3. **Tests**
-   - Changes tested manually
-   - No breaking changes
-   - Backend and frontend work together
-   - No console errors
-
-4. **Documentation**
-   - README updated if needed
-   - Code comments added
-   - API documented if new routes
-   - Clear commit messages
-
-### Timeline
-
-- Initial review: 1-3 days
-- Discussion/changes: As needed
-- Final merge: After approval
-
----
-
-## Code Style Guidelines
-
-### General
-
-- **Language:** English only (code, comments, docs)
-- **Formatting:** Use Prettier
-- **Linting:** Use ESLint
-- **Line length:** 100 characters max
-
-### Backend (TypeScript)
-
-```typescript
-// Use async/await
-async function fetchData() {
-  const data = await getData();
-  return data;
-}
-
-// Use interfaces for types
-interface User {
-  id: string;
-  name: string;
-  email: string;
-}
-
-// Use parameterized queries
-db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-
-// Handle errors properly
-try {
-  await someOperation();
-} catch (error) {
-  console.error('Error:', error);
-  return reply.status(500).send({ error: 'Internal error' });
-}
-```
-
-### Frontend (React/TypeScript)
-
-```typescript
-// Use function components
-export default function MyComponent() {
-  const [data, setData] = useState<Data[]>([]);
-
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  return <div>...</div>;
-}
-
-// Use hooks
-const { user } = useAuth();
-const navigate = useNavigate();
-
-// Handle loading states
-if (isLoading) return <Spinner />;
-if (error) return <ErrorMessage />;
-```
-
-### Extensions (JavaScript)
-
-```javascript
-// Pure JavaScript only (no TypeScript)
-export default {
-  id: 'my-extension',
-
-  async register(api) {
-    // Use async/await
-    await api.runMigrations([...]);
-
-    // Register routes
-    api.registerRoutes(async (fastify) => {
-      fastify.get('/route', handler);
-    });
-  }
-};
+**Additional context**
+Any other relevant information
 ```
 
 ---
 
-## Database Changes
+## Suggesting Features
 
-### Creating Migrations
+**Feature request template:**
 
-```sql
--- Migration: XXX_description.sql
--- Create table
-CREATE TABLE IF NOT EXISTS my_table (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+```markdown
+**Is your feature related to a problem?**
+Describe the problem
 
--- Create index
-CREATE INDEX IF NOT EXISTS idx_my_table_name
-ON my_table(name);
-```
+**Describe the solution**
+Clear description of what you want
 
-**Important:**
-- Always use `IF NOT EXISTS`
-- Number migrations sequentially (001, 002, 003...)
-- Test migration before submitting PR
+**Describe alternatives**
+Other solutions you've considered
 
----
-
-## Common Issues
-
-### Backend won't start
-```bash
-# Check .env file exists
-ls packages/backend/.env
-
-# Verify API key set
-cat packages/backend/.env | grep ANTHROPIC_API_KEY
-
-# Check port not in use
-netstat -an | grep 41522
-```
-
-### Frontend won't start
-```bash
-# Clear build cache
-rm -rf .next
-
-# Reinstall dependencies
-rm -rf node_modules
-pnpm install
-```
-
-### Database errors
-```bash
-# Delete and recreate database
-cd packages/backend/.data
-rm database.db
-# Restart backend (migrations auto-run)
+**Additional context**
+Mockups, examples, or references
 ```
 
 ---
 
 ## Getting Help
 
-### Stuck? Ask for help!
-
-1. **GitHub Issues:** Open an issue describing your problem
-2. **Pull Request Comments:** Ask questions in your PR
-3. **Documentation:** Check `docs/` folder
-
-### Before asking:
-
-1. Read error messages carefully
-2. Check console logs (browser + backend)
-3. Search existing issues
-4. Review documentation
-
----
-
-## What We're Looking For
-
-### Good Contributions ✅
-
-- Bug fixes with tests
-- New features with documentation
-- Performance improvements
-- Documentation improvements
-- Code refactoring (with tests)
-- Security fixes
-
-### Not Accepting ❌
-
-- Breaking changes without discussion
-- Features that don't fit project scope
-- Code without tests
-- Incomplete features
-- Style-only changes without value
-- Arabic or non-English text in code
-
----
-
-## Code of Conduct
-
-### Be Respectful
-
-- Be kind and courteous
-- Respect different opinions
-- Accept constructive criticism
-- Focus on what's best for the project
-
-### Don't
-
-- Use offensive language
-- Make personal attacks
-- Harass other contributors
-- Share others' private information
+- **Documentation**: Check `/docs` folder
+- **Extension Guide**: `packages/backend/extensions/EXTENSION_CREATOR_GUIDE.md`
+- **Issues**: Search existing issues first
+- **Discussions**: Ask questions in GitHub Discussions
 
 ---
 
@@ -431,14 +325,6 @@ rm database.db
 Contributors will be:
 - Listed in CONTRIBUTORS.md
 - Credited in release notes
-- Thanked in pull request comments
+- Mentioned in project README
 
----
-
-## Questions?
-
-Open an issue with your question, and we'll help you out!
-
----
-
-**Thank you for contributing to Agent Player!** 🚀
+Thank you for contributing! 🎉
