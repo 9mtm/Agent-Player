@@ -15,6 +15,7 @@ export interface AppNotification {
   isRead: boolean;
   actionUrl: string | null;
   meta: Record<string, unknown> | null;
+  source: string; // extensionId or 'system'
   createdAt: string;
 }
 

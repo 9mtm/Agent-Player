@@ -28,6 +28,7 @@ function rowToNotif(r: any) {
     isRead: !!r.is_read,
     actionUrl: r.action_url,
     meta: r.meta ? JSON.parse(r.meta) : null,
+    source: r.source || 'system',
     createdAt: r.created_at,
   };
 }
@@ -54,17 +55,18 @@ function rowToSchedule(r: any) {
 export async function notificationsRoutes(fastify: FastifyInstance) {
   // ── Notifications CRUD ──────────────────────────────────────────────────────
 
-  // GET /api/notifications — list (paginated), with optional ?unread=1
+  // GET /api/notifications — list (paginated), with optional ?unread=1&source=extensionId
   fastify.get('/api/notifications', async (request: any, reply) => {
     const userId = getUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
     const db = getDatabase();
-    const { unread, limit = '50', offset = '0' } = request.query as any;
+    const { unread, limit = '50', offset = '0', source } = request.query as any;
 
     let sql = 'SELECT * FROM notifications WHERE user_id = ?';
     const params: any[] = [userId];
     if (unread === '1') { sql += ' AND is_read = 0'; }
+    if (source) { sql += ' AND source = ?'; params.push(source); }
     sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
     params.push(parseInt(limit), parseInt(offset));
 
@@ -85,10 +87,10 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     const userId = getUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const { title, body, type, channel, actionUrl, meta } = request.body;
+    const { title, body, type, channel, actionUrl, meta, source } = request.body;
     if (!title) return reply.status(400).send({ error: 'title is required' });
 
-    const notif = notify({ userId, title, body, type, channel, actionUrl, meta });
+    const notif = notify({ userId, title, body, type, channel, actionUrl, meta, source });
     return reply.status(201).send({ success: true, notification: notif });
   });
 

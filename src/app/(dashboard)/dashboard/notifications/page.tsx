@@ -292,7 +292,14 @@ export default function NotificationsPage() {
                 >
                   <div className="mt-0.5 shrink-0">{typeIcon(n.type)}</div>
                   <div className="flex-1 min-w-0">
-                    <p className={`text-sm ${n.isRead ? '' : 'font-medium'} truncate`}>{n.title}</p>
+                    <div className="flex items-center gap-2">
+                      <p className={`text-sm ${n.isRead ? '' : 'font-medium'} truncate`}>{n.title}</p>
+                      {n.source && n.source !== 'system' && (
+                        <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded-full font-medium shrink-0">
+                          {n.source}
+                        </span>
+                      )}
+                    </div>
                     {n.body && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{n.body}</p>}
                     <p className="text-xs text-muted-foreground mt-1">{timeAgo(n.createdAt)}</p>
                   </div>

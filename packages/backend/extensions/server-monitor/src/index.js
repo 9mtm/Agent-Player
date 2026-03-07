@@ -851,6 +851,125 @@ export default {
       api.log('info', '[ServerMonitor] AI Tools registered');
     }
 
+    // ── Server Health Monitoring Cron Job ──────────────────────────────
+    // Runs every 10 minutes to check server health and send notifications
+    api.registerCronJob('*/10 * * * *', async () => {
+      api.log('info', '[ServerMonitor] Running health checks...');
+
+      try {
+        // Mock data - In production, fetch from real servers
+        const servers = [
+          {
+            id: '1',
+            name: 'Production Server',
+            online: Math.random() > 0.05, // 95% uptime
+            diskUsage: Math.floor(Math.random() * 30) + 70, // 70-100%
+            sslWarnings: Math.random() > 0.9 ? Math.floor(Math.random() * 3) + 1 : 0,
+            load: Math.random() * 5,
+            stoppedServices: Math.random() > 0.95 ? ['mysqld'] : [],
+          },
+          {
+            id: '2',
+            name: 'Development Server',
+            online: Math.random() > 0.02,
+            diskUsage: Math.floor(Math.random() * 40) + 40,
+            sslWarnings: 0,
+            load: Math.random() * 3,
+            stoppedServices: [],
+          },
+          {
+            id: '3',
+            name: 'Backup Server',
+            online: Math.random() > 0.03,
+            diskUsage: Math.floor(Math.random() * 20) + 75,
+            sslWarnings: Math.random() > 0.8 ? 1 : 0,
+            load: Math.random() * 4,
+            stoppedServices: Math.random() > 0.9 ? ['httpd'] : [],
+          },
+        ];
+
+        for (const server of servers) {
+          try {
+            // Check 1: Server Offline
+            if (!server.online) {
+              await api.notifications.create({
+                userId: '1',
+                title: `Server Offline: ${server.name}`,
+                body: `${server.name} is not responding. Please check the server immediately.`,
+                type: 'error',
+                actionUrl: `/dashboard/ext/server-monitor`,
+                meta: { serverId: server.id, type: 'offline' },
+              });
+            }
+
+            // Check 2: Disk Usage Critical
+            if (server.diskUsage > 90) {
+              await api.notifications.create({
+                userId: '1',
+                title: `Disk Space Critical: ${server.name}`,
+                body: `Disk usage at ${server.diskUsage}% on ${server.name}. Clean up immediately.`,
+                type: 'error',
+                actionUrl: `/dashboard/ext/server-monitor`,
+                meta: { serverId: server.id, type: 'disk', usage: server.diskUsage },
+              });
+            } else if (server.diskUsage > 80) {
+              await api.notifications.create({
+                userId: '1',
+                title: `Disk Space Warning: ${server.name}`,
+                body: `Disk usage at ${server.diskUsage}% on ${server.name}. Consider cleanup.`,
+                type: 'warning',
+                actionUrl: `/dashboard/ext/server-monitor`,
+                meta: { serverId: server.id, type: 'disk', usage: server.diskUsage },
+              });
+            }
+
+            // Check 3: SSL Certificates Expiring
+            if (server.sslWarnings > 0) {
+              await api.notifications.create({
+                userId: '1',
+                title: `SSL Certificates Expiring: ${server.name}`,
+                body: `${server.sslWarnings} SSL certificate(s) expiring soon on ${server.name}. Renew now.`,
+                type: 'warning',
+                actionUrl: `/dashboard/ext/server-monitor`,
+                meta: { serverId: server.id, type: 'ssl', count: server.sslWarnings },
+              });
+            }
+
+            // Check 4: High Load
+            if (server.load > 4.0) {
+              await api.notifications.create({
+                userId: '1',
+                title: `High Server Load: ${server.name}`,
+                body: `Server load at ${server.load.toFixed(2)} on ${server.name}. Check processes.`,
+                type: 'warning',
+                actionUrl: `/dashboard/ext/server-monitor`,
+                meta: { serverId: server.id, type: 'load', value: server.load },
+              });
+            }
+
+            // Check 5: Services Stopped
+            if (server.stoppedServices.length > 0) {
+              await api.notifications.create({
+                userId: '1',
+                title: `Service Stopped: ${server.name}`,
+                body: `Service ${server.stoppedServices.join(', ')} stopped on ${server.name}. Restart required.`,
+                type: 'error',
+                actionUrl: `/dashboard/ext/server-monitor`,
+                meta: { serverId: server.id, type: 'service', services: server.stoppedServices },
+              });
+            }
+          } catch (err) {
+            api.log('error', `[ServerMonitor] Error checking ${server.name}:`, err.message);
+          }
+        }
+
+        api.log('info', `[ServerMonitor] Health checks completed for ${servers.length} servers`);
+      } catch (err) {
+        api.log('error', '[ServerMonitor] Health check failed:', err.message);
+      }
+    }, 'server-health-check');
+
+    api.log('info', '[ServerMonitor] Health monitoring cron job registered (runs every 10 min)');
     api.log('info', '[ServerMonitor] Extension initialized successfully');
   },
 

@@ -42,6 +42,7 @@ export interface CreateNotificationInput {
   channel?: NotificationChannel;
   actionUrl?: string;
   meta?: Record<string, unknown>;
+  source?: string; // extensionId or 'system'
 }
 
 export interface Notification {
@@ -54,6 +55,7 @@ export interface Notification {
   isRead: boolean;
   actionUrl: string | null;
   meta: string | null;
+  source: string;
   createdAt: string;
 }
 
@@ -198,12 +200,13 @@ export function notify(input: CreateNotificationInput): Notification {
     channel = 'in_app',
     actionUrl,
     meta,
+    source = 'system',
   } = input;
 
   // Insert into DB
   db.prepare(`
-    INSERT INTO notifications (user_id, title, body, type, channel, action_url, meta)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO notifications (user_id, title, body, type, channel, action_url, meta, source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     userId,
     title,
@@ -211,7 +214,8 @@ export function notify(input: CreateNotificationInput): Notification {
     type,
     channel,
     actionUrl ?? null,
-    meta ? JSON.stringify(meta) : null
+    meta ? JSON.stringify(meta) : null,
+    source
   );
 
   const created = db.prepare(
@@ -248,6 +252,7 @@ export function notify(input: CreateNotificationInput): Notification {
     isRead: !!created.is_read,
     actionUrl: created.action_url,
     meta: created.meta,
+    source: created.source || 'system',
     createdAt: created.created_at,
   };
 }

@@ -85,6 +85,33 @@ export interface ExtensionApi {
     getUrl(fileId: string): string;
   };
 
+  // Notifications API — send notifications to users through Core system
+  notifications: {
+    /**
+     * Create a notification for a user
+     * Automatically tags notification with extensionId as source
+     */
+    create(notification: {
+      userId: string;
+      title: string;
+      body?: string;
+      type?: 'info' | 'success' | 'warning' | 'error' | 'agent' | 'system' | 'reminder';
+      channel?: 'in_app' | 'email' | 'push' | 'whatsapp' | 'sound';
+      actionUrl?: string;
+      meta?: Record<string, unknown>;
+    }): Promise<{ id: string; createdAt: string }>;
+
+    /**
+     * Get notification statistics for this extension
+     * Returns count of sent/read/unread notifications
+     */
+    getStats(): Promise<{
+      total: number;
+      unread: number;
+      byType: Record<string, number>;
+    }>;
+  };
+
   // Extension metadata
   extensionId: string;
 }
@@ -446,6 +473,69 @@ export function createExtensionApi(
         const { getStorageManager } = require('../services/storage-manager.js');
         const storageManager = getStorageManager();
         return storageManager.getPublicUrl(fileId);
+      },
+    },
+
+    // Notifications API — unified notification system
+    notifications: {
+      /**
+       * Create a notification for a user
+       * Automatically tags with extensionId as source
+       */
+      async create(notification: {
+        userId: string;
+        title: string;
+        body?: string;
+        type?: 'info' | 'success' | 'warning' | 'error' | 'agent' | 'system' | 'reminder';
+        channel?: 'in_app' | 'email' | 'push' | 'whatsapp' | 'sound';
+        actionUrl?: string;
+        meta?: Record<string, unknown>;
+      }): Promise<{ id: string; createdAt: string }> {
+        const { notify } = await import('../services/notification-service.js');
+
+        // Auto-tag with extensionId as source
+        const result = notify({
+          ...notification,
+          source: extensionId,
+        });
+
+        console.log(`[ExtensionApi:${extensionId}] 📬 Notification created: "${notification.title}"`);
+
+        return {
+          id: result.id,
+          createdAt: result.createdAt,
+        };
+      },
+
+      /**
+       * Get notification statistics for this extension
+       */
+      async getStats(): Promise<{
+        total: number;
+        unread: number;
+        byType: Record<string, number>;
+      }> {
+        const stats = db.prepare(`
+          SELECT
+            type,
+            COUNT(*) as count,
+            SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) as unread_count
+          FROM notifications
+          WHERE source = ?
+          GROUP BY type
+        `).all(extensionId) as any[];
+
+        const byType: Record<string, number> = {};
+        let total = 0;
+        let unread = 0;
+
+        stats.forEach(row => {
+          byType[row.type] = row.count;
+          total += row.count;
+          unread += row.unread_count || 0;
+        });
+
+        return { total, unread, byType };
       },
     },
 
