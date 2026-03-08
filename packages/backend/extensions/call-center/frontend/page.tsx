@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import CallCenterSettings from './settings';
 import ProviderCredentials from './provider-credentials';
+import CallDetailsPage from './call-details';
 
 const BACKEND_URL = typeof window !== 'undefined' && window.location.hostname === 'localhost'
   ? 'http://localhost:41522'
@@ -59,6 +60,13 @@ interface Stats {
 export default function CallCenterDashboard() {
   const searchParams = useSearchParams();
   const router = useRouter();
+
+  // Check if we should show call details page
+  const callId = searchParams.get('callId');
+  if (callId) {
+    return <CallDetailsPage callId={callId} />;
+  }
+
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'overview');
   const [callPoints, setCallPoints] = useState<CallPoint[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -417,7 +425,7 @@ function OverviewTab({ callPoints, campaigns }: { callPoints: CallPoint[]; campa
             {recentCalls.map((call) => (
               <a
                 key={call.id}
-                href={`?tab=settings#recording-${call.id}`}
+                href={`?callId=${call.id}`}
                 className="block p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition border border-transparent hover:border-blue-200"
               >
                 <div className="flex items-center justify-between">
@@ -748,6 +756,20 @@ function RecordingsTab() {
     loadRecordings();
   }, []);
 
+  // Removed hash-based deep linking - now using dedicated page
+
+  // Function to open recording with URL update
+  function openRecording(recording: any) {
+    // Navigate to dedicated call details page
+    window.location.href = `/dashboard/ext/call-center?callId=${recording.id}`;
+  }
+
+  // Function to close recording
+  function closeRecording() {
+    window.history.pushState('', document.title, window.location.pathname + window.location.search);
+    setSelectedRecording(null);
+  }
+
   async function loadRecordings() {
     try {
       setLoading(true);
@@ -821,7 +843,8 @@ function RecordingsTab() {
           {recordings.map((rec) => (
             <div
               key={rec.id}
-              className="bg-white border rounded-xl p-5 hover:shadow-md transition"
+              onClick={() => openRecording(rec)}
+              className="bg-white border rounded-xl p-5 hover:shadow-lg hover:border-blue-300 transition cursor-pointer"
             >
               <div className="flex items-start justify-between mb-4">
                 <div className="flex-1">
@@ -876,7 +899,7 @@ function RecordingsTab() {
               )}
 
               {/* Actions */}
-              <div className="flex items-center gap-3 pt-4 border-t">
+              <div className="flex items-center gap-3 pt-4 border-t" onClick={(e) => e.stopPropagation()}>
                 {rec.recording_url && (
                   <a
                     href={rec.recording_url}
@@ -889,7 +912,7 @@ function RecordingsTab() {
                   </a>
                 )}
                 <button
-                  onClick={() => setSelectedRecording(rec)}
+                  onClick={() => openRecording(rec)}
                   className="px-4 py-2 border rounded-lg hover:bg-gray-50 transition flex items-center gap-2"
                 >
                   <Eye className="w-4 h-4" />
@@ -905,7 +928,7 @@ function RecordingsTab() {
       {selectedRecording && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={() => setSelectedRecording(null)}
+          onClick={() => closeRecording()}
         >
           <div
             className="bg-white rounded-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto p-6"
@@ -914,7 +937,7 @@ function RecordingsTab() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xl font-bold text-gray-900">Call Details</h3>
               <button
-                onClick={() => setSelectedRecording(null)}
+                onClick={() => closeRecording()}
                 className="p-2 hover:bg-gray-100 rounded-lg transition"
               >
                 <XCircle className="w-5 h-5 text-gray-600" />
