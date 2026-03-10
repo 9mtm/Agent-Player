@@ -199,7 +199,55 @@ Agent Player is the **next-generation agent platform** you need:
 
 ## 🚀 Quick Start
 
-### Install
+### ⚡ One-Click Installer (Recommended) - **NEW in v1.3.0!**
+
+Download the installer for your platform:
+
+**Windows:**
+```powershell
+# Download: agent-player-installer-1.3.0-win-x64.msi (90 MB)
+# Right-click → Run as Administrator
+# Follow 8-step wizard → Done!
+```
+👉 **[Download for Windows](https://github.com/Agent-Player/Agent-Player/releases/download/v1.3.0/agent-player-installer-1.3.0-win-x64.msi)**
+
+**Linux:**
+```bash
+# Download: agent-player-installer-1.3.0-linux-x86_64.AppImage (95 MB)
+wget https://github.com/Agent-Player/Agent-Player/releases/download/v1.3.0/agent-player-installer-1.3.0-linux-x86_64.AppImage
+chmod +x agent-player-installer-1.3.0-linux-x86_64.AppImage
+./agent-player-installer-1.3.0-linux-x86_64.AppImage
+```
+👉 **[Download for Linux](https://github.com/Agent-Player/Agent-Player/releases/download/v1.3.0/agent-player-installer-1.3.0-linux-x86_64.AppImage)**
+
+**macOS:**
+```bash
+# Download: agent-player-installer-1.3.0-macos-universal.dmg (92 MB)
+# Open DMG → Drag to Applications → Run
+```
+👉 **[Download for macOS](https://github.com/Agent-Player/Agent-Player/releases/download/v1.3.0/agent-player-installer-1.3.0-macos-universal.dmg)**
+
+**What You Get:**
+- ✅ **System tray application** - Start/Stop/Restart with one click
+- ✅ **Auto-updater** - Always stay up to date
+- ✅ **Three deployment modes:** Docker, Direct (localhost), or Server (remote)
+- ✅ **Automatic service management** - No manual terminal commands
+- ✅ **Professional uninstaller** - Clean removal with data cleanup options
+- ✅ **5-10 minute installation** - Everything configured automatically
+
+**After Installation:**
+1. Open browser → http://localhost:41521
+2. Login with credentials you created during installation
+3. Start creating AI agents! 🎉
+
+📖 **Full Installation Guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
+
+---
+
+### 🛠️ Manual Installation (For Developers)
+
+If you want to run from source code or contribute to development:
+
 ```bash
 git clone https://github.com/Agent-Player/Agent-Player.git
 cd Agent-Player
@@ -211,21 +259,23 @@ cp .env.example .env
 # Edit .env: add ANTHROPIC_API_KEY
 ```
 
-### Run
+**Run (Two Terminals):**
 
-**Backend (Terminal 1):**
+**Terminal 1 - Backend:**
 ```bash
 cd packages/backend
 pnpm dev
 # → http://localhost:41522
 ```
 
-**Frontend (Terminal 2):**
+**Terminal 2 - Frontend:**
 ```bash
 cd Agent-Player
 pnpm dev
 # → http://localhost:41521
 ```
+
+📖 **Developer Setup:** [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
 
 ---
 

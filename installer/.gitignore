@@ -1,0 +1,36 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock file (for binary projects, we usually commit it, but for installer we can exclude)
+# Cargo.lock
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Tauri build outputs
+/dist/
+/build/
+
+# UI build artifacts
+ui/node_modules/
+ui/dist/
+ui/.next/
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Debug files
+*.pdb
+*.dSYM/

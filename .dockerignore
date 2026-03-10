@@ -1,0 +1,49 @@
+# Node modules
+node_modules
+**/node_modules
+
+# Build artifacts
+.next
+dist
+*.log
+
+# Data directories (will be mounted as volumes)
+.data
+public/storage
+
+# Development files
+.env.local
+.env.development
+*.local
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+
+# Installer
+installer
+
+# Tests
+**/__tests__
+**/*.test.ts
+**/*.test.js
+**/*.spec.ts
+**/*.spec.js
+
+# Documentation
+docs
+*.md
+!README.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.swp

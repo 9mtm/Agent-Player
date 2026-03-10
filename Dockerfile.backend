@@ -1,0 +1,99 @@
+# Multi-stage build for Fastify backend with Python
+# Stage 1: Dependencies
+FROM node:20-alpine AS deps
+WORKDIR /app
+
+# Install build dependencies for native modules
+RUN apk add --no-cache python3 make g++ gcc
+
+# Install pnpm
+RUN npm install -g pnpm@9.15.4
+
+# Copy package files
+COPY package.json pnpm-lock.yaml* ./
+COPY packages/backend/package.json ./packages/backend/
+
+# Install dependencies (including better-sqlite3)
+RUN pnpm install --frozen-lockfile
+
+# Stage 2: Python Environment
+FROM python:3.12-alpine AS python-builder
+WORKDIR /app
+
+# Install Python dependencies
+COPY packages/backend/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Stage 3: Builder
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+# Install build dependencies
+RUN apk add --no-cache python3 make g++ gcc
+
+# Install pnpm
+RUN npm install -g pnpm@9.15.4
+
+# Copy dependencies from deps stage
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/packages/backend/node_modules ./packages/backend/node_modules
+
+# Copy source code
+COPY packages/backend ./packages/backend
+
+# Build TypeScript
+RUN cd packages/backend && pnpm build
+
+# Stage 4: Runner
+FROM python:3.12-alpine AS runner
+WORKDIR /app
+
+# Install Node.js
+RUN apk add --no-cache nodejs npm
+
+# Install pnpm
+RUN npm install -g pnpm@9.15.4
+
+# Create non-root user
+RUN addgroup --system --gid 1001 backend
+RUN adduser --system --uid 1001 backend
+
+# Copy Python dependencies from python-builder
+COPY --from=python-builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=python-builder /usr/local/bin /usr/local/bin
+
+# Copy Node.js dependencies and built files
+COPY --from=builder /app/packages/backend/node_modules ./packages/backend/node_modules
+COPY --from=builder /app/packages/backend/dist ./packages/backend/dist
+COPY --from=builder /app/packages/backend/package.json ./packages/backend/
+
+# Copy database migrations
+COPY packages/backend/src/db/migrations ./packages/backend/src/db/migrations
+
+# Copy Python scripts
+COPY python-scripts ./python-scripts
+
+# Create necessary directories with correct permissions
+RUN mkdir -p /app/.data/storage /app/.data/memory /app/.data/agents /app/.data/backups /app/public/storage
+RUN chown -R backend:backend /app/.data /app/public/storage
+
+# Set correct permissions
+RUN chown -R backend:backend /app
+
+# Switch to non-root user
+USER backend
+
+# Expose port
+EXPOSE 41522
+
+# Set environment variables
+ENV NODE_ENV=production
+ENV PORT=41522
+ENV PYTHON_PATH=/usr/local/bin/python3
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:41522/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
+
+# Start Fastify server
+CMD ["node", "packages/backend/dist/api/server.js"]
