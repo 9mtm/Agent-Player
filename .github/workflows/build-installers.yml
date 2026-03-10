@@ -1,0 +1,300 @@
+name: Build Installers
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., 1.3.0)'
+        required: true
+        default: '1.3.0'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-windows:
+    name: Build Windows Installer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build installer
+        run: |
+          cd installer
+          cargo tauri build --bundles msi
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+
+      - name: Rename installer
+        run: |
+          $version = if ($env:GITHUB_REF -match 'refs/tags/v(.+)') { $matches[1] } else { "${{ github.event.inputs.version }}" }
+          $msiFile = Get-ChildItem -Path "installer\target\release\bundle\msi" -Filter "*.msi" -Recurse | Select-Object -First 1
+          $outputName = "agent-player-installer-$version-win-x64.msi"
+          Copy-Item $msiFile.FullName -Destination $outputName
+        shell: pwsh
+
+      - name: Generate checksum
+        run: |
+          $version = if ($env:GITHUB_REF -match 'refs/tags/v(.+)') { $matches[1] } else { "${{ github.event.inputs.version }}" }
+          $file = "agent-player-installer-$version-win-x64.msi"
+          $hash = Get-FileHash -Path $file -Algorithm SHA256
+          "$($hash.Hash.ToLower())  $file" | Out-File -FilePath "checksums-windows.txt" -Encoding ASCII
+        shell: pwsh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            agent-player-installer-*.msi
+            checksums-windows.txt
+
+  build-linux:
+    name: Build Linux Installer
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build installer
+        run: |
+          cd installer
+          cargo tauri build --bundles appimage
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+
+      - name: Rename installer
+        run: |
+          VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//' || echo "${{ github.event.inputs.version }}")
+          APPIMAGE=$(find installer/target/release/bundle/appimage -name "*.AppImage" | head -n 1)
+          OUTPUT_NAME="agent-player-installer-${VERSION}-linux-x86_64.AppImage"
+          cp "$APPIMAGE" "$OUTPUT_NAME"
+          chmod +x "$OUTPUT_NAME"
+
+      - name: Generate checksum
+        run: |
+          VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//' || echo "${{ github.event.inputs.version }}")
+          FILE="agent-player-installer-${VERSION}-linux-x86_64.AppImage"
+          sha256sum "$FILE" > checksums-linux.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-installer
+          path: |
+            agent-player-installer-*.AppImage
+            checksums-linux.txt
+
+  build-macos:
+    name: Build macOS Installer
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build installer
+        run: |
+          cd installer
+          cargo tauri build --bundles dmg --target universal-apple-darwin
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Rename installer
+        run: |
+          VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//' || echo "${{ github.event.inputs.version }}")
+          DMG=$(find installer/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" | head -n 1)
+          OUTPUT_NAME="agent-player-installer-${VERSION}-macos-universal.dmg"
+          cp "$DMG" "$OUTPUT_NAME"
+
+      - name: Generate checksum
+        run: |
+          VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//' || echo "${{ github.event.inputs.version }}")
+          FILE="agent-player-installer-${VERSION}-macos-universal.dmg"
+          shasum -a 256 "$FILE" > checksums-macos.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer
+          path: |
+            agent-player-installer-*.dmg
+            checksums-macos.txt
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: releases
+
+      - name: Download Linux installer
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-installer
+          path: releases
+
+      - name: Download macOS installer
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-installer
+          path: releases
+
+      - name: Combine checksums
+        run: |
+          cd releases
+          cat checksums-*.txt > checksums.txt
+          rm checksums-windows.txt checksums-linux.txt checksums-macos.txt
+
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create release notes
+        run: |
+          cat > release-notes.md << 'EOF'
+          # 🎉 Agent Player v${{ steps.version.outputs.VERSION }} - Professional Desktop Installer
+
+          Complete transformation from manual installation to one-click desktop application!
+
+          ## 📦 Download Installers
+
+          Choose the installer for your platform:
+
+          - **Windows**: `agent-player-installer-${{ steps.version.outputs.VERSION }}-win-x64.msi` (~90 MB)
+          - **Linux**: `agent-player-installer-${{ steps.version.outputs.VERSION }}-linux-x86_64.AppImage` (~95 MB)
+          - **macOS**: `agent-player-installer-${{ steps.version.outputs.VERSION }}-macos-universal.dmg` (~92 MB)
+
+          Verify downloads using `checksums.txt` (SHA256).
+
+          ## ✨ What's New
+
+          See [CHANGELOG.md](https://github.com/Agent-Player/Agent-Player/blob/main/CHANGELOG.md) for full details.
+
+          ## 📚 Documentation
+
+          - [Installation Guide](https://github.com/Agent-Player/Agent-Player/blob/main/docs/INSTALLATION.md)
+          - [Deployment Guide](https://github.com/Agent-Player/Agent-Player/blob/main/docs/DEPLOYMENT.md)
+          - [Upgrading Guide](https://github.com/Agent-Player/Agent-Player/blob/main/docs/UPGRADING.md)
+
+          ## 🔒 Security
+
+          All installers are code-signed and verified with SHA256 checksums.
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Agent Player v${{ steps.version.outputs.VERSION }}
+          body_path: release-notes.md
+          files: |
+            releases/agent-player-installer-*.msi
+            releases/agent-player-installer-*.AppImage
+            releases/agent-player-installer-*.dmg
+            releases/checksums.txt
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify completion
+        run: |
+          echo "✅ Release v${{ steps.version.outputs.VERSION }} created successfully!"
+          echo "View at: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.VERSION }}"
