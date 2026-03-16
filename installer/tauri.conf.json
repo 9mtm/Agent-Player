@@ -9,7 +9,7 @@
     "frontendDist": "../ui/dist"
   },
   "bundle": {
-    "active": false,
+    "active": true,
     "targets": ["msi", "appimage", "dmg"],
     "windows": {
       "certificateThumbprint": null,
