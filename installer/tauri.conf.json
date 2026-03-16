@@ -10,7 +10,7 @@
   },
   "bundle": {
     "active": true,
-    "icon": ["icons/icon.ico"],
+    "icon": ["icons/icon.png", "icons/icon.ico"],
     "targets": ["msi", "appimage", "dmg"],
     "windows": {
       "certificateThumbprint": null,

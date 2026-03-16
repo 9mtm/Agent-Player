@@ -18,5 +18,8 @@ anyhow = "1.0"
 thiserror = "2.0"
 chrono = "0.4"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
