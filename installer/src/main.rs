@@ -364,8 +364,10 @@ fn open_dashboard() -> Result<(), String> {
 /// Tauri command: Get service status for tray
 #[tauri::command]
 fn get_service_status() -> Result<String, String> {
-    SystemTrayService::get_service_status()
-        .map_err(|e| format!("Failed to get status: {}", e))
+    let status = SystemTrayService::get_service_status()
+        .map_err(|e| format!("Failed to get status: {}", e))?;
+    serde_json::to_string(&status)
+        .map_err(|e| format!("Failed to serialize status: {}", e))
 }
 
 /// Tauri command: Start services from tray

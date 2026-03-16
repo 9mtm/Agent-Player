@@ -7,7 +7,7 @@ description = "Professional installer for Agent Player"
 license = "MIT"
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.42", features = ["full"] }
@@ -16,6 +16,7 @@ ssh2 = "0.9"
 sysinfo = "0.33"
 anyhow = "1.0"
 thiserror = "2.0"
+chrono = "0.4"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

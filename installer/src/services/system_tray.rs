@@ -105,7 +105,7 @@ impl SystemTrayService {
     }
 
     /// Open dashboard in default browser
-    fn open_dashboard() -> Result<()> {
+    pub fn open_dashboard() -> Result<()> {
         let url = "http://localhost:41521";
 
         #[cfg(target_os = "windows")]
@@ -133,7 +133,7 @@ impl SystemTrayService {
     }
 
     /// Start services based on deployment mode
-    fn start_services() -> Result<()> {
+    pub fn start_services() -> Result<()> {
         // Detect deployment mode and start accordingly
         #[cfg(target_os = "linux")]
         {
@@ -170,7 +170,7 @@ impl SystemTrayService {
     }
 
     /// Stop services
-    fn stop_services() -> Result<()> {
+    pub fn stop_services() -> Result<()> {
         #[cfg(target_os = "linux")]
         {
             std::process::Command::new("systemctl")
@@ -206,7 +206,7 @@ impl SystemTrayService {
     }
 
     /// Restart services
-    fn restart_services() -> Result<()> {
+    pub fn restart_services() -> Result<()> {
         Self::stop_services()?;
         std::thread::sleep(std::time::Duration::from_secs(2));
         Self::start_services()?;

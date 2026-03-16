@@ -6,10 +6,11 @@
     "beforeDevCommand": "",
     "beforeBuildCommand": "",
     "devUrl": "http://localhost:3000",
-    "frontendDist": "../ui/dist"
+    "frontendDist": "ui/dist"
   },
   "bundle": {
     "active": true,
+    "icon": ["icons/icon.ico"],
     "targets": ["msi", "appimage", "dmg"],
     "windows": {
       "certificateThumbprint": null,

@@ -74,7 +74,7 @@ impl UpdaterService {
                 Ok(Some(UpdateInfo {
                     version: latest_version.to_string(),
                     release_notes: release.body,
-                    download_url: asset.browser_download_url,
+                    download_url: asset.browser_download_url.clone(),
                     published_at: release.published_at,
                     size: asset.size,
                 }))
