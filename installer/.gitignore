@@ -23,7 +23,7 @@ Thumbs.db
 
 # UI build artifacts
 ui/node_modules/
-ui/dist/
+# ui/dist/ - KEEP THIS: Static HTML file needed for Tauri build
 ui/.next/
 
 # Temporary files

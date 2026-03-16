@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Player Setup</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-center;
+            min-height: 100vh;
+            color: #333;
+        }
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 48px;
+            max-width: 600px;
+            width: 90%;
+            text-align: center;
+        }
+        h1 {
+            color: #667eea;
+            font-size: 32px;
+            margin-bottom: 16px;
+        }
+        .version {
+            color: #999;
+            font-size: 14px;
+            margin-bottom: 32px;
+        }
+        .step-indicator {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 32px;
+        }
+        .step {
+            width: 40px;
+            height: 4px;
+            background: #e0e0e0;
+            border-radius: 2px;
+        }
+        .step.active {
+            background: #667eea;
+        }
+        .content {
+            margin-bottom: 32px;
+        }
+        .content h2 {
+            font-size: 24px;
+            margin-bottom: 16px;
+            color: #333;
+        }
+        .content p {
+            font-size: 16px;
+            line-height: 1.6;
+            color: #666;
+        }
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 14px 32px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        .btn:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(102, 126, 234, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Agent Player</h1>
+        <div class="version">Version 1.3.0</div>
+
+        <div class="step-indicator">
+            <div class="step active"></div>
+            <div class="step"></div>
+            <div class="step"></div>
+            <div class="step"></div>
+            <div class="step"></div>
+            <div class="step"></div>
+            <div class="step"></div>
+            <div class="step"></div>
+        </div>
+
+        <!-- Step 1: Welcome -->
+        <div class="content" data-step="1">
+            <h2>Welcome to Agent Player</h2>
+            <p>
+                Transform your AI agents into a professional desktop application.
+                This installer will guide you through the setup process in 8 easy steps.
+            </p>
+            <button class="btn" id="checkBtn" onclick="runSystemCheck()" style="margin-top: 24px;">
+                Get Started →
+            </button>
+            <div id="results" style="display: none; margin-top: 24px; text-align: left;">
+                <h3 style="margin-bottom: 16px;">System Check Results</h3>
+                <div id="resultsContent"></div>
+            </div>
+        </div>
+
+        <!-- Step 2: License Agreement -->
+        <div class="content" data-step="2" style="display: none;">
+            <h2>License Agreement</h2>
+            <p style="margin-bottom: 16px;">
+                Please review and accept the MIT License to continue.
+            </p>
+
+            <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin-bottom: 24px; text-align: left; max-height: 300px; overflow-y: auto; font-size: 13px; line-height: 1.6;">
+                <strong>MIT License</strong><br><br>
+                Copyright (c) 2024 Agent Player<br><br>
+                Permission is hereby granted, free of charge, to any person obtaining a copy
+                of this software and associated documentation files (the "Software"), to deal
+                in the Software without restriction, including without limitation the rights
+                to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+                copies of the Software, and to permit persons to whom the Software is
+                furnished to do so, subject to the following conditions:<br><br>
+                The above copyright notice and this permission notice shall be included in all
+                copies or substantial portions of the Software.<br><br>
+                THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+                IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+                FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+                AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+                LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+                OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+                SOFTWARE.
+            </div>
+
+            <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 24px;">
+                <input type="checkbox" id="acceptLicense" style="margin-right: 8px; width: 18px; height: 18px;">
+                <span>I accept the terms of the MIT License</span>
+            </label>
+
+            <button class="btn" id="licenseBtn" onclick="acceptLicense()" disabled style="opacity: 0.5;">
+                Continue →
+            </button>
+        </div>
+
+        <!-- Step 3: Installation Directory -->
+        <div class="content" data-step="3" style="display: none;">
+            <h2>Installation Directory</h2>
+            <p style="margin-bottom: 24px;">
+                Choose where Agent Player will be installed on your computer.
+            </p>
+
+            <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin-bottom: 24px; text-align: left;">
+                <div style="font-size: 12px; color: #999; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">
+                    Installation Path
+                </div>
+                <div id="installDirPath" style="font-family: monospace; font-size: 14px; color: #333; word-break: break-all;">
+                    Loading...
+                </div>
+            </div>
+
+            <button class="btn" onclick="browseDirectory()" style="background: #555; margin-bottom: 16px;">
+                Browse... 📁
+            </button>
+
+            <div style="margin-top: 24px;">
+                <button class="btn" onclick="continueToNextStep()">
+                    Continue →
+                </button>
+            </div>
+
+            <div style="margin-top: 16px; font-size: 12px; color: #999;">
+                <strong>Required Space:</strong> ~900 MB
+                <br>
+                <strong>Default locations:</strong>
+                <br>• Windows: C:\Program Files\AgentPlayer
+                <br>• Linux: /opt/agent-player
+                <br>• macOS: /Applications/Agent Player.app
+            </div>
+        </div>
+
+        <!-- Step 4: Deployment Method -->
+        <div class="content" data-step="4" style="display: none;">
+            <h2>Deployment Method</h2>
+            <p style="margin-bottom: 24px;">
+                Choose how you want to deploy Agent Player.
+            </p>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin-bottom: 24px;">
+                <!-- Docker Mode -->
+                <div class="deployment-card" onclick="selectDeployment('docker')" style="border: 2px solid #e0e0e0; border-radius: 12px; padding: 20px; cursor: pointer; transition: all 0.2s;">
+                    <div style="font-size: 32px; margin-bottom: 12px;">🐳</div>
+                    <h3 style="margin-bottom: 8px; font-size: 18px;">Docker</h3>
+                    <p style="font-size: 13px; color: #666; line-height: 1.5;">
+                        Isolated containerized environment. Easy updates and rollback. Requires Docker Desktop/Engine.
+                    </p>
+                    <div style="margin-top: 12px; font-size: 12px; color: #667eea; font-weight: 600;">
+                        ✓ Recommended for Production
+                    </div>
+                </div>
+
+                <!-- Direct Mode -->
+                <div class="deployment-card" onclick="selectDeployment('direct')" style="border: 2px solid #e0e0e0; border-radius: 12px; padding: 20px; cursor: pointer; transition: all 0.2s;">
+                    <div style="font-size: 32px; margin-bottom: 12px;">💻</div>
+                    <h3 style="margin-bottom: 8px; font-size: 18px;">Direct</h3>
+                    <p style="font-size: 13px; color: #666; line-height: 1.5;">
+                        Native installation with system service. Fastest performance. No container overhead.
+                    </p>
+                    <div style="margin-top: 12px; font-size: 12px; color: #22c55e; font-weight: 600;">
+                        ✓ Best Performance
+                    </div>
+                </div>
+
+                <!-- Server Mode -->
+                <div class="deployment-card" onclick="selectDeployment('server')" style="border: 2px solid #e0e0e0; border-radius: 12px; padding: 20px; cursor: pointer; transition: all 0.2s;">
+                    <div style="font-size: 32px; margin-bottom: 12px;">🌐</div>
+                    <h3 style="margin-bottom: 8px; font-size: 18px;">Server</h3>
+                    <p style="font-size: 13px; color: #666; line-height: 1.5;">
+                        Deploy to remote VPS/cloud via SSH. Automatic nginx + SSL setup. Access from anywhere.
+                    </p>
+                    <div style="margin-top: 12px; font-size: 12px; color: #f59e0b; font-weight: 600;">
+                        ✓ Remote Deployment
+                    </div>
+                </div>
+            </div>
+
+            <button class="btn" id="deploymentBtn" onclick="continueToNextStep()" disabled style="opacity: 0.5;">
+                Continue →
+            </button>
+        </div>
+
+        <!-- Step 5: Configuration -->
+        <div class="content" data-step="5" style="display: none;">
+            <h2>Configuration</h2>
+            <p style="margin-bottom: 24px;">
+                Configure your Agent Player installation.
+            </p>
+
+            <div style="text-align: left; max-width: 400px; margin: 0 auto;">
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600;">Frontend Port</label>
+                    <input type="number" id="frontendPort" value="41521" style="width: 100%; padding: 10px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px;">
+                </div>
+
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600;">Backend Port</label>
+                    <input type="number" id="backendPort" value="41522" style="width: 100%; padding: 10px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px;">
+                </div>
+
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600;">Claude API Key <span style="color: red;">*</span></label>
+                    <input type="password" id="apiKey" placeholder="sk-ant-..." style="width: 100%; padding: 10px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px;">
+                </div>
+
+                <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 24px;">
+                    <input type="checkbox" id="autoStart" checked style="margin-right: 8px; width: 18px; height: 18px;">
+                    <span>Auto-start on boot</span>
+                </label>
+            </div>
+
+            <button class="btn" onclick="continueToNextStep()">
+                Continue →
+            </button>
+        </div>
+
+        <!-- Step 6: Admin Account -->
+        <div class="content" data-step="6" style="display: none;">
+            <h2>Admin Account</h2>
+            <p style="margin-bottom: 24px;">
+                Create your administrator account.
+            </p>
+
+            <div style="text-align: left; max-width: 400px; margin: 0 auto;">
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600;">Full Name <span style="color: red;">*</span></label>
+                    <input type="text" id="adminName" placeholder="John Doe" style="width: 100%; padding: 10px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px;">
+                </div>
+
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600;">Email <span style="color: red;">*</span></label>
+                    <input type="email" id="adminEmail" placeholder="admin@example.com" style="width: 100%; padding: 10px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px;">
+                </div>
+
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600;">Password <span style="color: red;">*</span></label>
+                    <input type="password" id="adminPassword" placeholder="Min 12 characters" style="width: 100%; padding: 10px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px;">
+                    <div style="font-size: 12px; color: #999; margin-top: 4px;">Must include uppercase, lowercase, number, and special character</div>
+                </div>
+
+                <div style="margin-bottom: 24px;">
+                    <label style="display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600;">Confirm Password <span style="color: red;">*</span></label>
+                    <input type="password" id="adminPasswordConfirm" placeholder="Re-enter password" style="width: 100%; padding: 10px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px;">
+                </div>
+            </div>
+
+            <button class="btn" onclick="startInstallation()">
+                Start Installation →
+            </button>
+        </div>
+
+        <!-- Step 7: Installation Progress -->
+        <div class="content" data-step="7" style="display: none;">
+            <h2>Installing Agent Player</h2>
+            <p style="margin-bottom: 24px;">
+                Please wait while we install and configure Agent Player...
+            </p>
+
+            <div style="margin-bottom: 24px;">
+                <div id="progressBar" style="width: 100%; height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden;">
+                    <div id="progressFill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #667eea, #764ba2); transition: width 0.3s;"></div>
+                </div>
+                <div id="progressText" style="margin-top: 8px; font-size: 14px; color: #666;">Initializing...</div>
+            </div>
+
+            <div id="installSteps" style="text-align: left; max-width: 500px; margin: 0 auto; font-size: 14px;">
+                <!-- Installation steps will be populated here -->
+            </div>
+        </div>
+
+        <!-- Step 8: Complete -->
+        <div class="content" data-step="8" style="display: none;">
+            <div style="font-size: 64px; margin-bottom: 16px;">🎉</div>
+            <h2>Installation Complete!</h2>
+            <p style="margin-bottom: 24px;">
+                Agent Player has been successfully installed and configured.
+            </p>
+
+            <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin-bottom: 24px; text-align: left; max-width: 400px; margin-left: auto; margin-right: auto;">
+                <div style="margin-bottom: 12px;">
+                    <strong>Frontend URL:</strong><br>
+                    <a href="http://localhost:41521" target="_blank" style="color: #667eea;">http://localhost:41521</a>
+                </div>
+                <div style="margin-bottom: 12px;">
+                    <strong>Backend URL:</strong><br>
+                    <span style="font-family: monospace; color: #333;">http://localhost:41522</span>
+                </div>
+                <div>
+                    <strong>Admin Email:</strong><br>
+                    <span id="completedEmail" style="font-family: monospace; color: #333;"></span>
+                </div>
+            </div>
+
+            <button class="btn" onclick="launchDashboard()" style="background: #22c55e; margin-right: 12px;">
+                Open Dashboard
+            </button>
+            <button class="btn" onclick="window.close()" style="background: #555;">
+                Close Installer
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const { invoke } = window.__TAURI__.core;
+        const { open } = window.__TAURI__.dialog;
+
+        let currentStep = 1;
+        let installDir = '';
+        let systemCheckPassed = false;
+        let selectedDeployment = '';
+        let config = {
+            frontendPort: 41521,
+            backendPort: 41522,
+            apiKey: '',
+            autoStart: true
+        };
+        let adminAccount = {
+            name: '',
+            email: '',
+            password: ''
+        };
+
+        async function showStep(step) {
+            currentStep = step;
+
+            // Update step indicators
+            document.querySelectorAll('.step').forEach((el, idx) => {
+                el.classList.toggle('active', idx < step);
+            });
+
+            // Hide all content sections
+            document.querySelectorAll('[data-step]').forEach(el => {
+                el.style.display = 'none';
+            });
+
+            // Show current step
+            const currentStepEl = document.querySelector(`[data-step="${step}"]`);
+            if (currentStepEl) {
+                currentStepEl.style.display = 'block';
+            }
+
+            // Step-specific initialization
+            if (step === 2) {
+                // Setup license checkbox handler
+                const checkbox = document.getElementById('acceptLicense');
+                const btn = document.getElementById('licenseBtn');
+                checkbox.onchange = function() {
+                    btn.disabled = !this.checked;
+                    btn.style.opacity = this.checked ? '1' : '0.5';
+                };
+            } else if (step === 3) {
+                await loadInstallDirectory();
+            }
+        }
+
+        async function runSystemCheck() {
+            const btn = document.getElementById('checkBtn');
+            const results = document.getElementById('results');
+            const content = document.getElementById('resultsContent');
+
+            btn.textContent = 'Checking system...';
+            btn.disabled = true;
+
+            try {
+                const check = await invoke('run_system_check');
+
+                let html = `
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px;">
+                        <div style="padding: 12px; background: #f5f5f5; border-radius: 8px;">
+                            <div style="font-size: 12px; color: #999; margin-bottom: 4px;">Disk Space</div>
+                            <div style="font-size: 20px; font-weight: 600; color: ${check.disk_space_gb >= 2 ? '#22c55e' : '#ef4444'}">${check.disk_space_gb} GB</div>
+                        </div>
+                        <div style="padding: 12px; background: #f5f5f5; border-radius: 8px;">
+                            <div style="font-size: 12px; color: #999; margin-bottom: 4px;">RAM</div>
+                            <div style="font-size: 20px; font-weight: 600; color: ${check.total_ram_gb >= 4 ? '#22c55e' : '#ef4444'}">${check.total_ram_gb} GB</div>
+                        </div>
+                        <div style="padding: 12px; background: #f5f5f5; border-radius: 8px;">
+                            <div style="font-size: 12px; color: #999; margin-bottom: 4px;">Port 41521</div>
+                            <div style="font-size: 16px; font-weight: 600; color: ${check.port_41521_available ? '#22c55e' : '#ef4444'}">
+                                ${check.port_41521_available ? '✓ Available' : '✗ In Use'}
+                            </div>
+                        </div>
+                        <div style="padding: 12px; background: #f5f5f5; border-radius: 8px;">
+                            <div style="font-size: 12px; color: #999; margin-bottom: 4px;">Port 41522</div>
+                            <div style="font-size: 16px; font-weight: 600; color: ${check.port_41522_available ? '#22c55e' : '#ef4444'}">
+                                ${check.port_41522_available ? '✓ Available' : '✗ In Use'}
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                if (check.docker_installed) {
+                    html += '<div style="padding: 8px 12px; background: #dcfce7; border-radius: 6px; margin-bottom: 8px; font-size: 14px;">✓ Docker is installed</div>';
+                }
+
+                if (check.errors.length > 0) {
+                    html += '<div style="margin-top: 16px;"><strong style="color: #ef4444;">Errors:</strong><ul style="margin: 8px 0; padding-left: 20px;">';
+                    check.errors.forEach(err => {
+                        html += `<li style="color: #ef4444; margin: 4px 0;">${err}</li>`;
+                    });
+                    html += '</ul></div>';
+                }
+
+                if (check.warnings.length > 0) {
+                    html += '<div style="margin-top: 16px;"><strong style="color: #f59e0b;">Warnings:</strong><ul style="margin: 8px 0; padding-left: 20px;">';
+                    check.warnings.forEach(warn => {
+                        html += `<li style="color: #f59e0b; margin: 4px 0;">${warn}</li>`;
+                    });
+                    html += '</ul></div>';
+                }
+
+                content.innerHTML = html;
+                results.style.display = 'block';
+
+                systemCheckPassed = check.errors.length === 0;
+
+                if (systemCheckPassed) {
+                    btn.textContent = 'Continue to License Agreement →';
+                    btn.style.background = '#22c55e';
+                    btn.onclick = () => showStep(2);
+                } else {
+                    btn.textContent = 'Fix Issues and Retry';
+                    btn.style.background = '#ef4444';
+                    btn.onclick = runSystemCheck;
+                }
+                btn.disabled = false;
+            } catch (err) {
+                content.innerHTML = `<div style="color: #ef4444;">Error: ${err}</div>`;
+                results.style.display = 'block';
+                btn.textContent = 'Retry';
+                btn.disabled = false;
+            }
+        }
+
+        async function loadInstallDirectory() {
+            try {
+                installDir = await invoke('get_default_install_dir');
+                document.getElementById('installDirPath').textContent = installDir;
+            } catch (err) {
+                console.error('Failed to get default install directory:', err);
+            }
+        }
+
+        async function browseDirectory() {
+            try {
+                const selected = await open({
+                    directory: true,
+                    multiple: false,
+                    title: 'Select Installation Directory'
+                });
+
+                if (selected) {
+                    installDir = selected;
+                    document.getElementById('installDirPath').textContent = installDir;
+                }
+            } catch (err) {
+                console.error('Failed to open directory picker:', err);
+            }
+        }
+
+        function acceptLicense() {
+            showStep(3);
+        }
+
+        function selectDeployment(mode) {
+            selectedDeployment = mode;
+
+            // Update card styling
+            document.querySelectorAll('.deployment-card').forEach(card => {
+                card.style.borderColor = '#e0e0e0';
+                card.style.background = 'white';
+            });
+
+            event.target.closest('.deployment-card').style.borderColor = '#667eea';
+            event.target.closest('.deployment-card').style.background = '#f8f9ff';
+
+            // Enable continue button
+            document.getElementById('deploymentBtn').disabled = false;
+            document.getElementById('deploymentBtn').style.opacity = '1';
+        }
+
+        async function continueToNextStep() {
+            if (currentStep === 3) {
+                // Create directories
+                try {
+                    await invoke('create_install_directories', { installDir });
+                    showStep(4);
+                } catch (err) {
+                    alert('Failed to create installation directories: ' + err);
+                }
+            } else if (currentStep === 4) {
+                // Save deployment mode and continue to configuration
+                showStep(5);
+            } else if (currentStep === 5) {
+                // Save configuration
+                config.frontendPort = parseInt(document.getElementById('frontendPort').value);
+                config.backendPort = parseInt(document.getElementById('backendPort').value);
+                config.apiKey = document.getElementById('apiKey').value;
+                config.autoStart = document.getElementById('autoStart').checked;
+
+                if (!config.apiKey) {
+                    alert('Claude API Key is required');
+                    return;
+                }
+
+                showStep(6);
+            }
+        }
+
+        async function startInstallation() {
+            // Validate admin account
+            adminAccount.name = document.getElementById('adminName').value.trim();
+            adminAccount.email = document.getElementById('adminEmail').value.trim();
+            adminAccount.password = document.getElementById('adminPassword').value;
+            const confirmPassword = document.getElementById('adminPasswordConfirm').value;
+
+            if (!adminAccount.name || !adminAccount.email || !adminAccount.password) {
+                alert('All fields are required');
+                return;
+            }
+
+            if (adminAccount.password !== confirmPassword) {
+                alert('Passwords do not match');
+                return;
+            }
+
+            if (adminAccount.password.length < 12) {
+                alert('Password must be at least 12 characters');
+                return;
+            }
+
+            // Start installation
+            showStep(7);
+            runInstallation();
+        }
+
+        async function runInstallation() {
+            const steps = [
+                { name: 'Creating directories', progress: 5 },
+                { name: 'Extracting Node.js runtime', progress: 15 },
+                { name: 'Extracting Python environment', progress: 25 },
+                { name: 'Copying application files', progress: 35 },
+                { name: 'Installing dependencies (this may take a few minutes)', progress: 80 },
+                { name: 'Building production assets', progress: 90 },
+                { name: 'Configuring system service', progress: 95 },
+                { name: 'Setting file permissions', progress: 98 },
+                { name: 'Finalizing installation', progress: 100 }
+            ];
+
+            const installStepsEl = document.getElementById('installSteps');
+
+            for (let i = 0; i < steps.length; i++) {
+                const step = steps[i];
+
+                // Update progress bar
+                document.getElementById('progressFill').style.width = step.progress + '%';
+                document.getElementById('progressText').textContent = step.name;
+
+                // Add step to list
+                const stepEl = document.createElement('div');
+                stepEl.style.marginBottom = '8px';
+                stepEl.style.color = '#22c55e';
+                stepEl.innerHTML = `✓ ${step.name}`;
+                installStepsEl.appendChild(stepEl);
+
+                // Simulate installation time
+                await new Promise(resolve => setTimeout(resolve, i === 4 ? 3000 : 800));
+            }
+
+            // Installation complete
+            document.getElementById('completedEmail').textContent = adminAccount.email;
+            setTimeout(() => showStep(8), 1000);
+        }
+
+        function launchDashboard() {
+            window.open('http://localhost:41521', '_blank');
+        }
+
+        // Initialize on load
+        window.addEventListener('DOMContentLoaded', () => {
+            showStep(1);
+        });
+    </script>
+</body>
+</html>
