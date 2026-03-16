@@ -158,7 +158,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-apple-darwin,aarch64-apple-darwin
+          targets: x86_64-apple-darwin
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli
@@ -179,7 +179,7 @@ jobs:
       - name: Build installer
         run: |
           cd installer
-          cargo tauri build --bundles dmg --target universal-apple-darwin
+          cargo tauri build --bundles dmg
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
@@ -192,14 +192,14 @@ jobs:
       - name: Rename installer
         run: |
           VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//' || echo "${{ github.event.inputs.version }}")
-          DMG=$(find installer/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" | head -n 1)
-          OUTPUT_NAME="agent-player-installer-${VERSION}-macos-universal.dmg"
+          DMG=$(find installer/target/release/bundle/dmg -name "*.dmg" | head -n 1)
+          OUTPUT_NAME="agent-player-installer-${VERSION}-macos-x64.dmg"
           cp "$DMG" "$OUTPUT_NAME"
 
       - name: Generate checksum
         run: |
           VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//' || echo "${{ github.event.inputs.version }}")
-          FILE="agent-player-installer-${VERSION}-macos-universal.dmg"
+          FILE="agent-player-installer-${VERSION}-macos-x64.dmg"
           shasum -a 256 "$FILE" > checksums-macos.txt
 
       - name: Upload artifacts
@@ -258,9 +258,9 @@ jobs:
 
           Choose the installer for your platform:
 
-          - **Windows**: `agent-player-installer-${{ steps.version.outputs.VERSION }}-win-x64.msi` (~90 MB)
-          - **Linux**: `agent-player-installer-${{ steps.version.outputs.VERSION }}-linux-x86_64.AppImage` (~95 MB)
-          - **macOS**: `agent-player-installer-${{ steps.version.outputs.VERSION }}-macos-universal.dmg` (~92 MB)
+          - **Windows**: `agent-player-installer-${{ steps.version.outputs.VERSION }}-win-x64.msi` (~4 MB)
+          - **Linux**: `agent-player-installer-${{ steps.version.outputs.VERSION }}-linux-x86_64.AppImage` (~4 MB)
+          - **macOS Intel**: `agent-player-installer-${{ steps.version.outputs.VERSION }}-macos-x64.dmg` (~4 MB)
 
           Verify downloads using `checksums.txt` (SHA256).
 
