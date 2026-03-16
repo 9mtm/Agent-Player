@@ -118,6 +118,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Debug - List installer files
+        run: |
+          echo "=== Installer directory structure ==="
+          ls -la installer/
+          echo "=== Icons folder ==="
+          ls -la installer/icons/
+          echo "=== UI dist folder ==="
+          ls -la installer/ui/dist/
+          echo "=== Tauri config ==="
+          cat installer/tauri.conf.json
+
       - name: Build installer
         run: |
           cd installer
@@ -175,6 +186,17 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install
+
+      - name: Debug - List installer files
+        run: |
+          echo "=== Installer directory structure ==="
+          ls -la installer/
+          echo "=== Icons folder ==="
+          ls -la installer/icons/
+          echo "=== UI dist folder ==="
+          ls -la installer/ui/dist/
+          echo "=== Tauri config ==="
+          cat installer/tauri.conf.json
 
       - name: Build installer
         run: |
