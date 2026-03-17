@@ -143,10 +143,23 @@ jobs:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
 
+      - name: Debug - Find generated files
+        run: |
+          echo "=== Searching for AppImage files ==="
+          find installer/target -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" 2>/dev/null || echo "No bundle files found"
+          echo "=== Bundle directory structure ==="
+          ls -laR installer/target/release/bundle/ || echo "Bundle directory not found"
+
       - name: Rename installer
         run: |
           VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//' || echo "${{ github.event.inputs.version }}")
-          APPIMAGE=$(find installer/target/release/bundle/appimage -name "*.AppImage" | head -n 1)
+          APPIMAGE=$(find installer/target -name "*.AppImage" | head -n 1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "ERROR: No AppImage file found!"
+            echo "Checking alternative locations..."
+            find installer/target -type f -name "*agent*" || true
+            exit 1
+          fi
           OUTPUT_NAME="agent-player-installer-${VERSION}-linux-x86_64.AppImage"
           cp "$APPIMAGE" "$OUTPUT_NAME"
           chmod +x "$OUTPUT_NAME"
@@ -236,10 +249,23 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
+      - name: Debug - Find generated files
+        run: |
+          echo "=== Searching for DMG files ==="
+          find installer/target -name "*.dmg" -o -name "*.app" 2>/dev/null || echo "No bundle files found"
+          echo "=== Bundle directory structure ==="
+          ls -laR installer/target/release/bundle/ || echo "Bundle directory not found"
+
       - name: Rename installer
         run: |
           VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//' || echo "${{ github.event.inputs.version }}")
-          DMG=$(find installer/target/release/bundle/dmg -name "*.dmg" | head -n 1)
+          DMG=$(find installer/target -name "*.dmg" | head -n 1)
+          if [ -z "$DMG" ]; then
+            echo "ERROR: No DMG file found!"
+            echo "Checking alternative locations..."
+            find installer/target -type f -name "*agent*" || true
+            exit 1
+          fi
           OUTPUT_NAME="agent-player-installer-${VERSION}-macos-x64.dmg"
           cp "$DMG" "$OUTPUT_NAME"
 
