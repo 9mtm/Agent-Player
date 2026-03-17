@@ -88,6 +88,7 @@ jobs:
           sudo apt update
           sudo apt install -y \
             libwebkit2gtk-4.1-dev \
+            libwebkit2gtk-4.0-dev \
             build-essential \
             cmake \
             curl \
@@ -98,6 +99,8 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
             pkg-config
 
       - name: Setup Rust
@@ -135,7 +138,7 @@ jobs:
       - name: Build installer
         run: |
           cd installer
-          cargo tauri build --bundles appimage
+          cargo tauri build --bundles appimage --verbose 2>&1 | tee build.log || (echo "=== BUILD FAILED - Last 100 lines ===" && tail -100 build.log && exit 1)
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
@@ -223,7 +226,7 @@ jobs:
       - name: Build installer
         run: |
           cd installer
-          cargo tauri build --bundles dmg
+          cargo tauri build --bundles dmg --verbose 2>&1 | tee build.log || (echo "=== BUILD FAILED - Last 100 lines ===" && tail -100 build.log && exit 1)
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
