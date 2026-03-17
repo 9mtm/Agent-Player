@@ -325,6 +325,19 @@ impl SystemTrayService {
             status.frontend_running = String::from_utf8_lossy(&frontend_status.stdout).trim() == "active";
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            let backend_status = std::process::Command::new("launchctl")
+                .args(["print", "system/com.agentplayer.backend"])
+                .output()?;
+            status.backend_running = backend_status.status.success();
+
+            let frontend_status = std::process::Command::new("launchctl")
+                .args(["print", "system/com.agentplayer.frontend"])
+                .output()?;
+            status.frontend_running = frontend_status.status.success();
+        }
+
         #[cfg(target_os = "windows")]
         {
             let backend_status = std::process::Command::new("sc")

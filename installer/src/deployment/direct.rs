@@ -407,6 +407,22 @@ impl DirectDeployment {
             }
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(output) = Command::new("launchctl")
+                .args(["print", "system/com.agentplayer.backend"])
+                .output()
+            {
+                status.backend_running = output.status.success();
+            }
+            if let Ok(output) = Command::new("launchctl")
+                .args(["print", "system/com.agentplayer.frontend"])
+                .output()
+            {
+                status.frontend_running = output.status.success();
+            }
+        }
+
         #[cfg(target_os = "windows")]
         {
             if let Ok(output) = Command::new("sc")
