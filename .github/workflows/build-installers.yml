@@ -194,6 +194,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Generate macOS icon
+        run: |
+          cd installer
+          mkdir -p icon.iconset
+          sips -z 16 16     icons/icon.png --out icon.iconset/icon_16x16.png
+          sips -z 32 32     icons/icon.png --out icon.iconset/icon_16x16@2x.png
+          sips -z 32 32     icons/icon.png --out icon.iconset/icon_32x32.png
+          sips -z 64 64     icons/icon.png --out icon.iconset/icon_32x32@2x.png
+          sips -z 128 128   icons/icon.png --out icon.iconset/icon_128x128.png
+          sips -z 256 256   icons/icon.png --out icon.iconset/icon_128x128@2x.png
+          sips -z 256 256   icons/icon.png --out icon.iconset/icon_256x256.png
+          iconutil -c icns icon.iconset -o icons/icon.icns
+          rm -rf icon.iconset
+          ls -la icons/
+
       - name: Debug - List installer files
         run: |
           echo "=== Installer directory structure ==="
