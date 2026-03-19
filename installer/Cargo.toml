@@ -21,5 +21,9 @@ chrono = "0.4"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[profile.release]
+strip = false  # Required for AppImage/DMG bundling in Tauri 2
+lto = false    # Disable link-time optimization for compatibility
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

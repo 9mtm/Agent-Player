@@ -12,6 +12,12 @@
     "active": true,
     "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"],
     "targets": ["msi", "appimage", "dmg"],
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false,
+        "files": {}
+      }
+    },
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
@@ -22,7 +28,8 @@
       "exceptionDomain": "",
       "frameworks": [],
       "providerShortName": null,
-      "signingIdentity": null
+      "signingIdentity": null,
+      "minimumSystemVersion": "10.13"
     }
   },
   "app": {
