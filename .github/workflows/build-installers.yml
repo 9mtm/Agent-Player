@@ -18,6 +18,7 @@ env:
 jobs:
   build-windows:
     name: Build Windows Installer
+    if: false  # Disabled temporarily - Windows already works
     runs-on: windows-latest
     steps:
       - name: Checkout code
@@ -184,6 +185,7 @@ jobs:
 
   build-macos:
     name: Build macOS Installer
+    if: false  # Disabled temporarily - testing Linux first
     runs-on: macos-latest
     steps:
       - name: Checkout code
