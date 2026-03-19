@@ -55,53 +55,61 @@ import {
 } from 'lucide-react';
 import { useDeveloperMode } from '@/contexts/developer-context';
 import { useEffect, useState as useReactState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { config } from '@/lib/config';
 
-// Core navigation items (static)
-const coreNavigation = [
-    { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-    { name: 'Chat', href: '/chat', icon: MessageSquare },
-    // { name: 'Email', href: '/dashboard/email', icon: Mail }, // Moved to email-client extension
-    { name: 'Tasks', href: '/dashboard/tasks', icon: ListTodo },
-    { name: 'Workflows', href: '/dashboard/workflows', icon: Workflow },
-    { name: 'Scheduler', href: '/dashboard/scheduler', icon: Clock },
-    // Calendar, Team, Public Chat moved to extensions
+// Navigation items use i18n keys — translated in the component via t()
+const coreNavigationDefs = [
+    { nameKey: 'dashboard', href: '/dashboard', icon: LayoutDashboard },
+    { nameKey: 'chat', href: '/chat', icon: MessageSquare },
+    { nameKey: 'tasks', href: '/dashboard/tasks', icon: ListTodo },
+    { nameKey: 'workflows', href: '/dashboard/workflows', icon: Workflow },
+    { nameKey: 'scheduler', href: '/dashboard/scheduler', icon: Clock },
 ];
 
-const avatarSubmenu = [
-    { name: 'Avatar Viewer', href: '/avatar-viewer', icon: Eye },
-    { name: 'Multiverse', href: '/dashboard/multiverse', icon: Globe },
+const avatarSubmenuDefs = [
+    { nameKey: 'avatar.viewer', href: '/avatar-viewer', icon: Eye },
+    { nameKey: 'avatar.multiverse', href: '/dashboard/multiverse', icon: Globe },
 ];
 
-const brainSubmenu = [
-    { name: 'Memory', href: '/dashboard/memory', icon: Brain },
-    { name: 'Shared Memory', href: '/dashboard/shared-memory', icon: Share2 },
-    { name: 'Memory Insights', href: '/dashboard/memory-insights', icon: Lightbulb },
-    { name: 'Evolution', href: '/dashboard/evolution', icon: Sparkles },
-    { name: 'Evaluation', href: '/dashboard/evaluation', icon: Award },
+const brainSubmenuDefs = [
+    { nameKey: 'brain.memory', href: '/dashboard/memory', icon: Brain },
+    { nameKey: 'brain.sharedMemory', href: '/dashboard/shared-memory', icon: Share2 },
+    { nameKey: 'brain.insights', href: '/dashboard/memory-insights', icon: Lightbulb },
+    { nameKey: 'brain.evolution', href: '/dashboard/evolution', icon: Sparkles },
+    { nameKey: 'brain.evaluation', href: '/dashboard/evaluation', icon: Award },
 ];
 
-const settingsSubmenu = [
-    { name: 'Agent', href: '/dashboard/agent', icon: Bot },
-    { name: 'Skills', href: '/dashboard/skills', icon: Puzzle },
-    { name: 'Extensions', href: '/dashboard/extensions', icon: PackagePlus },
-    { name: 'Voice Settings', href: '/settings/voice', icon: Volume2 },
-    { name: 'Storage', href: '/dashboard/storage', icon: HardDrive },
+const settingsSubmenuDefs = [
+    { nameKey: 'settings.agent', href: '/dashboard/agent', icon: Bot },
+    { nameKey: 'settings.skills', href: '/dashboard/skills', icon: Puzzle },
+    { nameKey: 'settings.extensions', href: '/dashboard/extensions', icon: PackagePlus },
+    { nameKey: 'settings.voice', href: '/settings/voice', icon: Volume2 },
+    { nameKey: 'settings.storage', href: '/dashboard/storage', icon: HardDrive },
 ];
 
-const developerMenu = [
-    { name: 'UI Components', href: '/dashboard/developer/ui-components', icon: Layers },
-    { name: 'AI Tools', href: '/dashboard/ai-tools', icon: ScanSearch },
-    { name: 'SEO Tools', href: '/dashboard/ext/seo', icon: TrendingUp },
-    { name: 'WAF Security', href: '/dashboard/ext/waf-security', icon: Shield },
-    { name: 'Claude Code', href: '/dashboard/claude', icon: Bot },
-    { name: 'Credentials', href: '/dashboard/settings/credentials', icon: Key },
-    { name: 'Database', href: '/dashboard/database', icon: Database },
+const developerMenuDefs = [
+    { nameKey: 'developer.uiComponents', href: '/dashboard/developer/ui-components', icon: Layers },
+    { nameKey: 'developer.aiTools', href: '/dashboard/ai-tools', icon: ScanSearch },
+    { nameKey: 'developer.seoTools', href: '/dashboard/ext/seo', icon: TrendingUp },
+    { nameKey: 'developer.wafSecurity', href: '/dashboard/ext/waf-security', icon: Shield },
+    { nameKey: 'developer.claudeCode', href: '/dashboard/claude', icon: Bot },
+    { nameKey: 'developer.credentials', href: '/dashboard/settings/credentials', icon: Key },
+    { nameKey: 'developer.database', href: '/dashboard/database', icon: Database },
 ];
 
 export function Sidebar() {
     const pathname = usePathname();
     const { devMode } = useDeveloperMode();
+    const { t } = useTranslation('nav');
+    const { t: tc } = useTranslation('common');
+
+    // Resolve translated navigation items from defs
+    const coreNavigation = coreNavigationDefs.map(d => ({ ...d, name: t(d.nameKey) }));
+    const avatarSubmenu = avatarSubmenuDefs.map(d => ({ ...d, name: t(d.nameKey) }));
+    const brainSubmenu = brainSubmenuDefs.map(d => ({ ...d, name: t(d.nameKey) }));
+    const settingsSubmenu = settingsSubmenuDefs.map(d => ({ ...d, name: t(d.nameKey) }));
+    const developerMenu = developerMenuDefs.map(d => ({ ...d, name: t(d.nameKey) }));
     const [devOpen, setDevOpen] = useState(
         pathname?.startsWith('/dashboard/developer/') ||
         pathname?.startsWith('/dashboard/claude') ||
@@ -137,7 +145,7 @@ export function Sidebar() {
     );
     const [showCustomize, setShowCustomize] = useReactState(false);
     const [hiddenItems, setHiddenItems] = useReactState<string[]>([]);
-    const [navOrder, setNavOrder] = useReactState(coreNavigation);
+    const [navOrder, setNavOrder] = useReactState<Array<{ name: string; href: string; icon: any }>>(coreNavigation);
     const [collapsed, setCollapsed] = useReactState(false);
     const [draggedIndex, setDraggedIndex] = useReactState<number | null>(null);
 
@@ -234,7 +242,7 @@ export function Sidebar() {
                     .filter(Boolean);
 
                 // Add any new items that aren't in the saved order
-                const rebuiltNames = rebuiltOrder.map(item => item.name);
+                const rebuiltNames = rebuiltOrder.map((item: any) => item.name);
                 const newItems = allNavigation.filter(item => !rebuiltNames.includes(item.name));
                 const finalOrder = [...rebuiltOrder, ...newItems];
 
@@ -251,7 +259,7 @@ export function Sidebar() {
         } else {
             setNavOrder(allNavigation);
         }
-    }, [extensionRoutes]);
+    }, [extensionRoutes, t]);
 
     const toggleItemVisibility = (itemName: string) => {
         const newHidden = hiddenItems.includes(itemName)
@@ -315,14 +323,14 @@ export function Sidebar() {
                         <button
                             onClick={() => setShowCustomize(true)}
                             className="rounded-md p-1.5 text-muted-foreground/60 transition-all hover:bg-muted/50 hover:text-foreground"
-                            title="Customize Sidebar"
+                            title={tc('customize.title')}
                         >
                             <Sliders className="h-4 w-4" />
                         </button>
                         <button
                             onClick={toggleCollapsed}
                             className="rounded-md p-1.5 text-muted-foreground/60 transition-all hover:bg-muted/50 hover:text-foreground"
-                            title="Collapse Sidebar"
+                            title={tc('customize.collapse')}
                         >
                             <PanelLeftClose className="h-4 w-4" />
                         </button>
@@ -331,7 +339,7 @@ export function Sidebar() {
                     <button
                         onClick={toggleCollapsed}
                         className="rounded-md p-1.5 text-muted-foreground/60 transition-all hover:bg-muted/50 hover:text-foreground mx-auto"
-                        title="Expand Sidebar"
+                        title={tc('customize.expand')}
                     >
                         <PanelLeft className="h-4 w-4" />
                     </button>
@@ -351,12 +359,12 @@ export function Sidebar() {
                                 ? 'bg-accent text-accent-foreground'
                                 : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                         )}
-                        title={collapsed ? 'Avatar' : undefined}
+                        title={collapsed ? t('avatar') : undefined}
                     >
                         <User2 className={cn(collapsed ? 'h-7 w-7' : 'h-5 w-5')} />
                         {!collapsed && (
                             <>
-                                <span className="flex-1 text-left">Avatar</span>
+                                <span className="flex-1 text-left">{t('avatar')}</span>
                                 {avatarOpen ? (
                                     <ChevronDown className="h-4 w-4" />
                                 ) : (
@@ -427,10 +435,10 @@ export function Sidebar() {
                                     ? 'bg-primary text-primary-foreground'
                                     : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                             )}
-                            title={collapsed ? 'Channels' : undefined}
+                            title={collapsed ? t('channels') : undefined}
                         >
                             <Hash className={cn(collapsed ? 'h-7 w-7' : 'h-5 w-5')} />
-                            {!collapsed && 'Channels'}
+                            {!collapsed && t('channels')}
                         </Link>
                     </div>
                 )}
@@ -446,12 +454,12 @@ export function Sidebar() {
                                 ? 'bg-accent text-accent-foreground'
                                 : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                         )}
-                        title={collapsed ? 'Settings' : undefined}
+                        title={collapsed ? t('settings') : undefined}
                     >
                         <Settings className={cn(collapsed ? 'h-7 w-7' : 'h-5 w-5')} />
                         {!collapsed && (
                             <>
-                                <span className="flex-1 text-left">Settings</span>
+                                <span className="flex-1 text-left">{t('settings')}</span>
                                 {settingsOpen ? (
                                     <ChevronDown className="h-4 w-4" />
                                 ) : (
@@ -497,12 +505,12 @@ export function Sidebar() {
                                     ? 'bg-purple-500/15 text-purple-600 dark:text-purple-400'
                                     : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                             )}
-                            title={collapsed ? 'Brain' : undefined}
+                            title={collapsed ? t('brain') : undefined}
                         >
                             <Brain className={cn(collapsed ? 'h-7 w-7' : 'h-5 w-5')} />
                             {!collapsed && (
                                 <>
-                                    <span className="flex-1 text-left">Brain</span>
+                                    <span className="flex-1 text-left">{t('brain')}</span>
                                     {brainOpen ? (
                                         <ChevronDown className="h-4 w-4" />
                                     ) : (
@@ -549,12 +557,12 @@ export function Sidebar() {
                                     ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
                                     : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                             )}
-                            title={collapsed ? 'Developer' : undefined}
+                            title={collapsed ? t('developer') : undefined}
                         >
                             <Code2 className={cn(collapsed ? 'h-7 w-7' : 'h-5 w-5')} />
                             {!collapsed && (
                                 <>
-                                    <span className="flex-1 text-left">Developer</span>
+                                    <span className="flex-1 text-left">{t('developer')}</span>
                                     {devOpen ? (
                                         <ChevronDown className="h-4 w-4" />
                                     ) : (
@@ -610,7 +618,7 @@ export function Sidebar() {
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowCustomize(false)}>
                     <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
                         <div className="mb-4 flex items-center justify-between">
-                            <h2 className="text-xl font-semibold">Customize Sidebar</h2>
+                            <h2 className="text-xl font-semibold">{tc('customize.title')}</h2>
                             <button
                                 onClick={() => setShowCustomize(false)}
                                 className="rounded-lg p-1 hover:bg-accent"
@@ -620,8 +628,8 @@ export function Sidebar() {
                         </div>
 
                         <div className="mb-4 space-y-2">
-                            <h3 className="text-sm font-semibold text-muted-foreground">Navigation Items</h3>
-                            <p className="text-xs text-muted-foreground">Drag items to reorder</p>
+                            <h3 className="text-sm font-semibold text-muted-foreground">{tc('customize.navItems')}</h3>
+                            <p className="text-xs text-muted-foreground">{tc('customize.dragHint')}</p>
                             <div className="space-y-1 max-h-96 overflow-y-auto">
                                 {navOrder.map((item, index) => (
                                     <div
@@ -658,13 +666,13 @@ export function Sidebar() {
                                 onClick={resetCustomization}
                                 className="flex-1 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent"
                             >
-                                Reset
+                                {tc('reset')}
                             </button>
                             <button
                                 onClick={() => setShowCustomize(false)}
                                 className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
                             >
-                                Done
+                                {tc('done')}
                             </button>
                         </div>
                     </div>

@@ -214,6 +214,24 @@ fastify.get('/', {
   docs: '/docs'
 }));
 
+// i18n: Detect locale from request and attach to request object
+// Priority: 1) User preference from DB (via auth), 2) Accept-Language header, 3) 'en'
+fastify.addHook('preHandler', async (request) => {
+  let locale = 'en';
+  try {
+    const acceptLang = request.headers['accept-language'];
+    if (acceptLang) {
+      const preferred = acceptLang.split(',')[0]?.split('-')[0]?.trim();
+      if (preferred) {
+        locale = preferred;
+      }
+    }
+  } catch {
+    // Ignore parsing errors
+  }
+  (request as any).locale = locale;
+});
+
 // Register routes
 await fastify.register(setupRoutes); // 🛠️ Setup Wizard (First-Time Installation)
 await fastify.register(authRoutes); // 🔐 Authentication

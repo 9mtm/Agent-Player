@@ -1,0 +1,10 @@
+{
+  "extensionNotFound": "Extension not found",
+  "extensionEnabled": "Extension enabled successfully",
+  "extensionDisabled": "Extension disabled successfully",
+  "extensionError": "Extension enabled but has errors",
+  "settingsSaved": "Settings saved successfully",
+  "settingsFailed": "Failed to save settings",
+  "missingEnvVar": "Missing environment variable: {{name}}",
+  "noSettingsUI": "No settings UI available for this extension"
+}

@@ -1,0 +1,10 @@
+{
+  "validation": "Invalid input data",
+  "authentication": "Authentication required",
+  "authorization": "Access denied",
+  "notFound": "Resource not found",
+  "conflict": "Resource conflict",
+  "rateLimit": "Too many requests",
+  "internal": "Internal server error",
+  "invalidToken": "Invalid or expired token"
+}

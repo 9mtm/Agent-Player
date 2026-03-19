@@ -645,5 +645,60 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
     }
   });
 
+  /**
+   * GET /api/extensions/:extensionId/i18n/:locale
+   * Returns translation JSON for a specific extension and locale.
+   * Falls back to English if the requested locale is not available.
+   * Used by frontend useExtensionTranslations() hook.
+   */
+  fastify.get('/api/extensions/:extensionId/i18n/:locale', {
+    schema: {
+      tags: ['Extensions'],
+      description: 'Get translations for an extension in a specific locale',
+      params: {
+        type: 'object',
+        properties: {
+          extensionId: { type: 'string' },
+          locale: { type: 'string' },
+        },
+        required: ['extensionId', 'locale'],
+      },
+    },
+  }, async (request, reply) => {
+    try {
+      const { extensionId, locale } = request.params as { extensionId: string; locale: string };
+
+      const extensionPath = join(extensionsDir, extensionId);
+      let manifestPath = join(extensionPath, 'agentplayer.plugin.json');
+      if (!existsSync(manifestPath)) {
+        manifestPath = join(extensionPath, 'agent-player.plugin.json');
+      }
+
+      if (!existsSync(manifestPath)) {
+        return reply.status(404).send({ error: 'Extension not found' });
+      }
+
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+      const i18nDir = manifest.i18n?.dir || 'i18n';
+      const localePath = join(extensionPath, i18nDir, `${locale}.json`);
+
+      if (existsSync(localePath)) {
+        return JSON.parse(readFileSync(localePath, 'utf-8'));
+      }
+
+      // Fall back to English
+      const fallbackPath = join(extensionPath, i18nDir, 'en.json');
+      if (existsSync(fallbackPath)) {
+        return JSON.parse(readFileSync(fallbackPath, 'utf-8'));
+      }
+
+      // No translations available
+      return {};
+    } catch (error: any) {
+      console.error('[Extensions API] ❌ Get i18n translations failed:', error);
+      return handleError(reply, error, 'internal', '[Extensions]');
+    }
+  });
+
   console.log('[Extensions API] ✅ Routes registered');
 }

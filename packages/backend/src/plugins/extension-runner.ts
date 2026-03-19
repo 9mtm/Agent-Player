@@ -139,6 +139,10 @@ export class ExtensionRunner {
       await extension.register(api);
     }
 
+    // Auto-load i18n translations if i18n directory exists
+    const i18nDir = manifest.i18n?.dir || 'i18n';
+    api.registerTranslations(i18nDir);
+
     // Register routes (collected during register() call)
     const routesToRegister = api.__getRoutesToRegister();
     for (const { fn, prefix } of routesToRegister) {

@@ -8,9 +8,10 @@ import type { Database } from 'better-sqlite3';
 import type { Tool } from '../tools/types.js';
 import { registerExtensionTool, unregisterExtensionTool } from '../tools/index.js';
 import { getDatabase } from '../db/index.js';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, resolve, sep } from 'path';
+import { dirname, resolve, sep, join } from 'path';
+import { getTranslator, registerExtensionBackendTranslations } from '../i18n/index.js';
 import { checkPermissions } from '../middleware/extension-permissions.js';
 import { logSecurityEvent } from '../services/audit-logger.js';
 
@@ -111,6 +112,24 @@ export interface ExtensionApi {
       byType: Record<string, number>;
     }>;
   };
+
+  // i18n — internationalization support
+  /**
+   * Register translations from extension's i18n directory.
+   * Reads all JSON files from the directory and registers them as translation bundles.
+   * Extensions place their translations in an i18n/ folder:
+   *   i18n/en.json, i18n/ar.json, etc.
+   * @param localeDir - Relative path to i18n directory (default: 'i18n')
+   */
+  registerTranslations(localeDir?: string): void;
+
+  /**
+   * Get a translated string for this extension's namespace.
+   * @param key - Translation key (e.g., 'title', 'settings.label')
+   * @param locale - Language code (default: 'en')
+   * @param options - Interpolation options (e.g., { count: 5 })
+   */
+  t(key: string, locale?: string, options?: Record<string, any>): string;
 
   // Extension metadata
   extensionId: string;
@@ -537,6 +556,35 @@ export function createExtensionApi(
 
         return { total, unread, byType };
       },
+    },
+
+    // i18n: Register translations from extension's i18n directory
+    registerTranslations(localeDir = 'i18n') {
+      const i18nDir = resolve(extensionDir, localeDir);
+
+      if (!existsSync(i18nDir)) {
+        return; // No i18n directory — skip silently
+      }
+
+      const files = readdirSync(i18nDir).filter(f => f.endsWith('.json'));
+
+      for (const file of files) {
+        const locale = file.replace('.json', '');
+        const filePath = join(i18nDir, file);
+        try {
+          const translations = JSON.parse(readFileSync(filePath, 'utf-8'));
+          registerExtensionBackendTranslations(extensionId, locale, translations);
+          console.log(`[ExtensionApi:${extensionId}] 🌐 Loaded ${locale} translations (${Object.keys(translations).length} keys)`);
+        } catch (err) {
+          console.error(`[ExtensionApi:${extensionId}] ❌ Failed to load ${locale} translations:`, err);
+        }
+      }
+    },
+
+    // i18n: Translator helper for this extension's namespace
+    t(key: string, locale: string = 'en', options?: Record<string, any>): string {
+      const translator = getTranslator(locale);
+      return String(translator(`ext-${extensionId}:${key}`, options || {}));
     },
 
     // Internal: Get pending routes (used by extension-runner)

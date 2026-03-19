@@ -9,6 +9,7 @@
 
 import type { FastifyReply } from 'fastify';
 import { randomUUID } from 'crypto';
+import { getTranslator } from '../i18n/index.js';
 
 /**
  * Error categories for proper HTTP status codes
@@ -32,16 +33,16 @@ export interface ErrorResponse {
 }
 
 /**
- * Error messages that are safe to expose to clients
+ * Translation keys for safe error messages (resolved via i18n at runtime)
  */
-const SAFE_ERROR_MESSAGES: Record<ErrorCategory, string> = {
-  validation: 'Invalid input data',
-  authentication: 'Authentication required',
-  authorization: 'Access denied',
-  not_found: 'Resource not found',
-  conflict: 'Resource conflict',
-  rate_limit: 'Too many requests',
-  internal: 'Internal server error',
+const SAFE_ERROR_KEYS: Record<ErrorCategory, string> = {
+  validation: 'validation',
+  authentication: 'authentication',
+  authorization: 'authorization',
+  not_found: 'notFound',
+  conflict: 'conflict',
+  rate_limit: 'rateLimit',
+  internal: 'internal',
 };
 
 /**
@@ -88,8 +89,11 @@ export function handleError(
   }
 
   // SECURITY: Return sanitized error to client (H-09)
+  // i18n: Translate error message based on request locale
+  const locale = (reply.request as any)?.locale || 'en';
+  const t = getTranslator(locale);
   const statusCode = ERROR_STATUS_CODES[category];
-  const safeMessage = userMessage || SAFE_ERROR_MESSAGES[category];
+  const safeMessage = userMessage || t(SAFE_ERROR_KEYS[category]);
 
   const response: ErrorResponse = {
     error: safeMessage,

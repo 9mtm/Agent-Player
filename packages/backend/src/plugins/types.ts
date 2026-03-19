@@ -138,6 +138,16 @@ export interface PluginManifest {
   // Compatibility
   compatibleWith?: string[]; // Other plugin IDs
   conflicts?: string[]; // Conflicting plugin IDs
+
+  // i18n — internationalization (optional)
+  i18n?: {
+    /** Directory containing locale JSON files (relative to extension root). Default: 'i18n' */
+    dir?: string;
+    /** Default locale for this extension. Default: 'en' */
+    defaultLocale?: string;
+    /** List of locales this extension provides */
+    supportedLocales?: string[];
+  };
 }
 
 /**

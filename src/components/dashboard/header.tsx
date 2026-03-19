@@ -18,6 +18,8 @@ import { useNotifications } from '@/contexts/notification-context';
 import { useDeveloperMode } from '@/contexts/developer-context';
 import { useTheme } from '@/contexts/theme-context';
 import { useRouter } from 'next/navigation';
+import { useTranslation } from 'react-i18next';
+import { LanguageSwitcher } from '@/components/ui/language-switcher';
 
 export function Header() {
     const { user, logout } = useAuth();
@@ -26,6 +28,7 @@ export function Header() {
     const { devMode, toggle: toggleDevMode } = useDeveloperMode();
     const { theme, setTheme } = useTheme();
     const router = useRouter();
+    const { t } = useTranslation('common');
 
     const handleLogout = async () => {
         await logout();
@@ -45,7 +48,7 @@ export function Header() {
                     <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                         type="search"
-                        placeholder="Search workflows, skills..."
+                        placeholder={t('search.placeholder')}
                         className="pl-10"
                     />
                 </div>
@@ -53,12 +56,15 @@ export function Header() {
 
             {/* Actions */}
             <div className="flex items-center gap-2">
+                {/* Language switcher — visible when multiple locales available */}
+                <LanguageSwitcher />
+
                 {/* Avatar widget toggle */}
                 <Button
                     variant="ghost"
                     size="icon"
                     onClick={toggle}
-                    title={isOpen ? 'Close Avatar' : 'Open Avatar Assistant'}
+                    title={isOpen ? t('avatar.close') : t('avatar.open')}
                     className={isOpen ? 'text-indigo-500 bg-indigo-50 dark:bg-indigo-950/40' : ''}
                 >
                     <Bot className="h-5 w-5" />
@@ -70,7 +76,7 @@ export function Header() {
                     size="sm"
                     onClick={toggleDevMode}
                     className={`text-[10px] font-bold px-3 ${devMode ? 'bg-amber-600/20 text-amber-600 hover:bg-amber-600/30 dark:bg-amber-600/30 dark:text-amber-400' : 'text-muted-foreground hover:text-amber-600'}`}
-                    title={devMode ? 'Developer mode ON — click to disable' : 'Enable developer mode'}
+                    title={devMode ? t('devMode.on') : t('devMode.off')}
                 >
                     DEV
                 </Button>
@@ -105,11 +111,11 @@ export function Header() {
                         <DropdownMenuSeparator />
                         <DropdownMenuItem onClick={() => router.push('/dashboard/profile')}>
                             <User className="mr-2 h-4 w-4" />
-                            <span>Profile</span>
+                            <span>{t('profile')}</span>
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => router.push('/dashboard/notifications')} className="relative">
                             <Bell className="mr-2 h-4 w-4" />
-                            <span>Notifications</span>
+                            <span>{t('notifications')}</span>
                             {unreadCount > 0 && (
                                 <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
                                     {unreadCount > 99 ? '99' : unreadCount}
@@ -118,13 +124,13 @@ export function Header() {
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => router.push('/dashboard/security')}>
                             <Shield className="mr-2 h-4 w-4" />
-                            <span>Security</span>
+                            <span>{t('security')}</span>
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
 
                         {/* Theme Toggle - Icon Row */}
                         <div className="px-2 py-2">
-                            <p className="text-xs text-muted-foreground mb-2 px-2">Appearance</p>
+                            <p className="text-xs text-muted-foreground mb-2 px-2">{t('appearance')}</p>
                             <div className="flex items-center gap-1">
                                 <button
                                     onClick={() => setTheme('light')}
@@ -133,10 +139,10 @@ export function Header() {
                                             ? 'bg-accent text-accent-foreground'
                                             : 'hover:bg-accent/50'
                                     }`}
-                                    title="Light Mode"
+                                    title={t('theme.lightMode')}
                                 >
                                     <Sun className="h-4 w-4" />
-                                    <span className="text-xs">Light</span>
+                                    <span className="text-xs">{t('theme.light')}</span>
                                 </button>
                                 <button
                                     onClick={() => setTheme('dark')}
@@ -145,10 +151,10 @@ export function Header() {
                                             ? 'bg-accent text-accent-foreground'
                                             : 'hover:bg-accent/50'
                                     }`}
-                                    title="Dark Mode"
+                                    title={t('theme.darkMode')}
                                 >
                                     <Moon className="h-4 w-4" />
-                                    <span className="text-xs">Dark</span>
+                                    <span className="text-xs">{t('theme.dark')}</span>
                                 </button>
                                 <button
                                     onClick={() => setTheme('system')}
@@ -157,17 +163,17 @@ export function Header() {
                                             ? 'bg-accent text-accent-foreground'
                                             : 'hover:bg-accent/50'
                                     }`}
-                                    title="System Mode"
+                                    title={t('theme.systemMode')}
                                 >
                                     <Monitor className="h-4 w-4" />
-                                    <span className="text-xs">Auto</span>
+                                    <span className="text-xs">{t('theme.auto')}</span>
                                 </button>
                             </div>
                         </div>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem onClick={handleLogout} className="text-red-600 focus:text-red-600">
                             <LogOut className="mr-2 h-4 w-4" />
-                            <span>Logout</span>
+                            <span>{t('logout')}</span>
                         </DropdownMenuItem>
                     </DropdownMenuContent>
                 </DropdownMenu>
