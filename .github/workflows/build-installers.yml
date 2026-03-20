@@ -247,7 +247,7 @@ jobs:
       - name: Build installer
         run: |
           cd installer
-          cargo tauri build --bundles dmg --verbose
+          cargo tauri build --verbose
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
@@ -271,15 +271,28 @@ jobs:
       - name: Rename installer
         run: |
           VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//' || echo "${{ github.event.inputs.version }}")
+
+          # Try to find DMG first
           DMG=$(find installer/target -name "*.dmg" | head -n 1)
-          if [ -z "$DMG" ]; then
-            echo "ERROR: No DMG file found!"
-            find installer/target -type f -name "*agent*" 2>/dev/null || true
-            ls -laR installer/target/release/bundle/ 2>/dev/null || true
-            exit 1
+
+          if [ -n "$DMG" ]; then
+            echo "Found DMG: $DMG"
+            OUTPUT_NAME="agent-player-installer-${VERSION}-macos-x64.dmg"
+            cp "$DMG" "$OUTPUT_NAME"
+          else
+            # If no DMG, try to find .app and create DMG from it
+            APP=$(find installer/target -name "*.app" -type d | head -n 1)
+            if [ -z "$APP" ]; then
+              echo "ERROR: No DMG or APP bundle found!"
+              find installer/target -type f -name "*agent*" 2>/dev/null || true
+              ls -laR installer/target/release/bundle/ 2>/dev/null || true
+              exit 1
+            fi
+            echo "Found APP: $APP, creating DMG..."
+            OUTPUT_NAME="agent-player-installer-${VERSION}-macos-x64.dmg"
+            # Create DMG from .app using hdiutil
+            hdiutil create -volname "Agent Player Installer" -srcfolder "$APP" -ov -format UDZO "$OUTPUT_NAME"
           fi
-          OUTPUT_NAME="agent-player-installer-${VERSION}-macos-x64.dmg"
-          cp "$DMG" "$OUTPUT_NAME"
 
       - name: Generate checksum
         run: |
