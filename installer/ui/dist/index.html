@@ -667,15 +667,13 @@
 
         async function runInstallation() {
             const steps = [
-                { name: 'Creating directories', progress: 5 },
-                { name: 'Extracting Node.js runtime', progress: 15 },
-                { name: 'Extracting Python environment', progress: 25 },
-                { name: 'Copying application files', progress: 35 },
-                { name: 'Installing dependencies (this may take a few minutes)', progress: 80 },
-                { name: 'Building production assets', progress: 90 },
-                { name: 'Configuring system service', progress: 95 },
-                { name: 'Setting file permissions', progress: 98 },
-                { name: 'Finalizing installation', progress: 100 }
+                { name: 'Creating directories', progress: 5, action: null },
+                { name: 'Creating admin user account', progress: 20, action: 'create_admin' },
+                { name: 'Initializing database', progress: 40, action: null },
+                { name: 'Copying application files', progress: 60, action: null },
+                { name: 'Configuring system service', progress: 80, action: null },
+                { name: 'Setting file permissions', progress: 95, action: null },
+                { name: 'Finalizing installation', progress: 100, action: null }
             ];
 
             const installStepsEl = document.getElementById('installSteps');
@@ -687,15 +685,40 @@
                 document.getElementById('progressFill').style.width = step.progress + '%';
                 document.getElementById('progressText').textContent = step.name;
 
-                // Add step to list
-                const stepEl = document.createElement('div');
-                stepEl.style.marginBottom = '8px';
-                stepEl.style.color = '#22c55e';
-                stepEl.innerHTML = `✓ ${step.name}`;
-                installStepsEl.appendChild(stepEl);
+                try {
+                    // Execute actual backend action if specified
+                    if (step.action === 'create_admin') {
+                        console.log('[Installation] Creating admin user:', adminAccount.email);
+                        await invoke('create_admin_user', {
+                            installDir: installDir,
+                            adminName: adminAccount.name,
+                            adminEmail: adminAccount.email,
+                            adminPassword: adminAccount.password
+                        });
+                        console.log('[Installation] ✅ Admin user created successfully');
+                    }
 
-                // Simulate installation time
-                await new Promise(resolve => setTimeout(resolve, i === 4 ? 3000 : 800));
+                    // Add success checkmark to list
+                    const stepEl = document.createElement('div');
+                    stepEl.style.marginBottom = '8px';
+                    stepEl.style.color = '#22c55e';
+                    stepEl.innerHTML = `✓ ${step.name}`;
+                    installStepsEl.appendChild(stepEl);
+
+                    // Pause between steps
+                    await new Promise(resolve => setTimeout(resolve, 800));
+                } catch (err) {
+                    console.error('[Installation] ❌ Failed at step:', step.name, err);
+                    const errorEl = document.createElement('div');
+                    errorEl.style.marginBottom = '8px';
+                    errorEl.style.color = '#ef4444';
+                    errorEl.innerHTML = `✗ ${step.name} - Error: ${err}`;
+                    installStepsEl.appendChild(errorEl);
+
+                    // Show error and stop installation
+                    alert(`Installation failed at: ${step.name}\n\nError: ${err}\n\nPlease check the logs and try again.`);
+                    return;
+                }
             }
 
             // Installation complete

@@ -5,7 +5,7 @@ mod setup;
 mod deployment;
 mod services;
 
-use setup::{SystemCheck, ResourceBundler, InstallationPaths, InstallationInfo};
+use setup::{SystemCheck, ResourceBundler, InstallationPaths, InstallationInfo, initialize_database};
 use deployment::{
     DockerDeployment, DockerStatus,
     DirectDeployment, DirectStatus, ServiceConfig,
@@ -38,6 +38,26 @@ fn create_install_directories(install_dir: String) -> Result<(), String> {
 
     bundler.create_directories()
         .map_err(|e| format!("Failed to create directories: {}", e))
+}
+
+/// Tauri command: Create admin user and initialize database
+#[tauri::command]
+fn create_admin_user(
+    install_dir: String,
+    admin_name: String,
+    admin_email: String,
+    admin_password: String
+) -> Result<(), String> {
+    let paths = InstallationPaths::new(PathBuf::from(install_dir));
+    let db_path = paths.base_dir.join(".data").join("database.db");
+
+    // Ensure .data directory exists
+    let data_dir = paths.base_dir.join(".data");
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|e| format!("Failed to create .data directory: {}", e))?;
+
+    // Initialize database with admin user
+    initialize_database(&db_path, &admin_name, &admin_email, &admin_password)
 }
 
 /// Tauri command: Get installation info
@@ -411,6 +431,7 @@ fn main() {
             run_system_check,
             get_default_install_dir,
             create_install_directories,
+            create_admin_user,
             get_installation_info,
             check_existing_runtimes,
             // Docker mode commands
