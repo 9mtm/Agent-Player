@@ -20,7 +20,7 @@ env:
 jobs:
   build-windows:
     name: Build Windows Installer
-    if: false  # Disabled temporarily - testing one platform at a time
+    if: false  # Disabled - testing macOS fix
     runs-on: windows-latest
     steps:
       - name: Checkout code
@@ -81,7 +81,7 @@ jobs:
 
   build-linux:
     name: Build Linux Installer
-    if: false  # Disabled temporarily - Linux already works, testing macOS now
+    if: false  # Disabled - testing macOS fix
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
@@ -217,6 +217,19 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install
+
+      - name: Build frontend for installer
+        run: |
+          cd installer
+          # Verify ui/dist exists and has content
+          if [ ! -f "ui/dist/index.html" ]; then
+            echo "ERROR: ui/dist/index.html not found!"
+            echo "Creating minimal index.html for testing..."
+            mkdir -p ui/dist
+            echo "<html><body>Agent Player Installer</body></html>" > ui/dist/index.html
+          fi
+          echo "Frontend dist folder contents:"
+          ls -la ui/dist/
 
       - name: Generate macOS icon
         run: |

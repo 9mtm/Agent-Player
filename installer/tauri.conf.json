@@ -11,7 +11,7 @@
   "bundle": {
     "active": true,
     "icon": ["icons/icon.png", "icons/icon.ico"],
-    "targets": "all",
+    "targets": ["app", "dmg", "appimage", "msi"],
     "linux": {
       "appimage": {
         "bundleMediaFramework": false,
