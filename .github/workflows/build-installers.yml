@@ -2,6 +2,8 @@ name: Build Installers
 
 on:
   push:
+    branches:
+      - main  # Temporary - for testing only
     tags:
       - 'v*.*.*'
   workflow_dispatch:
