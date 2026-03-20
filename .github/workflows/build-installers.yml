@@ -2,8 +2,6 @@ name: Build Installers
 
 on:
   push:
-    branches:
-      - main  # Temporary - for testing only
     tags:
       - 'v*.*.*'
   workflow_dispatch:
@@ -20,7 +18,6 @@ env:
 jobs:
   build-windows:
     name: Build Windows Installer
-    if: false  # Disabled - testing macOS fix
     runs-on: windows-latest
     steps:
       - name: Checkout code
@@ -94,7 +91,6 @@ jobs:
 
   build-linux:
     name: Build Linux Installer
-    if: false  # Disabled - testing macOS fix
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
