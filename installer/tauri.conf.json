@@ -1,7 +1,7 @@
 {
-  "productName": "Agent Player Installer",
+  "productName": "Agent Player",
   "version": "1.3.0",
-  "identifier": "com.agentplayer.installer",
+  "identifier": "com.agentplayer.app",
   "build": {
     "beforeDevCommand": "",
     "beforeBuildCommand": "",
@@ -35,6 +35,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Agent Player Setup",
         "width": 900,
         "height": 650,
@@ -45,8 +46,11 @@
       }
     ],
     "security": {
-      "csp": null
-    }
+      "csp": null,
+      "dangerousDisableAssetCspModification": false,
+      "capabilities": []
+    },
+    "withGlobalTauri": true
   },
   "plugins": {
     "updater": {

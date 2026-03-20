@@ -36,7 +36,12 @@ impl InstallationPaths {
     /// Get default installation directory based on OS
     pub fn default() -> Self {
         #[cfg(target_os = "windows")]
-        let base_dir = PathBuf::from(r"C:\Program Files\AgentPlayer");
+        let base_dir = {
+            // Use %LOCALAPPDATA% to avoid needing admin privileges
+            let local_app_data = std::env::var("LOCALAPPDATA")
+                .unwrap_or_else(|_| String::from(r"C:\Users\Public\AppData\Local"));
+            PathBuf::from(local_app_data).join("AgentPlayer")
+        };
 
         #[cfg(target_os = "linux")]
         let base_dir = PathBuf::from("/opt/agent-player");
