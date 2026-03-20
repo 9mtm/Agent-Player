@@ -57,7 +57,14 @@ jobs:
 
       - name: Rename installer
         run: |
-          $version = if ($env:GITHUB_REF -match 'refs/tags/v(.+)') { $matches[1] } else { "${{ github.event.inputs.version }}" }
+          if ($env:GITHUB_REF -match 'refs/tags/v(.+)') {
+            $version = $matches[1]
+          } elseif ("${{ github.event.inputs.version }}" -ne "") {
+            $version = "${{ github.event.inputs.version }}"
+          } else {
+            $version = "1.3.0"
+          }
+          Write-Host "Using version: $version"
           $msiFile = Get-ChildItem -Path "installer\target\release\bundle\msi" -Filter "*.msi" -Recurse | Select-Object -First 1
           $outputName = "agent-player-installer-$version-win-x64.msi"
           Copy-Item $msiFile.FullName -Destination $outputName
@@ -65,7 +72,13 @@ jobs:
 
       - name: Generate checksum
         run: |
-          $version = if ($env:GITHUB_REF -match 'refs/tags/v(.+)') { $matches[1] } else { "${{ github.event.inputs.version }}" }
+          if ($env:GITHUB_REF -match 'refs/tags/v(.+)') {
+            $version = $matches[1]
+          } elseif ("${{ github.event.inputs.version }}" -ne "") {
+            $version = "${{ github.event.inputs.version }}"
+          } else {
+            $version = "1.3.0"
+          }
           $file = "agent-player-installer-$version-win-x64.msi"
           $hash = Get-FileHash -Path $file -Algorithm SHA256
           "$($hash.Hash.ToLower())  $file" | Out-File -FilePath "checksums-windows.txt" -Encoding ASCII
@@ -160,7 +173,17 @@ jobs:
 
       - name: Rename installer
         run: |
-          VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//' || echo "${{ github.event.inputs.version }}")
+          # Get version from tag or use default
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//')
+          else
+            VERSION="${{ github.event.inputs.version }}"
+            if [ -z "$VERSION" ]; then
+              VERSION="1.3.0"
+            fi
+          fi
+          echo "Using version: $VERSION"
+
           APPIMAGE=$(find installer/target -name "*.AppImage" | head -n 1)
           if [ -z "$APPIMAGE" ]; then
             echo "ERROR: No AppImage file found!"
@@ -174,7 +197,15 @@ jobs:
 
       - name: Generate checksum
         run: |
-          VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//' || echo "${{ github.event.inputs.version }}")
+          # Get version from tag or use default
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//')
+          else
+            VERSION="${{ github.event.inputs.version }}"
+            if [ -z "$VERSION" ]; then
+              VERSION="1.3.0"
+            fi
+          fi
           FILE="agent-player-installer-${VERSION}-linux-x86_64.AppImage"
           sha256sum "$FILE" > checksums-linux.txt
 
@@ -283,7 +314,16 @@ jobs:
 
       - name: Rename installer
         run: |
-          VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//' || echo "${{ github.event.inputs.version }}")
+          # Get version from tag or use default
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//')
+          else
+            VERSION="${{ github.event.inputs.version }}"
+            if [ -z "$VERSION" ]; then
+              VERSION="1.3.0"
+            fi
+          fi
+          echo "Using version: $VERSION"
 
           # Try to find DMG first
           DMG=$(find installer/target -name "*.dmg" | head -n 1)
@@ -309,7 +349,15 @@ jobs:
 
       - name: Generate checksum
         run: |
-          VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//' || echo "${{ github.event.inputs.version }}")
+          # Get version from tag or use default
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//')
+          else
+            VERSION="${{ github.event.inputs.version }}"
+            if [ -z "$VERSION" ]; then
+              VERSION="1.3.0"
+            fi
+          fi
           FILE="agent-player-installer-${VERSION}-macos-x64.dmg"
           shasum -a 256 "$FILE" > checksums-macos.txt
 
