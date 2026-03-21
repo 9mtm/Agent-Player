@@ -20,6 +20,8 @@ chrono = "0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
 bcrypt = "0.15"
 uuid = { version = "1.11", features = ["v4"] }
+zip = "2.2"
+futures-util = "0.3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

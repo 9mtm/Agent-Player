@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 
 /// Installation directories structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,46 +186,98 @@ impl ResourceBundler {
         Ok(())
     }
 
-    /// Copy application files to installation directory
+    /// Copy application files to installation directory (FULL INSTALL - Option A)
     pub fn copy_application_files(&self, source_dir: &Path) -> Result<()> {
-        // Copy package.json
-        let package_json = source_dir.join("package.json");
-        if package_json.exists() {
-            fs::copy(
-                &package_json,
-                self.paths.app_dir.join("package.json")
-            ).context("Failed to copy package.json")?;
+        println!("[Bundler] 📂 Copying Agent Player files from: {}", source_dir.display());
+        println!("[Bundler] 📂 To: {}", self.paths.base_dir.display());
+
+        // Exclude these folders (we'll install dependencies later)
+        let exclude = vec![
+            "node_modules",
+            ".next",
+            ".data",
+            ".git",
+            "target",
+            "installer",
+            ".cache",
+            "dist",
+            ".turbo"
+        ];
+
+        // Copy everything except excluded folders
+        copy_dir_recursive_filtered(source_dir, &self.paths.base_dir, &exclude)?;
+
+        println!("[Bundler] ✅ Application files copied successfully");
+        Ok(())
+    }
+
+    /// Install dependencies using pnpm
+    pub fn install_dependencies(&self) -> Result<()> {
+        use std::process::Command;
+
+        println!("[Bundler] 📦 Installing dependencies (this may take 2-3 minutes)...");
+
+        // Install backend dependencies
+        println!("[Bundler] 📦 Installing backend dependencies...");
+        let backend_dir = self.paths.base_dir.join("packages").join("backend");
+        let backend_status = Command::new("pnpm")
+            .args(&["install", "--prod"])
+            .current_dir(&backend_dir)
+            .status()
+            .context("Failed to run pnpm install for backend")?;
+
+        if !backend_status.success() {
+            return Err(anyhow!("pnpm install failed for backend"));
         }
 
-        // Copy packages directory
-        let packages_dir = source_dir.join("packages");
-        if packages_dir.exists() {
-            copy_dir_recursive(&packages_dir, &self.paths.app_dir.join("packages"))?;
+        // Install frontend dependencies
+        println!("[Bundler] 📦 Installing frontend dependencies...");
+        let frontend_status = Command::new("pnpm")
+            .args(&["install", "--prod"])
+            .current_dir(&self.paths.base_dir)
+            .status()
+            .context("Failed to run pnpm install for frontend")?;
+
+        if !frontend_status.success() {
+            return Err(anyhow!("pnpm install failed for frontend"));
         }
 
-        // Copy src directory
-        let src_dir = source_dir.join("src");
-        if src_dir.exists() {
-            copy_dir_recursive(&src_dir, &self.paths.app_dir.join("src"))?;
+        println!("[Bundler] ✅ Dependencies installed successfully");
+        Ok(())
+    }
+
+    /// Build production version (optional - for production deployment)
+    pub fn build_production(&self) -> Result<()> {
+        use std::process::Command;
+
+        println!("[Bundler] 🏗️  Building production version...");
+
+        // Build backend
+        println!("[Bundler] 🏗️  Building backend...");
+        let backend_dir = self.paths.base_dir.join("packages").join("backend");
+        let backend_status = Command::new("pnpm")
+            .args(&["build"])
+            .current_dir(&backend_dir)
+            .status()
+            .context("Failed to build backend")?;
+
+        if !backend_status.success() {
+            return Err(anyhow!("Backend build failed"));
         }
 
-        // Copy public directory
-        let public_dir = source_dir.join("public");
-        if public_dir.exists() {
-            copy_dir_recursive(&public_dir, &self.paths.app_dir.join("public"))?;
+        // Build frontend
+        println!("[Bundler] 🏗️  Building frontend...");
+        let frontend_status = Command::new("pnpm")
+            .args(&["build"])
+            .current_dir(&self.paths.base_dir)
+            .status()
+            .context("Failed to build frontend")?;
+
+        if !frontend_status.success() {
+            return Err(anyhow!("Frontend build failed"));
         }
 
-        // Copy configuration files
-        for config_file in &["next.config.mjs", "tsconfig.json", ".env.example"] {
-            let file_path = source_dir.join(config_file);
-            if file_path.exists() {
-                fs::copy(
-                    &file_path,
-                    self.paths.app_dir.join(config_file)
-                ).context(format!("Failed to copy {}", config_file))?;
-            }
-        }
-
+        println!("[Bundler] ✅ Production build completed successfully");
         Ok(())
     }
 
@@ -262,6 +314,129 @@ impl ResourceBundler {
                 },
             ],
         }
+    }
+
+    /// Download and extract Agent Player files from GitHub Releases (Option 2 - Web Installer)
+    pub async fn download_and_extract_from_github(&self, version: &str) -> Result<()> {
+        use futures_util::StreamExt;
+        use std::io::Write;
+
+        println!("[Bundler] 🌐 Downloading Agent Player v{} from GitHub...", version);
+
+        let url = format!(
+            "https://github.com/9mtm/Agent-Player/releases/download/{}/agent-player-files.zip",
+            version
+        );
+
+        // Create HTTP client with 5-minute timeout
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .context("Failed to create HTTP client")?;
+
+        // Start download
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to download from GitHub")?;
+
+        if !response.status().is_success() {
+            return Err(anyhow!("Failed to download: HTTP {}", response.status()));
+        }
+
+        // Get content length for progress tracking
+        let total_size = response.content_length().unwrap_or(0);
+        println!("[Bundler] 📦 File size: {} MB", total_size / 1_000_000);
+
+        // Create temp file for download
+        let temp_dir = std::env::temp_dir();
+        let temp_file_path = temp_dir.join(format!("agent-player-{}.zip", version));
+        let mut temp_file = fs::File::create(&temp_file_path)
+            .context("Failed to create temporary file")?;
+
+        // Download with progress tracking
+        let mut downloaded: u64 = 0;
+        let mut stream = response.bytes_stream();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.context("Error while downloading file")?;
+            temp_file
+                .write_all(&chunk)
+                .context("Failed to write to temporary file")?;
+
+            downloaded += chunk.len() as u64;
+
+            // Print progress every 10MB
+            if downloaded % 10_000_000 < chunk.len() as u64 {
+                let percent = (downloaded as f64 / total_size as f64 * 100.0) as u32;
+                println!(
+                    "[Bundler] ⬇️  Downloaded: {} MB / {} MB ({}%)",
+                    downloaded / 1_000_000,
+                    total_size / 1_000_000,
+                    percent
+                );
+            }
+        }
+
+        println!("[Bundler] ✅ Download complete: {}", temp_file_path.display());
+
+        // Extract ZIP to installation directory
+        println!("[Bundler] 📂 Extracting files to: {}", self.paths.base_dir.display());
+
+        let zip_file = fs::File::open(&temp_file_path)
+            .context("Failed to open downloaded ZIP file")?;
+
+        let mut archive = zip::ZipArchive::new(zip_file)
+            .context("Failed to read ZIP archive")?;
+
+        let total_files = archive.len();
+        println!("[Bundler] 📄 Extracting {} files...", total_files);
+
+        for i in 0..total_files {
+            let mut file = archive.by_index(i)
+                .context(format!("Failed to access file {} in archive", i))?;
+
+            let outpath = match file.enclosed_name() {
+                Some(path) => self.paths.base_dir.join(path),
+                None => continue,
+            };
+
+            // Create directory if needed
+            if file.name().ends_with('/') {
+                fs::create_dir_all(&outpath)
+                    .context(format!("Failed to create directory: {:?}", outpath))?;
+            } else {
+                // Create parent directory
+                if let Some(parent) = outpath.parent() {
+                    fs::create_dir_all(parent)
+                        .context(format!("Failed to create parent directory: {:?}", parent))?;
+                }
+
+                // Extract file
+                let mut outfile = fs::File::create(&outpath)
+                    .context(format!("Failed to create file: {:?}", outpath))?;
+
+                std::io::copy(&mut file, &mut outfile)
+                    .context(format!("Failed to extract file: {:?}", outpath))?;
+            }
+
+            // Print progress every 100 files
+            if i % 100 == 0 {
+                let percent = ((i + 1) as f64 / total_files as f64 * 100.0) as u32;
+                println!("[Bundler] 📦 Extracted: {} / {} files ({}%)", i + 1, total_files, percent);
+            }
+        }
+
+        println!("[Bundler] ✅ All files extracted successfully");
+
+        // Clean up temporary file
+        fs::remove_file(&temp_file_path)
+            .context("Failed to delete temporary ZIP file")?;
+
+        println!("[Bundler] 🧹 Cleaned up temporary files");
+
+        Ok(())
     }
 }
 
@@ -311,6 +486,38 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 
         if file_type.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)
+                .context(format!("Failed to copy file: {:?}", src_path))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Recursively copy directory with filtering (exclude specific folders)
+fn copy_dir_recursive_filtered(src: &Path, dst: &Path, exclude: &[&str]) -> Result<()> {
+    if !dst.exists() {
+        fs::create_dir_all(dst).context("Failed to create destination directory")?;
+    }
+
+    for entry in fs::read_dir(src).context("Failed to read source directory")? {
+        let entry = entry.context("Failed to read directory entry")?;
+        let file_name = entry.file_name();
+        let file_name_str = file_name.to_string_lossy();
+
+        // Skip excluded folders
+        if exclude.contains(&file_name_str.as_ref()) {
+            println!("[Bundler] ⏭️  Skipping: {}", file_name_str);
+            continue;
+        }
+
+        let file_type = entry.file_type().context("Failed to get file type")?;
+        let src_path = entry.path();
+        let dst_path = dst.join(&file_name);
+
+        if file_type.is_dir() {
+            copy_dir_recursive_filtered(&src_path, &dst_path, exclude)?;
         } else {
             fs::copy(&src_path, &dst_path)
                 .context(format!("Failed to copy file: {:?}", src_path))?;

@@ -668,11 +668,11 @@
         async function runInstallation() {
             const steps = [
                 { name: 'Creating directories', progress: 5, action: null },
-                { name: 'Creating admin user account', progress: 20, action: 'create_admin' },
-                { name: 'Initializing database', progress: 35, action: null },
-                { name: 'Configuring auto-start', progress: 50, action: 'configure_autostart' },
-                { name: 'Copying application files', progress: 70, action: null },
-                { name: 'Setting file permissions', progress: 90, action: null },
+                { name: 'Downloading application files from GitHub (this may take 1-2 minutes)', progress: 15, action: 'download_files' },
+                { name: 'Installing dependencies (this may take 2-3 minutes)', progress: 30, action: 'install_deps' },
+                { name: 'Creating admin user account', progress: 50, action: 'create_admin' },
+                { name: 'Initializing database', progress: 60, action: null },
+                { name: 'Configuring auto-start', progress: 80, action: 'configure_autostart' },
                 { name: 'Finalizing installation', progress: 100, action: null }
             ];
 
@@ -687,7 +687,20 @@
 
                 try {
                     // Execute actual backend action if specified
-                    if (step.action === 'create_admin') {
+                    if (step.action === 'download_files') {
+                        console.log('[Installation] 🌐 Downloading application files from GitHub...');
+                        await invoke('download_and_extract_from_github', {
+                            installDir: installDir,
+                            version: '1.3.0'
+                        });
+                        console.log('[Installation] ✅ Files downloaded and extracted successfully');
+                    } else if (step.action === 'install_deps') {
+                        console.log('[Installation] 📦 Installing dependencies (this will take a few minutes)...');
+                        await invoke('install_dependencies', {
+                            installDir: installDir
+                        });
+                        console.log('[Installation] ✅ Dependencies installed successfully');
+                    } else if (step.action === 'create_admin') {
                         console.log('[Installation] Creating admin user:', adminAccount.email);
                         await invoke('create_admin_user', {
                             installDir: installDir,

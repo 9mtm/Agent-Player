@@ -26,8 +26,9 @@ fn run_system_check() -> SystemCheck {
 /// Tauri command: Get default installation directory
 #[tauri::command]
 fn get_default_install_dir() -> String {
-    let paths = InstallationPaths::default();
-    paths.base_dir.to_string_lossy().to_string()
+    // For development mode: Use the actual project directory
+    // For production: This should be read from a config file
+    String::from(r"C:\MAMP\htdocs\agent\agent_player")
 }
 
 /// Tauri command: Create installation directories
@@ -97,6 +98,55 @@ fn check_existing_runtimes(install_dir: String) -> Result<serde_json::Value, Str
         "node_installed": status.node_installed,
         "python_installed": status.python_installed
     }))
+}
+
+/// Tauri command: Copy application files (Option A - Full Install)
+#[tauri::command]
+fn copy_application_files(install_dir: String, source_dir: String) -> Result<(), String> {
+    println!("[Main] 📂 Copying files from {} to {}", source_dir, install_dir);
+
+    let paths = InstallationPaths::new(PathBuf::from(install_dir));
+    let bundler = ResourceBundler::new(paths);
+
+    bundler.copy_application_files(&PathBuf::from(source_dir))
+        .map_err(|e| format!("Failed to copy files: {}", e))
+}
+
+/// Tauri command: Download and extract files from GitHub (Option B - Stub Installer)
+#[tauri::command]
+async fn download_and_extract_from_github(install_dir: String, version: String) -> Result<(), String> {
+    println!("[Main] 🌐 Downloading Agent Player v{} from GitHub to {}", version, install_dir);
+
+    let paths = InstallationPaths::new(PathBuf::from(install_dir));
+    let bundler = ResourceBundler::new(paths);
+
+    bundler.download_and_extract_from_github(&version)
+        .await
+        .map_err(|e| format!("Failed to download files: {}", e))
+}
+
+/// Tauri command: Install dependencies using pnpm
+#[tauri::command]
+fn install_dependencies(install_dir: String) -> Result<(), String> {
+    println!("[Main] 📦 Installing dependencies in {}", install_dir);
+
+    let paths = InstallationPaths::new(PathBuf::from(install_dir));
+    let bundler = ResourceBundler::new(paths);
+
+    bundler.install_dependencies()
+        .map_err(|e| format!("Failed to install dependencies: {}", e))
+}
+
+/// Tauri command: Build production version (optional)
+#[tauri::command]
+fn build_production(install_dir: String) -> Result<(), String> {
+    println!("[Main] 🏗️  Building production in {}", install_dir);
+
+    let paths = InstallationPaths::new(PathBuf::from(install_dir));
+    let bundler = ResourceBundler::new(paths);
+
+    bundler.build_production()
+        .map_err(|e| format!("Failed to build production: {}", e))
 }
 
 /// Tauri command: Check Docker installation
@@ -492,6 +542,12 @@ fn main() {
             configure_autostart,
             get_installation_info,
             check_existing_runtimes,
+            // Full install commands (Option A)
+            copy_application_files,
+            // Stub install commands (Option B)
+            download_and_extract_from_github,
+            install_dependencies,
+            build_production,
             // Docker mode commands
             check_docker,
             docker_build,
