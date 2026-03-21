@@ -669,10 +669,10 @@
             const steps = [
                 { name: 'Creating directories', progress: 5, action: null },
                 { name: 'Creating admin user account', progress: 20, action: 'create_admin' },
-                { name: 'Initializing database', progress: 40, action: null },
-                { name: 'Copying application files', progress: 60, action: null },
-                { name: 'Configuring system service', progress: 80, action: null },
-                { name: 'Setting file permissions', progress: 95, action: null },
+                { name: 'Initializing database', progress: 35, action: null },
+                { name: 'Configuring auto-start', progress: 50, action: 'configure_autostart' },
+                { name: 'Copying application files', progress: 70, action: null },
+                { name: 'Setting file permissions', progress: 90, action: null },
                 { name: 'Finalizing installation', progress: 100, action: null }
             ];
 
@@ -696,6 +696,17 @@
                             adminPassword: adminAccount.password
                         });
                         console.log('[Installation] ✅ Admin user created successfully');
+                    } else if (step.action === 'configure_autostart') {
+                        console.log('[Installation] Configuring auto-start:', config.autoStart);
+                        if (config.autoStart) {
+                            await invoke('configure_autostart', {
+                                installDir: installDir,
+                                enable: true
+                            });
+                            console.log('[Installation] ✅ Auto-start configured successfully');
+                        } else {
+                            console.log('[Installation] ⏭️ Auto-start disabled by user');
+                        }
                     }
 
                     // Add success checkmark to list
@@ -726,9 +737,44 @@
             setTimeout(() => showStep(8), 1000);
         }
 
-        function launchDashboard() {
-            // Open dashboard in the same Tauri window (not external browser)
-            window.location.href = 'http://localhost:41521';
+        async function launchDashboard() {
+            const btn = document.querySelector('[onclick="launchDashboard()"]');
+            const originalText = btn.textContent;
+
+            try {
+                // Show loading state
+                btn.textContent = 'Starting servers...';
+                btn.disabled = true;
+                btn.style.opacity = '0.5';
+
+                console.log('[Dashboard] Starting backend and frontend servers...');
+
+                // Call Tauri command to start servers
+                await invoke('start_servers', {
+                    installDir: installDir
+                });
+
+                console.log('[Dashboard] ✅ Servers started successfully!');
+
+                // Update button
+                btn.textContent = 'Opening Dashboard...';
+
+                // Wait 2 seconds for servers to stabilize
+                await new Promise(resolve => setTimeout(resolve, 2000));
+
+                // Navigate to dashboard
+                console.log('[Dashboard] Navigating to http://localhost:41521');
+                window.location.href = 'http://localhost:41521';
+
+            } catch (err) {
+                console.error('[Dashboard] ❌ Failed to start servers:', err);
+                alert(`Failed to start servers!\n\nError: ${err}\n\nPlease start manually:\n1. Open terminal in VS Code\n2. Run: cd C:\\MAMP\\htdocs\\agent\\agent_player\\packages\\backend && pnpm dev\n3. Open another terminal\n4. Run: cd C:\\MAMP\\htdocs\\agent\\agent_player && pnpm dev`);
+
+                // Reset button
+                btn.textContent = originalText;
+                btn.disabled = false;
+                btn.style.opacity = '1';
+            }
         }
 
         // Initialize on load

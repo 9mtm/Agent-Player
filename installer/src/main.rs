@@ -5,7 +5,7 @@ mod setup;
 mod deployment;
 mod services;
 
-use setup::{SystemCheck, ResourceBundler, InstallationPaths, InstallationInfo, initialize_database};
+use setup::{SystemCheck, ResourceBundler, InstallationPaths, InstallationInfo, initialize_database, start_development_servers, enable_autostart};
 use deployment::{
     DockerDeployment, DockerStatus,
     DirectDeployment, DirectStatus, ServiceConfig,
@@ -58,6 +58,24 @@ fn create_admin_user(
 
     // Initialize database with admin user
     initialize_database(&db_path, &admin_name, &admin_email, &admin_password)
+}
+
+/// Tauri command: Start development servers (backend + frontend)
+#[tauri::command]
+fn start_servers(install_dir: String) -> Result<(), String> {
+    let install_path = PathBuf::from(install_dir);
+    start_development_servers(&install_path)
+}
+
+/// Tauri command: Configure auto-start on boot
+#[tauri::command]
+fn configure_autostart(install_dir: String, enable: bool) -> Result<(), String> {
+    if enable {
+        let install_path = PathBuf::from(install_dir);
+        enable_autostart(&install_path)
+    } else {
+        Ok(()) // Don't configure autostart if disabled
+    }
 }
 
 /// Tauri command: Get installation info
@@ -412,16 +430,54 @@ fn tray_restart_services() -> Result<(), String> {
 }
 
 fn main() {
-    tauri::Builder::default()
-        .setup(|app| {
-            let window = app.get_webview_window("main").unwrap();
-            window.set_title("Agent Player Setup - Step 2 of 8: System Check")?;
+    // Check for --background flag
+    let args: Vec<String> = std::env::args().collect();
+    let is_background_mode = args.contains(&"--background".to_string());
 
-            // Initialize system tray (Phase 6)
-            // Note: System tray will be visible after installation completes
-            if let Err(e) = SystemTrayService::initialize(app.handle()) {
-                eprintln!("Warning: Failed to initialize system tray: {}", e);
-                // Don't fail setup if tray initialization fails
+    tauri::Builder::default()
+        .setup(move |app| {
+            let window = app.get_webview_window("main").unwrap();
+
+            if is_background_mode {
+                println!("[BackgroundMode] 🚀 Starting in background mode...");
+
+                // Hide the installer window
+                window.hide()?;
+
+                // Initialize system tray
+                if let Err(e) = SystemTrayService::initialize(app.handle()) {
+                    eprintln!("❌ Failed to initialize system tray: {}", e);
+                    return Err(e.into());
+                }
+
+                // Get Agent Player source directory
+                // In production, this should be read from a config file
+                // For now, use the development path
+                let install_dir = PathBuf::from(r"C:\MAMP\htdocs\agent\agent_player");
+
+                println!("[BackgroundMode] 📂 Agent Player directory: {}", install_dir.display());
+
+                // Start development servers in background
+                let install_dir_clone = install_dir.clone();
+                std::thread::spawn(move || {
+                    println!("[BackgroundMode] ⚡ Starting backend and frontend servers...");
+                    if let Err(e) = start_development_servers(&install_dir_clone) {
+                        eprintln!("[BackgroundMode] ❌ Failed to start servers: {}", e);
+                    } else {
+                        println!("[BackgroundMode] ✅ Servers started successfully!");
+                    }
+                });
+
+                println!("[BackgroundMode] ✅ Background mode initialized. System tray active.");
+            } else {
+                // Normal installer mode - show UI
+                window.set_title("Agent Player Setup - Step 1 of 8: Welcome")?;
+
+                // Initialize system tray (will be visible after installation)
+                if let Err(e) = SystemTrayService::initialize(app.handle()) {
+                    eprintln!("⚠️ Warning: Failed to initialize system tray: {}", e);
+                    // Don't fail setup if tray initialization fails
+                }
             }
 
             Ok(())
@@ -432,6 +488,8 @@ fn main() {
             get_default_install_dir,
             create_install_directories,
             create_admin_user,
+            start_servers,
+            configure_autostart,
             get_installation_info,
             check_existing_runtimes,
             // Docker mode commands
