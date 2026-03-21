@@ -128,3 +128,8 @@ apps/ios/fastlane/.env
 docker-compose.extra.yml
 .tgz
 *.tsbuildinfo
+
+# Ignore release files (upload to GitHub Releases only)
+*.zip
+agent-player-files.zip
+temp-release/
