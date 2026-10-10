@@ -1,5 +1,13 @@
 # Agent Player
 
+**Agent Player — AI that shares your world and works alongside you every day.**
+
+Agent Player was built on a vision that goes beyond conversation: a workspace where people and AI agents collaborate through clearly defined tasks, specialized roles, and persistent memory. Agents organize work on task boards, delegate steps to sub-agents, and track execution, while 3D avatars give them an interactive presence that makes collaboration feel closer to working with a real team.
+
+**The project began in May 2025 with one vision: to make AI a partner in your life and work, from idea to execution.**
+
+---
+
 <div dir="rtl" align="right">
 
 **Agent Player — ذكاء اصطناعي يعيش معك الواقع، ويشاركك العمل اليومي.**
