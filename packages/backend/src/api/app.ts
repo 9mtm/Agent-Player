@@ -46,6 +46,7 @@ import { registerAvatarRoutes } from './routes/avatar.js';
 import { agentsConfigRoutes } from './routes/agents-config.js';
 import { approvalsRoutes } from './routes/approvals.js';
 import { agentGrantsRoutes } from './routes/agent-grants.js';
+import { agentPersonalityRoutes } from './routes/agent-personality.js';
 import { storageRoutes } from './routes/storage.js';
 import { uploadsRoutes } from './routes/uploads.js';
 import { claudeLocalRoutes } from './routes/claude-local.js';
@@ -281,6 +282,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   await fastify.register(agentsConfigRoutes);  // 🤖 Agent Configurations CRUD
   await fastify.register(approvalsRoutes); // S1.3: owner approvals for held agent tool calls
   await fastify.register(agentGrantsRoutes); // S1.4: owner view/edit of agent tool grants
+  await fastify.register(agentPersonalityRoutes); // CORE-01: owner-only versioned personality
   await fastify.register(storageRoutes);       // 📦 Local Storage (Cache + CDN)
   await fastify.register(uploadsRoutes);       // 🔒 Runtime uploads in .data/uploads (CL-05)
   await fastify.register(claudeLocalRoutes);   // 🔗 Claude Local Integration

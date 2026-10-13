@@ -18,6 +18,8 @@ import { claudeCliTool } from '../../tools/cli/claude-cli.js';
 import { getJsonRenderPrompt } from './json-render-prompt.js';
 import { resolveProviderApiKey } from '../../credentials/authority.js';
 import { readPersonality, readMemory } from '../../services/agent-files.js';
+import { getCurrentPersonality } from '../../services/personality-store.js';
+import { stripPersonalityExport, traitsToBehavior, type Behavior } from '../../services/personality.js';
 import { outsiderAgentMemoryEnabled } from '../../services/outsider-memory.js';
 import { createModelRouter, ModelRouter } from '../../services/model-router.js';
 import { CostTracker } from '../../services/cost-tracker.js';
@@ -48,6 +50,17 @@ function getPrimaryAgent(): AgentConfig | null {
     // Fallback: first agent
     return db.prepare('SELECT * FROM agents_config LIMIT 1').get() as AgentConfig | null;
   } catch {
+    return null;
+  }
+}
+
+/** Behaviour parameters from the agent's current personality version (CORE-01). */
+function personalityBehavior(agentId: string): Behavior | null {
+  try {
+    const current = getCurrentPersonality(agentId);
+    return current ? traitsToBehavior(current.traits, current.dialect) : null;
+  } catch (err) {
+    console.warn('[Chat] Personality unavailable, using agent defaults');
     return null;
   }
 }
@@ -194,8 +207,13 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // Resolve agent config: specific agent > primary agent > fallback defaults
     const agentConfig = agentId ? getAgentById(agentId) : getPrimaryAgent();
     const resolvedModel = model || agentConfig?.model || DEFAULT_MODEL;
-    const resolvedTemp = temperature ?? agentConfig?.temperature ?? 0.7;
-    const resolvedMaxTokens = maxTokens ?? agentConfig?.max_tokens;
+    // CORE-01: the agent's current personality version sets temperature,
+    // output length and the working-style prompt block. An explicit request
+    // value still wins. Personality never changes tools or approvals: the
+    // tool registry below is built from grants only.
+    const behavior = agentConfig?.id ? personalityBehavior(agentConfig.id) : null;
+    const resolvedTemp = temperature ?? behavior?.temperature ?? agentConfig?.temperature ?? 0.7;
+    const resolvedMaxTokens = maxTokens ?? behavior?.maxTokens ?? agentConfig?.max_tokens;
     const agentName = agentConfig?.name;
 
     // SECURITY (S0-A.14): a channel turn answers an outside sender, so the
@@ -209,7 +227,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
     let memoryFileContent = '';
     if (agentConfig?.id) {
       try {
-        personalityContent = await readPersonality(agentConfig.id);
+        // The generated settings block is a readable export; the database values are used instead.
+        personalityContent = stripPersonalityExport(await readPersonality(agentConfig.id));
         memoryFileContent = includeAgentMemory ? await readMemory(agentConfig.id) : '';
         console.log(`[Chat] 📝 Loaded PERSONALITY.md (${personalityContent.length} chars) and MEMORY.md (${memoryFileContent.length} chars) for agent ${agentConfig.name}`);
       } catch (err) {
@@ -225,8 +244,14 @@ export async function chatRoutes(fastify: FastifyInstance) {
       ? `Your name is ${agentName}.\n\n${rawSystemPrompt}`
       : rawSystemPrompt;
 
-    // Build complete context: Base Prompt + Agent Memory File + Session Memory
+    // Build complete context: Base Prompt + Personality settings + Agent Memory File + Session Memory
     let resolvedSystemPrompt = baseSystemPrompt || '';
+
+    if (behavior) {
+      resolvedSystemPrompt = resolvedSystemPrompt
+        ? `${resolvedSystemPrompt}\n\n${behavior.promptBlock}`
+        : behavior.promptBlock;
+    }
 
     // Add MEMORY.md content if exists
     if (memoryFileContent) {
@@ -385,7 +410,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
 
   // Update ollamaMessages system prompt to include JSON render instructions (for non-Claude providers)
   if (provider !== 'claude' && ollamaMessages.length > 0 && ollamaMessages[0].role === 'system') {
-    ollamaMessages[0].content = finalSystemPrompt;
+    ollamaMessages[0].content = finalSystemPrompt ?? '';
   }
 
   // 💰 COST OPTIMIZATION: Smart model routing based on task complexity
@@ -440,7 +465,8 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       sessionId,
       chatContext,
       toolPolicy,
-      agentId
+      agentId,
+      maxTokens
     );
   }
 
@@ -704,7 +730,7 @@ async function nonStreamChat(
   const tools = toolsRegistryNS.getToolsForAPI();
   if (provider === 'claude' && apiKey) {
     console.log('[Chat] 🤖 Using Claude API (non-stream)');
-    return streamChatClaude(reply, apiKey, model || getSettingsManager().getSettings().claude?.model || 'claude-sonnet-4-5-20250929', ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext, toolPolicy, agentId);
+    return streamChatClaude(reply, apiKey, model || getSettingsManager().getSettings().claude?.model || 'claude-sonnet-4-5-20250929', ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext, toolPolicy, agentId, maxTokens);
   }
 
   // Gemini CLI provider (non-stream path)

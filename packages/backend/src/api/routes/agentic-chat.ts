@@ -90,7 +90,8 @@ export async function streamChatClaude(
   sessionId: string = 'default',
   chatContext?: Partial<ChatContext>,
   toolPolicy?: ChannelToolPolicy,
-  agentId?: string
+  agentId?: string,
+  maxTokens?: number
 ): Promise<FastifyReply> {
   console.log('[Chat] 🚀 Starting Claude agentic stream');
   console.log('[Chat]   Model:', model);
@@ -219,7 +220,7 @@ export async function streamChatClaude(
           systemPrompt: agenticSystemPrompt,
           tools: tools.length > 0 ? tools : undefined,
           temperature,
-          maxTokens: 4096,
+          maxTokens: maxTokens ?? 4096,
         });
       } catch (err: any) {
         const isRateLimit = err.message?.includes('rate_limit_error') || err.message?.includes('rate limit');
