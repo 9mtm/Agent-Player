@@ -12,6 +12,7 @@ import { readdirSync, existsSync, readFileSync } from 'fs';
 import { resolve, join } from 'path';
 import { validateTableName } from '../../db/sql-utils.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
+import { maskSecretFields, restoreMaskedFields } from '../../credentials/secret-mask.js';
 
 export async function extensionsRoutes(fastify: FastifyInstance) {
   const extensionsDir = resolve('./extensions');
@@ -173,9 +174,11 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
       const configRow = db
         .prepare('SELECT config_json FROM extension_configs WHERE extension_id = ?')
         .get(id) as { config_json: string } | undefined;
-      const config = configRow ? JSON.parse(configRow.config_json) : null;
+      let config = configRow ? JSON.parse(configRow.config_json) : null;
       if (config && ['telegram', 'discord'].includes(id)) delete config.bot_token;
       if (config && id === 'agent-connect') delete config.channels;
+      // SECURITY (S0-Q.4): never return secret config values in plaintext
+      config = maskSecretFields(config);
 
       // 3. Get database tables (query SQLite schema for tables created by this extension)
       const allTables = db.prepare(`
@@ -350,7 +353,9 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
 
       return {
         success: true,
-        config,
+        // SECURITY (S0-Q.4): secret-looking keys are masked; a masked value sent
+        // back on PUT keeps the stored secret.
+        config: maskSecretFields(config),
       };
     } catch (error: any) {
       console.error('[Extensions API] ❌ Get config failed:', error);
@@ -411,14 +416,14 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const { id } = request.params;
-      const { config } = request.body;
+      let { config } = request.body;
       if (['telegram', 'discord', 'agent-connect'].includes(id)) {
         return reply.code(409).send({ error: 'Save channel settings through /api/ext/' + id + '/config. Enable the extension and restart the backend first.' });
       }
       const db = getDatabase();
 
       // Check if extension exists
-      const extension = db.prepare('SELECT * FROM extension_configs WHERE extension_id = ?').get(id);
+      const extension = db.prepare('SELECT * FROM extension_configs WHERE extension_id = ?').get(id) as any;
 
       if (!extension) {
         return reply.status(404).send({
@@ -426,6 +431,11 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
           error: 'Extension not found',
         });
       }
+
+      // A masked secret echoed back by the UI keeps the stored value
+      let storedConfig: Record<string, any> = {};
+      try { storedConfig = extension.config_json ? JSON.parse(extension.config_json) : {}; } catch { /* keep {} */ }
+      config = restoreMaskedFields(config, storedConfig);
 
       // Validate config against manifest
       const manifestPath = join(extensionsDir, id, 'agentplayer.plugin.json');

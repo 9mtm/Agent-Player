@@ -134,25 +134,3 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     }
   );
 }
-
-/**
- * Mask API keys (show only first/last 4 chars)
- */
-function maskApiKeys(settings: AgentSettings): AgentSettings {
-  const masked = { ...settings };
-
-  if (masked.claude?.apiKey) {
-    masked.claude.apiKey = maskKey(masked.claude.apiKey);
-  }
-
-  if (masked.openai?.apiKey) {
-    masked.openai.apiKey = maskKey(masked.openai.apiKey);
-  }
-
-  return masked;
-}
-
-function maskKey(key: string): string {
-  if (key.length <= 8) return '****';
-  return `${key.slice(0, 4)}...${key.slice(-4)}`;
-}

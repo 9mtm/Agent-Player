@@ -11,6 +11,7 @@ import {
 } from '../../telephony/voice-handler.js';
 import { processIvrSelection } from '../../telephony/ivr-engine.js';
 import { getCredentialStorage } from '../../credentials/index.js';
+import { isMaskedSecret } from '../../credentials/secret-mask.js';
 import { randomBytes } from 'crypto';
 
 /**
@@ -574,11 +575,12 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
 
       const credStorage = getCredentialStorage();
 
+      // A masked value echoed back by the UI (e.g. "••••") means "keep the stored secret"
       // Save Twilio credentials
-      if (twilioAccountSid) {
+      if (twilioAccountSid && !isMaskedSecret(twilioAccountSid)) {
         await credStorage.set('telephony.twilio.account_sid', twilioAccountSid);
       }
-      if (twilioAuthToken) {
+      if (twilioAuthToken && !isMaskedSecret(twilioAuthToken)) {
         await credStorage.set('telephony.twilio.auth_token', twilioAuthToken);
       }
 
@@ -586,7 +588,7 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
       if (googleProjectId) {
         await credStorage.set('telephony.google.project_id', googleProjectId);
       }
-      if (googleCredentialsJson) {
+      if (googleCredentialsJson && !isMaskedSecret(googleCredentialsJson)) {
         await credStorage.set('telephony.google.credentials_json', googleCredentialsJson);
       }
 

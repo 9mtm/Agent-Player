@@ -13,6 +13,7 @@ import {
 } from '../../encryption/index.js';
 import { getAuditLogger } from '../../audit/index.js';
 import { handleError } from '../error-handler.js';
+import { maskSecret, isMaskedSecret } from '../../credentials/secret-mask.js';
 
 export async function encryptionRoutes(fastify: FastifyInstance) {
   /**
@@ -238,7 +239,8 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
 
   /**
    * POST /api/vault/credentials/:id/retrieve
-   * Retrieve and decrypt a credential
+   * Retrieve a credential. SECURITY (S0-Q.4): every data field is returned
+   * masked ("••••abcd"); the decrypted secret stays inside the backend.
    */
   fastify.post('/api/vault/credentials/:id/retrieve', async (request, reply) => {
     try {
@@ -274,7 +276,10 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
           type: result.credential.type,
           service: result.credential.service,
         },
-        data: result.data,
+        data: Object.fromEntries(
+          Object.entries(result.data || {}).map(([k, v]) => [k, maskSecret(v)])
+        ),
+        masked: true,
       };
     } catch (error: any) {
       // Audit failed access
@@ -302,6 +307,20 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: string };
       const body = request.body as Partial<CredentialInput>;
       const vault = getCredentialVault();
+
+      // A masked field echoed back by a client keeps the stored value
+      if (body.data && typeof body.data === 'object') {
+        const maskedKeys = Object.keys(body.data).filter((k) => isMaskedSecret((body.data as any)[k]));
+        if (maskedKeys.length > 0) {
+          const current = await vault.retrieve(id);
+          const data: Record<string, unknown> = { ...(body.data as Record<string, unknown>) };
+          for (const k of maskedKeys) {
+            if (current && current.data[k] !== undefined) data[k] = current.data[k];
+            else delete data[k];
+          }
+          body.data = data as any;
+        }
+      }
 
       const credential = await vault.update(id, body);
 

@@ -22,10 +22,9 @@ export class EncryptionService implements IEncryptionService {
     } else {
       // Generate a new key if none provided
       this.masterKey = crypto.randomBytes(KEY_LENGTH);
-      console.warn('⚠️  [Encryption] No ENCRYPTION_KEY found!');
-      console.warn('⚠️  [Encryption] Generated new key. Add this to your .env:');
-      console.warn(`ENCRYPTION_KEY=${this.masterKey.toString('hex')}`);
-      console.warn('⚠️  [Encryption] Using temporary key for this session.\n');
+      // SECURITY (S0-Q.4): never print the generated key to stdout/logs.
+      console.warn('⚠️  [Encryption] No ENCRYPTION_KEY set — using a temporary random key for this session.');
+      console.warn('⚠️  [Encryption] Credentials saved now cannot be decrypted after a restart. Set ENCRYPTION_KEY in .env (64 hex chars, e.g. from `openssl rand -hex 32`).\n');
     }
 
     // Validate key length

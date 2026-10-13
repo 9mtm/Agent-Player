@@ -7,6 +7,7 @@
 import type { AgentSettings } from './types.js';
 import { DEFAULT_SETTINGS } from './types.js';
 import { encrypt, decrypt, maskApiKey, isEncrypted } from './encryption.js';
+import { isMaskedSecret } from '../credentials/secret-mask.js';
 import { getDatabase } from '../db/index.js';
 
 export class SettingsManager {
@@ -99,6 +100,18 @@ export class SettingsManager {
   updateSettings(settings: Partial<AgentSettings>): void {
     const current = this.getSettings();
     const updated = { ...current, ...settings };
+
+    // Provider blocks are merged, not replaced. A missing or masked apiKey
+    // (the UI only ever sees a masked key) keeps the stored key.
+    for (const provider of ['claude', 'openai'] as const) {
+      const incoming = settings[provider];
+      if (!incoming) continue;
+      const merged: any = { ...(current[provider] || {}), ...incoming };
+      if (incoming.apiKey === undefined || isMaskedSecret(incoming.apiKey)) {
+        merged.apiKey = current[provider]?.apiKey;
+      }
+      (updated as any)[provider] = merged;
+    }
 
     // Encrypt API keys before saving
     if (updated.claude?.apiKey && !isEncrypted(updated.claude.apiKey)) {

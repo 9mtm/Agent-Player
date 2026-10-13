@@ -5,6 +5,7 @@
  */
 
 import crypto from 'node:crypto';
+import { maskSecret, SECRET_PLACEHOLDER } from '../credentials/secret-mask.js';
 
 // Master encryption key (generated on first run)
 const ALGORITHM = 'aes-256-gcm';
@@ -25,10 +26,9 @@ function getMasterKey(): Buffer {
     const key = crypto.randomBytes(KEY_LENGTH);
     keyHex = key.toString('hex');
 
-    console.log('⚠️  [Encryption] No ENCRYPTION_KEY found!');
-    console.log('⚠️  [Encryption] Generated new key. Add this to your .env:');
-    console.log(`ENCRYPTION_KEY=${keyHex}`);
-    console.log('⚠️  [Encryption] Using temporary key for this session.');
+    // SECURITY (S0-Q.4): never print the generated key to stdout/logs.
+    console.warn('⚠️  [Encryption] No ENCRYPTION_KEY set — using a temporary random key for this session.');
+    console.warn('⚠️  [Encryption] Values encrypted now cannot be decrypted after a restart. Set ENCRYPTION_KEY in .env (64 hex chars, e.g. from `openssl rand -hex 32`).');
 
     return key;
   }
@@ -80,11 +80,8 @@ export function decrypt(ciphertext: string): string {
  * Mask API key for display (show first/last 4 chars)
  */
 export function maskApiKey(apiKey: string): string {
-  if (!apiKey || apiKey.length <= 8) {
-    return '****';
-  }
-
-  return `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}`;
+  // Only the last 4 characters may be shown (S0-Q.4)
+  return maskSecret(apiKey) || SECRET_PLACEHOLDER;
 }
 
 /**

@@ -9,6 +9,7 @@ import { handleError, handleValidationError } from '../error-handler.js';
 import { getCredentialManager } from '../../credentials/manager.js';
 import { getCredentialStorage } from '../../credentials/storage.js';
 import { CredentialType } from '../../credentials/types.js';
+import { maskSecret } from '../../credentials/secret-mask.js';
 import type {
   CreateCredentialRequest,
   UpdateCredentialRequest
@@ -23,7 +24,8 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
 
   /**
    * GET /api/credentials - List all credentials
-   * Pass ?decrypt=true to include decrypted values in the response
+   * Pass ?decrypt=true to include a masked hint of each value ("••••abcd").
+   * SECURITY (S0-Q.4): full secret values are never returned by the API.
    */
   fastify.get('/api/credentials', async (request, reply) => {
     const { userId, skillId, decrypt } = request.query as {
@@ -57,10 +59,11 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
         lastUsed: c.lastUsed
       };
 
-      // Include decrypted value if requested
+      // Include a masked hint of the value if requested (never the full secret)
       if (wantDecrypt) {
         try {
-          base.value = await manager.getValue(c.id);
+          base.value = maskSecret(await manager.getValue(c.id));
+          base.masked = true;
         } catch {
           base.value = null;
         }
@@ -78,7 +81,7 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
 
   /**
    * GET /api/credentials/:id - Get a specific credential
-   * Pass ?decrypt=true to include the decrypted value in the response
+   * Pass ?decrypt=true to include a masked hint of the value ("••••abcd")
    */
   fastify.get<{ Params: { id: string }; Querystring: { decrypt?: string } }>(
     '/api/credentials/:id',
@@ -105,10 +108,11 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
         lastUsed: credential.lastUsed
       };
 
-      // Include decrypted value only when explicitly requested
+      // Include a masked hint only when requested (never the full secret)
       if (wantDecrypt) {
         try {
-          safe.value = await manager.getValue(id);
+          safe.value = maskSecret(await manager.getValue(id));
+          safe.masked = true;
         } catch {
           safe.value = null;
         }
@@ -200,8 +204,9 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
   );
 
   /**
-   * GET /api/credentials/:id/value - Get decrypted value
-   * DANGEROUS: Only use over HTTPS in production!
+   * GET /api/credentials/:id/value - Get a masked hint of the value
+   * SECURITY (S0-Q.4): the decrypted secret stays inside the backend; callers
+   * that need it (skills, tools, channels) use the credential manager directly.
    */
   fastify.get<{ Params: { id: string } }>(
     '/api/credentials/:id/value',
@@ -213,7 +218,8 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
 
         return {
           success: true,
-          value
+          value: maskSecret(value),
+          masked: true
         };
       } catch (err: any) {
         // SECURITY: Use centralized error handler to prevent info disclosure (H-09)

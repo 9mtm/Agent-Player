@@ -7,6 +7,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getCredentialStorage } from './storage.js';
 import { getEncryptionService } from './encryption.js';
+import { isMaskedSecret } from './secret-mask.js';
 import { CredentialType } from './types.js';
 import type {
   Credential,
@@ -116,8 +117,9 @@ export class CredentialManager implements ICredentialManager {
       throw new Error(`Credential ${id} not found`);
     }
 
-    // If value is being updated, re-encrypt it
-    if (updates.value) {
+    // If value is being updated, re-encrypt it. A masked placeholder sent
+    // back by a client (e.g. "••••abcd") means "keep the stored value".
+    if (updates.value && !isMaskedSecret(updates.value)) {
       const { encrypted, iv, authTag } = await this.encryption.encrypt(
         updates.value
       );
