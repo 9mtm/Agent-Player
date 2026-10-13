@@ -10,6 +10,7 @@
 import path from 'path';
 import type { StorageProvider } from './types.js';
 import { LocalStorageProvider } from './local.provider.js';
+import { getUploadsRoot } from '../uploads.js';
 import { createS3ProviderFromEnv, createR2ProviderFromEnv } from './s3.provider.js';
 
 export type { StorageProvider } from './types.js';
@@ -35,9 +36,10 @@ export function getStorageProvider(): StorageProvider {
       break;
     }
     default: {
+      // CL-05: runtime files live in .data/uploads, never under public/.
       const baseDir = process.env.STORAGE_BASE_DIR
         ? path.resolve(process.env.STORAGE_BASE_DIR)
-        : path.join(process.cwd(), '..', '..', 'public', 'storage');
+        : getUploadsRoot();
       console.log(`[StorageProvider] 💾 Using local storage: ${baseDir}`);
       providerInstance = new LocalStorageProvider(baseDir);
       break;

@@ -4,6 +4,7 @@ import { getAudioService } from '../../services/audio-service.js';
 import { generateLipsync, isRhubarbAvailable } from '../../services/lipsync-service.js';
 import fs from 'fs';
 import path from 'path';
+import { uploadsPath, uploadPathFromUrl } from '../../services/uploads.js';
 import { randomBytes } from 'crypto';
 import { handleError } from '../error-handler.js';
 import {
@@ -405,8 +406,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       }
 
       // Ensure logos directory exists
-      const projectRoot = path.join(process.cwd(), '..', '..');
-      const logosDir = path.join(projectRoot, 'public', 'storage', 'logos');
+      const logosDir = uploadsPath('logos');
       if (!fs.existsSync(logosDir)) fs.mkdirSync(logosDir, { recursive: true });
 
       // Generate unique filename with original extension
@@ -436,8 +436,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       if (filename.includes('..') || filename.includes('/')) {
         return reply.status(400).send({ error: 'Invalid filename' });
       }
-      const projectRoot = path.join(process.cwd(), '..', '..');
-      const filePath = path.join(projectRoot, 'public', 'storage', 'logos', filename);
+      const filePath = uploadsPath('logos', filename);
       if (!fs.existsSync(filePath)) return reply.status(404).send({ error: 'Not found' });
 
       const ext = path.extname(filename).toLowerCase();
@@ -712,11 +711,10 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
 
       // Delete uploaded file if exists
       if (avatar.localGlbPath) {
-        const projectRoot = path.join(process.cwd(), '..', '..');
-        const absPath = path.join(projectRoot, 'public', avatar.localGlbPath.replace(/^\//, ''));
-        const avatarDir = path.dirname(absPath);
+        const absPath = uploadPathFromUrl(avatar.localGlbPath);
+        const avatarDir = absPath ? path.dirname(absPath) : null;
         try {
-          if (fs.existsSync(avatarDir)) fs.rmSync(avatarDir, { recursive: true, force: true });
+          if (avatarDir && fs.existsSync(avatarDir)) fs.rmSync(avatarDir, { recursive: true, force: true });
         } catch {}
       }
 
@@ -759,8 +757,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       }
 
       const id = randomBytes(8).toString('hex');
-      const projectRoot = path.join(process.cwd(), '..', '..');
-      const avatarDir = path.join(projectRoot, 'public', 'storage', 'avatars', 'user', userId, id);
+      const avatarDir = uploadsPath('avatars', 'user', userId, id);
       fs.mkdirSync(avatarDir, { recursive: true });
 
       const modelFilename = 'avatar' + ext;
@@ -813,8 +810,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
 
       const buffer = await data.toBuffer();
 
-      const projectRoot = path.join(process.cwd(), '..', '..');
-      const avatarDir = path.join(projectRoot, 'public', 'storage', 'avatars', 'user', avatar.userId, id);
+      const avatarDir = uploadsPath('avatars', 'user', avatar.userId, id);
       fs.mkdirSync(avatarDir, { recursive: true });
 
       const previewPath = path.join(avatarDir, 'preview.png');
@@ -852,8 +848,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       const glbBuffer = await downloadAvatarModel(avatar.glbUrl);
       const previewBuf = await downloadAvatarPreview(avatar.glbUrl);
 
-      const projectRoot = path.join(process.cwd(), '..', '..');
-      const avatarDir = path.join(projectRoot, 'public', 'storage', 'avatars', 'user', avatar.userId, id);
+      const avatarDir = uploadsPath('avatars', 'user', avatar.userId, id);
       fs.mkdirSync(avatarDir, { recursive: true });
       writeFileAtomic(path.join(avatarDir, 'avatar.glb'), glbBuffer);
       const localGlbPath = `/storage/avatars/user/${avatar.userId}/${id}/avatar.glb`;
@@ -905,8 +900,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       const previewBuf = await downloadAvatarPreview(glbUrl); // optional
 
       const id = randomBytes(8).toString('hex');
-      const projectRoot = path.join(process.cwd(), '..', '..');
-      const avatarDir = path.join(projectRoot, 'public', 'storage', 'avatars', 'user', userId, id);
+      const avatarDir = uploadsPath('avatars', 'user', userId, id);
       fs.mkdirSync(avatarDir, { recursive: true });
       writeFileAtomic(path.join(avatarDir, 'avatar.glb'), glbBuffer);
       const localGlbPath = `/storage/avatars/user/${userId}/${id}/avatar.glb`;
@@ -981,8 +975,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
           return reply.status(400).send({ error: `Unsupported file type: ${ext}` });
         }
 
-        const projectRoot = path.join(process.cwd(), '..', '..');
-        const bgDir = path.join(projectRoot, 'public', 'storage', 'backgrounds', userId);
+        const bgDir = uploadsPath('backgrounds', userId);
         fs.mkdirSync(bgDir, { recursive: true });
 
         const filename = `bg-${Date.now()}${ext}`;
@@ -1022,8 +1015,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
         }
 
         const id = randomBytes(8).toString('hex');
-        const projectRoot = path.join(process.cwd(), '..', '..');
-        const animDir = path.join(projectRoot, 'public', 'storage', 'animations', 'user', userId, id);
+        const animDir = uploadsPath('animations', 'user', userId, id);
         fs.mkdirSync(animDir, { recursive: true });
 
         const animFilename = 'anim' + ext;
@@ -1102,10 +1094,10 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
         if (!anim) return reply.status(404).send({ error: 'Animation not found' });
 
         // Delete file from disk
-        const projectRoot = path.join(process.cwd(), '..', '..');
-        const absDir = path.dirname(path.join(projectRoot, 'public', anim.localPath.replace(/^\//, '')));
+        const animFile = uploadPathFromUrl(anim.localPath);
+        const absDir = animFile ? path.dirname(animFile) : null;
         try {
-          if (fs.existsSync(absDir)) fs.rmSync(absDir, { recursive: true, force: true });
+          if (absDir && fs.existsSync(absDir)) fs.rmSync(absDir, { recursive: true, force: true });
         } catch { /* ignore cleanup errors */ }
 
         db.prepare('DELETE FROM user_animations WHERE id = ? AND user_id = ?').run(id, userId);

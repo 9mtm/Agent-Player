@@ -76,7 +76,7 @@ export interface ExtensionApi {
   storage: {
     /**
      * Save file to extension's isolated storage
-     * Files go to public/storage/extensions/{extensionId}/
+     * Files go to .data/uploads/cdn/extensions/{extensionId}/ (storage manager, cdn zone)
      */
     save(
       filename: string,
@@ -501,7 +501,7 @@ export function createExtensionApi(
     storage: {
       /**
        * Save file to extension's isolated storage
-       * Files go to public/storage/extensions/{extensionId}/
+       * Files go to .data/uploads/cdn/extensions/{extensionId}/ (storage manager, cdn zone)
        */
       async save(
         filename: string,

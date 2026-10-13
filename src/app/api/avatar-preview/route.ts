@@ -13,10 +13,12 @@ import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
 import { getSessionUser } from '@/lib/session';
+import { avatarModelCacheDir } from '@/lib/uploads-dir';
 
 export const runtime = 'nodejs';
 
-const CACHE_DIR = path.join(process.cwd(), 'public', 'storage', 'cache');
+// CL-05: cache lives in .data/uploads, not in public/ (served via app/storage/[...path]).
+const CACHE_DIR = avatarModelCacheDir();
 
 async function ensureCacheDir() {
   try { await fs.mkdir(CACHE_DIR, { recursive: true }); } catch { /* exists */ }

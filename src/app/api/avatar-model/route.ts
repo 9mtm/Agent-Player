@@ -2,7 +2,7 @@
  * Avatar Model Proxy & Cache
  *
  * Downloads a Ready Player Me GLB from its CDN URL (allow-listed hosts only), caches it in
- * /public/avatar-cache/<hash>.glb, and returns a local URL.
+ * .data/uploads/cache/avatar-models/<hash>.glb, and returns its /storage/... URL.
  * On subsequent requests for the same URL, returns the cached version immediately.
  *
  * Query param: ?url=<encoded-glb-url>
@@ -13,12 +13,14 @@ import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import { getSessionUser } from '@/lib/session';
+import { avatarModelCacheDir, avatarModelCacheUrl } from '@/lib/uploads-dir';
 import { checkUrl, SafeFetchError } from '@/lib/net/safe-fetch';
 import { AVATAR_MODEL_HOSTS, downloadAvatarModel } from '@/lib/net/avatar-download';
 
 export const runtime = 'nodejs';
 
-const CACHE_DIR = path.join(process.cwd(), 'public', 'storage', 'cache');
+// CL-05: cache lives in .data/uploads, not in public/ (served via app/storage/[...path]).
+const CACHE_DIR = avatarModelCacheDir();
 
 async function ensureCacheDir() {
   try { await fs.mkdir(CACHE_DIR, { recursive: true }); } catch { /* exists */ }
@@ -47,7 +49,7 @@ export async function GET(req: Request) {
   await ensureCacheDir();
   const filename = urlToFilename(glbUrl);
   const cachePath = path.join(CACHE_DIR, filename);
-  const localUrl = `/storage/cache/${filename}`;
+  const localUrl = avatarModelCacheUrl(filename);
 
   try {
     await fs.access(cachePath);
@@ -83,7 +85,7 @@ export async function POST(req: Request) {
   await ensureCacheDir();
   const filename = urlToFilename(glbUrl);
   const cachePath = path.join(CACHE_DIR, filename);
-  const localUrl = `/storage/cache/${filename}`;
+  const localUrl = avatarModelCacheUrl(filename);
 
   // Already cached
   try { await fs.access(cachePath); return NextResponse.json({ localUrl }); } catch { /* continue */ }

@@ -314,8 +314,8 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
       }
 
       // Also delete extension storage directory from disk
-      const { join: pathJoin } = await import('path');
-      const extensionStorageDir = pathJoin(process.cwd(), '..', '..', 'public', 'storage', 'extensions', id);
+      const { uploadsPath } = await import('../../services/uploads.js');
+      const extensionStorageDir = uploadsPath('extensions', id);
       if (existsSync(extensionStorageDir)) {
         const { rmSync } = await import('fs');
         rmSync(extensionStorageDir, { recursive: true, force: true });

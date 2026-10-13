@@ -87,7 +87,7 @@ export const OPTIONAL_ROUTES: ReadonlySet<string> = new Set([
   key('GET', '/api/storage/:id'),
   key('GET', '/api/storage/:id/info'),
   key('GET', '/api/audio/download/:id'),      // UUID ids, played via <audio src>
-  key('GET', '/api/avatar/logo/:filename'),   // same files as public/storage/logos
+  key('GET', '/api/avatar/logo/:filename'),   // same files as .data/uploads/logos (CL-05)
   // Static asset lists.
   key('GET', '/api/avatars/system'),
   key('GET', '/api/multiverse/system'),

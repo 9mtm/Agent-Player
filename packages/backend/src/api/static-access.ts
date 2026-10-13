@@ -2,13 +2,12 @@
  * Which files under the repo `public/` folder the backend serves without a
  * token (S0-A.7).
  *
- * Decision: under `public/storage/` only an explicit ALLOW-list of display
- * subtrees is served statically (files pages load with <img> or the 3D
- * loaders): storage/avatars, storage/backgrounds, storage/logos,
- * storage/profiles, storage/animations. Everything else there (cache,
- * cdn uploads, extension data, anything added later) is denied and stays
- * reachable only through `/api/storage/:id` (random UUID ids). Files outside
- * storage/ are the shipped public assets.
+ * Decision: nothing under `public/storage/` is served statically. Runtime
+ * uploads moved to `.data/uploads` (CL-05, src/services/uploads.ts) and are
+ * served only through authenticated routes (`/api/uploads/*`,
+ * `/api/storage/:id`); a leftover `public/storage` folder stays unreachable.
+ * Files outside storage/ are the shipped (bundled) public assets.
+ * PUBLIC_STORAGE_SUBTREES is the (now empty) allow-list.
  *
  * The check does not trust string normalization alone (the file system may
  * be case-insensitive, normalize Unicode, follow symlinks):
@@ -22,13 +21,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const PUBLIC_STORAGE_SUBTREES: readonly string[] = [
-  'avatars',
-  'backgrounds',
-  'logos',
-  'profiles',
-  'animations',
-];
+export const PUBLIC_STORAGE_SUBTREES: readonly string[] = [];
 
 // Printable ASCII; first char not a space; last char not a dot or space.
 const SAFE_SEGMENT = /^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x2d\x2f-\x7e])?$/;

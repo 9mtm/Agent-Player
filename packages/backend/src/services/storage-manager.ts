@@ -112,9 +112,8 @@ export class StorageManager {
         'extensions', // Extension-specific folders created on-demand
       ];
       for (const dir of dirs) {
-        const projectRoot = path.join(process.cwd(), '..', '..');
-        const absPath = path.join(projectRoot, 'public', 'storage', dir);
-        if (!fs.existsSync(absPath)) fs.mkdirSync(absPath, { recursive: true });
+        const absPath = provider.absolutePath(dir);
+        if (!fs.existsSync(absPath)) fs.mkdirSync(absPath, { recursive: true, mode: 0o700 });
       }
     }
 
@@ -125,12 +124,13 @@ export class StorageManager {
   }
 
   /**
-   * Scan public/storage on disk and index any files missing from storage_files table.
+   * Scan the local storage root (.data/uploads, CL-05) and index any files missing from storage_files table.
    * Covers cache/, cdn/, avatars/, and backgrounds/ directories.
    */
   private syncDiskFiles(): void {
-    const projectRoot = path.join(process.cwd(), '..', '..');
-    const storageRoot = path.join(projectRoot, 'public', 'storage');
+    const provider = getStorageProvider();
+    if (!(provider instanceof LocalStorageProvider)) return;
+    const storageRoot = provider.absolutePath('');
     if (!fs.existsSync(storageRoot)) return;
 
     const db = getDatabase();

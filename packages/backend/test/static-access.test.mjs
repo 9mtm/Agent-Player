@@ -1,5 +1,5 @@
-// S0-A.7: under public/storage only an allow-list of display subtrees is
-// served by @fastify/static; the canonical on-disk path is checked too.
+// S0-A.7 + CL-05: nothing under public/storage is served by @fastify/static
+// (uploads live in .data/uploads); the canonical on-disk path is checked too.
 // Run: node --import tsx --test test/static-access.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -61,10 +61,11 @@ test('odd segments are refused: trailing dot/space, non-ASCII, control chars', a
   }
 });
 
-test('allow-listed display assets and shipped public files are served', async () => {
-  for (const url of ['/storage/profiles/p.png', '/storage/avatars/user/1/a/avatar.glb', '/storage/logos/l.png', '/icons/x.svg']) {
+test('shipped public files are served; former display subtrees under storage/ are not (CL-05)', async () => {
+  assert.equal((await get('/icons/x.svg')).statusCode, 200);
+  for (const url of ['/storage/profiles/p.png', '/storage/avatars/user/1/a/avatar.glb', '/storage/logos/l.png']) {
     const res = await get(url);
-    assert.equal(res.statusCode, 200, `${url} -> ${res.statusCode}`);
+    assert.equal(res.statusCode, 404, `${url} -> ${res.statusCode}`);
   }
 });
 

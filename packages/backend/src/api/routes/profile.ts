@@ -3,6 +3,7 @@ import { getDatabase } from '../../db/index.js';
 import { getUserIdFromRequest as getAuthUserId } from '../../auth/jwt.js';
 import { handleError } from '../error-handler.js';
 import path from 'path';
+import { uploadsPath, uploadPathFromUrl } from '../../services/uploads.js';
 import fs from 'fs';
 import { randomBytes } from 'crypto';
 
@@ -165,8 +166,7 @@ export async function profileRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'Only image files allowed' });
       }
 
-      const projectRoot = path.join(process.cwd(), '..', '..');
-      const uploadDir = path.join(projectRoot, 'public', 'storage', 'profiles');
+      const uploadDir = uploadsPath('profiles');
       fs.mkdirSync(uploadDir, { recursive: true });
 
       const filename = `user-${userId}-${randomBytes(4).toString('hex')}${ext}`;
@@ -202,9 +202,8 @@ export async function profileRoutes(fastify: FastifyInstance) {
       // Delete file if exists
       if (user?.profile_picture_url) {
         try {
-          const projectRoot = path.join(process.cwd(), '..', '..');
-          const filePath = path.join(projectRoot, 'public', user.profile_picture_url);
-          if (fs.existsSync(filePath)) {
+          const filePath = uploadPathFromUrl(user.profile_picture_url);
+          if (filePath && fs.existsSync(filePath)) {
             fs.unlinkSync(filePath);
           }
         } catch (err) {

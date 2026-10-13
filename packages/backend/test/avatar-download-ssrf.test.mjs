@@ -11,7 +11,7 @@ import { randomBytes } from 'node:crypto';
 
 const backendDir = process.cwd();
 const dir = mkdtempSync(join(tmpdir(), 'ap-avatar-ssrf-'));
-// The avatar routes write to <cwd>/../../public/storage: run from dir/pkg/backend.
+// The avatar routes write to <cwd>/../../.data/uploads (CL-05): run from dir/pkg/backend.
 const cwd = join(dir, 'pkg', 'backend');
 mkdirSync(join(cwd, '.data'), { recursive: true });
 process.chdir(cwd);
@@ -150,7 +150,7 @@ test('size, content type and GLB magic are enforced', async () => {
 });
 
 const as = { authorization: `Bearer ${generateToken('t-alice', 1)}` };
-const storage = join(dir, 'public', 'storage', 'avatars', 'user');
+const storage = join(dir, '.data', 'uploads', 'avatars', 'user');
 
 test('POST /api/avatars/download: refused URLs answer 400 and write nothing; anonymous 401', async () => {
   ad.setAvatarFetchDepsForTests(okWorld());
@@ -174,6 +174,7 @@ test('POST /api/avatars/download: a Ready Player Me GLB is saved for the token u
   assert.deepEqual(readFileSync(file), GLB);
   assert.ok(existsSync(join(storage, 't-alice', avatar.id, 'preview.png')));
   assert.deepEqual(readdirSync(join(storage, 't-alice', avatar.id)).filter(f => f.endsWith('.tmp')), [], 'no temp files left');
+  assert.ok(!existsSync(join(dir, 'public', 'storage')), 'nothing written under public/ (CL-05)');
 });
 
 test('POST /api/avatars/:id/localize uses the same guard for the stored glbUrl', async () => {
