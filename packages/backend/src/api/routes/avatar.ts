@@ -14,6 +14,34 @@ import { handleError } from '../error-handler.js';
 export async function registerAvatarRoutes(fastify: FastifyInstance) {
   fastify.log.info('[Avatar API] ✅ Routes registered');
 
+  // SECURITY (S0-A.6): the user is the signed-in user (request.authUser, set
+  // by the auth gate), never a `userId` from the query or body: any such
+  // value is replaced. Routes that take an avatar id only act on the
+  // caller's own avatars (the owner may act on all).
+  fastify.addHook('preHandler', async (request, reply) => {
+    const authUser = (request as any).authUser as { id: string; role: string } | null | undefined;
+    if (!authUser) {
+      // Only the optional-auth routes (system list, logos) run anonymously.
+      const anonymousOk = ['/api/avatars/system', '/api/avatar/logo/:filename'].includes(request.routeOptions.url || '');
+      if (anonymousOk) return;
+      return reply.status(401).send({ error: 'Authentication required' });
+    }
+    const uid = String(authUser.id);
+    // Routes read the user from query.userId or body.userId: always the caller.
+    if (request.query && typeof request.query === 'object') (request.query as any).userId = uid;
+    if (request.body && typeof request.body === 'object' && !Array.isArray(request.body)) {
+      (request.body as any).userId = uid;
+    }
+    const url = request.routeOptions.url || '';
+    if (url.startsWith('/api/avatars/:id') && authUser.role !== 'owner') {
+      const id = (request.params as any)?.id;
+      const row = getDatabase().prepare('SELECT user_id FROM user_avatars WHERE id = ?').get(id) as { user_id: string } | undefined;
+      if (row && String(row.user_id) !== uid) {
+        return reply.status(404).send({ error: 'Avatar not found' });
+      }
+    }
+  });
+
   // GET /api/avatar/settings - Get user's avatar settings
   fastify.get<{
     Querystring: { userId: string };
@@ -944,7 +972,8 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
     '/api/avatar/background/upload',
     async (request, reply) => {
       try {
-        const userId = (request.query as { userId?: string }).userId || '1';
+        const userId = (request.query as { userId?: string }).userId;
+        if (!userId) return reply.status(401).send({ error: 'Authentication required' });
         const data = await request.file();
         if (!data) return reply.status(400).send({ error: 'No file provided' });
 

@@ -3,7 +3,8 @@
  * CRUD operations for managing workflows
  */
 
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, FastifyRequest } from 'fastify';
+import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { getDatabase } from '../../db/index.js';
 import { randomUUID } from 'crypto';
 import { WorkflowExecutor } from '../../workflows/executor.js';
@@ -48,11 +49,12 @@ interface WorkflowExecution {
 export async function workflowRoutes(fastify: FastifyInstance) {
     const db = getDatabase();
 
-    // Helper function to get user_id
-    // TODO: Extract from JWT token in production
-    function getUserId(): string {
-        const firstUser = db.getDb().prepare('SELECT id FROM users LIMIT 1').get() as { id: string } | undefined;
-        return firstUser?.id || 'unknown';
+    // SECURITY (S0-A.6): the user is the verified token user (the auth gate
+    // sets request.authUser; getUserIdFromRequest is the second line), never
+    // "the first user in the database".
+    function getUserId(request: FastifyRequest): string {
+        const authUser = (request as any).authUser as { id: string } | null | undefined;
+        return authUser?.id || getUserIdFromRequest(request);
     }
 
     // Get all workflows for current user
@@ -60,7 +62,7 @@ export async function workflowRoutes(fastify: FastifyInstance) {
         try {
             // TODO: Get user_id from JWT token in request.headers.authorization
             // For now, we'll use a default user
-            const user_id = getUserId();
+            const user_id = getUserId(request);
 
             const workflows = db.getDb().prepare(`
                 SELECT id, user_id, name, description, enabled, nodes, edges, created_at, updated_at
@@ -89,7 +91,7 @@ export async function workflowRoutes(fastify: FastifyInstance) {
     fastify.get('/api/workflows/:id', async (request, reply) => {
         try {
             const { id } = request.params as { id: string };
-            const user_id = getUserId();
+            const user_id = getUserId(request);
 
             const workflow = db.getDb().prepare(`
                 SELECT id, user_id, name, description, enabled, nodes, edges, created_at, updated_at
@@ -141,7 +143,7 @@ export async function workflowRoutes(fastify: FastifyInstance) {
                 return reply.status(400).send({ error: 'Edges must be an array' });
             }
 
-            const user_id = getUserId();
+            const user_id = getUserId(request);
             const id = randomUUID();
             const now = new Date().toISOString();
 
@@ -196,7 +198,7 @@ export async function workflowRoutes(fastify: FastifyInstance) {
                 enabled?: boolean;
             };
 
-            const user_id = getUserId();
+            const user_id = getUserId(request);
 
             // Check if workflow exists
             const existing = db.getDb().prepare(`
@@ -290,7 +292,7 @@ export async function workflowRoutes(fastify: FastifyInstance) {
     fastify.delete('/api/workflows/:id', async (request, reply) => {
         try {
             const { id } = request.params as { id: string };
-            const user_id = getUserId();
+            const user_id = getUserId(request);
 
             // Check if workflow exists
             const existing = db.getDb().prepare(`
@@ -321,7 +323,7 @@ export async function workflowRoutes(fastify: FastifyInstance) {
     fastify.post('/api/workflows/:id/execute', async (request, reply) => {
         try {
             const { id } = request.params as { id: string };
-            const user_id = getUserId();
+            const user_id = getUserId(request);
 
             // Get workflow
             const workflow = db.getDb().prepare(`
@@ -381,7 +383,7 @@ export async function workflowRoutes(fastify: FastifyInstance) {
         try {
             const { id } = request.params as { id: string };
             const { limit = 10 } = request.query as { limit?: number };
-            const user_id = getUserId();
+            const user_id = getUserId(request);
 
             // Verify workflow belongs to user
             const workflow = db.getDb().prepare(`
