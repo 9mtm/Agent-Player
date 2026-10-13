@@ -35,10 +35,6 @@ const mask = await import('../src/credentials/secret-mask.ts');
 
 const db = getDatabase();
 await db.initialize();
-// Pre-existing schema conflict: schema.sql creates an older `credentials` table
-// (no skill_id) that CredentialStorage.initialize() cannot index. On this empty
-// throwaway DB, drop it so the storage creates its own table (tracked in HANDOFF).
-db.prepare('DROP TABLE IF EXISTS credentials').run();
 
 const app = Fastify();
 await app.register(credentialsRoutes);

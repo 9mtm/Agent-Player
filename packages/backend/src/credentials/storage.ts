@@ -36,6 +36,10 @@ export class CredentialStorage implements ICredentialStorage {
     // Create credentials directory
     await fs.mkdir(this.credentialsDir, { recursive: true });
 
+    // Older databases may hold a legacy `credentials` table (from an earlier
+    // schema.sql) without skill_id etc. Upgrade it before creating indexes.
+    this.upgradeLegacyTable();
+
     // Create database table
     this.db.getDb().exec(`
       CREATE TABLE IF NOT EXISTS credentials (
@@ -65,6 +69,42 @@ export class CredentialStorage implements ICredentialStorage {
     `);
 
     console.log(`[Credentials] 🔐 Storage initialized: ${this.credentialsDir}`);
+  }
+
+  /**
+   * F-03: bring a legacy `credentials` table (old schema.sql: no skill_id,
+   * user_id NOT NULL, type CHECK without oauth_token/secret) up to date.
+   * - Table missing or already current: nothing happens.
+   * - Legacy and empty: dropped, so the current definition is created below.
+   * - Legacy with rows: never dropped; only the missing columns are added
+   *   (old NOT NULL/CHECK constraints stay until an explicit, approved rebuild).
+   */
+  private upgradeLegacyTable(): void {
+    const db = this.db.getDb();
+    const columns = db.prepare("SELECT name FROM pragma_table_info('credentials')").all() as Array<{ name: string }>;
+    if (columns.length === 0) return;
+    const have = new Set(columns.map(c => c.name));
+    if (have.has('skill_id')) return;
+
+    const { count } = db.prepare('SELECT COUNT(*) AS count FROM credentials').get() as { count: number };
+    if (count === 0) {
+      db.exec('DROP TABLE credentials');
+      console.log('[Credentials] Replaced empty legacy credentials table with the current definition');
+      return;
+    }
+
+    const wanted: Array<[string, string]> = [
+      ['description', 'TEXT'],
+      ['skill_id', 'TEXT'],
+      ['refresh_token', 'TEXT'],
+      ['expires_at', 'TEXT'],
+      ['scopes', 'TEXT'],
+      ['last_used', 'TEXT'],
+    ];
+    for (const [name, type] of wanted) {
+      if (!have.has(name)) db.exec(`ALTER TABLE credentials ADD COLUMN ${name} ${type}`);
+    }
+    console.warn('[Credentials] Legacy credentials table upgraded in place (columns added; existing rows kept)');
   }
 
   /**

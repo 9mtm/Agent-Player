@@ -162,18 +162,25 @@ CREATE TABLE IF NOT EXISTS workflow_executions (
 );
 
 -- Credentials (encrypted storage)
+-- Same definition as src/credentials/storage.ts (CredentialStorage owns this table).
+-- An older definition here (no skill_id, restrictive type CHECK) made
+-- CredentialStorage.initialize() fail on fresh databases (F-03).
 CREATE TABLE IF NOT EXISTS credentials (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
     name TEXT NOT NULL,
-    type TEXT NOT NULL CHECK(type IN ('api_key', 'oauth', 'password', 'ssh_key', 'other')),
+    type TEXT NOT NULL,
     encrypted_value TEXT NOT NULL,
     iv TEXT NOT NULL,
     auth_tag TEXT NOT NULL,
-    metadata TEXT, -- JSON (non-sensitive data like username, url, etc.)
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    description TEXT,
+    skill_id TEXT,
+    user_id TEXT,
+    refresh_token TEXT,
+    expires_at TEXT,
+    scopes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_used TEXT
 );
 
 -- Scheduled Jobs (Cron)
