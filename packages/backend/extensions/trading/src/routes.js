@@ -55,6 +55,14 @@ function getUserId(request) {
  * Register all trading routes
  * @param {FastifyInstance} fastify - Fastify instance
  */
+/** Origins allowed to read the SSE stream: the same list as the core CORS config. */
+function streamAllowedOrigins() {
+  return (process.env.ALLOWED_ORIGINS || 'http://localhost:41521')
+    .split(',')
+    .map((o) => o.trim())
+    .filter((o) => o && o !== '*');
+}
+
 export async function registerTradingRoutes(fastify) {
   const db = fastify.db;
   const credentialManager = getCredentialManager();
@@ -2584,10 +2592,15 @@ export async function registerTradingRoutes(fastify) {
 
       console.log(`[Trading WebSocket] Starting stream for ${symbols.length} symbols:`, symbols.join(', '));
 
-      // Set up CORS headers (required for EventSource from different origin)
-      reply.raw.setHeader('Access-Control-Allow-Origin', '*');
-      reply.raw.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-      reply.raw.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      // SECURITY (F-08): never `Access-Control-Allow-Origin: *`. The raw SSE
+      // response bypasses the core CORS plugin, so allow only the same
+      // origins the core CORS config allows (the dashboard), else none.
+      const requestOrigin = request.headers.origin;
+      if (typeof requestOrigin === 'string' && streamAllowedOrigins().includes(requestOrigin)) {
+        reply.raw.setHeader('Access-Control-Allow-Origin', requestOrigin);
+        reply.raw.setHeader('Access-Control-Allow-Credentials', 'true');
+        reply.raw.setHeader('Vary', 'Origin');
+      }
 
       // Set up SSE headers
       reply.raw.setHeader('Content-Type', 'text/event-stream');

@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import type { PluginManifest } from './types.js';
 import { createExtensionApi } from './sdk.js';
 import { createExtensionRouteGuard } from './extension-route-access.js';
+import { createExtensionErrorSanitizer } from './extension-error-sanitizer.js';
 import { getDatabase } from '../db/index.js';
 import { readdirSync, existsSync, readFileSync, watch } from 'fs';
 import { resolve, join } from 'path';
@@ -153,6 +154,8 @@ export class ExtensionRunner {
       const guard = createExtensionRouteGuard(manifest, `/api/ext/${id}`);
       await fastify.register(async (scope) => {
         scope.addHook('onRequest', guard);
+        // F-08: 5xx responses never echo internal error text.
+        scope.addHook('onSend', createExtensionErrorSanitizer(id));
         await fn(scope);
       }, { prefix: fullPrefix });
       console.log(`[ExtensionRunner] ✅ Routes registered under: ${fullPrefix}`);
