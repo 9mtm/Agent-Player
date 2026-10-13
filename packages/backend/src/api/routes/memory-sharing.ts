@@ -6,11 +6,37 @@
  * - Mark memories as team-critical
  * - Run deduplication
  * - View shared knowledge base
+ *
+ * SECURITY (S0-Q.17): every route needs a valid token of an active user; the
+ * user comes from the token (query/body userId ignored). Only the memory's
+ * owner may share/unshare or mark it; another user's memory answers 404.
+ * Shared lists show the caller's own shared memories, public ones, and team
+ * ones of teams the caller owns or belongs to. Deduplication and the audit
+ * log are limited to the caller's own memories (no owner-wide view).
  */
+
+const VISIBILITIES = ['private', 'team', 'public'] as const;
+
+/** SQL fragment + params: shared memories (alias m) the caller may see. */
+function visibleSharedClause(userId: string): { sql: string; params: string[] } {
+    const teams = teamIdsOf(userId);
+    const teamSql = teams.length ? ` OR (m.visibility = 'team' AND m.team_id IN (${teams.map(() => '?').join(',')}))` : '';
+    return {
+        sql: `(m.visibility IN ('team', 'public') AND (m.user_id = ? OR m.visibility = 'public'${teamSql}))`,
+        params: [userId, ...teams],
+    };
+}
 
 import { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { v4 as uuidv4 } from 'uuid';
+import {
+    requireMemoryCaller,
+    memoryCaller,
+    callerOwnsMemory,
+    teamIdsOf,
+    boundedInt,
+} from './memory-access.js';
 import {
     runDeduplication,
     getDeduplicationStats,
@@ -19,6 +45,7 @@ import {
 
 export default async function memorySharingRoutes(fastify: FastifyInstance) {
     const db = getDatabase();
+    requireMemoryCaller(fastify);
 
     /**
      * POST /api/memory-sharing/:memoryId/share
@@ -33,17 +60,28 @@ export default async function memorySharingRoutes(fastify: FastifyInstance) {
         };
     }>('/api/memory-sharing/:memoryId/share', async (request, reply) => {
         const { memoryId } = request.params;
-        const { visibility, teamId, reason } = request.body;
+        const { visibility, teamId, reason } = (request.body || {}) as any;
+
+        if (!callerOwnsMemory(request, memoryId)) {
+            return reply.status(404).send({ error: 'Memory not found' });
+        }
+        if (!VISIBILITIES.includes(visibility)) {
+            return reply.status(400).send({ error: 'visibility must be private, team or public' });
+        }
+        if (reason !== undefined && reason !== null && (typeof reason !== 'string' || reason.length > 1000)) {
+            return reply.status(400).send({ error: 'Invalid reason' });
+        }
+        // A team memory must name a team the caller owns or belongs to.
+        if (visibility === 'team') {
+            if (typeof teamId !== 'string' || !teamIdsOf(memoryCaller(request).id).includes(teamId)) {
+                return reply.status(400).send({ error: 'teamId must be a team you belong to' });
+            }
+        }
 
         try {
-            // Get current memory
             const memory = db.prepare(`
                 SELECT * FROM memories WHERE id = ?
             `).get(memoryId) as any;
-
-            if (!memory) {
-                return reply.status(404).send({ error: 'Memory not found' });
-            }
 
             const oldVisibility = memory.visibility || 'private';
 
@@ -52,7 +90,7 @@ export default async function memorySharingRoutes(fastify: FastifyInstance) {
                 UPDATE memories
                 SET visibility = ?, team_id = ?
                 WHERE id = ?
-            `).run(visibility, teamId || null, memoryId);
+            `).run(visibility, visibility === 'team' ? teamId : null, memoryId);
 
             // Log the action
             db.prepare(`
@@ -72,7 +110,7 @@ export default async function memorySharingRoutes(fastify: FastifyInstance) {
                 success: true,
                 memoryId,
                 visibility,
-                teamId,
+                teamId: visibility === 'team' ? teamId : null,
             });
         } catch (error: any) {
             return reply.status(500).send({
@@ -94,7 +132,17 @@ export default async function memorySharingRoutes(fastify: FastifyInstance) {
         };
     }>('/api/memory-sharing/:memoryId/mark-critical', async (request, reply) => {
         const { memoryId } = request.params;
-        const { critical, reason } = request.body;
+        const { critical, reason } = (request.body || {}) as any;
+
+        if (!callerOwnsMemory(request, memoryId)) {
+            return reply.status(404).send({ error: 'Memory not found' });
+        }
+        if (typeof critical !== 'boolean') {
+            return reply.status(400).send({ error: 'critical must be true or false' });
+        }
+        if (reason !== undefined && reason !== null && (typeof reason !== 'string' || reason.length > 1000)) {
+            return reply.status(400).send({ error: 'Invalid reason' });
+        }
 
         try {
             db.prepare(`
@@ -134,13 +182,17 @@ export default async function memorySharingRoutes(fastify: FastifyInstance) {
      */
     fastify.get<{
         Querystring: {
-            userId: string;
+            userId?: string; // ignored: user comes from the token (S0-Q.17)
             visibility?: 'team' | 'public';
             teamCriticalOnly?: string;
             limit?: string;
         };
     }>('/api/memory-sharing/shared', async (request, reply) => {
-        const { userId, visibility, teamCriticalOnly, limit } = request.query;
+        const userId = memoryCaller(request).id;
+        const { visibility, teamCriticalOnly, limit } = request.query;
+        if (visibility !== undefined && visibility !== 'team' && visibility !== 'public') {
+            return reply.status(400).send({ error: 'visibility must be team or public' });
+        }
 
         try {
             // Check if memories table has visibility column
@@ -162,15 +214,16 @@ export default async function memorySharingRoutes(fastify: FastifyInstance) {
                 });
             }
 
+            const visible = visibleSharedClause(userId);
             let query = `
                 SELECT m.*, u.full_name as user_name
                 FROM memories m
                 LEFT JOIN users u ON m.user_id = u.id
                 WHERE m.status = 'active'
-                AND (m.visibility = 'team' OR m.visibility = 'public')
+                AND ${visible.sql}
             `;
 
-            const params: any[] = [];
+            const params: any[] = [...visible.params];
 
             if (visibility) {
                 query += ` AND m.visibility = ?`;
@@ -183,12 +236,8 @@ export default async function memorySharingRoutes(fastify: FastifyInstance) {
 
             query += ` ORDER BY m.is_team_critical DESC, m.importance_score DESC, m.created_at DESC`;
 
-            if (limit) {
-                query += ` LIMIT ?`;
-                params.push(parseInt(limit));
-            } else {
-                query += ` LIMIT 50`;
-            }
+            query += ` LIMIT ?`;
+            params.push(boundedInt(limit, 50, 200));
 
             const memories = db.prepare(query).all(...params);
 
@@ -217,15 +266,16 @@ export default async function memorySharingRoutes(fastify: FastifyInstance) {
         const { limit } = request.query;
 
         try {
+            const visible = visibleSharedClause(memoryCaller(request).id);
             const memories = db.prepare(`
-                SELECT *
-                FROM memories
-                WHERE source_agent_id = ?
-                AND status = 'active'
-                AND (visibility = 'team' OR visibility = 'public')
-                ORDER BY created_at DESC
+                SELECT m.*
+                FROM memories m
+                WHERE m.source_agent_id = ?
+                AND m.status = 'active'
+                AND ${visible.sql}
+                ORDER BY m.created_at DESC
                 LIMIT ?
-            `).all(agentId, parseInt(limit || '20'));
+            `).all(agentId, ...visible.params, boundedInt(limit, 20, 200));
 
             return reply.send({
                 success: true,
@@ -247,14 +297,18 @@ export default async function memorySharingRoutes(fastify: FastifyInstance) {
      */
     fastify.post<{
         Body: {
-            userId: string;
+            userId?: string; // ignored: user comes from the token (S0-Q.17)
             similarityThreshold?: number;
         };
     }>('/api/memory-sharing/deduplication/run', async (request, reply) => {
-        const { userId, similarityThreshold } = request.body;
+        const userId = memoryCaller(request).id;
+        const threshold = Number((request.body as any)?.similarityThreshold ?? 0.85);
+        if (!Number.isFinite(threshold) || threshold < 0.5 || threshold > 1) {
+            return reply.status(400).send({ error: 'similarityThreshold must be between 0.5 and 1' });
+        }
 
         try {
-            const result = await runDeduplication(userId, similarityThreshold || 0.85);
+            const result = await runDeduplication(userId, threshold);
 
             return reply.send({
                 success: true,
@@ -273,9 +327,9 @@ export default async function memorySharingRoutes(fastify: FastifyInstance) {
      * Get deduplication statistics
      */
     fastify.get<{
-        Querystring: { userId: string };
+        Querystring: { userId?: string }; // userId ignored (S0-Q.17)
     }>('/api/memory-sharing/deduplication/stats', async (request, reply) => {
-        const { userId } = request.query;
+        const userId = memoryCaller(request).id;
 
         try {
             const stats = getDeduplicationStats(userId);
@@ -298,17 +352,18 @@ export default async function memorySharingRoutes(fastify: FastifyInstance) {
      */
     fastify.get<{
         Querystring: {
-            userId: string;
+            userId?: string; // ignored: user comes from the token (S0-Q.17)
             similarityThreshold?: string;
         };
     }>('/api/memory-sharing/deduplication/candidates', async (request, reply) => {
-        const { userId, similarityThreshold } = request.query;
+        const userId = memoryCaller(request).id;
+        const threshold = parseFloat(request.query.similarityThreshold || '0.85');
+        if (!Number.isFinite(threshold) || threshold < 0.5 || threshold > 1) {
+            return reply.status(400).send({ error: 'similarityThreshold must be between 0.5 and 1' });
+        }
 
         try {
-            const groups = findSimilarMemories(
-                userId,
-                parseFloat(similarityThreshold || '0.85')
-            );
+            const groups = findSimilarMemories(userId, threshold);
 
             return reply.send({
                 success: true,
@@ -337,21 +392,23 @@ export default async function memorySharingRoutes(fastify: FastifyInstance) {
         const { memoryId, limit } = request.query;
 
         try {
+            // Only audit rows of the caller's own memories.
             let query = `
                 SELECT a.*, m.content as memory_content
                 FROM memory_sharing_audit a
-                LEFT JOIN memories m ON a.memory_id = m.id
+                JOIN memories m ON a.memory_id = m.id
+                WHERE m.user_id = ?
             `;
 
-            const params: any[] = [];
+            const params: any[] = [memoryCaller(request).id];
 
             if (memoryId) {
-                query += ` WHERE a.memory_id = ?`;
+                query += ` AND a.memory_id = ?`;
                 params.push(memoryId);
             }
 
             query += ` ORDER BY a.created_at DESC LIMIT ?`;
-            params.push(parseInt(limit || '50'));
+            params.push(boundedInt(limit, 50, 200));
 
             const logs = db.prepare(query).all(...params);
 

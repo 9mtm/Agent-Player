@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getSessionUser } from '@/lib/session';
+import { backendFetch, getSessionUser } from '@/lib/session';
 import { config } from '@/lib/config';
 
 const BACKEND_URL = config.backendUrl;
@@ -23,7 +23,7 @@ export async function POST(
         const { memoryId } = await params;
         const body = await req.json();
 
-        const res = await fetch(`${BACKEND_URL}/api/memory-sharing/${memoryId}/mark-critical`, {
+        const res = await backendFetch(`${BACKEND_URL}/api/memory-sharing/${encodeURIComponent(memoryId)}/mark-critical`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),

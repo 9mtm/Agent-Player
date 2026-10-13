@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getSessionUser } from '@/lib/session';
+import { backendFetch, getSessionUser } from '@/lib/session';
 import { config } from '@/lib/config';
 
 const BACKEND_URL = config.backendUrl;
@@ -18,9 +18,9 @@ export async function POST(req: Request) {
         }
 
         const body = await req.json();
-        body.userId = userId;
+        delete body.userId; // backend takes the user from the token (S0-Q.17)
 
-        const res = await fetch(`${BACKEND_URL}/api/memory-sharing/deduplication/run`, {
+        const res = await backendFetch(`${BACKEND_URL}/api/memory-sharing/deduplication/run`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),

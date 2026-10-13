@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getSessionUser } from '@/lib/session';
+import { backendFetch, getSessionUser } from '@/lib/session';
 import { config } from '@/lib/config';
 
 const BACKEND_URL = config.backendUrl;
@@ -20,7 +20,7 @@ export async function GET(req: Request) {
         const url = new URL(req.url);
         const params = url.searchParams;
 
-        const res = await fetch(`${BACKEND_URL}/api/memory-sharing/audit?${params}`);
+        const res = await backendFetch(`${BACKEND_URL}/api/memory-sharing/audit?${params}`);
         const data = await res.json();
         return NextResponse.json(data, { status: res.status });
     } catch (error: any) {

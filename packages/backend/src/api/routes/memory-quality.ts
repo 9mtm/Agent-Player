@@ -8,19 +8,20 @@ import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { MemoryQualityScorer } from '../../services/memory-quality-scorer.js';
 import { MemoryEnrichmentService } from '../../services/memory-enrichment.js';
+import { requireMemoryCaller, memoryCaller, callerOwnsMemory, boundedInt } from './memory-access.js';
 
+/**
+ * SECURITY (S0-Q.17): every route needs a valid token of an active user; the
+ * user comes from the token (query/body userId ignored); per-memory routes
+ * answer 404 for another user's memory. No owner-wide view.
+ */
 export default async function memoryQualityRoutes(fastify: FastifyInstance) {
+    requireMemoryCaller(fastify);
+
     // Get quality statistics for a user
     fastify.get('/api/memory-quality/stats', async (request, reply) => {
         try {
-            const { userId } = request.query as { userId: string };
-
-            if (!userId) {
-                return reply.status(400).send({
-                    success: false,
-                    error: 'userId is required'
-                });
-            }
+            const userId = memoryCaller(request).id;
 
             const stats = await MemoryQualityScorer.getQualityStats(userId);
 
@@ -40,18 +41,12 @@ export default async function memoryQualityRoutes(fastify: FastifyInstance) {
     // Get low quality memories that need improvement
     fastify.get('/api/memory-quality/low-quality', async (request, reply) => {
         try {
-            const { userId, limit } = request.query as { userId: string; limit?: string };
-
-            if (!userId) {
-                return reply.status(400).send({
-                    success: false,
-                    error: 'userId is required'
-                });
-            }
+            const userId = memoryCaller(request).id;
+            const { limit } = (request.query || {}) as { limit?: string };
 
             const memories = await MemoryQualityScorer.getLowQualityMemories(
                 userId,
-                limit ? parseInt(limit) : 10
+                boundedInt(limit, 10, 100)
             );
 
             return reply.send({
@@ -72,6 +67,9 @@ export default async function memoryQualityRoutes(fastify: FastifyInstance) {
     fastify.get('/api/memory-quality/:memoryId/analyze', async (request, reply) => {
         try {
             const { memoryId } = request.params as { memoryId: string };
+            if (!callerOwnsMemory(request, memoryId)) {
+                return reply.status(404).send({ success: false, error: 'Memory not found' });
+            }
             const db = getDatabase();
 
             const memory = db.prepare('SELECT content, metadata FROM memories WHERE id = ?').get(memoryId) as any;
@@ -103,6 +101,9 @@ export default async function memoryQualityRoutes(fastify: FastifyInstance) {
     fastify.post('/api/memory-quality/:memoryId/enrich', async (request, reply) => {
         try {
             const { memoryId } = request.params as { memoryId: string };
+            if (!callerOwnsMemory(request, memoryId)) {
+                return reply.status(404).send({ success: false, error: 'Memory not found' });
+            }
             const db = getDatabase();
 
             const memory = db.prepare('SELECT content, metadata FROM memories WHERE id = ?').get(memoryId) as any;
@@ -133,16 +134,10 @@ export default async function memoryQualityRoutes(fastify: FastifyInstance) {
     // Batch enrich multiple memories
     fastify.post('/api/memory-quality/batch-enrich', async (request, reply) => {
         try {
-            const { userId, limit } = request.body as { userId: string; limit?: number };
+            const userId = memoryCaller(request).id;
+            const { limit } = (request.body || {}) as { limit?: number };
 
-            if (!userId) {
-                return reply.status(400).send({
-                    success: false,
-                    error: 'userId is required'
-                });
-            }
-
-            const results = await MemoryEnrichmentService.batchEnrich(userId, limit || 10);
+            const results = await MemoryEnrichmentService.batchEnrich(userId, boundedInt(limit, 10, 50));
 
             return reply.send({
                 success: true,
@@ -162,6 +157,9 @@ export default async function memoryQualityRoutes(fastify: FastifyInstance) {
     fastify.get('/api/memory-quality/:memoryId/history', async (request, reply) => {
         try {
             const { memoryId } = request.params as { memoryId: string };
+            if (!callerOwnsMemory(request, memoryId)) {
+                return reply.status(404).send({ success: false, error: 'Memory not found' });
+            }
             const db = getDatabase();
 
             const history = db.prepare(`
@@ -188,6 +186,9 @@ export default async function memoryQualityRoutes(fastify: FastifyInstance) {
     fastify.get('/api/memory-quality/:memoryId/relationships', async (request, reply) => {
         try {
             const { memoryId } = request.params as { memoryId: string };
+            if (!callerOwnsMemory(request, memoryId)) {
+                return reply.status(404).send({ success: false, error: 'Memory not found' });
+            }
             const db = getDatabase();
 
             const relationships = db.prepare(`
@@ -196,11 +197,11 @@ export default async function memoryQualityRoutes(fastify: FastifyInstance) {
                     m.type as target_type,
                     m.content as target_content
                 FROM memory_relationships mr
-                LEFT JOIN memories m ON mr.target_memory_id = m.id
-                WHERE mr.source_memory_id = ?
+                JOIN memories m ON mr.target_memory_id = m.id
+                WHERE mr.source_memory_id = ? AND m.user_id = ?
                 ORDER BY mr.strength DESC, mr.created_at DESC
                 LIMIT 10
-            `).all(memoryId);
+            `).all(memoryId, memoryCaller(request).id);
 
             return reply.send({
                 success: true,
@@ -219,6 +220,9 @@ export default async function memoryQualityRoutes(fastify: FastifyInstance) {
     fastify.get('/api/memory-quality/:memoryId/enrichment-log', async (request, reply) => {
         try {
             const { memoryId } = request.params as { memoryId: string };
+            if (!callerOwnsMemory(request, memoryId)) {
+                return reply.status(404).send({ success: false, error: 'Memory not found' });
+            }
             const db = getDatabase();
 
             const log = db.prepare(`
@@ -244,14 +248,7 @@ export default async function memoryQualityRoutes(fastify: FastifyInstance) {
     // Get quality distribution (for charts)
     fastify.get('/api/memory-quality/distribution', async (request, reply) => {
         try {
-            const { userId } = request.query as { userId: string };
-
-            if (!userId) {
-                return reply.status(400).send({
-                    success: false,
-                    error: 'userId is required'
-                });
-            }
+            const userId = memoryCaller(request).id;
 
             const db = getDatabase();
 

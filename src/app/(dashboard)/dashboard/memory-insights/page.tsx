@@ -17,6 +17,7 @@ import {
     Target
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { authHeaders } from '@/lib/auth/headers';
 
 interface QualityStats {
     totalMemories: number;
@@ -72,21 +73,21 @@ export default function MemoryInsightsPage() {
         setLoading(true);
         try {
             // Load quality stats
-            const statsRes = await fetch(`http://localhost:41522/api/memory-quality/stats?userId=${userId}`);
+            const statsRes = await fetch(`http://localhost:41522/api/memory-quality/stats`, { headers: authHeaders() });
             if (statsRes.ok) {
                 const statsData = await statsRes.json();
                 setStats(statsData.stats);
             }
 
             // Load low quality memories
-            const lowQualityRes = await fetch(`http://localhost:41522/api/memory-quality/low-quality?userId=${userId}&limit=20`);
+            const lowQualityRes = await fetch(`http://localhost:41522/api/memory-quality/low-quality?limit=20`, { headers: authHeaders() });
             if (lowQualityRes.ok) {
                 const lowQualityData = await lowQualityRes.json();
                 setLowQualityMemories(lowQualityData.memories);
             }
 
             // Load quality distribution
-            const distRes = await fetch(`http://localhost:41522/api/memory-quality/distribution?userId=${userId}`);
+            const distRes = await fetch(`http://localhost:41522/api/memory-quality/distribution`, { headers: authHeaders() });
             if (distRes.ok) {
                 const distData = await distRes.json();
                 setDistribution(distData.distribution);
@@ -102,8 +103,9 @@ export default function MemoryInsightsPage() {
         setEnriching(true);
         setSelectedMemory(memoryId);
         try {
-            const res = await fetch(`http://localhost:41522/api/memory-quality/${memoryId}/enrich`, {
-                method: 'POST'
+            const res = await fetch(`http://localhost:41522/api/memory-quality/${encodeURIComponent(memoryId)}/enrich`, {
+                method: 'POST',
+                headers: authHeaders(),
             });
 
             if (!res.ok) throw new Error('Failed to enrich memory');
@@ -126,8 +128,8 @@ export default function MemoryInsightsPage() {
         try {
             const res = await fetch('http://localhost:41522/api/memory-quality/batch-enrich', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId, limit: 10 })
+                headers: authHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ limit: 10 })
             });
 
             if (!res.ok) throw new Error('Failed to batch enrich');
