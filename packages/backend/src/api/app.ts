@@ -85,6 +85,7 @@ import { registerHttpsEnforcement } from '../middleware/https-enforcement.js';
 import { registerHostCheck } from '../middleware/host-check.js';
 import type { FastifyInstance, FastifyServerOptions } from 'fastify';
 import { registerAuthGate } from '../auth/auth-gate.js';
+import { isPublicStaticPath } from './static-access.js';
 
 export interface BuildServerOptions {
   logger?: FastifyServerOptions['logger'];
@@ -164,6 +165,9 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   await fastify.register(fastifyStatic, {
     root: publicDir,
     prefix: '/', // Serve files at root level (e.g., /avatars/user/1/abc/avatar.glb)
+    // SECURITY (S0-A.7): runtime data zones under public/storage are not
+    // served statically; see src/api/static-access.ts.
+    allowedPath: (pathName) => isPublicStaticPath(pathName),
   });
 
   fastify.log.info(`[Server] ✅ Static files served from: ${publicDir}`);
