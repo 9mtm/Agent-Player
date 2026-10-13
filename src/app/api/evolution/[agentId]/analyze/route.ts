@@ -3,7 +3,7 @@
  * Trigger performance analysis for an agent
  */
 
-import { getSessionUser } from '@/lib/session';
+import { backendFetch, getSessionUser } from '@/lib/session';
 import { config } from '@/lib/config';
 import { NextResponse } from 'next/server';
 
@@ -29,7 +29,7 @@ export async function POST(
     const body = await req.json();
 
     try {
-        const res = await fetch(`${BACKEND_URL}/api/evolution/${agentId}/analyze`, {
+        const res = await backendFetch(`${BACKEND_URL}/api/evolution/${agentId}/analyze`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),

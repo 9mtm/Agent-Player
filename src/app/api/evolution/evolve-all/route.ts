@@ -3,7 +3,7 @@
  * Trigger evolution for all enabled agents
  */
 
-import { getSessionUser } from '@/lib/session';
+import { backendFetch, getSessionUser } from '@/lib/session';
 import { config } from '@/lib/config';
 import { NextResponse } from 'next/server';
 
@@ -23,7 +23,7 @@ export async function POST() {
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     try {
-        const res = await fetch(`${BACKEND_URL}/api/evolution/evolve-all`, {
+        const res = await backendFetch(`${BACKEND_URL}/api/evolution/evolve-all`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
         });

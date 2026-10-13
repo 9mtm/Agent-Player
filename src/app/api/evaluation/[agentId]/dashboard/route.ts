@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getSessionUser } from '@/lib/session';
+import { backendFetch, getSessionUser } from '@/lib/session';
 import { config } from '@/lib/config';
 
 const BACKEND_URL = config.backendUrl;
@@ -24,7 +24,7 @@ export async function GET(
         const url = new URL(req.url);
         const periodDays = url.searchParams.get('periodDays') || '7';
 
-        const res = await fetch(
+        const res = await backendFetch(
             `${BACKEND_URL}/api/evaluation/${agentId}/dashboard?periodDays=${periodDays}`
         );
 

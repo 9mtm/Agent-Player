@@ -3,7 +3,7 @@
  * Get evolution history for an agent
  */
 
-import { getSessionUser } from '@/lib/session';
+import { backendFetch, getSessionUser } from '@/lib/session';
 import { config } from '@/lib/config';
 import { NextResponse } from 'next/server';
 
@@ -30,7 +30,7 @@ export async function GET(
     const limit = url.searchParams.get('limit') || '20';
 
     try {
-        const res = await fetch(`${BACKEND_URL}/api/evolution/${agentId}/history?limit=${limit}`);
+        const res = await backendFetch(`${BACKEND_URL}/api/evolution/${agentId}/history?limit=${limit}`);
         const data = await res.json();
         return NextResponse.json(data);
     } catch {

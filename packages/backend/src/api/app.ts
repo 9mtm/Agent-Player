@@ -1,0 +1,306 @@
+/**
+ * Agent Player Fastify app factory.
+ *
+ * buildServer() creates the Fastify instance with every global hook and the
+ * core route plugins, without initializing background systems and without
+ * listening. server.ts calls it and then runs start(); tests import it to
+ * check the real route table (S0-A.1).
+ */
+
+import Fastify from 'fastify';
+import cors from '@fastify/cors';
+import multipart from '@fastify/multipart';
+import rateLimit from '@fastify/rate-limit';
+import helmet from '@fastify/helmet';
+import fastifyStatic from '@fastify/static';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { sessionsRoutes } from './routes/sessions.js';
+import { modelsRoutes } from './routes/models.js';
+import { chatRoutes } from './routes/chat.js';
+import { smartChatRoutes } from './routes/smart-chat.js';
+import { settingsRoutes } from './routes/settings.js';
+import { agentsStatusRoutes } from './routes/agents-status.js';
+import { pluginsRoutes } from './routes/plugins.js';
+import { channelsRoutes } from './routes/channels.js';
+import { skillsRoutes } from './routes/skills.js';
+import { schedulerRoutes } from './routes/scheduler.js';
+import { memoryRoutes } from './routes/memory.js';
+import { credentialsRoutes } from './routes/credentials.js';
+// import { onboardingRoutes } from './routes/onboarding.js'; // S0-Q.14: disabled, see below
+import { onboardingWebRoutes } from './routes/onboarding-web.js'; // F-05: web wizard after first owner login
+import { gatewayRoutes } from './routes/gateway.js';
+import { authRoutes } from './routes/auth.js';
+import { databaseRoutes } from './routes/database.js';
+import { workflowRoutes } from './routes/workflows.js';
+import { sandboxRoutes } from './routes/sandbox.js';
+import { auditRoutes } from './routes/audit.js';
+import { encryptionRoutes } from './routes/encryption.js';
+import { heartbeatRoutes } from './routes/heartbeat.js';
+import { webhooksRoutes } from './routes/webhooks.js';
+import { multiAgentRoutes } from './routes/multi-agent.js';
+import { browserRoutes } from './routes/browser.js';
+import { inboxRoutes } from './routes/inbox.js';
+import { registerAudioRoutes } from './routes/audio.js';
+import { registerAvatarRoutes } from './routes/avatar.js';
+import { agentsConfigRoutes } from './routes/agents-config.js';
+import { storageRoutes } from './routes/storage.js';
+import { claudeLocalRoutes } from './routes/claude-local.js';
+import { aiToolsRoutes } from './routes/ai-tools.js';
+import { cameraRoutes } from './routes/camera.js';
+import { profileRoutes } from './routes/profile.js';
+import { notificationsRoutes } from './routes/notifications.js';
+import { registerTeamRoutes } from './routes/team.js';
+// Email routes moved to email-client extension
+// import { registerEmailRoutes } from './routes/email.js';
+// import emailAccountsRoutes from './routes/email-accounts.js';
+// import emailFoldersRoutes from './routes/email-folders.js';
+// import emailMessagesRoutes from './routes/email-messages.js';
+// import emailSearchRoutes from './routes/email-search.js';
+// import emailComposeRoutes from './routes/email-compose.js';
+// import emailAttachmentsRoutes from './routes/email-attachments.js';
+// import emailDraftsRoutes from './routes/email-drafts.js';
+import { worldsRoutes } from './routes/worlds.js';
+import { multiverseRoutes } from './routes/multiverse.js';
+import { worldBotsRoutes } from './routes/world-bots.js';
+import { worldGeneratorRoutes } from './routes/world-generator.js';
+import { worldBuilderRoutes } from './routes/world-builder.js';
+import { extensionsRoutes } from './routes/extensions.js';
+import { systemRoutes } from './routes/system.js';
+import { registerTelephonyRoutes } from './routes/telephony.js';
+import { agentFilesRoutes } from './routes/agent-files.js';
+import { registerDashboardRoutes } from './routes/dashboard.js';
+import { registerCalendarRoutes } from './routes/calendar.js';
+import { registerPublicChatRoutes } from './routes/public-chat.js';
+import { registerCostAnalyticsRoutes } from './routes/cost-analytics.js';
+import evolutionRoutes from './routes/evolution.js';
+import evaluationRoutes from './routes/evaluation.js';
+import memorySharingRoutes from './routes/memory-sharing.js';
+import memoryQualityRoutes from './routes/memory-quality.js';
+import setupRoutes from './routes/setup.js';
+import { marketplaceRoutes } from './routes/marketplace.js';
+import { config } from '../config/index.js';
+import { registerCsrfProtection } from '../middleware/csrf-protection.js';
+import { registerHttpsEnforcement } from '../middleware/https-enforcement.js';
+import { registerHostCheck } from '../middleware/host-check.js';
+import type { FastifyInstance, FastifyServerOptions } from 'fastify';
+
+export interface BuildServerOptions {
+  logger?: FastifyServerOptions['logger'];
+}
+
+export async function buildServer(options: BuildServerOptions = {}): Promise<FastifyInstance> {
+  const fastify = Fastify({
+    logger: options.logger ?? {
+      level: process.env.LOG_LEVEL || 'info',
+      transport: {
+        target: 'pino-pretty',
+        options: {
+          colorize: true,
+          translateTime: 'HH:MM:ss',
+          ignore: 'pid,hostname'
+        }
+      }
+    }
+  });
+
+  // Register CORS — SECURITY: Restrict to allowed origins only
+  const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:41521').split(',').map(o => o.trim());
+  await fastify.register(cors, {
+    origin: ALLOWED_ORIGINS,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    credentials: true,
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
+  });
+
+  // Register Multipart (for file uploads - audio transcription)
+  await fastify.register(multipart, {
+    limits: { fileSize: 25 * 1024 * 1024 } // 25MB max
+  });
+
+  // SECURITY: Register rate limiting
+  await fastify.register(rateLimit, {
+    global: false, // Don't apply to all routes by default
+    max: 100, // Global default: 100 requests
+    timeWindow: '1 minute' // Per minute
+  });
+
+  // SECURITY: Register helmet for security headers (M-05)
+  await fastify.register(helmet, {
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'"],
+        imgSrc: ["'self'", 'data:', 'https:'],
+      },
+    },
+    crossOriginEmbedderPolicy: false, // Allow embedding for local dev
+  });
+
+  // SECURITY: Reject unknown Host headers (DNS rebinding) (S0-Q.1)
+  registerHostCheck(fastify);
+
+  // SECURITY: Register CSRF protection middleware (M-01)
+  // Validates Origin/Referer headers for state-changing requests
+  registerCsrfProtection(fastify);
+
+  // SECURITY: Register HTTPS enforcement middleware (L-01)
+  // Redirects HTTP to HTTPS in production mode
+  registerHttpsEnforcement(fastify);
+
+  // Serve static files from public folder (avatars, backgrounds, worlds, etc.)
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const publicDir = path.join(__dirname, '..', '..', '..', '..', 'public');
+
+  await fastify.register(fastifyStatic, {
+    root: publicDir,
+    prefix: '/', // Serve files at root level (e.g., /avatars/user/1/abc/avatar.glb)
+  });
+
+  fastify.log.info(`[Server] ✅ Static files served from: ${publicDir}`);
+
+  // Register Swagger Documentation
+  const { registerSwagger } = await import('../docs/swagger.js');
+  await registerSwagger(fastify);
+
+  // Health check
+  fastify.get('/health', {
+    schema: {
+      tags: ['Health'],
+      summary: 'Health check endpoint',
+      description: 'Returns the current health status of the API server',
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            status: { type: 'string', enum: ['ok', 'degraded', 'error'] },
+            timestamp: { type: 'string', format: 'date-time' },
+            version: { type: 'string' },
+          },
+        },
+      },
+    },
+  }, async () => ({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    version: '0.1.0'
+  }));
+
+  // Root route
+  fastify.get('/', {
+    schema: {
+      tags: ['Health'],
+      summary: 'API information',
+      description: 'Returns basic information about the API',
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            version: { type: 'string' },
+            docs: { type: 'string', description: 'Documentation URL' },
+          },
+        },
+      },
+    },
+  }, async () => ({
+    name: 'Agent Player Backend',
+    version: '0.1.0',
+    docs: '/docs'
+  }));
+
+  // i18n: Detect locale from request and attach to request object
+  // Priority: 1) User preference from DB (via auth), 2) Accept-Language header, 3) 'en'
+  fastify.addHook('preHandler', async (request) => {
+    let locale = 'en';
+    try {
+      const acceptLang = request.headers['accept-language'];
+      if (acceptLang) {
+        const preferred = acceptLang.split(',')[0]?.split('-')[0]?.trim();
+        if (preferred) {
+          locale = preferred;
+        }
+      }
+    } catch {
+      // Ignore parsing errors
+    }
+    (request as any).locale = locale;
+  });
+
+  // Register routes
+  await fastify.register(setupRoutes); // 🛠️ Setup Wizard (First-Time Installation)
+  await fastify.register(authRoutes); // 🔐 Authentication
+  await fastify.register(databaseRoutes); // 🗄️ Database Management (Stats, Backups, Vacuum)
+  await fastify.register(workflowRoutes); // ⚡ Workflow Builder
+  await fastify.register(sessionsRoutes);
+  await fastify.register(modelsRoutes);
+  await fastify.register(chatRoutes);
+  await fastify.register(smartChatRoutes); // 🧠 Smart Agent System
+  await fastify.register(settingsRoutes); // ⚙️ Settings API
+  await fastify.register(agentsStatusRoutes); // 📊 Agents Status
+  await fastify.register(pluginsRoutes); // 🔌 Plugins System
+  await fastify.register(channelsRoutes); // 📱 Channels System
+  await fastify.register(skillsRoutes); // 🛠️ Skills System
+  await fastify.register(schedulerRoutes); // ⏰ Scheduler System
+  await fastify.register(memoryRoutes); // 🧠 Memory System
+  await fastify.register(credentialsRoutes); // 🔐 Credentials System
+  // SECURITY (S0-Q.14): the /api/onboarding/* routes started the interactive
+  // terminal wizard inside the server process for any caller. They are disabled
+  // here (the routes themselves are owner-only as a second line); the web
+  // first-run flow is /setup. Re-enable only with a reviewed design.
+  // await fastify.register(onboardingRoutes); // 🎯 Onboarding Wizard
+  // F-05: the web wizard (/onboarding page) has its own owner-only API with
+  // per-user state in the DB; it never runs the terminal wizard.
+  await fastify.register(onboardingWebRoutes);
+  await fastify.register(gatewayRoutes); // 🌐 Multi-Interface Gateway
+  await fastify.register(sandboxRoutes); // 🐳 Docker Sandbox System
+  await fastify.register(auditRoutes); // 🛡️ Security Audit System
+  await fastify.register(encryptionRoutes); // 🔒 Encryption & Vault
+  await fastify.register(heartbeatRoutes); // 💓 Heartbeat Monitor
+  await fastify.register(webhooksRoutes); // 🪝 Webhooks System
+  await fastify.register(multiAgentRoutes); // 🤖 Multi-Agent System
+  await fastify.register(browserRoutes); // 🌐 Browser Automation
+  await fastify.register(registerAudioRoutes); // 🎤 Audio (Whisper STT + TTS)
+  await fastify.register(registerAvatarRoutes); // 🧑‍🎨 Avatar Settings (Ready Player Me)
+  await fastify.register(agentsConfigRoutes);  // 🤖 Agent Configurations CRUD
+  await fastify.register(storageRoutes);       // 📦 Local Storage (Cache + CDN)
+  await fastify.register(claudeLocalRoutes);   // 🔗 Claude Local Integration
+  await fastify.register(aiToolsRoutes);       // 🔍 AI Tools Scanner
+  await fastify.register(cameraRoutes);        // 📷 Camera Sessions + WebRTC Signaling
+  await fastify.register(profileRoutes);       // 👤 User Profile (GET/PUT /api/profile)
+  await fastify.register(notificationsRoutes); // 🔔 Notifications (CRUD + Settings + Schedules)
+  await fastify.register(registerTeamRoutes);     // 👥 Team Management (Teams, Members, Invitations)
+  // Email routes moved to email-client extension (install via /dashboard/extensions)
+  // await fastify.register(registerEmailRoutes);    // 📧 Email Configuration (SMTP Test + Verify)
+  // await fastify.register(emailAccountsRoutes);    // 📬 Email Accounts (Multi-Account IMAP/SMTP + OAuth)
+  // await fastify.register(emailFoldersRoutes);     // 📁 Email Folders (List, Create, Update, Delete)
+  // await fastify.register(emailMessagesRoutes);    // 📨 Email Messages (List, Read, Star, Delete, Move, Bulk)
+  // await fastify.register(emailSearchRoutes);      // 🔍 Email Search (FTS5 Full-Text Search)
+  // await fastify.register(emailComposeRoutes);     // ✉️  Email Compose (Send, Reply, Forward)
+  // await fastify.register(emailAttachmentsRoutes); // 📎 Email Attachments (Upload, Download)
+  // await fastify.register(emailDraftsRoutes);      // 📝 Email Drafts (Auto-Save, CRUD)
+  // await fastify.register(worldsRoutes);           // 🌍 Interactive 3D Worlds (DEPRECATED - merged into multiverseRoutes)
+  await fastify.register(multiverseRoutes);    // 🪐 Multiverse (Worlds + Bots + System Worlds)
+  // await fastify.register(worldBotsRoutes);     // 🤖 World Bots (DEPRECATED - merged into multiverseRoutes)
+  await fastify.register(worldGeneratorRoutes); // ✨ AI World Generator (Prompt-based Generation)
+  await fastify.register(worldBuilderRoutes);     // 🏗️  World Builder (Manual Building + Save/Load)
+  await fastify.register(extensionsRoutes);    // 🔌 Extensions Management (SDK-based)
+  await fastify.register(marketplaceRoutes);   // 🛒 Extension Marketplace (Registry, Install, Reviews)
+  await fastify.register(registerTelephonyRoutes); // ☎️ Telephony / Assistant Center (Call Center)
+  await fastify.register(systemRoutes);        // ⚙️ System Operations (Restart, Shutdown)
+  await fastify.register(agentFilesRoutes);    // 📝 Agent Files (PERSONALITY.md + MEMORY.md)
+  await fastify.register(registerDashboardRoutes); // 📊 Customizable Dashboard (Widgets + Layouts)
+  await fastify.register(registerCalendarRoutes);  // 📅 Calendar System (Events + Google Calendar Sync)
+  await fastify.register(registerPublicChatRoutes); // 💬 Public Chat Rooms (Multi-User Chat with AI Agents)
+  await fastify.register(registerCostAnalyticsRoutes); // 💰 Cost Analytics (Model Usage & Savings Tracking)
+  await fastify.register(evolutionRoutes);        // 🧬 Agent Evolution System (Self-Learning & Adaptation)
+  await fastify.register(evaluationRoutes);       // 📊 Agent Evaluation Framework (Quality Assessment & Metrics)
+  await fastify.register(memorySharingRoutes);    // 🤝 Multi-Agent Memory Sharing (Shared Knowledge & Deduplication)
+  await fastify.register(memoryQualityRoutes);    // ✨ High-Quality Memory Content (Quality Scoring & Enrichment)
+
+  return fastify;
+}

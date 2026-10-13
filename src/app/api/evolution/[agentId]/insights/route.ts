@@ -3,7 +3,7 @@
  * Get learning insights for an agent
  */
 
-import { getSessionUser } from '@/lib/session';
+import { backendFetch, getSessionUser } from '@/lib/session';
 import { config } from '@/lib/config';
 import { NextResponse } from 'next/server';
 
@@ -34,7 +34,7 @@ export async function GET(
         let queryUrl = `${BACKEND_URL}/api/evolution/${agentId}/insights?limit=${limit}`;
         if (applied !== null) queryUrl += `&applied=${applied}`;
 
-        const res = await fetch(queryUrl);
+        const res = await backendFetch(queryUrl);
         const data = await res.json();
         return NextResponse.json(data);
     } catch {

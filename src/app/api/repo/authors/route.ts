@@ -1,10 +1,14 @@
 import { NextResponse } from 'next/server';
+import { requireSessionRole } from '@/lib/session';
 import fs from 'fs';
 import path from 'path';
 
 const REPO_ROOT = 'C:\\MAMP\\htdocs\\agent\\more_skills\\skills';
 
 export async function GET() {
+    // SECURITY (S0-A.8): owner/admin only (reads the local skills repository).
+    const auth = await requireSessionRole();
+    if (auth instanceof Response) return auth;
     if (!fs.existsSync(REPO_ROOT)) {
         return NextResponse.json([]);
     }

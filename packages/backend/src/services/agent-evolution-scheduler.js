@@ -9,6 +9,14 @@ import { getDatabase } from '../db/index.js';
 import { getCronEngine } from '../scheduler/engine.js';
 import { v4 as uuidv4 } from 'uuid';
 
+// SECURITY (S0-A.4): auto-evolve jobs run the evolution service in-process
+// ('evolve-agent' action) instead of an unauthenticated HTTP call to the
+// backend's own /api/evolution route.
+export const EVOLVE_ACTION_TYPE = 'evolve-agent';
+export function evolveActionData(agentId) {
+  return { agentId };
+}
+
 /**
  * Initialize evolution scheduler for all agents with enabled evolution
  */
@@ -66,11 +74,12 @@ export async function scheduleAgentEvolution(agentId, frequency = 'daily') {
 
   if (existingJob) {
     // Update existing job
+    // Also rewrites old rows that still use the HTTP 'api-call' form (S0-A.4).
     db.prepare(`
       UPDATE cron_jobs
-      SET cron_expression = ?, updated_at = ?
+      SET cron_expression = ?, action_type = ?, action_data = ?, updated_at = ?
       WHERE name = ?
-    `).run(cronExpression, new Date().toISOString(), jobName);
+    `).run(cronExpression, EVOLVE_ACTION_TYPE, JSON.stringify(evolveActionData(agentId)), new Date().toISOString(), jobName);
 
     // Reschedule
     const job = db.prepare('SELECT * FROM cron_jobs WHERE name = ?').get(jobName);
@@ -100,14 +109,8 @@ export async function scheduleAgentEvolution(agentId, frequency = 'daily') {
       jobName,
       `Auto-evolve agent: ${agent.name}`,
       cronExpression,
-      'api-call',
-      JSON.stringify({
-        method: 'POST',
-        url: `http://localhost:${process.env.PORT || 41522}/api/evolution/${agentId}/evolve`,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      }),
+      EVOLVE_ACTION_TYPE,
+      JSON.stringify(evolveActionData(agentId)),
       1, // enabled
       new Date().toISOString(),
       new Date().toISOString()
@@ -119,14 +122,8 @@ export async function scheduleAgentEvolution(agentId, frequency = 'daily') {
       name: jobName,
       description: `Auto-evolve agent: ${agent.name}`,
       cronExpression,
-      actionType: 'api-call',
-      actionData: {
-        method: 'POST',
-        url: `http://localhost:${process.env.PORT || 41522}/api/evolution/${agentId}/evolve`,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
+      actionType: EVOLVE_ACTION_TYPE,
+      actionData: evolveActionData(agentId),
       enabled: true,
       createdAt: new Date(),
       updatedAt: new Date(),

@@ -12,6 +12,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
+import { getSessionUser } from '@/lib/session';
 
 export const runtime = 'nodejs';
 
@@ -22,6 +23,10 @@ async function ensureCacheDir() {
 }
 
 export async function GET(req: Request) {
+  // SECURITY (S0-A.8): signed-in users only (outbound fetch + cache write).
+  if (!(await getSessionUser())) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   const { searchParams } = new URL(req.url);
   const avatarId = searchParams.get('id');
   if (!avatarId || !/^[a-f0-9]+$/i.test(avatarId)) {
@@ -54,6 +59,6 @@ export async function GET(req: Request) {
     return new Response(buffer, { headers: { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' } });
   } catch (err: any) {
     console.error(`[Avatar Preview] ❌ Fetch failed: ${err.message}`);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to fetch avatar preview' }, { status: 500 });
   }
 }

@@ -11,6 +11,7 @@ export type CronActionType =
   | 'send-message' // Send message to channel
   | 'api-call' // HTTP API call
   | 'run-workflow' // Execute workflow
+  | 'evolve-agent' // Run one agent evolution cycle in-process (S0-A.4)
   | 'custom'; // Custom function
 
 /**

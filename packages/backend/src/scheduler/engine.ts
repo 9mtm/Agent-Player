@@ -169,6 +169,10 @@ export class CronEngine extends EventEmitter implements ICronEngine {
           output = await this.executeWorkflow(job.actionData as RunWorkflowAction);
           break;
 
+        case 'evolve-agent':
+          output = await this.executeEvolveAgent(job.actionData as any);
+          break;
+
         case 'custom':
           output = await this.executeCustom(job.actionData as any);
           break;
@@ -274,6 +278,22 @@ export class CronEngine extends EventEmitter implements ICronEngine {
   private async executeWorkflow(action: RunWorkflowAction): Promise<any> {
     // TODO: Integrate with workflow engine when implemented
     throw new Error('Workflow execution not yet implemented');
+  }
+
+  /**
+   * Run one evolution cycle for an agent, in-process (S0-A.4). The auto-evolve
+   * jobs used to POST to the backend's own /api/evolution route without any
+   * credentials; with deny-by-default auth that call is refused, and a cron
+   * job should not need an HTTP identity for server-internal work anyway.
+   */
+  private async executeEvolveAgent(action: { agentId?: unknown }): Promise<any> {
+    const agentId = action?.agentId;
+    if (typeof agentId !== 'string' || !agentId) {
+      throw new Error('evolve-agent job is missing agentId');
+    }
+    // @ts-ignore -- plain JS module without type declarations
+    const { evolveAgent } = await import('../services/agent-evolution-orchestrator.js');
+    return await evolveAgent(agentId);
   }
 
   /**

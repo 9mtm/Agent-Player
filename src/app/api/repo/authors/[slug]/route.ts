@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { skillsDb } from '@/lib/skills/db';
+import { requireSessionRole } from '@/lib/session';
+import { isSafePathSegment } from '@/lib/net/path-segment';
 
 const REPO_ROOT = 'C:\\MAMP\\htdocs\\agent\\more_skills\\skills';
 
@@ -13,10 +15,17 @@ export interface RepoSkillSummary {
 }
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ slug: string }> }) {
+    // SECURITY (S0-A.8): owner/admin only (lists local paths); the slug must
+    // be a plain directory name (no traversal out of the repo root).
+    const auth = await requireSessionRole();
+    if (auth instanceof Response) return auth;
     const { slug: author } = await params;
 
     if (!author) {
         return NextResponse.json({ error: 'Author is required' }, { status: 400 });
+    }
+    if (!isSafePathSegment(author)) {
+        return NextResponse.json({ error: 'Invalid author' }, { status: 400 });
     }
 
     const authorPath = path.join(REPO_ROOT, author);

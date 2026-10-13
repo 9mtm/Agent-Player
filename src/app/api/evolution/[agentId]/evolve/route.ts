@@ -3,7 +3,7 @@
  * Trigger evolution cycle for an agent
  */
 
-import { getSessionUser } from '@/lib/session';
+import { backendFetch, getSessionUser } from '@/lib/session';
 import { config } from '@/lib/config';
 import { NextResponse } from 'next/server';
 
@@ -28,7 +28,7 @@ export async function POST(
     const { agentId } = params;
 
     try {
-        const res = await fetch(`${BACKEND_URL}/api/evolution/${agentId}/evolve`, {
+        const res = await backendFetch(`${BACKEND_URL}/api/evolution/${agentId}/evolve`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
         });

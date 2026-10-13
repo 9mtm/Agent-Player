@@ -36,6 +36,10 @@ function urlToFilename(url: string): string {
  * Client should then POST to trigger background download.
  */
 export async function GET(req: Request) {
+  // SECURITY (S0-A.8): signed-in users only, like POST.
+  if (!(await getSessionUser())) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   const { searchParams } = new URL(req.url);
   const glbUrl = searchParams.get('url');
   if (!glbUrl) return NextResponse.json({ error: 'Missing url param' }, { status: 400 });

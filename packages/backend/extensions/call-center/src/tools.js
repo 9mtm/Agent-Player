@@ -3,6 +3,8 @@
  * Tools that AI agents can use to make and manage calls
  */
 
+import { internalAuthHeaders } from '../../shared/internal-auth.js';
+
 const backendUrl = process.env.BACKEND_URL || `http://${process.env.HOST || 'localhost'}:${process.env.PORT || '41522'}`;
 
 export const makeCallTool = {
@@ -26,11 +28,12 @@ export const makeCallTool = {
     },
     required: ['callPointId', 'toNumber'],
   },
-  async execute({ callPointId, toNumber, customGreeting }) {
+  async execute({ callPointId, toNumber, customGreeting }, context) {
     try {
+      // SECURITY (S0-A.4): act as the user of the current agent turn.
       const response = await fetch(`${backendUrl}/api/telephony/calls/make`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...internalAuthHeaders(context?.userId) },
         body: JSON.stringify({ callPointId, toNumber, customGreeting }),
       });
 
@@ -68,10 +71,12 @@ export const hangupCallTool = {
     },
     required: ['callSid'],
   },
-  async execute({ callSid }) {
+  async execute({ callSid }, context) {
     try {
-      const response = await fetch(`${backendUrl}/api/telephony/calls/${callSid}/hangup`, {
+      // SECURITY (S0-A.4): act as the user of the current agent turn.
+      const response = await fetch(`${backendUrl}/api/telephony/calls/${encodeURIComponent(callSid)}/hangup`, {
         method: 'POST',
+        headers: internalAuthHeaders(context?.userId),
       });
 
       if (!response.ok) {

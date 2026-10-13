@@ -3,7 +3,7 @@
  * Measure impact of a specific evolution
  */
 
-import { getSessionUser } from '@/lib/session';
+import { backendFetch, getSessionUser } from '@/lib/session';
 import { config } from '@/lib/config';
 import { NextResponse } from 'next/server';
 
@@ -28,7 +28,7 @@ export async function POST(
     const { agentId, evolutionId } = params;
 
     try {
-        const res = await fetch(`${BACKEND_URL}/api/evolution/${agentId}/measure/${evolutionId}`, {
+        const res = await backendFetch(`${BACKEND_URL}/api/evolution/${agentId}/measure/${evolutionId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
         });

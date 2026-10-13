@@ -3,7 +3,7 @@
  * Get evolution status, config, performance, and insights for an agent
  */
 
-import { getSessionUser } from '@/lib/session';
+import { backendFetch, getSessionUser } from '@/lib/session';
 import { config } from '@/lib/config';
 import { NextResponse } from 'next/server';
 
@@ -28,7 +28,7 @@ export async function GET(
     const { agentId } = params;
 
     try {
-        const res = await fetch(`${BACKEND_URL}/api/evolution/${agentId}/status`);
+        const res = await backendFetch(`${BACKEND_URL}/api/evolution/${agentId}/status`);
         const data = await res.json();
         return NextResponse.json(data);
     } catch {

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getSessionUser } from '@/lib/session';
+import { backendFetch, getSessionUser } from '@/lib/session';
 import { config } from '@/lib/config';
 
 const BACKEND_URL = config.backendUrl;
@@ -23,7 +23,7 @@ export async function POST(
         const body = await req.json();
         const { agentId } = await params;
 
-        const res = await fetch(`${BACKEND_URL}/api/evaluation/${agentId}/evaluate`, {
+        const res = await backendFetch(`${BACKEND_URL}/api/evaluation/${agentId}/evaluate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
