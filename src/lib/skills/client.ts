@@ -5,9 +5,19 @@
  */
 
 import { config } from '@/lib/config';
+import { authHeaders } from '@/lib/auth/headers';
 
 // Use centralized config
 const BACKEND_URL = config.backendUrl;
+
+/**
+ * The backend requires a bearer token on every /api/skills* route (S0-Q.19).
+ * In the browser the stored token is added; server-side callers (Next routes,
+ * server components) pass the forwarded session token in `headers`.
+ */
+function withAuth(headers: Record<string, string> = {}): Record<string, string> {
+  return authHeaders(headers);
+}
 
 export type SkillCategory =
   | 'development'
@@ -53,8 +63,8 @@ export const skillsClient = {
   /**
    * List all skills
    */
-  async list(): Promise<Skill[]> {
-    const res = await fetch(`${BACKEND_URL}/api/skills`);
+  async list(headers: Record<string, string> = {}): Promise<Skill[]> {
+    const res = await fetch(`${BACKEND_URL}/api/skills`, { headers: withAuth(headers) });
     if (!res.ok) {
       throw new Error(`Failed to fetch skills: ${res.statusText}`);
     }
@@ -65,8 +75,10 @@ export const skillsClient = {
   /**
    * Get a skill by name
    */
-  async get(name: string): Promise<Skill | null> {
-    const res = await fetch(`${BACKEND_URL}/api/skills/${encodeURIComponent(name)}`);
+  async get(name: string, headers: Record<string, string> = {}): Promise<Skill | null> {
+    const res = await fetch(`${BACKEND_URL}/api/skills/${encodeURIComponent(name)}`, {
+      headers: withAuth(headers),
+    });
     if (res.status === 404) {
       return null;
     }
@@ -82,7 +94,7 @@ export const skillsClient = {
   async reload(headers: Record<string, string> = {}): Promise<{ success: boolean; count: number }> {
     const res = await fetch(`${BACKEND_URL}/api/skills/reload`, {
       method: 'POST',
-      headers,
+      headers: withAuth(headers),
     });
     if (!res.ok) {
       throw new Error(`Failed to reload skills: ${res.statusText}`);
@@ -93,11 +105,9 @@ export const skillsClient = {
   /**
    * Find a skill that matches a message
    */
-  async match(message: string): Promise<SkillMatchResponse> {
-    const res = await fetch(`${BACKEND_URL}/api/skills/match`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message }),
+  async match(message: string, headers: Record<string, string> = {}): Promise<SkillMatchResponse> {
+    const res = await fetch(`${BACKEND_URL}/api/skills/match?message=${encodeURIComponent(message)}`, {
+      headers: withAuth(headers),
     });
     if (!res.ok) {
       throw new Error(`Failed to match skill: ${res.statusText}`);

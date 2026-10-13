@@ -9,11 +9,19 @@ import { Octokit } from '@octokit/rest';
 import { getDatabase } from '../db/index.js';
 import fs from 'fs/promises';
 import path from 'path';
+import { isValidSkillName, isValidSkillSourcePath } from '../skills/skill-ids.js';
 
 const ANTHROPIC_REPO_OWNER = 'anthropics';
 const ANTHROPIC_REPO_NAME = 'skills';
 const SKILLS_BASE_PATH = 'skills';
 const LOCAL_SKILLS_DIR = '.data/skills';
+
+/** True when `filePath` resolves to a file directly inside the local skills directory. */
+function isInsideLocalSkillsDir(filePath: string): boolean {
+  const base = path.resolve(LOCAL_SKILLS_DIR);
+  const resolved = path.resolve(filePath);
+  return path.dirname(resolved) === base && resolved.endsWith('.md');
+}
 
 interface AnthropicSkill {
   name: string;
@@ -232,6 +240,11 @@ export class AnthropicSkillsService {
   async installSkill(skillName: string, skillPath: string): Promise<string> {
     const db = getDatabase();
 
+    // SECURITY (S0-Q.19): the name becomes a local file name, the path a repo path.
+    if (!isValidSkillName(skillName) || !isValidSkillSourcePath(skillPath)) {
+      throw new Error('Invalid skill name or path');
+    }
+
     try {
       console.log(`[AnthropicSkills] 📦 Installing skill: ${skillName} from path: ${skillPath}`);
 
@@ -251,6 +264,9 @@ export class AnthropicSkillsService {
       // 4. Save SKILL.md locally
       const fileName = `${skillName}.md`;
       const localPath = path.join(LOCAL_SKILLS_DIR, fileName);
+      if (!isInsideLocalSkillsDir(localPath)) {
+        throw new Error('Invalid skill name');
+      }
       await fs.writeFile(localPath, content, 'utf-8');
       console.log(`[AnthropicSkills] ✅ File saved to: ${localPath}`);
 
@@ -276,8 +292,7 @@ export class AnthropicSkillsService {
         ON CONFLICT(source_id, skill_name)
         DO UPDATE SET
           file_path = excluded.file_path,
-          metadata = excluded.metadata,
-          updated_at = CURRENT_TIMESTAMP
+          metadata = excluded.metadata
       `).run(
         source.id,
         skillName,
@@ -352,8 +367,11 @@ export class AnthropicSkillsService {
       throw new Error('Skill not found');
     }
 
-    // Delete local file
+    // Delete local file (only ever inside the local skills directory)
     try {
+      if (!isInsideLocalSkillsDir(skill.file_path)) {
+        throw new Error('skill file is outside the skills directory');
+      }
       await fs.unlink(skill.file_path);
     } catch (error) {
       console.warn(`Failed to delete skill file: ${skill.file_path}`);

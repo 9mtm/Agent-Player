@@ -3,12 +3,43 @@
  * Manage skills installation, settings, and execution
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { getSkillsRegistry } from '../../skills/registry.js';
 import { getSkillsExecutor } from '../../skills/executor.js';
 import { handleError } from '../error-handler.js';
 import { anthropicSkillsService } from '../../services/anthropic-skills-service.js';
-import { authorizeActiveRole, OWNER_OR_ADMIN } from '../../auth/route-guards.js';
+import {
+  authenticateActiveUser,
+  authorizeActiveRole,
+  OWNER_OR_ADMIN,
+} from '../../auth/route-guards.js';
+import {
+  isValidInstalledSkillId,
+  isValidSkillName,
+  isValidSkillSourcePath,
+} from '../../skills/skill-ids.js';
+
+/**
+ * SECURITY (S0-Q.19): every /api/skills* route needs a verified token of an
+ * active user. Read-only listing is open to any such user; anything that
+ * changes state, writes or deletes files, or runs a skill needs owner/admin.
+ */
+function requireUser(request: FastifyRequest, reply: FastifyReply): string | null {
+  const user = authenticateActiveUser(request);
+  if (!user) {
+    reply.code(401).send({ success: false, error: 'Authentication required' });
+    return null;
+  }
+  return user.id;
+}
+
+function requireAdmin(request: FastifyRequest, reply: FastifyReply): string | null {
+  return authorizeActiveRole(request, reply, OWNER_OR_ADMIN);
+}
+
+function badId(reply: FastifyReply) {
+  return reply.status(400).send({ success: false, error: 'Invalid skill id' });
+}
 
 export async function skillsRoutes(fastify: FastifyInstance) {
   const skillsRegistry = getSkillsRegistry();
@@ -28,6 +59,7 @@ export async function skillsRoutes(fastify: FastifyInstance) {
 
   // GET /api/skills - List all skills
   fastify.get('/api/skills', async (request, reply) => {
+    if (requireUser(request, reply) === null) return reply;
     try {
       const skills = skillsRegistry.getAll();
 
@@ -60,8 +92,10 @@ export async function skillsRoutes(fastify: FastifyInstance) {
 
   // GET /api/skills/:id - Get skill details
   fastify.get<{ Params: { id: string } }>('/api/skills/:id', async (request, reply) => {
+    if (requireUser(request, reply) === null) return reply;
     try {
       const { id } = request.params;
+      if (!isValidSkillName(id)) return badId(reply);
       const skill = skillsRegistry.get(id);
 
       if (!skill) {
@@ -94,8 +128,16 @@ export async function skillsRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: { content: string; name: string; source: 'managed' | 'workspace' } }>(
     '/api/skills/install',
     async (request, reply) => {
+      if (requireAdmin(request, reply) === null) return reply;
       try {
-        const { content, name, source } = request.body;
+        const { content, name, source } = request.body || ({} as any);
+        if (!isValidSkillName(name)) return badId(reply);
+        if (source !== 'managed' && source !== 'workspace') {
+          return reply.status(400).send({ success: false, error: 'Invalid source' });
+        }
+        if (typeof content !== 'string' || content.length === 0 || content.length > 200_000) {
+          return reply.status(400).send({ success: false, error: 'Invalid content' });
+        }
 
         // TODO: Validate content is valid SKILL.md
         // TODO: Save to appropriate directory based on source
@@ -119,9 +161,10 @@ export async function skillsRoutes(fastify: FastifyInstance) {
     Params: { id: string };
     Body: { settings: Record<string, any> };
   }>('/api/skills/:id/settings', async (request, reply) => {
+    if (requireAdmin(request, reply) === null) return reply;
     try {
       const { id } = request.params;
-      const { settings } = request.body;
+      if (!isValidSkillName(id)) return badId(reply);
 
       const skill = skillsRegistry.get(id);
 
@@ -149,8 +192,13 @@ export async function skillsRoutes(fastify: FastifyInstance) {
 
   // POST /api/skills/:id/enable - Enable skill
   fastify.post<{ Params: { id: string } }>('/api/skills/:id/enable', async (request, reply) => {
+    if (requireAdmin(request, reply) === null) return reply;
     try {
       const { id } = request.params;
+      if (!isValidSkillName(id)) return badId(reply);
+      if (!skillsRegistry.get(id)) {
+        return reply.status(404).send({ success: false, error: 'Skill not found' });
+      }
 
       skillsRegistry.enable(id);
 
@@ -167,8 +215,13 @@ export async function skillsRoutes(fastify: FastifyInstance) {
 
   // POST /api/skills/:id/disable - Disable skill
   fastify.post<{ Params: { id: string } }>('/api/skills/:id/disable', async (request, reply) => {
+    if (requireAdmin(request, reply) === null) return reply;
     try {
       const { id } = request.params;
+      if (!isValidSkillName(id)) return badId(reply);
+      if (!skillsRegistry.get(id)) {
+        return reply.status(404).send({ success: false, error: 'Skill not found' });
+      }
 
       skillsRegistry.disable(id);
 
@@ -185,8 +238,10 @@ export async function skillsRoutes(fastify: FastifyInstance) {
 
   // DELETE /api/skills/:id - Uninstall skill
   fastify.delete<{ Params: { id: string } }>('/api/skills/:id', async (request, reply) => {
+    if (requireAdmin(request, reply) === null) return reply;
     try {
       const { id } = request.params;
+      if (!isValidSkillName(id)) return badId(reply);
 
       const skill = skillsRegistry.get(id);
 
@@ -223,14 +278,20 @@ export async function skillsRoutes(fastify: FastifyInstance) {
     Params: { id: string };
     Body: { message: string; settings?: Record<string, any> };
   }>('/api/skills/:id/execute', async (request, reply) => {
+    const userId = requireAdmin(request, reply);
+    if (userId === null) return reply;
     try {
       const { id } = request.params;
-      const { message, settings } = request.body;
+      if (!isValidSkillName(id)) return badId(reply);
+      const { message, settings } = request.body || ({} as any);
+      if (typeof message !== 'string' || message.length === 0) {
+        return reply.status(400).send({ success: false, error: 'message is required' });
+      }
 
       const result = await skillsExecutor.execute(id, {
         message,
-        settings: settings || {},
-        userId: 'test-user',
+        settings: settings && typeof settings === 'object' ? settings : {},
+        userId,
         channelId: 'test-channel',
       });
 
@@ -251,6 +312,7 @@ export async function skillsRoutes(fastify: FastifyInstance) {
   fastify.get<{ Querystring: { message: string } }>(
     '/api/skills/match',
     async (request, reply) => {
+      if (requireUser(request, reply) === null) return reply;
       try {
         const { message } = request.query;
 
@@ -286,6 +348,7 @@ export async function skillsRoutes(fastify: FastifyInstance) {
 
   // GET /api/skills/marketplace/sources - List skill sources
   fastify.get('/api/skills/marketplace/sources', async (request, reply) => {
+    if (requireUser(request, reply) === null) return reply;
     try {
       const { getDatabase } = await import('../../db/index.js');
       const db = getDatabase();
@@ -309,6 +372,7 @@ export async function skillsRoutes(fastify: FastifyInstance) {
 
   // GET /api/skills/marketplace/available - Fetch available skills from Anthropic
   fastify.get('/api/skills/marketplace/available', async (request, reply) => {
+    if (requireUser(request, reply) === null) return reply;
     try {
       console.log('[Skills Marketplace] 📥 Fetching available skills from Anthropic...');
       const skills = await anthropicSkillsService.fetchAvailableSkills();
@@ -316,16 +380,14 @@ export async function skillsRoutes(fastify: FastifyInstance) {
 
       return { success: true, skills, count: skills.length };
     } catch (error: any) {
-      console.error('[Skills Marketplace] ❌ Fetch available failed:', error);
-      return reply.status(500).send({
-        success: false,
-        error: error.message || 'Failed to fetch skills',
-      });
+      // SECURITY: never echo error.message (H-09); details stay in the server log.
+      return handleError(reply, error, 'internal', '[Skills Marketplace] Fetch available failed');
     }
   });
 
   // GET /api/skills/marketplace/installed - List installed marketplace skills
   fastify.get('/api/skills/marketplace/installed', async (request, reply) => {
+    if (requireUser(request, reply) === null) return reply;
     try {
       const skills = anthropicSkillsService.getInstalledSkills();
 
@@ -345,8 +407,9 @@ export async function skillsRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: { skillName: string; skillPath: string } }>(
     '/api/skills/marketplace/install',
     async (request, reply) => {
+      if (requireAdmin(request, reply) === null) return reply;
       try {
-        const { skillName, skillPath } = request.body;
+        const { skillName, skillPath } = request.body || ({} as any);
 
         console.log('[Skills Marketplace] 📥 Install request:', { skillName, skillPath });
 
@@ -356,6 +419,10 @@ export async function skillsRoutes(fastify: FastifyInstance) {
             success: false,
             error: 'skillName and skillPath are required',
           });
+        }
+        // SECURITY: the name becomes a local file name and the path a repo path.
+        if (!isValidSkillName(skillName) || !isValidSkillSourcePath(skillPath)) {
+          return reply.status(400).send({ success: false, error: 'Invalid skillName or skillPath' });
         }
 
         const localPath = await anthropicSkillsService.installSkill(skillName, skillPath);
@@ -368,12 +435,8 @@ export async function skillsRoutes(fastify: FastifyInstance) {
           localPath,
         };
       } catch (error: any) {
-        console.error('[Skills Marketplace] ❌ Install failed:', error);
-        // Return detailed error to frontend
-        return reply.status(500).send({
-          success: false,
-          error: error.message || 'Installation failed',
-        });
+        // SECURITY: never echo error.message (H-09); details stay in the server log.
+        return handleError(reply, error, 'internal', '[Skills Marketplace] Install failed');
       }
     }
   );
@@ -382,8 +445,10 @@ export async function skillsRoutes(fastify: FastifyInstance) {
   fastify.delete<{ Params: { skillId: string } }>(
     '/api/skills/marketplace/:skillId',
     async (request, reply) => {
+      if (requireAdmin(request, reply) === null) return reply;
       try {
         const { skillId } = request.params;
+        if (!isValidInstalledSkillId(skillId)) return badId(reply);
 
         await anthropicSkillsService.uninstallSkill(skillId);
 
@@ -402,6 +467,7 @@ export async function skillsRoutes(fastify: FastifyInstance) {
   fastify.get<{ Querystring: { q: string } }>(
     '/api/skills/marketplace/search',
     async (request, reply) => {
+      if (requireUser(request, reply) === null) return reply;
       try {
         const { q } = request.query;
 
@@ -424,6 +490,7 @@ export async function skillsRoutes(fastify: FastifyInstance) {
 
   // GET /api/skills/marketplace/stats - Get marketplace statistics
   fastify.get('/api/skills/marketplace/stats', async (request, reply) => {
+    if (requireUser(request, reply) === null) return reply;
     try {
       const { getDatabase } = await import('../../db/index.js');
       const db = getDatabase();
@@ -468,8 +535,10 @@ export async function skillsRoutes(fastify: FastifyInstance) {
   fastify.put<{ Params: { skillId: string } }>(
     '/api/skills/marketplace/:skillId/toggle',
     async (request, reply) => {
+      if (requireAdmin(request, reply) === null) return reply;
       try {
         const { skillId } = request.params;
+        if (!isValidInstalledSkillId(skillId)) return badId(reply);
         const { getDatabase } = await import('../../db/index.js');
         const db = getDatabase();
 

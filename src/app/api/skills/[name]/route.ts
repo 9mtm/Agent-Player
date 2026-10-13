@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { skillsClient } from '@/lib/skills/client';
 import fs from 'fs';
 import path from 'path';
-import { requireSessionRole } from '@/lib/session';
+import { backendAuthHeaders, requireSessionRole } from '@/lib/session';
+
+/** Skill names are plain slugs; anything else could escape the skills folder. */
+const SKILL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const isValidSkillName = (name: string) => SKILL_NAME_RE.test(name) && !name.includes('..');
 
 const SKILLS_DIR = path.join(process.cwd(), 'skills');
 
@@ -14,9 +18,15 @@ export async function GET(
     request: NextRequest,
     { params }: { params: Promise<{ name: string }> }
 ) {
+    // SECURITY (S0-Q.19): any signed-in user; the token is forwarded to the backend.
+    const auth = await requireSessionRole(['owner', 'admin', 'user']);
+    if (auth instanceof Response) return auth;
     try {
         const { name } = await params;
-        const skill = await skillsClient.get(name);
+        if (!isValidSkillName(name)) {
+            return NextResponse.json({ error: 'Invalid skill name' }, { status: 400 });
+        }
+        const skill = await skillsClient.get(name, await backendAuthHeaders());
 
         if (!skill) {
             return NextResponse.json(
@@ -52,6 +62,9 @@ export async function DELETE(
 
     try {
         const { name } = await params;
+        if (!isValidSkillName(name)) {
+            return NextResponse.json({ error: 'Invalid skill name' }, { status: 400 });
+        }
 
         // Check for folder-based skill first (skills/{name}/SKILL.md)
         const skillFolder = path.join(SKILLS_DIR, name);

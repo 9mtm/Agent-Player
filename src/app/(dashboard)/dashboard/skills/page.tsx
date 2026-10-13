@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { Search, Download, Trash2, Package, RefreshCw, Github, FolderOpen, HardDrive } from 'lucide-react';
 import { config } from '@/lib/config';
+import { authHeaders } from '@/lib/auth/headers';
 
 const BACKEND_URL = config.backendUrl;
 
@@ -31,7 +32,7 @@ export default function SkillsPage() {
 
   const fetchLocalSkills = async () => {
     try {
-      const res = await fetch(`${BACKEND_URL}/api/skills`);
+      const res = await fetch(`${BACKEND_URL}/api/skills`, { headers: authHeaders() });
       if (!res.ok) {
         console.warn('Local skills API returned error:', res.status);
         setLocalSkills([]);
@@ -52,7 +53,7 @@ export default function SkillsPage() {
   const fetchAvailableSkills = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/skills/marketplace/available`);
+      const res = await fetch(`${BACKEND_URL}/api/skills/marketplace/available`, { headers: authHeaders() });
       const data = await res.json();
       if (data.success) {
         setAvailableSkills(data.skills);
@@ -71,7 +72,7 @@ export default function SkillsPage() {
 
       const res = await fetch(`${BACKEND_URL}/api/skills/marketplace/install`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ skillName: skill.name, skillPath: skill.path }),
       });
 

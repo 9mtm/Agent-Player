@@ -86,10 +86,13 @@ async function loadSkillsFromDisk(): Promise<Skill[]> {
  * List all skills - tries backend first, falls back to direct disk read
  */
 export async function GET() {
+    // SECURITY (S0-Q.19): any signed-in user; the token is forwarded to the backend.
+    const auth = await requireSessionRole(['owner', 'admin', 'user']);
+    if (auth instanceof Response) return auth;
     try {
         // Try backend first
         try {
-            const skills = await skillsClient.list();
+            const skills = await skillsClient.list(await backendAuthHeaders());
             if (skills && skills.length > 0) {
                 return NextResponse.json({
                     success: true,

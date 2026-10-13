@@ -1,4 +1,5 @@
 import { skillsClient } from "@/lib/skills/client";
+import { backendAuthHeaders } from "@/lib/session";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -12,7 +13,7 @@ export default async function SkillDetailPage({ params }: { params: Promise<{ na
 
     let skill = null;
     try {
-        skill = await skillsClient.get(name);
+        skill = await skillsClient.get(name, await backendAuthHeaders());
     } catch (e) {
         console.error('Failed to fetch skill:', e);
     }
