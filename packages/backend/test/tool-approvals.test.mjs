@@ -107,7 +107,12 @@ const requestSend = async (to, text = 'hello') => {
   assert.match(res.content[0].text, /Waiting for owner approval/);
   return res.details.approvalId;
 };
-const approve = (id, who = 'ap-owner') => quietly(() => app.inject({ method: 'POST', url: `/api/approvals/${id}/approve`, headers: auth(who) }));
+// The owner opens the full view first and approves exactly that (paramsHash).
+const detail = async (id) => (await app.inject({ method: 'GET', url: `/api/approvals/${id}`, headers: auth('ap-owner') })).json().approval;
+const approve = async (id, who = 'ap-owner', hash) => {
+  const paramsHash = hash ?? (await detail(id))?.paramsHash ?? undefined;
+  return quietly(() => app.inject({ method: 'POST', url: `/api/approvals/${id}/approve`, headers: auth(who), payload: { paramsHash } }));
+};
 const deny = (id, who = 'ap-owner') => app.inject({ method: 'POST', url: `/api/approvals/${id}/deny`, headers: auth(who) });
 
 test('a risky call creates a pending record (params encrypted) and runs nothing', async () => {
@@ -226,4 +231,40 @@ test('chat: a model-emitted risky call returns "waiting for approval" and does n
   assert.notEqual(result.is_error, true);
   const pending = approvals.listApprovals({ status: 'pending' }).filter((a) => a.paramsPreview?.to === 'chat-7');
   assert.equal(pending.length, 1);
+});
+
+test('full view shows the exact parameters; lossy list previews are marked truncated', async () => {
+  const long = 'L'.repeat(1000);
+  const res = await quietly(() => registry().execute('demo_send', { to: 'chat-8', text: long, extra: { nested: ['a', { deep: 1 }] }, apiKey: 'sk-secret-' + 'x'.repeat(20) }));
+  const id = res.details.approvalId;
+  const item = approvals.listApprovals({ status: 'pending' }).find((a) => a.id === id);
+  assert.equal(item.truncated, true);
+  const full = await detail(id);
+  assert.equal(full.params.text, long, 'exact long text');
+  assert.deepEqual(full.params.extra, { nested: ['a', { deep: 1 }] }, 'exact nested object');
+  assert.match(full.params.apiKey, /^••••/, 'real secret field masked');
+  assert.match(full.paramsHash, /^[0-9a-f]{64}$/);
+  const short = await requestSend('chat-short', 'hi');
+  assert.equal(approvals.listApprovals({ status: 'pending' }).find((a) => a.id === short).truncated, false);
+});
+
+test('approve must carry the hash of the shown parameters; changed parameters never run', async () => {
+  sent.length = 0;
+  const id = await requestSend('chat-10', 'original');
+  const noHash = await quietly(() => app.inject({ method: 'POST', url: `/api/approvals/${id}/approve`, headers: auth('ap-owner'), payload: {} }));
+  assert.equal(noHash.statusCode, 400);
+  const wrong = await approve(id, 'ap-owner', 'f'.repeat(64));
+  assert.equal(wrong.statusCode, 409);
+  assert.equal(db.prepare('SELECT status FROM tool_approvals WHERE id = ?').get(id).status, 'pending', 'still pending');
+
+  // Parameters swapped in storage after the request (same hash shown): refused, nothing runs.
+  const shownHash = (await detail(id)).paramsHash;
+  const { getEncryptionService } = await import(join(backendDir, 'src/credentials/encryption.ts'));
+  const forged = await getEncryptionService().encrypt(JSON.stringify({ to: 'attacker', text: 'swapped' }));
+  db.prepare('UPDATE tool_approvals SET params_encrypted = ?, params_iv = ?, params_tag = ? WHERE id = ?')
+    .run(forged.encrypted, forged.iv, forged.authTag, id);
+  const res = await approve(id, 'ap-owner', shownHash);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().approval.status, 'failed');
+  assert.equal(sent.length, 0);
 });

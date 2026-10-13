@@ -4,8 +4,8 @@
  * handlers check the role again.
  *
  *   GET  /api/approvals?status=pending   list (masked parameter previews)
- *   GET  /api/approvals/:id              one record
- *   POST /api/approvals/:id/approve      approve once: runs the call now
+ *   GET  /api/approvals/:id              full view: exact parameters (secrets masked) + paramsHash
+ *   POST /api/approvals/:id/approve      { paramsHash } approve once: runs exactly those parameters
  *   POST /api/approvals/:id/deny         deny: it never runs
  */
 
@@ -14,7 +14,7 @@ import {
   ApprovalStateError,
   approveAndRun,
   denyApproval,
-  getApproval,
+  getApprovalDetail,
   listApprovals,
 } from '../../tools/approvals.js';
 import { logAudit } from '../../services/audit-logger.js';
@@ -60,17 +60,21 @@ export async function approvalsRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { id: string } }>('/api/approvals/:id', { config }, async (request, reply) => {
     if (ownerOf(request, reply) === null) return reply;
     if (!ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid id' });
-    const record = getApproval(request.params.id);
+    const record = await getApprovalDetail(request.params.id);
     if (!record) return reply.code(404).send({ error: 'Approval not found' });
     return { approval: record };
   });
 
-  fastify.post<{ Params: { id: string } }>('/api/approvals/:id/approve', { config }, async (request, reply) => {
+  fastify.post<{ Params: { id: string }; Body: { paramsHash?: string } }>('/api/approvals/:id/approve', { config }, async (request, reply) => {
     const ownerId = ownerOf(request, reply);
     if (ownerId === null) return reply;
     if (!ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid id' });
+    const paramsHash = request.body?.paramsHash;
+    if (typeof paramsHash !== 'string' || !/^[0-9a-f]{64}$/.test(paramsHash)) {
+      return reply.code(400).send({ error: 'paramsHash from GET /api/approvals/:id is required' });
+    }
     try {
-      const { record, result } = await approveAndRun(request.params.id, ownerId);
+      const { record, result } = await approveAndRun(request.params.id, ownerId, paramsHash);
       audit(request, ownerId, 'approve', record.id, record.status === 'executed', { tool: record.toolName, agentId: record.agentId, status: record.status });
       return { approval: record, result: { ok: !result.error, preview: record.resultPreview, error: record.error } };
     } catch (err: any) {
