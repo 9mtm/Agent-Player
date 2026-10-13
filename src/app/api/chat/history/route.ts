@@ -1,4 +1,4 @@
-import { getSessionUser } from '@/lib/session';
+import { getSessionUser, backendFetch } from '@/lib/session';
 import { NextRequest } from 'next/server';
 import { config } from '@/lib/config';
 
@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
 
     if (sessionId) {
       // Get messages for specific session
-      const messagesRes = await fetch(`${BACKEND_URL}/api/sessions/${sessionId}/messages`, {
+      const messagesRes = await backendFetch(`${BACKEND_URL}/api/sessions/${sessionId}/messages`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' }
       });
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
     }
 
     // Get all sessions with their latest messages
-    const sessionsRes = await fetch(`${BACKEND_URL}/api/sessions`, {
+    const sessionsRes = await backendFetch(`${BACKEND_URL}/api/sessions`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' }
     });

@@ -1,4 +1,4 @@
-import { getSessionUser } from '@/lib/session';
+import { getSessionUser, backendFetch } from '@/lib/session';
 import { NextRequest } from 'next/server';
 import { config } from '@/lib/config';
 
@@ -25,7 +25,7 @@ export async function GET(
     console.log('[Session API] 📖 Loading session:', id);
 
     // Get session from backend
-    const sessionRes = await fetch(`${BACKEND_URL}/api/sessions/${id}`, {
+    const sessionRes = await backendFetch(`${BACKEND_URL}/api/sessions/${id}`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' }
     });
@@ -49,7 +49,7 @@ export async function GET(
 
     // Also get messages for this session
     console.log('[Session API] 📨 Loading messages for session...');
-    const messagesRes = await fetch(`${BACKEND_URL}/api/sessions/${id}/messages`, {
+    const messagesRes = await backendFetch(`${BACKEND_URL}/api/sessions/${id}/messages`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' }
     });
@@ -105,7 +105,7 @@ export async function PATCH(
     console.log('[Session API] 📝 Updating session:', id, body);
 
     // Update session via backend (PATCH for partial updates)
-    const sessionRes = await fetch(`${BACKEND_URL}/api/sessions/${id}`, {
+    const sessionRes = await backendFetch(`${BACKEND_URL}/api/sessions/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -161,7 +161,7 @@ export async function DELETE(
     console.log('[Session API] 🗑️ Deleting session:', id);
 
     // Delete session via backend
-    const sessionRes = await fetch(`${BACKEND_URL}/api/sessions/${id}`, {
+    const sessionRes = await backendFetch(`${BACKEND_URL}/api/sessions/${id}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' }
     });

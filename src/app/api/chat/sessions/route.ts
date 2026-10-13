@@ -1,4 +1,4 @@
-import { getSessionUser } from '@/lib/session';
+import { getSessionUser, backendFetch } from '@/lib/session';
 import { config } from '@/lib/config';
 
 export const runtime = 'nodejs';
@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     console.log('[Sessions API] 📝 Creating new session:', sessionData);
 
     // Create session via backend
-    const sessionRes = await fetch(`${BACKEND_URL}/api/sessions`, {
+    const sessionRes = await backendFetch(`${BACKEND_URL}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(sessionData)
@@ -85,7 +85,7 @@ export async function GET() {
     }
 
     // Get sessions from backend
-    const sessionRes = await fetch(`${BACKEND_URL}/api/sessions`, {
+    const sessionRes = await backendFetch(`${BACKEND_URL}/api/sessions`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' }
     });

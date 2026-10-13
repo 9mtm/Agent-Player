@@ -2,7 +2,7 @@
  * Memory item API - Delete and update individual memories
  */
 
-import { getSessionUser } from '@/lib/session';
+import { getSessionUser, backendFetch } from '@/lib/session';
 import { config } from '@/lib/config';
 import { NextResponse } from 'next/server';
 
@@ -22,7 +22,7 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id } = await params;
-    const res = await fetch(`${BACKEND_URL}/api/memory/${id}`, {
+    const res = await backendFetch(`${BACKEND_URL}/api/memory/${id}`, {
         method: 'DELETE',
     });
     return NextResponse.json(await res.json());
@@ -35,7 +35,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 
     const { id } = await params;
     const body = await req.json();
-    const res = await fetch(`${BACKEND_URL}/api/memory/${id}`, {
+    const res = await backendFetch(`${BACKEND_URL}/api/memory/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

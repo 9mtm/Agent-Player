@@ -3,7 +3,7 @@
  * Manually trigger memory consolidation
  */
 
-import { getSessionUser } from '@/lib/session';
+import { getSessionUser, backendFetch } from '@/lib/session';
 import { config } from '@/lib/config';
 import { NextResponse } from 'next/server';
 
@@ -23,7 +23,7 @@ export async function POST() {
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     try {
-        const res = await fetch(`${BACKEND_URL}/api/memory/layers/consolidate`, {
+        const res = await backendFetch(`${BACKEND_URL}/api/memory/layers/consolidate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userId }),

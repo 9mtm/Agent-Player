@@ -3,7 +3,7 @@
  * Returns statistics for each memory layer
  */
 
-import { getSessionUser } from '@/lib/session';
+import { getSessionUser, backendFetch } from '@/lib/session';
 import { config } from '@/lib/config';
 import { NextResponse } from 'next/server';
 
@@ -23,7 +23,7 @@ export async function GET() {
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     try {
-        const res = await fetch(`${BACKEND_URL}/api/memory/layers/stats?userId=${userId}`);
+        const res = await backendFetch(`${BACKEND_URL}/api/memory/layers/stats?userId=${userId}`);
         const data = await res.json();
         return NextResponse.json(data);
     } catch {

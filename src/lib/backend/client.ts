@@ -17,8 +17,11 @@ async function fetchAPI<T>(
 ): Promise<T> {
   const url = `${BACKEND_URL}${endpoint}`;
 
-  // Only add Content-Type header if there's a body
+  // Only add Content-Type header if there's a body.
+  // The bearer token is sent by default (S0-Q.11: backend sessions/memory need it);
+  // explicitly passed headers win.
   const headers: HeadersInit = {
+    ...authHeaders(),
     ...options.headers,
   };
 

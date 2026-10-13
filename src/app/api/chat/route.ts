@@ -19,6 +19,10 @@ export async function POST(req: Request) {
 
         console.log('[Chat API] ✅ User authenticated:', user.email);
 
+        // S0-Q.11: backend sessions/memory take the user from this token. Captured
+        // once here because the stream below runs after this handler returns.
+        const authH = await backendAuthHeaders();
+
         const { messages, model: selectedModel, agentId, sessionId: requestedSessionId, systemPrompt: customSystemPrompt, systemPromptAppend } = await req.json();
         const modelName = selectedModel || process.env.LOCAL_MODEL_NAME || 'qwen2.5:7b';
         const userId = (user as any).id || user.email;
@@ -36,7 +40,7 @@ export async function POST(req: Request) {
             console.log('[Chat API] 📝 No session ID, creating new session...');
             const sessionRes = await fetch(`${BACKEND_URL}/api/sessions`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...authH },
                 body: JSON.stringify({ title: 'New Chat', model: modelName })
             });
             if (sessionRes.ok) {
@@ -51,7 +55,7 @@ export async function POST(req: Request) {
         if (lastMessage && lastMessage.role === 'user' && sessionId) {
             await fetch(`${BACKEND_URL}/api/sessions/${sessionId}/messages`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...authH },
                 body: JSON.stringify({
                     role: 'user',
                     content: lastMessage.content,
@@ -66,7 +70,7 @@ export async function POST(req: Request) {
             try {
                 const memRes = await fetch(
                     `${BACKEND_URL}/api/memory/relevant?query=${encodeURIComponent(lastMessage.content)}&userId=${encodeURIComponent(userId)}&limit=5`,
-                    { signal: AbortSignal.timeout(2000) } // 2 second timeout
+                    { headers: authH, signal: AbortSignal.timeout(2000) } // 2 second timeout
                 );
                 if (memRes.ok) {
                     const { memories } = await memRes.json();
@@ -91,7 +95,7 @@ export async function POST(req: Request) {
                 'Content-Type': 'application/json',
                 'Origin': config.appUrl,
                 // S0-Q.9: the backend takes the user from this token, not from `userId`
-                ...(await backendAuthHeaders()),
+                ...authH,
             },
             body: JSON.stringify({
                 model: agentId ? undefined : modelName,
@@ -155,7 +159,7 @@ export async function POST(req: Request) {
                         console.log('[Chat API] 💾 Saving assistant response (' + fullResponse.length + ' chars)...');
                         await fetch(`${BACKEND_URL}/api/sessions/${sessionId}/messages`, {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: { 'Content-Type': 'application/json', ...authH },
                             body: JSON.stringify({
                                 role: 'assistant',
                                 content: fullResponse,
@@ -169,7 +173,7 @@ export async function POST(req: Request) {
                         const conversationText = `User: ${lastMessage.content}\nAssistant: ${fullResponse}`;
                         fetch(`${BACKEND_URL}/api/memory/extract`, {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: { 'Content-Type': 'application/json', ...authH },
                             body: JSON.stringify({ text: conversationText, userId }),
                         }).then(r => {
                             if (r.ok) r.json().then(d => {

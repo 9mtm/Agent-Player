@@ -79,9 +79,9 @@ export interface Message {
 
 // Legacy Sessions API (uses SessionsRepository under the hood)
 export const sessionsDb = {
-  list(): Session[] {
-    // For backward compatibility, use mock user ID
-    const sessions = repos.sessions.findUserSessions('mock-user');
+  /** Sessions of one user (S0-Q.11: the caller from the token). */
+  list(userId: string): Session[] {
+    const sessions = repos.sessions.findUserSessions(userId);
     return sessions.map(s => ({
       id: s.id,
       title: s.title,
@@ -90,6 +90,11 @@ export const sessionsDb = {
       createdAt: s.created_at,
       updatedAt: s.updated_at
     }));
+  },
+
+  /** Owner user id of a session, or null if it does not exist. */
+  ownerOf(id: string): string | null {
+    return repos.sessions.findSessionById(id)?.user_id ?? null;
   },
 
   get(id: string): Session | null {
@@ -106,9 +111,9 @@ export const sessionsDb = {
     };
   },
 
-  create(input: { title?: string; model?: string; systemPrompt?: string }): Session {
+  create(input: { title?: string; model?: string; systemPrompt?: string }, userId: string): Session {
     const session = repos.sessions.createSession({
-      user_id: 'mock-user', // For backward compatibility
+      user_id: userId,
       title: input.title,
       model: input.model || 'gpt-4',
       system_prompt: input.systemPrompt

@@ -4,7 +4,9 @@
  * RESTful endpoints for memory management
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { authenticateActiveUser, type UserRole } from '../../auth/route-guards.js';
+import { getDatabase } from '../../db/index.js';
 import { v4 as uuidv4 } from 'uuid';
 import { getMemoryStorage } from '../../memory/storage.js';
 import { getMemoryRetrieval } from '../../memory/retrieval.js';
@@ -17,6 +19,25 @@ const MEMORY_TYPES: MemoryType[] = [
   'fact', 'event', 'context', 'insight', 'preference', 'skill', 'relationship', 'task'
 ];
 
+/**
+ * SECURITY (S0-Q.11): every /api/memory* route needs a valid bearer token of an
+ * active user. The user always comes from the token; `userId` in the query or
+ * body is ignored. Memories of other users answer 404 (there is no owner-wide
+ * memory view). Server-wide maintenance (consolidation run, its log) is
+ * owner-only.
+ */
+interface MemoryCaller { id: string; role: UserRole }
+
+function caller(request: FastifyRequest): MemoryCaller {
+  return (request as any).memoryCaller as MemoryCaller;
+}
+
+/** Owner user id of a memory (no access-count side effect), or null. */
+function memoryOwner(id: string): string | null {
+  const row = getDatabase().prepare('SELECT user_id FROM memories WHERE id = ?').get(id) as { user_id: string } | undefined;
+  return row?.user_id ?? null;
+}
+
 export async function memoryRoutes(fastify: FastifyInstance) {
   const storage = getMemoryStorage();
   const retrieval = getMemoryRetrieval();
@@ -24,15 +45,20 @@ export async function memoryRoutes(fastify: FastifyInstance) {
   // Initialize storage
   await storage.initialize();
 
+  // Encapsulated to this plugin: applies to the memory routes only.
+  fastify.addHook('preHandler', async (request, reply) => {
+    const user = authenticateActiveUser(request);
+    if (!user) return reply.code(401).send({ error: 'Authentication required' });
+    (request as any).memoryCaller = user satisfies MemoryCaller;
+  });
+
+  const ownsMemory = (request: FastifyRequest, id: string) => !!id && memoryOwner(id) === caller(request).id;
+
   /**
    * GET /api/memory - Get all memories for a user
    */
   fastify.get('/api/memory', async (request, reply) => {
-    const { userId } = request.query as { userId: string };
-
-    if (!userId) {
-      return reply.code(400).send({ error: 'userId is required' });
-    }
+    const userId = caller(request).id;
 
     const memories = await storage.getByUser(userId);
 
@@ -51,7 +77,7 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const { id } = request.params;
 
-      const memory = await storage.get(id);
+      const memory = ownsMemory(request, id) ? await storage.get(id) : null;
 
       if (!memory) {
         return reply.code(404).send({ error: 'Memory not found' });
@@ -68,7 +94,7 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * POST /api/memory - Create a new memory
    */
   fastify.post('/api/memory', async (request, reply) => {
-    const body = request.body as {
+    const body = { ...(request.body as object || {}), userId: caller(request).id } as {
       userId: string;
       type: MemoryType;
       content: string;
@@ -76,9 +102,9 @@ export async function memoryRoutes(fastify: FastifyInstance) {
       metadata?: Record<string, any>;
     };
 
-    if (!body.userId || !body.type || !body.content) {
+    if (!body.type || !body.content) {
       return reply.code(400).send({
-        error: 'userId, type, and content are required'
+        error: 'type and content are required'
       });
     }
 
@@ -130,7 +156,11 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     '/api/memory/:id',
     async (request, reply) => {
       const { id } = request.params;
-      const updates = request.body as Partial<Memory>;
+      if (!ownsMemory(request, id)) {
+        return reply.code(404).send({ error: 'Memory not found' });
+      }
+      // Identity fields can never be changed through the API.
+      const { id: _id, userId: _userId, ...updates } = (request.body || {}) as Partial<Memory>;
 
       try {
         await storage.update(id, updates);
@@ -141,7 +171,7 @@ export async function memoryRoutes(fastify: FastifyInstance) {
           memory: updated
         };
       } catch (err: any) {
-        return reply.code(404).send({ error: err.message });
+        return reply.code(404).send({ error: 'Memory not found' });
       }
     }
   );
@@ -153,6 +183,9 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     '/api/memory/:id',
     async (request, reply) => {
       const { id } = request.params;
+      if (!ownsMemory(request, id)) {
+        return reply.code(404).send({ error: 'Memory not found' });
+      }
 
       await storage.delete(id);
 
@@ -167,7 +200,7 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * POST /api/memory/search - Search memories by semantic similarity (with Multi-Tier Memory support)
    */
   fastify.post('/api/memory/search', async (request, reply) => {
-    const body = request.body as {
+    const body = { ...(request.body as object || {}), userId: caller(request).id } as {
       query: string;
       userId: string;
       type?: MemoryType;
@@ -177,9 +210,9 @@ export async function memoryRoutes(fastify: FastifyInstance) {
       minImportanceScore?: number;
     };
 
-    if (!body.query || !body.userId) {
+    if (!body.query) {
       return reply.code(400).send({
-        error: 'query and userId are required'
+        error: 'query is required'
       });
     }
 
@@ -204,14 +237,14 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * POST /api/memory/extract - Extract memories from text
    */
   fastify.post('/api/memory/extract', async (request, reply) => {
-    const body = request.body as {
+    const body = { ...(request.body as object || {}), userId: caller(request).id } as {
       text: string;
       userId: string;
     };
 
-    if (!body.text || !body.userId) {
+    if (!body.text || typeof body.text !== 'string') {
       return reply.code(400).send({
-        error: 'text and userId are required'
+        error: 'text is required'
       });
     }
 
@@ -228,15 +261,15 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * GET /api/memory/relevant - Find relevant memories for a query
    */
   fastify.get('/api/memory/relevant', async (request, reply) => {
-    const { query, userId, limit } = request.query as {
+    const { query, limit } = request.query as {
       query: string;
-      userId: string;
       limit?: string;
     };
+    const userId = caller(request).id;
 
-    if (!query || !userId) {
+    if (!query) {
       return reply.code(400).send({
-        error: 'query and userId are required'
+        error: 'query is required'
       });
     }
 
@@ -257,11 +290,7 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * GET /api/memory/summary - Get memory summary for a user
    */
   fastify.get('/api/memory/summary', async (request, reply) => {
-    const { userId } = request.query as { userId: string };
-
-    if (!userId) {
-      return reply.code(400).send({ error: 'userId is required' });
-    }
+    const userId = caller(request).id;
 
     const summary = await retrieval.getSummary(userId);
 
@@ -275,11 +304,7 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * POST /api/memory/consolidate - Consolidate similar memories
    */
   fastify.post('/api/memory/consolidate', async (request, reply) => {
-    const { userId } = request.body as { userId: string };
-
-    if (!userId) {
-      return reply.code(400).send({ error: 'userId is required' });
-    }
+    const userId = caller(request).id;
 
     const consolidated = await retrieval.consolidate(userId);
 
@@ -306,11 +331,7 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * GET /api/memory/layers/stats - Get statistics for all memory layers
    */
   fastify.get('/api/memory/layers/stats', async (request, reply) => {
-    const { userId } = request.query as { userId: string };
-
-    if (!userId) {
-      return reply.code(400).send({ error: 'userId is required' });
-    }
+    const userId = caller(request).id;
 
     const stats = await MemoryTiersService.getLayerStats(userId);
 
@@ -324,15 +345,15 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * POST /api/memory/layers/promote - Promote a memory to the next layer
    */
   fastify.post('/api/memory/layers/promote', async (request, reply) => {
-    const body = request.body as {
+    const body = { ...(request.body as object || {}), userId: caller(request).id } as {
       userId: string;
       memoryId: string;
       targetLayer: 'experiential' | 'factual';
     };
 
-    if (!body.userId || !body.memoryId || !body.targetLayer) {
+    if (!body.memoryId || !body.targetLayer) {
       return reply.code(400).send({
-        error: 'userId, memoryId, and targetLayer are required'
+        error: 'memoryId and targetLayer are required'
       });
     }
 
@@ -360,6 +381,10 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * POST /api/memory/layers/consolidate - Manually trigger memory consolidation
    */
   fastify.post('/api/memory/layers/consolidate', async (request, reply) => {
+    // Runs across every user's memories: owner only.
+    if (caller(request).role !== 'owner') {
+      return reply.code(403).send({ error: 'This action requires the owner account' });
+    }
     const consolidationService = getConsolidationService();
 
     const result = await consolidationService.runManual();
@@ -375,6 +400,10 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * GET /api/memory/layers/consolidate/log - Get consolidation log
    */
   fastify.get('/api/memory/layers/consolidate/log', async (request, reply) => {
+    // Server-wide log: owner only.
+    if (caller(request).role !== 'owner') {
+      return reply.code(403).send({ error: 'This action requires the owner account' });
+    }
     const { limit } = request.query as { limit?: string };
 
     const log = await MemoryTiersService.getConsolidationLog(
@@ -392,11 +421,7 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * GET /api/memory/layers/candidates - Get promotion candidates
    */
   fastify.get('/api/memory/layers/candidates', async (request, reply) => {
-    const { userId } = request.query as { userId: string };
-
-    if (!userId) {
-      return reply.code(400).send({ error: 'userId is required' });
-    }
+    const userId = caller(request).id;
 
     const candidates = await MemoryTiersService.getPromotionCandidates(userId);
 
@@ -420,6 +445,9 @@ export async function memoryRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({
         error: 'memoryId and importanceScore are required'
       });
+    }
+    if (!ownsMemory(request, body.memoryId)) {
+      return reply.code(404).send({ error: 'Memory not found' });
     }
 
     const success = await MemoryTiersService.updateImportanceScore(

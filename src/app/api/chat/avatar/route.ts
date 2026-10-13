@@ -20,6 +20,8 @@ export async function POST(req: Request) {
         }
 
         const body = await req.json();
+        // S0-Q.11: backend memory routes take the user from this token.
+        const authH = await backendAuthHeaders();
 
         // 🧠 Fetch relevant memories for context injection
         const userId = user.email; // same memory key as /api/chat and /api/memory (was String(undefined))
@@ -29,7 +31,7 @@ export async function POST(req: Request) {
             try {
                 const memRes = await fetch(
                     `${BACKEND_URL}/api/memory/relevant?query=${encodeURIComponent(lastUserMsg)}&userId=${encodeURIComponent(userId)}&limit=5`,
-                    { signal: AbortSignal.timeout(2000) }
+                    { headers: authH, signal: AbortSignal.timeout(2000) }
                 );
                 if (memRes.ok) {
                     const { memories } = await memRes.json();
@@ -44,7 +46,7 @@ export async function POST(req: Request) {
         const res = await fetch(`${BACKEND_URL}/api/chat`, {
             method: 'POST',
             // S0-Q.9: the backend takes the user from this token, not from `userId`
-            headers: { 'Content-Type': 'application/json', ...(await backendAuthHeaders()) },
+            headers: { 'Content-Type': 'application/json', ...authH },
             body: JSON.stringify({ ...body, stream: true, userId, memoryContext: memoryContext || undefined }),
         });
 
@@ -90,7 +92,7 @@ export async function POST(req: Request) {
             const extractText = `User: ${lastUserMsg}\nAssistant: ${fullContent}`;
             fetch(`${BACKEND_URL}/api/memory/extract`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...authH },
                 body: JSON.stringify({ text: extractText, userId }),
             }).then(r => {
                 if (r.ok) r.json().then(d => {

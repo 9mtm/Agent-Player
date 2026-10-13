@@ -13,6 +13,7 @@ import {
 import { useAvatarWidget } from '@/contexts/avatar-widget-context';
 import { useAuth } from '@/contexts/auth-context';
 import { config } from '@/lib/config';
+import { authHeaders } from '@/lib/auth/headers';
 
 const AvatarViewer = dynamic(
   () => import('@/components/avatar/AvatarViewer').then(m => ({ default: m.AvatarViewer })),
@@ -315,7 +316,7 @@ export function FloatingAvatarWidget() {
         // Create a dedicated session for widget conversations (shows in sidebar)
         const sessRes = await fetch(`${config.backendUrl}/api/sessions`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders({ 'Content-Type': 'application/json' }), // S0-Q.11
           body: JSON.stringify({ title: '🎭 Avatar Chat' }),
         });
         if (sessRes.ok) {

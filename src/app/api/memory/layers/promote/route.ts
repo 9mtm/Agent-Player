@@ -3,7 +3,7 @@
  * Promote a memory to a higher layer
  */
 
-import { getSessionUser } from '@/lib/session';
+import { getSessionUser, backendFetch } from '@/lib/session';
 import { config } from '@/lib/config';
 import { NextResponse } from 'next/server';
 
@@ -25,7 +25,7 @@ export async function POST(req: Request) {
     const body = await req.json();
 
     try {
-        const res = await fetch(`${BACKEND_URL}/api/memory/layers/promote`, {
+        const res = await backendFetch(`${BACKEND_URL}/api/memory/layers/promote`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...body, userId }),

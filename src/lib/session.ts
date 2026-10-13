@@ -42,6 +42,18 @@ export async function backendAuthHeaders(): Promise<Record<string, string>> {
 }
 
 /**
+ * fetch() to the backend with the caller's token forwarded (S0-Q.11: backend
+ * memory and session routes take the user from this token). Call it while the
+ * request is being handled; inside a response stream, capture
+ * backendAuthHeaders() first and pass the headers explicitly.
+ */
+export async function backendFetch(url: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers);
+    for (const [key, value] of Object.entries(await backendAuthHeaders())) headers.set(key, value);
+    return fetch(url, { ...init, headers });
+}
+
+/**
  * Check if user is authenticated
  */
 export async function requireAuth(): Promise<SessionUser> {

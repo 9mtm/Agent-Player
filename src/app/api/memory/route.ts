@@ -3,7 +3,7 @@
  * All memory operations are scoped to the authenticated user
  */
 
-import { getSessionUser } from '@/lib/session';
+import { getSessionUser, backendFetch } from '@/lib/session';
 import { config } from '@/lib/config';
 import { NextResponse } from 'next/server';
 
@@ -30,7 +30,7 @@ export async function GET(req: Request) {
     if (type) backendUrl.searchParams.set('type', type);
 
     try {
-        const res = await fetch(backendUrl.toString());
+        const res = await backendFetch(backendUrl.toString());
         const data = await res.json();
         return NextResponse.json(data);
     } catch {
@@ -50,7 +50,7 @@ export async function POST(req: Request) {
 
     // Handle search
     if (action === 'search') {
-        const res = await fetch(`${BACKEND_URL}/api/memory/search`, {
+        const res = await backendFetch(`${BACKEND_URL}/api/memory/search`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...body, userId }),
@@ -60,7 +60,7 @@ export async function POST(req: Request) {
 
     // Handle extract
     if (action === 'extract') {
-        const res = await fetch(`${BACKEND_URL}/api/memory/extract`, {
+        const res = await backendFetch(`${BACKEND_URL}/api/memory/extract`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...body, userId }),
@@ -69,7 +69,7 @@ export async function POST(req: Request) {
     }
 
     // Create memory
-    const res = await fetch(`${BACKEND_URL}/api/memory`, {
+    const res = await backendFetch(`${BACKEND_URL}/api/memory`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...body, userId }),
@@ -89,7 +89,7 @@ export async function PUT(req: Request) {
     const body = await req.json();
 
     try {
-        const res = await fetch(`${BACKEND_URL}/api/memory/${id}`, {
+        const res = await backendFetch(`${BACKEND_URL}/api/memory/${id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...body, userId }),
@@ -111,7 +111,7 @@ export async function DELETE(req: Request) {
     if (!id) return NextResponse.json({ error: 'Memory ID required' }, { status: 400 });
 
     try {
-        const res = await fetch(`${BACKEND_URL}/api/memory/${id}?userId=${userId}`, {
+        const res = await backendFetch(`${BACKEND_URL}/api/memory/${id}?userId=${userId}`, {
             method: 'DELETE',
         });
         const data = await res.json();
