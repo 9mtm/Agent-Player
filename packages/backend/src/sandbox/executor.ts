@@ -293,17 +293,21 @@ export class SandboxExecutor {
    * Update configuration
    */
   updateConfig(config: Partial<SandboxConfig>): void {
-    // SECURITY (S0-Q.3): isolation settings come from the server environment only,
-    // never from an API call (no switching to host execution, privileged or host network).
-    const { mode, docker, ...rest } = config;
-    if (mode !== undefined && mode !== 'off') {
-      this.config.mode = mode;
+    // SECURITY (S0-Q.3): isolation settings come from the server environment only.
+    // The API may only switch between sandboxed modes and tighten resource limits
+    // (never above the server defaults). Image, mounts, network, privileges, workspace
+    // access and command lists are not changeable at runtime.
+    if (config.mode === 'non-main' || config.mode === 'all') {
+      this.config.mode = config.mode;
     }
-    if (docker) {
-      const { privileged: _privileged, network: _network, ...safeDocker } = docker;
-      this.config.docker = { ...this.config.docker, ...safeDocker };
-    }
-    this.config = { ...this.config, ...rest };
+    const clamp = (value: unknown, max: number) =>
+      typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(value, max) : undefined;
+    const timeout = clamp(config.timeout, DEFAULT_SANDBOX_CONFIG.timeout);
+    const maxMemory = clamp(config.maxMemory, DEFAULT_SANDBOX_CONFIG.maxMemory);
+    const maxCpu = clamp(config.maxCpu, DEFAULT_SANDBOX_CONFIG.maxCpu);
+    if (timeout !== undefined) this.config.timeout = timeout;
+    if (maxMemory !== undefined) this.config.maxMemory = maxMemory;
+    if (maxCpu !== undefined) this.config.maxCpu = maxCpu;
   }
 
   /**

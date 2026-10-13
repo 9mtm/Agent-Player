@@ -39,13 +39,22 @@ test("mode 'off' runs on the host only when SANDBOX_ALLOW_HOST_EXEC=true", async
   });
 });
 
-test('the config API cannot switch off isolation', () => {
+test('the config API cannot switch off isolation or loosen limits', () => {
   const executor = new SandboxExecutor({ mode: 'all' });
-  executor.updateConfig({ mode: 'off', docker: { privileged: true, network: 'host', image: 'custom:1' }, timeout: 5000 });
+  const before = executor.getConfig();
+  executor.updateConfig({
+    mode: 'off',
+    docker: { privileged: true, network: 'host', image: 'evil:1' },
+    workspaceAccess: 'write',
+    allowedCommands: ['rm'],
+    timeout: 5000,
+    maxMemory: 999999,
+  });
   const config = executor.getConfig();
   assert.equal(config.mode, 'all');
-  assert.equal(config.docker.privileged, false);
-  assert.equal(config.docker.network, 'none');
-  assert.equal(config.docker.image, 'custom:1');
-  assert.equal(config.timeout, 5000);
+  assert.deepEqual(config.docker, before.docker);
+  assert.equal(config.workspaceAccess, before.workspaceAccess);
+  assert.equal(config.allowedCommands, before.allowedCommands);
+  assert.equal(config.timeout, Math.min(5000, before.timeout));
+  assert.equal(config.maxMemory, before.maxMemory);
 });
