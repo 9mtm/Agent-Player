@@ -7,7 +7,21 @@
 
 import type { Tool, ToolResult } from '../types.js';
 import { getDatabase } from '../../db/index.js';
-import { getEncryptionService } from '../../credentials/encryption.js';
+import { getCredentialManager } from '../../credentials/manager.js';
+import { CredentialType } from '../../credentials/types.js';
+
+/**
+ * F-06: the tool acts for the real user of the tool execution context only.
+ * Returns the id when it belongs to an existing active user, otherwise null
+ * (no 'default' or other fallback user).
+ */
+export function resolveToolUser(userId: unknown): string | null {
+  if (typeof userId !== 'string' || userId.trim() === '') return null;
+  const row = getDatabase()
+    .prepare('SELECT status FROM users WHERE id = ?')
+    .get(userId) as { status: string } | undefined;
+  return row && row.status === 'active' ? userId : null;
+}
 
 export const credentialsSaveTool: Tool = {
   name: 'credentials_save',
@@ -70,7 +84,13 @@ The credential will be encrypted using AES-256-GCM before storage.`,
 
   async execute(params, context): Promise<ToolResult> {
     const { service, name, value, description } = params;
-    const userId = context?.userId || 'default';
+    const userId = resolveToolUser(context?.userId);
+    if (!userId) {
+      return {
+        content: [{ type: 'text', text: '❌ Cannot save the credential: no signed-in user for this request.' }],
+        error: 'No authenticated user in the tool context',
+      };
+    }
 
     console.log(`[CredentialsSave] 🔐 Saving ${service} credential for user ${userId}`);
 
@@ -80,30 +100,20 @@ The credential will be encrypted using AES-256-GCM before storage.`,
         error: 'Invalid credential value',
       };
     }
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      return {
+        content: [{ type: 'text', text: '❌ Error: Credential name cannot be empty' }],
+        error: 'Invalid credential name',
+      };
+    }
 
     try {
-      const db = getDatabase();
-      const encryptionService = getEncryptionService();
-
-      // Encrypt the credential
-      const { encrypted, iv, authTag } = await encryptionService.encrypt(value);
-
-      // Store as JSON with all encryption parts
-      const encryptedValue = JSON.stringify({ encrypted, iv, authTag });
-
-      // Check if credential with same name already exists for this user
-      const existing = db.prepare(`
-        SELECT id FROM credentials
-        WHERE user_id = ? AND name = ?
-      `).get(userId, name);
+      // Encrypted and owned by the user through the credential manager.
+      const manager = getCredentialManager();
+      const existing = await manager.getByName(name, userId);
 
       if (existing) {
-        // Update existing credential
-        db.prepare(`
-          UPDATE credentials
-          SET service = ?, encrypted_value = ?, description = ?, updated_at = CURRENT_TIMESTAMP
-          WHERE user_id = ? AND name = ?
-        `).run(service, encryptedValue, description || null, userId, name);
+        await manager.update(existing.id, { value, description: description || existing.description });
 
         console.log(`[CredentialsSave] ✅ Updated existing credential: ${name}`);
 
@@ -120,11 +130,15 @@ The credential has been encrypted and saved securely. You can now use it with yo
           }],
         };
       } else {
-        // Insert new credential
-        db.prepare(`
-          INSERT INTO credentials (user_id, service, name, encrypted_value, description)
-          VALUES (?, ?, ?, ?, ?)
-        `).run(userId, service, name, encryptedValue, description || null);
+        await manager.create({
+          name,
+          type: CredentialType.API_KEY,
+          value,
+          description: description || undefined,
+          // The service this credential is for (e.g. 'claude'); lets tools find it.
+          skillId: typeof service === 'string' && service ? service : 'custom',
+          userId,
+        });
 
         console.log(`[CredentialsSave] ✅ Saved new credential: ${name}`);
 
@@ -146,11 +160,12 @@ ${service === 'google' ? '\n💡 You can now use Google Gemini models in your ag
         };
       }
     } catch (error: any) {
-      console.error(`[CredentialsSave] ❌ Error saving credential:`, error);
+      // Never echo the value; error messages from storage do not contain it.
+      console.error(`[CredentialsSave] ❌ Error saving credential: ${error?.message}`);
 
       return {
-        content: [{ type: 'text', text: `❌ Failed to save credential: ${error.message}` }],
-        error: error.message,
+        content: [{ type: 'text', text: '❌ Failed to save credential' }],
+        error: 'Credential save failed',
       };
     }
   },

@@ -488,7 +488,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
         prompt: claudeFullPrompt,
         model: model || undefined,
         timeout: 180000  // 3 minutes
-      });
+      }, { workspaceDir: process.cwd(), userId, sessionId });
       const text = result.content?.[0]?.text || '(no response)';
       const claudeModel = (result.details as any)?.model || model || 'claude-sonnet-4-5-20250929';
       console.log(`[Chat] ✅ Claude CLI responded | model: ${claudeModel} | length: ${text.length}`);
@@ -721,7 +721,7 @@ async function nonStreamChat(
       prompt: userMessage,
       model: model || undefined,
       timeout: 180000
-    });
+    }, { workspaceDir: process.cwd(), userId, sessionId });
     const text = result.content?.[0]?.text || '(no response)';
     return reply.send({ message: { role: 'assistant', content: text } });
   }

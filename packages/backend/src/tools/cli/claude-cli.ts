@@ -16,8 +16,10 @@ import { promisify } from 'node:util';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import type { Tool, ToolResult } from '../types.js';
+import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
 import { getDatabase } from '../../db/index.js';
+import { getCredentialManager } from '../../credentials/manager.js';
+import { resolveToolUser } from '../credentials/credentials-save.js';
 import {
   execToolRefusal,
   isExecToolsEnabled,
@@ -58,6 +60,33 @@ async function findClaudeExecutable(): Promise<string> {
   return 'claude';
 }
 
+/** Credential names checked, in order, for the Claude CLI's Anthropic API key. */
+const ANTHROPIC_KEY_NAMES = ['anthropic_api_key', 'claude_api_key'];
+
+/**
+ * F-06: Anthropic API key from the calling user's own encrypted credentials
+ * (by name, then the newest one saved for the 'claude'/'anthropic' service).
+ * No user in the context → nothing is read; never another user's credential.
+ */
+export async function getAnthropicKeyForUser(userId: unknown): Promise<string> {
+  const owner = resolveToolUser(userId);
+  if (!owner) return '';
+  const manager = getCredentialManager();
+  try {
+    for (const name of ANTHROPIC_KEY_NAMES) {
+      const credential = await manager.getByName(name, owner);
+      if (credential) return await manager.getValue(credential.id);
+    }
+    const byService = (await manager.list(owner))
+      .filter((c) => c.skillId === 'claude' || c.skillId === 'anthropic')
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    if (byService[0]) return await manager.getValue(byService[0].id);
+  } catch {
+    console.warn('[ClaudeCLI] Could not read the stored Anthropic key');
+  }
+  return '';
+}
+
 export const claudeCliTool: Tool = {
   name: 'claude_cli',
   description:
@@ -93,7 +122,7 @@ export const claudeCliTool: Tool = {
     required: ['prompt'],
   },
 
-  async execute(params): Promise<ToolResult> {
+  async execute(params, context?: ToolExecutionContext): Promise<ToolResult> {
     const { prompt, workdir, model, timeout = 180_000 } = params;
 
     // SECURITY: the CLI runs a host process with its own shell tools; off
@@ -115,7 +144,7 @@ export const claudeCliTool: Tool = {
     if (workdir) console.log(`[ClaudeCLI]   Workdir: ${workdir}`);
     if (model) console.log(`[ClaudeCLI]   Model: ${model}`);
 
-    // Resolve API key: env var → agent api_key → global credentials
+    // Resolve API key: env var → agent api_key → the caller's own credentials
     let anthropicApiKey = process.env.ANTHROPIC_API_KEY || '';
     if (!anthropicApiKey) {
       try {
@@ -124,16 +153,12 @@ export const claudeCliTool: Tool = {
         const row = db.prepare(
           `SELECT api_key FROM agents_config WHERE provider IN ('claude', 'claude-cli') AND api_key IS NOT NULL AND api_key != '' LIMIT 1`
         ).get() as { api_key: string } | undefined;
-        if (row?.api_key) {
-          anthropicApiKey = row.api_key;
-        } else {
-          // Second try: get from global credentials table
-          const credRow = db.prepare(
-            `SELECT value FROM credentials WHERE key = 'anthropic_api_key' LIMIT 1`
-          ).get() as { value: string } | undefined;
-          if (credRow?.value) anthropicApiKey = credRow.value;
-        }
+        if (row?.api_key) anthropicApiKey = row.api_key;
       } catch { /* ignore DB errors */ }
+    }
+    if (!anthropicApiKey) {
+      // Second try: the calling user's encrypted credentials (F-06)
+      anthropicApiKey = await getAnthropicKeyForUser(context?.userId);
     }
 
     const claudeBin = await findClaudeExecutable();

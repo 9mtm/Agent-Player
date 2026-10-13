@@ -167,12 +167,6 @@ test('valid marketplace install writes only inside .data/skills; uninstall never
   const row = db.prepare(`SELECT id FROM installed_skills WHERE skill_name = 'pdf'`).get();
   assert.ok(row);
 
-  // Pre-existing schema bug (recorded, not fixed here): skill_usage_log has a
-  // foreign key to a non-existent `agents` table, so any DELETE from
-  // installed_skills fails. Give the throwaway DB that table so the uninstall
-  // path guard can be exercised.
-  db.prepare(`CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY)`).run();
-
   // A row whose stored path points outside the skills directory: the file stays.
   const outside = join(dir, 'keep-me.md');
   writeFileSync(outside, 'keep');
