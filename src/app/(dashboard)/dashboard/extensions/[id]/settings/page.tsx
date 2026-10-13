@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import { config } from '@/lib/config';
 import { UnifiedSettingsRenderer } from '@/components/extensions/UnifiedSettingsRenderer';
+import { authHeaders } from '@/lib/auth/headers';
 
 export default function ExtensionSettingsPage() {
   const params = useParams();
@@ -36,7 +37,7 @@ export default function ExtensionSettingsPage() {
       setExtension(ext);
 
       // Fetch current config
-      const cfgRes = await fetch(`${config.backendUrl}/api/extensions/${extensionId}/config`);
+      const cfgRes = await fetch(`${config.backendUrl}/api/extensions/${extensionId}/config`, { headers: authHeaders() });
       const cfgData = await cfgRes.json();
       setCurrentConfig(cfgData.config || {});
     } catch (error) {

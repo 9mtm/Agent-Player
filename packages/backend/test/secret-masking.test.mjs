@@ -121,6 +121,12 @@ test('settings: API keys are masked; a masked or omitted key keeps the stored on
 });
 
 test('extension config: secret keys masked on read, kept on masked write', async () => {
+  // S0-Q.7: extension management routes need an active owner/admin token.
+  const { generateToken } = await import('../src/auth/jwt.ts');
+  db.prepare(`INSERT OR IGNORE INTO users (id, email, username, password_hash, role, status)
+    VALUES ('mask-owner', 'mask-owner@example.test', 'mask-owner', 'x', 'owner', 'active')`).run();
+  const authorization = `Bearer ${generateToken('mask-owner', 1)}`;
+  const call = (method, url, payload) => app.inject({ method, url, payload, headers: { authorization } });
   db.prepare('INSERT INTO extension_configs (extension_id, config_json) VALUES (?, ?)')
     .run('slack', JSON.stringify({ bot_token: SECRET, signing_secret: SECRET + 'x', channel: 'general' }));
 

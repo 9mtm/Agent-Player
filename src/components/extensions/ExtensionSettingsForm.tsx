@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { config } from '@/lib/config';
+import { authHeaders } from '@/lib/auth/headers';
 
 const BACKEND_URL = config.backendUrl;
 
@@ -28,7 +29,7 @@ export function ExtensionSettingsForm({ extensionId, uiSpec, onSave }: Extension
 
   const fetchSettings = async () => {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/extensions/${extensionId}/config`);
+      const response = await fetch(`${BACKEND_URL}/api/extensions/${extensionId}/config`, { headers: authHeaders() });
       if (response.ok) {
         const data = await response.json();
         setSettings(data.config || {});
@@ -44,7 +45,7 @@ export function ExtensionSettingsForm({ extensionId, uiSpec, onSave }: Extension
     try {
       const response = await fetch(`${BACKEND_URL}/api/extensions/${extensionId}/config`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ config: formData }),
       });
 

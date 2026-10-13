@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/dialog';
 import { ExtensionSettingsForm } from '@/components/extensions/ExtensionSettingsForm';
 import { PermissionsBadge } from '@/components/extensions/PermissionsBadge';
+import { authHeaders } from '@/lib/auth/headers';
 
 const API_URL = config.backendUrl;
 
@@ -67,11 +68,6 @@ export default function ExtensionsPage() {
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
   const [extensionToSettings, setExtensionToSettings] = useState<Extension | null>(null);
 
-  const authHeaders = () => {
-    const token = localStorage.getItem('auth_token');
-    return token ? { 'Authorization': `Bearer ${token}` } : {};
-  };
-
   const fetchExtensions = async () => {
     try {
       setLoading(true);
@@ -99,6 +95,7 @@ export default function ExtensionsPage() {
       const endpoint = currentlyEnabled ? 'disable' : 'enable';
       const res = await fetch(`${API_URL}/api/extensions/${id}/${endpoint}`, {
         method: 'POST',
+        headers: authHeaders(),
       });
 
       const data = await res.json();
@@ -132,6 +129,7 @@ export default function ExtensionsPage() {
     try {
       const res = await fetch(`${API_URL}/api/extensions/${extensionToDelete.id}`, {
         method: 'DELETE',
+        headers: authHeaders(),
       });
 
       const data = await res.json();
@@ -164,7 +162,7 @@ export default function ExtensionsPage() {
   const inspectExtension = async (ext: Extension) => {
     try {
       setExtensionToInspect(ext);
-      const res = await fetch(`${API_URL}/api/extensions/${ext.id}/inspect`);
+      const res = await fetch(`${API_URL}/api/extensions/${ext.id}/inspect`, { headers: authHeaders() });
       const data = await res.json();
 
       if (data.success) {

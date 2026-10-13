@@ -11,6 +11,7 @@ import { SpecRenderer } from '@/lib/json-render/renderer';
 
 // Form schema renderer (for discord/slack style settingsUI)
 import { FormSchemaRenderer } from './FormSchemaRenderer';
+import { authHeaders } from '@/lib/auth/headers';
 
 interface Props {
   extensionId: string;
@@ -45,7 +46,7 @@ export function UnifiedSettingsRenderer({
     try {
       const res = await fetch(`${config.backendUrl}/api/extensions/${extensionId}/config`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ config: configData }),
       });
 

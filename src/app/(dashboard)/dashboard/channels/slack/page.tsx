@@ -6,6 +6,7 @@ import { ArrowLeft, CheckCircle2, XCircle, Loader2, MessageSquare, Send, Setting
 import Link from 'next/link';
 import { SpecRenderer } from '@/lib/json-render/renderer';
 import { config } from '@/lib/config';
+import { authHeaders } from '@/lib/auth/headers';
 
 const BACKEND_URL = config.backendUrl;
 const CHANNEL_ID = 'slack';
@@ -52,7 +53,7 @@ export default function SlackChannelPage() {
         setSettingsUI(ext.settingsUI);
       }
 
-      const configResponse = await fetch(`${BACKEND_URL}/api/extensions/${CHANNEL_ID}/config`);
+      const configResponse = await fetch(`${BACKEND_URL}/api/extensions/${CHANNEL_ID}/config`, { headers: authHeaders() });
       if (configResponse.ok) {
         const configData = await configResponse.json();
         setConfig(configData.config || {});
@@ -84,7 +85,7 @@ export default function SlackChannelPage() {
     try {
       const response = await fetch(`${BACKEND_URL}/api/extensions/${CHANNEL_ID}/config`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ config: formData }),
       });
 

@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, Loader2, Shield, CheckCircle2, XCircle, AlertCircle, Clock } from 'lucide-react';
 import { config } from '@/lib/config';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { authHeaders } from '@/lib/auth/headers';
 
 const API_URL = config.backendUrl;
 
@@ -58,7 +59,7 @@ export default function ExtensionAuditPage() {
       setExtensionName(ext.name);
 
       // Fetch audit logs
-      const logsRes = await fetch(`${API_URL}/api/extensions/${extensionId}/audit-logs`);
+      const logsRes = await fetch(`${API_URL}/api/extensions/${extensionId}/audit-logs`, { headers: authHeaders() });
       const logsData = await logsRes.json();
 
       if (logsData.success) {

@@ -11,19 +11,42 @@ import { getExtensionTools } from '../../tools/index.js';
 import { readdirSync, existsSync, readFileSync } from 'fs';
 import { resolve, join } from 'path';
 import { validateTableName } from '../../db/sql-utils.js';
-import { getUserIdFromRequest } from '../../auth/jwt.js';
+import { requireActiveRole, OWNER_OR_ADMIN } from '../../auth/route-guards.js';
 import { maskSecretFields, restoreMaskedFields } from '../../credentials/secret-mask.js';
+
+// Extension ids are directory names; locales are short language tags. Both
+// end up in filesystem paths (delete, i18n), so nothing else is accepted.
+const EXTENSION_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+const LOCALE = /^[a-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})?$/;
 
 export async function extensionsRoutes(fastify: FastifyInstance) {
   const extensionsDir = resolve('./extensions');
-  fastify.addHook('preHandler', async (request, reply) => {
-    if (!/^\/api\/extensions\/(telegram|discord|agent-connect)(?:\/|\?|$)/.test(request.url)) return;
-    try {
-      const userId = getUserIdFromRequest(request);
-      const user = getDatabase().prepare('SELECT role, status FROM users WHERE id = ?').get(userId) as any;
-      if (!user || user.status !== 'active' || !['owner', 'admin'].includes(user.role)) throw new Error('Forbidden');
-    } catch {
-      return reply.code(403).send({ error: 'Channel administration requires an active owner or admin' });
+  // SECURITY (S0-Q.7): authorization is decided by the route Fastify actually
+  // matched (request.routeOptions.url) and its decoded params, never by a regex
+  // on the raw URL. Deny by default: every route in this plugin needs an active
+  // owner/admin except the read-only metadata routes listed here.
+  const PUBLIC_ROUTES = new Set([
+    'GET /api/extensions',                                // manifest list (no config)
+    'GET /api/extensions/enabled-routes',                 // sidebar links
+    'GET /api/extensions/:id/status',                     // enabled flag
+    'GET /api/extensions/:extensionId/i18n/:locale',      // UI translations
+  ]);
+  const requireOwnerOrAdmin = requireActiveRole(OWNER_OR_ADMIN);
+  fastify.addHook('onRequest', async (request, reply) => {
+    const route = request.routeOptions?.url;
+    if (!route) return; // unmatched: Fastify answers 404
+    if (!PUBLIC_ROUTES.has(`${request.method} ${route}`)) {
+      await requireOwnerOrAdmin(request, reply);
+      if (reply.sent) return reply;
+    }
+    const params = (request.params || {}) as Record<string, string>;
+    for (const key of ['id', 'extensionId']) {
+      if (params[key] !== undefined && !EXTENSION_ID.test(params[key])) {
+        return reply.code(400).send({ error: 'Invalid extension id' });
+      }
+    }
+    if (params.locale !== undefined && !LOCALE.test(params.locale)) {
+      return reply.code(400).send({ error: 'Invalid locale' });
     }
   });
 
@@ -348,7 +371,7 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
       if (['telegram', 'discord'].includes(id)) {
         const hasToken = Boolean(config.bot_token);
         delete config.bot_token;
-        return { success: true, config, hasToken };
+        return { success: true, config: maskSecretFields(config), hasToken };
       }
 
       return {

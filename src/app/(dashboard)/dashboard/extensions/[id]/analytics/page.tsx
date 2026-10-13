@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, Loader2, BarChart3, TrendingUp, TrendingDown, AlertTriangle, HardDrive, Activity } from 'lucide-react';
 import { config } from '@/lib/config';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { authHeaders } from '@/lib/auth/headers';
 
 const API_URL = config.backendUrl;
 
@@ -72,7 +73,7 @@ export default function ExtensionAnalyticsPage() {
       setExtensionName(ext.name);
 
       // Fetch analytics
-      const analyticsRes = await fetch(`${API_URL}/api/extensions/${extensionId}/analytics`);
+      const analyticsRes = await fetch(`${API_URL}/api/extensions/${extensionId}/analytics`, { headers: authHeaders() });
       const analyticsData = await analyticsRes.json();
 
       if (analyticsData.success) {
