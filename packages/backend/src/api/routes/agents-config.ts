@@ -1,12 +1,36 @@
 /**
  * Agent Configurations API
  * CRUD for named agent profiles (name, system prompt, model, capabilities)
+ *
+ * Names (CORE-02): a new agent without a name gets a random name in the
+ * onboarding language; every name used at creation or rename is reserved
+ * company-wide for good (used_agent_names), so it never repeats, even after
+ * the agent is deleted. POST /api/agents/name-suggestion (owner/admin)
+ * returns a suggestion without reserving it.
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import { randomBytes } from 'node:crypto';
 import { getDatabase } from '../../db/index.js';
 import { setAgentApiKey, removeAgentApiKey } from '../../credentials/authority.js';
 import { SECRET_PLACEHOLDER } from '../../credentials/secret-mask.js';
+import {
+  AgentNameInputError,
+  AgentNameTakenError,
+  normalizeAgentName,
+  reserveAgentName,
+  resolveNamingLanguage,
+  suggestAgentName,
+  validateAgentName,
+  validateExclude,
+} from '../../services/agent-names.js';
+
+/** Map naming errors to 400 / 409; anything else is rethrown. */
+function nameErrorReply(err: unknown, reply: FastifyReply): FastifyReply | null {
+  if (err instanceof AgentNameTakenError) return reply.status(409).send({ error: err.message, code: 'name_taken' });
+  if (err instanceof AgentNameInputError) return reply.status(400).send({ error: err.message });
+  return null;
+}
 
 interface AgentConfig {
   id: string;
@@ -40,6 +64,26 @@ function parseAgent(row: AgentConfig) {
 }
 
 export async function agentsConfigRoutes(fastify: FastifyInstance) {
+  // POST /api/agents/name-suggestion — random unused name in the onboarding language (not reserved)
+  fastify.post<{ Body: { language?: unknown; exclude?: unknown } }>(
+    '/api/agents/name-suggestion', { config: { access: 'admin' } }, async (req, reply) => {
+      const user = req.authUser;
+      if (!user) return reply.status(401).send({ error: 'Authentication required' });
+      if (user.role !== 'owner' && user.role !== 'admin') {
+        return reply.status(403).send({ error: 'This action requires an owner or admin account' });
+      }
+      try {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const language = resolveNamingLanguage(user.id, body.language);
+        return reply.send(suggestAgentName(language, validateExclude(body.exclude)));
+      } catch (err) {
+        const handled = nameErrorReply(err, reply);
+        if (handled) return handled;
+        fastify.log.error({ err }, '[AgentsConfig] Name suggestion error');
+        return reply.status(500).send({ error: 'Failed to suggest a name' });
+      }
+    });
+
   // GET /api/agents — list all agents
   fastify.get('/api/agents', async (_req, reply) => {
     try {
@@ -65,20 +109,40 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
   });
 
   // POST /api/agents — create agent
-  fastify.post<{ Body: Partial<AgentConfig> & { capabilities?: object } }>('/api/agents', async (req, reply) => {
+  fastify.post<{ Body: Partial<AgentConfig> & { capabilities?: object; language?: unknown } }>('/api/agents', async (req, reply) => {
     try {
       const db = getDatabase();
       const body = req.body || {};
-      const id = `agent-${Date.now()}`;
+      const id = `agent-${Date.now()}-${randomBytes(3).toString('hex')}`;
 
-      if (!body.name) return reply.status(400).send({ error: 'name is required' });
+      // CORE-02: no name -> random name in the onboarding language. The name
+      // is reserved in the same transaction as the insert.
+      let name: string;
+      let language: string | null = null;
+      try {
+        if (body.name === undefined || body.name === null || body.name === '') {
+          const suggestion = suggestAgentName(resolveNamingLanguage(req.authUser?.id, body.language));
+          name = suggestion.name;
+          language = suggestion.language;
+        } else {
+          name = validateAgentName(body.name);
+          if (body.language !== undefined) language = resolveNamingLanguage(req.authUser?.id, body.language);
+        }
+      } catch (err) {
+        const handled = nameErrorReply(err, reply);
+        if (handled) return handled;
+        throw err;
+      }
 
-      db.prepare(`
+      try {
+        db.transaction(() => {
+          reserveAgentName(name, id, { reason: 'create', language, reservedBy: req.authUser?.id });
+          db.prepare(`
         INSERT INTO agents_config (id, name, description, emoji, system_prompt, model, provider, temperature, max_tokens, capabilities, api_key)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')
       `).run(
         id,
-        body.name,
+        name,
         body.description || '',
         body.emoji || '🤖',
         body.system_prompt || '',
@@ -88,6 +152,12 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
         body.max_tokens ?? 4096,
         typeof body.capabilities === 'object' ? JSON.stringify(body.capabilities) : (body.capabilities || '{}'),
       );
+        });
+      } catch (err) {
+        const handled = nameErrorReply(err, reply);
+        if (handled) return handled;
+        throw err;
+      }
 
       // SECURITY (S1.1): the key goes to the encrypted credentials store only.
       if (typeof body.api_key === 'string' && body.api_key.trim()) {
@@ -117,13 +187,28 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
         ? JSON.stringify(body.capabilities)
         : (body.capabilities ?? existing.capabilities);
 
-      db.prepare(`
+      // CORE-02 / D-AGENT-RENAME: a new name must be free company-wide and is
+      // reserved for good (same transaction as the update).
+      let name = existing.name;
+      try {
+        if (body.name !== undefined) name = validateAgentName(body.name);
+      } catch (err) {
+        const handled = nameErrorReply(err, reply);
+        if (handled) return handled;
+        throw err;
+      }
+      const renamed = normalizeAgentName(name) !== normalizeAgentName(existing.name ?? '');
+
+      try {
+        db.transaction(() => {
+          if (renamed) reserveAgentName(name, id, { reason: 'rename', reservedBy: req.authUser?.id });
+          db.prepare(`
         UPDATE agents_config
         SET name=?, description=?, emoji=?, system_prompt=?, model=?, provider=?,
             temperature=?, max_tokens=?, capabilities=?, updated_at=datetime('now')
         WHERE id=?
       `).run(
-        body.name ?? existing.name,
+        name,
         body.description ?? existing.description,
         body.emoji ?? existing.emoji,
         body.system_prompt ?? existing.system_prompt,
@@ -134,6 +219,12 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
         capStr,
         id,
       );
+        });
+      } catch (err) {
+        const handled = nameErrorReply(err, reply);
+        if (handled) return handled;
+        throw err;
+      }
 
       // SECURITY (S1.1): a new key goes to the encrypted credentials store; an
       // empty or masked value keeps the stored key.
@@ -177,13 +268,17 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
       const original = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(id) as AgentConfig | undefined;
       if (!original) return reply.status(404).send({ error: 'Agent not found' });
 
-      const newId = `agent-${Date.now()}`;
-      db.prepare(`
+      const newId = `agent-${Date.now()}-${randomBytes(3).toString('hex')}`;
+      // CORE-02: a copy is a new agent, so it gets its own new unique name.
+      const suggestion = suggestAgentName(resolveNamingLanguage(req.authUser?.id));
+      db.transaction(() => {
+        reserveAgentName(suggestion.name, newId, { reason: 'duplicate', language: suggestion.language, reservedBy: req.authUser?.id });
+        db.prepare(`
         INSERT INTO agents_config (id, name, description, emoji, system_prompt, model, provider, temperature, max_tokens, capabilities)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         newId,
-        `${original.name} (copy)`,
+        suggestion.name,
         original.description,
         original.emoji,
         original.system_prompt,
@@ -193,6 +288,7 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
         original.max_tokens,
         original.capabilities,
       );
+      });
 
       const row = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(newId) as AgentConfig;
       return reply.status(201).send({ agent: parseAgent(row) });

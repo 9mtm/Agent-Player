@@ -243,6 +243,7 @@ const OWNER_OR_ADMIN = [
   ['POST', '/api/channels/:id/send'], ['GET', '/api/channels/whatsapp/qr'],
   ['POST', '/api/plugins/:id/enable'],
   ['POST', '/api/agents'], ['PUT', '/api/agents/:id'], ['POST', '/api/agents/:id/set-primary'],
+  ['POST', '/api/agents/name-suggestion'], // CORE-02
   ['PUT', '/api/agents/:id/personality'], ['PUT', '/api/agents/:id/memory'], ['GET', '/api/agents/:id/memory'],
   ['POST', '/api/evolution/:agentId/evolve'], ['POST', '/api/multi-agent/agents'],
   ['PUT', '/api/heartbeat/config'], ['POST', '/api/cost-analytics/cleanup'], ['POST', '/api/inbox/cleanup'],
