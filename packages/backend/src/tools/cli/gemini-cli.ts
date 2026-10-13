@@ -19,6 +19,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import type { Tool, ToolResult } from '../types.js';
 import { execToolRefusal, isExecToolsEnabled, minimalChildEnv } from '../exec-policy.js';
+import { getEnvProviderApiKey } from '../../credentials/authority.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -104,7 +105,7 @@ export const geminiCliTool: Tool = {
     const childEnv = minimalChildEnv({
       NO_COLOR: '1',
       TERM: 'dumb',
-      GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+      GEMINI_API_KEY: getEnvProviderApiKey('gemini') || undefined, // S1.1: via the credential authority
     });
 
     try {

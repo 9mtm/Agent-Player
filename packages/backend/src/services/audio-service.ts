@@ -4,6 +4,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { getDatabase } from '../db/index.js';
 import { spawnPython, getPythonPath } from './python-env.js';
+import { getEnvProviderApiKey } from '../credentials/authority.js';
 
 type AudioProvider = 'openai' | 'local' | 'qwen';
 
@@ -18,7 +19,7 @@ export class AudioService {
 
   constructor() {
     // Check which provider to use
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = getEnvProviderApiKey('openai') || undefined; // S1.1: via the credential authority
     this.provider = apiKey ? 'openai' : 'local';
 
     if (this.provider === 'openai') {

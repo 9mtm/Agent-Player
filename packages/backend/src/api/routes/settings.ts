@@ -7,6 +7,7 @@ import { handleError } from '../error-handler.js';
 import { getSettingsManager } from '../../settings/index.js';
 import type { AgentSettings } from '../../settings/types.js';
 import { authorizeActiveRole, OWNER_OR_ADMIN } from '../../auth/route-guards.js';
+import { getGlobalProviderApiKey } from '../../credentials/authority.js';
 
 export async function settingsRoutes(fastify: FastifyInstance) {
   const settingsManager = getSettingsManager();
@@ -58,7 +59,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
       try {
         if (provider === 'claude') {
-          const apiKey = settings.claude?.apiKey;
+          const apiKey = getGlobalProviderApiKey('claude');
           if (!apiKey) {
             return reply.status(400).send({
               success: false,
@@ -94,7 +95,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
             message: 'Claude API connection successful',
           };
         } else if (provider === 'openai') {
-          const apiKey = settings.openai?.apiKey;
+          const apiKey = getGlobalProviderApiKey('openai');
           if (!apiKey) {
             return reply.status(400).send({
               success: false,

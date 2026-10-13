@@ -42,9 +42,8 @@ export const config = {
    * AI Providers
    */
   ai: {
-    openai: process.env.OPENAI_API_KEY || '',
-    anthropic: process.env.ANTHROPIC_API_KEY || '',
-    google: process.env.GOOGLE_API_KEY || '',
+    // Provider API keys are not kept here: read them through the credential
+    // authority (credentials/authority.ts, S1.1).
     ollama: {
       url: process.env.OLLAMA_URL || 'http://127.0.0.1:11434',
       apiUrl: process.env.LOCAL_MODEL_API_URL || 'http://127.0.0.1:11434/v1',

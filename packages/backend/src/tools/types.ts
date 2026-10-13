@@ -48,6 +48,8 @@ export interface ToolExecutionContext {
   timeout?: number;
   userId?: string;
   sessionId?: string;
+  /** Agent the tools run for (agents_config.id). Its grants limit the tools (S1.2). */
+  agentId?: string;
   /** Present for channel-originated turns: restricts which tools may be offered/run (S0-Q.8). */
   toolPolicy?: import('./channel-policy.js').ChannelToolPolicy;
 }

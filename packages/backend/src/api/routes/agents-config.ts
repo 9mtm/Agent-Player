@@ -5,8 +5,8 @@
 
 import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
-import { getCredentialManager } from '../../credentials/manager.js';
-import { CredentialType } from '../../credentials/types.js';
+import { setAgentApiKey, removeAgentApiKey } from '../../credentials/authority.js';
+import { SECRET_PLACEHOLDER } from '../../credentials/secret-mask.js';
 
 interface AgentConfig {
   id: string;
@@ -26,50 +26,17 @@ interface AgentConfig {
 }
 
 function parseAgent(row: AgentConfig) {
+  // SECURITY (S1.1): the key lives in the encrypted credentials store; the
+  // response only says whether one is set. The legacy column is never returned.
+  const { api_key: _legacy, api_key_credential_id: _ref, ...rest } = row as AgentConfig & { api_key_credential_id?: string | null };
+  const apiKeySet = !!(row as any).api_key_credential_id || !!(row.api_key && row.api_key.trim());
   return {
-    ...row,
+    ...rest,
     isPrimary: row.is_primary === 1,
     capabilities: (() => { try { return JSON.parse(row.capabilities); } catch { return {}; } })(),
-    // Mask api_key — return only whether it's set, not the actual value
-    apiKeySet: !!(row.api_key && row.api_key.trim()),
-    api_key: row.api_key ? '••••••••' : '',
+    apiKeySet,
+    api_key: apiKeySet ? SECRET_PLACEHOLDER : '',
   };
-}
-
-/** Return agent with actual api_key (for internal use by runtime) */
-function parseAgentWithKey(row: AgentConfig) {
-  return {
-    ...parseAgent(row),
-    api_key: row.api_key || '',
-  };
-}
-
-/** Sync agent API key to encrypted credentials store */
-async function syncApiKeyToCredentials(agentId: string, agentName: string, provider: string, apiKey: string): Promise<void> {
-  if (!apiKey || !apiKey.trim()) return;
-
-  try {
-    const credManager = getCredentialManager();
-    // Readable name: "max (claude)" or "my-agent (openai)"
-    const credName = `${agentName} (${provider})`;
-
-    const existing = await credManager.getByName(credName);
-
-    if (existing) {
-      await credManager.update(existing.id, { value: apiKey.trim(), description: `API key for agent: ${agentName}` });
-    } else {
-      await credManager.create({
-        name: credName,
-        type: CredentialType.API_KEY,
-        value: apiKey.trim(),
-        description: `API key for agent: ${agentName}`,
-        skillId: agentId,
-      });
-    }
-  } catch (err: any) {
-    // Non-fatal: log but don't fail the agent save
-    console.error(`[AgentsConfig] Failed to sync API key to credentials for agent ${agentId}:`, err.message);
-  }
 }
 
 export async function agentsConfigRoutes(fastify: FastifyInstance) {
@@ -108,7 +75,7 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
 
       db.prepare(`
         INSERT INTO agents_config (id, name, description, emoji, system_prompt, model, provider, temperature, max_tokens, capabilities, api_key)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')
       `).run(
         id,
         body.name,
@@ -120,15 +87,14 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
         body.temperature ?? 0.7,
         body.max_tokens ?? 4096,
         typeof body.capabilities === 'object' ? JSON.stringify(body.capabilities) : (body.capabilities || '{}'),
-        body.api_key || '',
       );
 
-      const row = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(id) as AgentConfig;
-
-      // Sync API key to encrypted credentials store
-      if (body.api_key && body.api_key.trim()) {
-        await syncApiKeyToCredentials(id, body.name!, body.provider || 'claude', body.api_key.trim());
+      // SECURITY (S1.1): the key goes to the encrypted credentials store only.
+      if (typeof body.api_key === 'string' && body.api_key.trim()) {
+        await setAgentApiKey(id, body.api_key);
       }
+
+      const row = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(id) as AgentConfig;
 
       return reply.status(201).send({ agent: parseAgent(row) });
     } catch (err: any) {
@@ -151,15 +117,10 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
         ? JSON.stringify(body.capabilities)
         : (body.capabilities ?? existing.capabilities);
 
-      // Keep existing key if frontend sent empty string or the masked placeholder
-      const newApiKey = (body.api_key && body.api_key.trim() && body.api_key !== '••••••••')
-        ? body.api_key.trim()
-        : existing.api_key;
-
       db.prepare(`
         UPDATE agents_config
         SET name=?, description=?, emoji=?, system_prompt=?, model=?, provider=?,
-            temperature=?, max_tokens=?, capabilities=?, api_key=?, updated_at=datetime('now')
+            temperature=?, max_tokens=?, capabilities=?, updated_at=datetime('now')
         WHERE id=?
       `).run(
         body.name ?? existing.name,
@@ -171,17 +132,16 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
         body.temperature ?? existing.temperature,
         body.max_tokens ?? existing.max_tokens,
         capStr,
-        newApiKey,
         id,
       );
 
-      const updated = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(id) as AgentConfig;
-
-      // Sync new API key to encrypted credentials store (only if a new key was provided)
-      const keyWasUpdated = body.api_key && body.api_key.trim() && body.api_key !== '••••••••';
-      if (keyWasUpdated) {
-        await syncApiKeyToCredentials(id, updated.name, updated.provider, newApiKey);
+      // SECURITY (S1.1): a new key goes to the encrypted credentials store; an
+      // empty or masked value keeps the stored key.
+      if (typeof body.api_key === 'string' && body.api_key.trim()) {
+        await setAgentApiKey(id, body.api_key);
       }
+
+      const updated = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(id) as AgentConfig;
 
       return reply.send({ agent: parseAgent(updated) });
     } catch (err: any) {
@@ -251,6 +211,7 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
       const totalCount = (db.prepare('SELECT COUNT(*) as cnt FROM agents_config').get() as { cnt: number }).cnt;
       if (row.is_primary === 1 && totalCount > 1) return reply.status(400).send({ error: 'Cannot delete the primary agent. Set another agent as primary first.' });
 
+      await removeAgentApiKey(id);
       db.prepare('DELETE FROM agents_config WHERE id = ?').run(id);
       return reply.send({ success: true });
     } catch (err: any) {

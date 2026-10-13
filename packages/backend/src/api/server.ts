@@ -66,6 +66,11 @@ async function start() {
     await credentialStorage.initialize();
     console.log('[Server] ✅ Credentials system initialized\n');
 
+    // SECURITY (S1.1): move plaintext agents_config.api_key values into
+    // encrypted credentials (verified round-trip; refused without ENCRYPTION_KEY).
+    const { migrateAgentApiKeys } = await import('../credentials/authority.js');
+    await migrateAgentApiKeys();
+
     // Initialize Multi-Interface Gateway
     const { getGateway, WebChannelAdapter, DesktopChannelAdapter } = await import('../gateway/index.js');
     const { AgentRuntime } = await import('../agent/index.js');

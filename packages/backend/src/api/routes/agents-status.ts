@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { getSettingsManager } from '../../settings/index.js';
 
 import { OLLAMA_URL } from '../../llm/ollama.js';
+import { getGlobalProviderApiKey, hasGlobalProviderApiKey } from '../../credentials/authority.js';
 
 export async function agentsStatusRoutes(fastify: FastifyInstance) {
   // GET /api/agents/status - Get status of all agents
@@ -31,26 +32,26 @@ export async function agentsStatusRoutes(fastify: FastifyInstance) {
     }
 
     // Check Claude API
-    if (settings.claude?.apiKey) {
-      const claudeStatus = await checkClaude(settings.claude.apiKey);
+    if (hasGlobalProviderApiKey('claude')) {
+      const claudeStatus = await checkClaude(getGlobalProviderApiKey('claude'));
       agents.push({
         id: 'claude',
         name: 'Claude API',
         type: 'claude',
-        model: settings.claude.model,
+        model: settings.claude?.model,
         status: claudeStatus.online ? 'online' : 'offline',
         ...claudeStatus,
       });
     }
 
     // Check OpenAI API
-    if (settings.openai?.apiKey) {
-      const openaiStatus = await checkOpenAI(settings.openai.apiKey);
+    if (hasGlobalProviderApiKey('openai')) {
+      const openaiStatus = await checkOpenAI(getGlobalProviderApiKey('openai'));
       agents.push({
         id: 'openai',
         name: 'OpenAI API',
         type: 'openai',
-        model: settings.openai.model,
+        model: settings.openai?.model,
         status: openaiStatus.online ? 'online' : 'offline',
         ...openaiStatus,
       });

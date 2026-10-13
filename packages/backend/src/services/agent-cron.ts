@@ -16,6 +16,7 @@ import { getOrchestrator } from '../multi-agent/index.js';
 import { ClaudeClient } from '../llm/claude-client.js';
 import { createToolsRegistry } from '../tools/index.js';
 import { logActivity } from './activity-logger.js';
+import { resolveProviderApiKey } from '../credentials/authority.js';
 
 const HEARTBEAT_OK_TOKEN = 'HEARTBEAT_OK';
 const HEARTBEAT_ACK_MAX_CHARS = 300;
@@ -49,12 +50,9 @@ function readHeartbeatFile(agentName: string): string | null {
  * returns anything other than a HEARTBEAT_OK acknowledgment.
  */
 async function runHeartbeat(agent: AgentRow, heartbeatContent: string): Promise<void> {
-  const db = getDatabase();
-  let apiKey = agent.api_key;
-  if (!apiKey) {
-    const settings = db.prepare(`SELECT value FROM settings WHERE key = 'claude_api_key' LIMIT 1`).get() as { value: string } | undefined;
-    apiKey = settings?.value ?? null;
-  }
+  // SECURITY (S1.1): key from the credential authority (agent's own key, then
+  // the historical cron fallback row); never another agent's key.
+  const apiKey = await resolveProviderApiKey('claude', { agentId: agent.id, noGlobal: true, legacySettingsRow: 'claude_api_key' });
 
   if (!apiKey || agent.provider !== 'claude') return;
 
@@ -110,7 +108,6 @@ interface AgentRow {
   model: string;
   provider: string;
   system_prompt: string | null;
-  api_key: string | null;
   temperature: number;
   max_tokens: number;
   cron_schedule: string;
@@ -134,13 +131,8 @@ async function runAgentTask(agent: AgentRow, taskId: string, taskDescription: st
     summary: `Agent ${agent.name} started task`,
   });
 
-  // Resolve API key — agent key takes priority
-  const db = getDatabase();
-  let apiKey = agent.api_key;
-  if (!apiKey) {
-    const settings = db.prepare(`SELECT value FROM settings WHERE key = 'claude_api_key' LIMIT 1`).get() as { value: string } | undefined;
-    apiKey = settings?.value ?? null;
-  }
+  // SECURITY (S1.1): key from the credential authority (see runHeartbeat).
+  const apiKey = await resolveProviderApiKey('claude', { agentId: agent.id, noGlobal: true, legacySettingsRow: 'claude_api_key' });
 
   if (!apiKey || agent.provider !== 'claude') {
     const msg = `Agent "${agent.name}" has no Claude API key configured or provider is not claude.`;
@@ -343,7 +335,7 @@ export async function startAgentCronService(): Promise<void> {
   const db = getDatabase();
 
   const agents = db.prepare(`
-    SELECT id, name, model, provider, system_prompt, api_key, temperature, max_tokens, cron_schedule, cron_enabled
+    SELECT id, name, model, provider, system_prompt, temperature, max_tokens, cron_schedule, cron_enabled
     FROM agents_config
     WHERE cron_enabled = 1 AND cron_schedule IS NOT NULL
   `).all() as AgentRow[];
@@ -367,7 +359,7 @@ export async function startAgentCronService(): Promise<void> {
 export function refreshAgentCron(agentId: string): void {
   const db = getDatabase();
   const agent = db.prepare(`
-    SELECT id, name, model, provider, system_prompt, api_key, temperature, max_tokens, cron_schedule, cron_enabled
+    SELECT id, name, model, provider, system_prompt, temperature, max_tokens, cron_schedule, cron_enabled
     FROM agents_config WHERE id = ?
   `).get(agentId) as AgentRow | undefined;
 

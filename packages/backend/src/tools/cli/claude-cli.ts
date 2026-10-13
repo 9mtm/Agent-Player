@@ -17,7 +17,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
-import { getDatabase } from '../../db/index.js';
+import { getAgentApiKey, getEnvProviderApiKey } from '../../credentials/authority.js';
 import { getCredentialManager } from '../../credentials/manager.js';
 import { resolveToolUser } from '../credentials/credentials-save.js';
 import {
@@ -144,17 +144,12 @@ export const claudeCliTool: Tool = {
     if (workdir) console.log(`[ClaudeCLI]   Workdir: ${workdir}`);
     if (model) console.log(`[ClaudeCLI]   Model: ${model}`);
 
-    // Resolve API key: env var → agent api_key → the caller's own credentials
-    let anthropicApiKey = process.env.ANTHROPIC_API_KEY || '';
+    // SECURITY (S1.1): key from the credential authority only: the server env
+    // key, then the calling agent's OWN key, then the caller's own credentials.
+    // Never "any agent's key" (that was an unscoped read of other agents' keys).
+    let anthropicApiKey = getEnvProviderApiKey('claude');
     if (!anthropicApiKey) {
-      try {
-        const db = getDatabase();
-        // First try: get from any Claude or Claude-CLI agent
-        const row = db.prepare(
-          `SELECT api_key FROM agents_config WHERE provider IN ('claude', 'claude-cli') AND api_key IS NOT NULL AND api_key != '' LIMIT 1`
-        ).get() as { api_key: string } | undefined;
-        if (row?.api_key) anthropicApiKey = row.api_key;
-      } catch { /* ignore DB errors */ }
+      anthropicApiKey = await getAgentApiKey(context?.agentId);
     }
     if (!anthropicApiKey) {
       // Second try: the calling user's encrypted credentials (F-06)

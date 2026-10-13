@@ -10,6 +10,7 @@ import { ClaudeClient } from '../../llm/claude-client.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { getEnvProviderApiKey } from '../../credentials/authority.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -80,7 +81,7 @@ Output ONLY valid JSON in this exact format:
 Create a simple but functional 3D world based on the prompt. Use basic geometric shapes.`;
 
       // Get API key
-      const apiKey = process.env.ANTHROPIC_API_KEY || '';
+      const apiKey = getEnvProviderApiKey('claude'); // S1.1: via the credential authority
       if (!apiKey) {
         return reply.status(500).send({ error: 'Anthropic API key not configured' });
       }

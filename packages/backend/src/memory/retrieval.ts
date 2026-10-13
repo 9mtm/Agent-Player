@@ -9,7 +9,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getMemoryStorage } from './storage.js';
 import { getDatabase } from '../db/index.js';
-import { decrypt, isEncrypted } from '../settings/encryption.js';
+import { getMemoryExtractionClaudeConfig } from '../credentials/authority.js';
 import { getCredentialManager } from '../credentials/manager.js';
 import type {
   Memory,
@@ -28,44 +28,18 @@ function isValidClaudeKey(key: string): boolean {
   return CLAUDE_KEY_PATTERN.test(key);
 }
 
-/** Get Claude API config from the agent_settings stored in SQLite */
+/**
+ * Claude config for memory extraction, from the credential authority (S1.1).
+ * The authority keeps the historical source so no new paid calls start.
+ */
 function getClaudeConfig(): { apiKey: string; model: string } | null {
-  try {
-    const db = getDatabase();
-
-    // Read agent_settings from settings table
-    const row = db.prepare(
-      "SELECT value FROM settings WHERE key = 'agent_settings' LIMIT 1"
-    ).get() as any;
-
-    if (!row?.value) return null;
-
-    const settings = JSON.parse(row.value);
-    let apiKey: string = settings?.claude?.apiKey || '';
-    const model: string = settings?.claude?.model || 'claude-haiku-4-5-20251001';
-
-    if (!apiKey) return null;
-
-    // Decrypt if stored encrypted
-    if (isEncrypted(apiKey)) {
-      try {
-        apiKey = decrypt(apiKey);
-      } catch {
-        console.warn('[Memory] Could not decrypt Claude API key — ENCRYPTION_KEY may differ');
-        return null;
-      }
-    }
-
-    if (!isValidClaudeKey(apiKey)) {
-      console.warn('[Memory] Claude API key is not valid (does not start with sk-ant-)');
-      return null;
-    }
-
-    return { apiKey, model };
-  } catch (err) {
-    console.warn('[Memory] Failed to read Claude config:', (err as Error).message);
+  const config = getMemoryExtractionClaudeConfig();
+  if (!config) return null;
+  if (!isValidClaudeKey(config.apiKey)) {
+    console.warn('[Memory] Claude API key is not valid (does not start with sk-ant-)');
     return null;
   }
+  return config;
 }
 
 /** Call Claude to extract memories from conversation text */

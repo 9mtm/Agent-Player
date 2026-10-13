@@ -18,6 +18,7 @@ import { getSettingsManager } from '../settings/index.js';
 import { DEFAULT_SETTINGS } from '../settings/types.js';
 import type { AgentSettings } from '../settings/types.js';
 import { isMaskedSecret, maskSecret } from '../credentials/secret-mask.js';
+import { getGlobalProviderApiKey } from '../credentials/authority.js';
 
 export const TOTAL_STEPS = 6;
 
@@ -259,8 +260,7 @@ function writeRow(userId: string, row: Row, completedAt: 'now' | 'null' | 'keep'
 /** Masked view of the stored key for the chosen cloud provider (never the key itself). */
 function providerKeyView(provider: WizardProvider | undefined): { apiKeySet?: boolean; apiKeyMasked?: string } {
   if (provider !== 'anthropic' && provider !== 'openai') return {};
-  const settings = getSettingsManager().getSettings();
-  const key = provider === 'anthropic' ? settings.claude?.apiKey : settings.openai?.apiKey;
+  const key = getGlobalProviderApiKey(provider === 'anthropic' ? 'claude' : 'openai');
   return key ? { apiKeySet: true, apiKeyMasked: maskSecret(key) } : { apiKeySet: false };
 }
 

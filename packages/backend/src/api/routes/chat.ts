@@ -16,6 +16,7 @@ import { authenticateActiveUser } from '../../auth/route-guards.js';
 import { geminiCliTool } from '../../tools/cli/gemini-cli.js';
 import { claudeCliTool } from '../../tools/cli/claude-cli.js';
 import { getJsonRenderPrompt } from './json-render-prompt.js';
+import { resolveProviderApiKey } from '../../credentials/authority.js';
 import { readPersonality, readMemory } from '../../services/agent-files.js';
 import { outsiderAgentMemoryEnabled } from '../../services/outsider-memory.js';
 import { createModelRouter, ModelRouter } from '../../services/model-router.js';
@@ -239,7 +240,11 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // An agent's explicit provider wins; without one, follow the global settings provider.
     const resolvedProvider = agentConfig?.provider
       || (getSettingsManager().getSettings().provider === 'claude' ? 'claude' : 'ollama');
-    const resolvedApiKey = agentConfig?.api_key || '';
+    // SECURITY (S1.1): keys come from the credential authority only: the
+    // agent's own encrypted key, else the global Settings key.
+    const resolvedApiKey = resolvedProvider === 'claude'
+      ? await resolveProviderApiKey('claude', { agentId: agentConfig?.id })
+      : '';
 
     console.log('[Chat] Agent:', agentConfig?.name || 'none (fallback)', '| Provider:', resolvedProvider, '| Model:', resolvedModel);
     if (memoryContext) console.log('[Chat] 🧠 Memory context injected:', memoryContext.slice(0, 80) + '...');
@@ -419,21 +424,13 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
     });
   }
 
-  // Route to the correct provider
+  // Route to the correct provider (key resolved by the credential authority, S1.1)
   if (provider === 'claude' && apiKey) {
-    console.log('[Chat] 🤖 Using Claude API (agent api_key)');
-    return streamChatClaude(reply, apiKey, selectedModel, ollamaMessages, finalSystemPrompt, tools, temperature, userId, sessionId, chatContext, toolPolicy);
-  }
-
-  // Fallback: check global settings for claude
-  const settingsManager = getSettingsManager();
-  const settings = settingsManager.getSettings();
-  if (provider === 'claude' && settings.claude?.apiKey) {
-    console.log('[Chat] 🤖 Using Claude API (global settings)');
+    console.log('[Chat] 🤖 Using Claude API');
     return streamChatClaude(
       reply,
-      settings.claude.apiKey,
-      selectedModel || settings.claude.model || 'claude-sonnet-4-5-20250929',
+      apiKey,
+      selectedModel || getSettingsManager().getSettings().claude?.model || 'claude-sonnet-4-5-20250929',
       ollamaMessages,
       finalSystemPrompt,
       tools,
@@ -703,14 +700,8 @@ async function nonStreamChat(
   const toolsRegistryNS = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy });
   const tools = toolsRegistryNS.getToolsForAPI();
   if (provider === 'claude' && apiKey) {
-    console.log('[Chat] 🤖 Using Claude API (agent api_key, non-stream)');
-    return streamChatClaude(reply, apiKey, model, ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext, toolPolicy);
-  }
-  const settingsManagerNS = getSettingsManager();
-  const settingsNS = settingsManagerNS.getSettings();
-  if (provider === 'claude' && settingsNS.claude?.apiKey) {
-    console.log('[Chat] 🤖 Using Claude API (global settings, non-stream)');
-    return streamChatClaude(reply, settingsNS.claude.apiKey, model || settingsNS.claude.model || 'claude-sonnet-4-5-20250929', ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext, toolPolicy);
+    console.log('[Chat] 🤖 Using Claude API (non-stream)');
+    return streamChatClaude(reply, apiKey, model || getSettingsManager().getSettings().claude?.model || 'claude-sonnet-4-5-20250929', ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext, toolPolicy);
   }
 
   // Gemini CLI provider (non-stream path)

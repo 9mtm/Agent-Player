@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import { getSettingsManager } from '../../settings/index.js';
 
 import { OLLAMA_URL } from '../../llm/ollama.js';
+import { getEnvProviderApiKey, hasGlobalProviderApiKey } from '../../credentials/authority.js';
 
 interface OllamaModel {
   name: string;
@@ -55,7 +56,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
       }
 
       // 2. Add Claude models (if API key configured)
-      if (settings.claude?.apiKey) {
+      if (hasGlobalProviderApiKey('claude')) {
         const claudeModels = [
           {
             id: 'claude-opus-4-6',
@@ -86,7 +87,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
       }
 
       // 3. Add OpenAI models (if API key configured)
-      if (settings.openai?.apiKey) {
+      if (hasGlobalProviderApiKey('openai')) {
         const openaiModels = [
           {
             id: 'gpt-4-turbo',
@@ -135,8 +136,8 @@ export async function modelsRoutes(fastify: FastifyInstance) {
   fastify.get('/api/models/providers', async () => {
     const providers = [
       { name: 'ollama', available: await checkOllama() },
-      { name: 'openai', available: !!process.env.OPENAI_API_KEY },
-      { name: 'anthropic', available: !!process.env.ANTHROPIC_API_KEY },
+      { name: 'openai', available: !!getEnvProviderApiKey('openai') },
+      { name: 'anthropic', available: !!getEnvProviderApiKey('claude') },
     ];
     return { providers };
   });
