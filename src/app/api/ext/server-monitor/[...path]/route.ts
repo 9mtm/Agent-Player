@@ -1,131 +1,62 @@
+/**
+ * Server Monitor extension proxy: /api/ext/server-monitor/* -> backend.
+ *
+ * SECURITY (S0-Q.12): the extension manages remote servers (SSH/WHM
+ * credentials, commands), so every method needs a signed-in owner/admin
+ * verified by the backend. Only the caller's bearer token is forwarded (no
+ * cookies, Host or other client headers), and the path is rebuilt from
+ * validated segments so it cannot climb out of /api/ext/server-monitor/.
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
+import { config } from '@/lib/config';
+import { backendFetch, requireSessionRole } from '@/lib/session';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:41522';
+const BACKEND_URL = config.backendUrl;
+const SEGMENT = /^[A-Za-z0-9_.:@-]{1,200}$/;
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> }
-) {
+type Ctx = { params: Promise<{ path: string[] }> };
+
+/** Backend URL for these segments, or null when a segment is not allowed. */
+function targetUrl(segments: string[], search = ''): string | null {
+  if (!segments.length || segments.length > 20) return null;
+  for (const s of segments) {
+    if (!SEGMENT.test(s) || s === '.' || s === '..') return null;
+  }
+  return `${BACKEND_URL}/api/ext/server-monitor/${segments.map(encodeURIComponent).join('/')}${search}`;
+}
+
+async function proxy(request: NextRequest, ctx: Ctx, method: 'GET' | 'POST' | 'PUT' | 'DELETE') {
+  const auth = await requireSessionRole(['owner', 'admin']);
+  if (auth instanceof Response) return auth;
+
   try {
-    const resolvedParams = await params;
-    const path = resolvedParams.path.join('/');
-    const url = `${BACKEND_URL}/api/ext/server-monitor/${path}${request.nextUrl.search}`;
+    const { path } = await ctx.params;
+    const url = targetUrl(path, method === 'GET' ? request.nextUrl.search : '');
+    if (!url) return NextResponse.json({ error: 'Invalid path' }, { status: 400 });
 
-    console.log('[Server Monitor Proxy] GET:', url);
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    console.log('[Server Monitor Proxy] Response status:', response.status);
-
-    if (!response.ok) {
-      const text = await response.text();
-      console.error('[Server Monitor Proxy] Backend error:', text);
-      return NextResponse.json(
-        { error: `Backend returned ${response.status}: ${text}` },
-        { status: response.status }
-      );
+    const init: RequestInit = { method, headers: { 'Content-Type': 'application/json' } };
+    if (method === 'POST' || method === 'PUT') {
+      const body = await request.json().catch(() => undefined);
+      init.body = JSON.stringify(body ?? {});
     }
 
-    const data = await response.json();
-    return NextResponse.json(data, { status: response.status });
-  } catch (error: any) {
-    console.error('[Server Monitor Proxy] Error:', error.message, error.cause);
-    return NextResponse.json(
-      { error: `Failed to proxy request: ${error.message}` },
-      { status: 500 }
-    );
-  }
-}
-
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> }
-) {
-  try {
-    const resolvedParams = await params;
-    const path = resolvedParams.path.join('/');
-    const body = await request.json();
-    const url = `${BACKEND_URL}/api/ext/server-monitor/${path}`;
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...Object.fromEntries(request.headers.entries()),
-      },
-      body: JSON.stringify(body),
-    });
-
-    const data = await response.json();
+    const response = await backendFetch(url, init);
+    const text = await response.text();
+    let data: unknown;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { error: `Backend returned ${response.status}` };
+    }
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error('[API] Server Monitor proxy error:', error);
-    return NextResponse.json(
-      { error: 'Failed to proxy request to backend' },
-      { status: 500 }
-    );
+    console.error('[Server Monitor Proxy] Error:', error instanceof Error ? error.message : error);
+    return NextResponse.json({ error: 'Failed to proxy request to backend' }, { status: 502 });
   }
 }
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> }
-) {
-  try {
-    const resolvedParams = await params;
-    const path = resolvedParams.path.join('/');
-    const body = await request.json();
-    const url = `${BACKEND_URL}/api/ext/server-monitor/${path}`;
-
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        ...Object.fromEntries(request.headers.entries()),
-      },
-      body: JSON.stringify(body),
-    });
-
-    const data = await response.json();
-    return NextResponse.json(data, { status: response.status });
-  } catch (error) {
-    console.error('[API] Server Monitor proxy error:', error);
-    return NextResponse.json(
-      { error: 'Failed to proxy request to backend' },
-      { status: 500 }
-    );
-  }
-}
-
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> }
-) {
-  try {
-    const resolvedParams = await params;
-    const path = resolvedParams.path.join('/');
-    const url = `${BACKEND_URL}/api/ext/server-monitor/${path}`;
-
-    const response = await fetch(url, {
-      method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        ...Object.fromEntries(request.headers.entries()),
-      },
-    });
-
-    const data = await response.json();
-    return NextResponse.json(data, { status: response.status });
-  } catch (error) {
-    console.error('[API] Server Monitor proxy error:', error);
-    return NextResponse.json(
-      { error: 'Failed to proxy request to backend' },
-      { status: 500 }
-    );
-  }
-}
+export const GET = (request: NextRequest, ctx: Ctx) => proxy(request, ctx, 'GET');
+export const POST = (request: NextRequest, ctx: Ctx) => proxy(request, ctx, 'POST');
+export const PUT = (request: NextRequest, ctx: Ctx) => proxy(request, ctx, 'PUT');
+export const DELETE = (request: NextRequest, ctx: Ctx) => proxy(request, ctx, 'DELETE');

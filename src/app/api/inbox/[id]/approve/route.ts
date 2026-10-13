@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { config } from '@/lib/config';
+import { backendFetch, getSessionUser } from '@/lib/session';
 
 const BACKEND_URL = config.backendUrl;
 
@@ -13,16 +14,16 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // SECURITY (S0-Q.12): signed-in users only; token forwarded to the backend.
+    if (!(await getSessionUser())) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const { id } = await params;
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) return NextResponse.json({ error: 'Invalid id' }, { status: 400 });
     const body = await request.json();
 
-    const response = await fetch(`${BACKEND_URL}/api/inbox/${id}/approve`, {
+    const response = await backendFetch(`${BACKEND_URL}/api/inbox/${encodeURIComponent(id)}/approve`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(request.headers.get('authorization') && {
-          authorization: request.headers.get('authorization')!,
-        }),
       },
       body: JSON.stringify(body),
     });

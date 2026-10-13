@@ -5,30 +5,22 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { config } from '@/lib/config';
+import { backendFetch, getSessionUser } from '@/lib/session';
 
 const BACKEND_URL = config.backendUrl;
 
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
-    const userId = searchParams.get('userId');
+    // SECURITY (S0-Q.12): signed-in users only; the backend takes the user
+    // from the forwarded token (no userId from the query).
+    if (!(await getSessionUser())) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    if (!userId) {
-      return NextResponse.json(
-        { error: 'userId is required' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(
-      `${BACKEND_URL}/api/inbox/stats?userId=${userId}`,
+    const response = await backendFetch(
+      `${BACKEND_URL}/api/inbox/stats`,
       {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
-          ...(request.headers.get('authorization') && {
-            authorization: request.headers.get('authorization')!,
-          }),
         },
       }
     );

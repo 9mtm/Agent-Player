@@ -1,26 +1,28 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { isPublicPath } from '@/lib/auth/first-run';
+import { AUTH_COOKIE } from '@/lib/auth/verify-session';
+import { pageGate } from '@/lib/auth/page-gate';
 
+/**
+ * Page sign-in gate (S0-Q.12): a page request without a well-formed
+ * `auth_token` cookie goes to /login. Public pages (/login, /setup,
+ * /avatar-lab) and static files pass; API routes are excluded by the matcher
+ * and keep their own checks. The token itself is verified by the backend.
+ */
 export function middleware(request: NextRequest) {
-    const { pathname } = request.nextUrl;
-
-    // Public pages (/login, /setup, /avatar-lab); no open /register page.
-    if (isPublicPath(pathname)) {
-        return NextResponse.next();
+    let cookieToken = request.cookies.get(AUTH_COOKIE)?.value;
+    try {
+        if (cookieToken) cookieToken = decodeURIComponent(cookieToken);
+    } catch {
+        cookieToken = undefined;
     }
-
-    // Check for auth token
-    const token = request.cookies.get('auth_token')?.value;
-
-    // If no token, redirect to login
-    if (!token) {
-        // For client-side, check localStorage token
-        // But middleware runs on server, so we'll handle this differently
-        // For now, allow through and let client-side auth handle it
-        return NextResponse.next();
+    const decision = pageGate(request.nextUrl.pathname, cookieToken);
+    if (decision.action === 'redirect') {
+        const url = request.nextUrl.clone();
+        url.pathname = decision.location;
+        url.search = '';
+        return NextResponse.redirect(url);
     }
-
     return NextResponse.next();
 }
 

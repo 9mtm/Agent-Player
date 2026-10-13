@@ -79,9 +79,10 @@ export const skillsClient = {
   /**
    * Reload all skills from disk
    */
-  async reload(): Promise<{ success: boolean; count: number }> {
+  async reload(headers: Record<string, string> = {}): Promise<{ success: boolean; count: number }> {
     const res = await fetch(`${BACKEND_URL}/api/skills/reload`, {
       method: 'POST',
+      headers,
     });
     if (!res.ok) {
       throw new Error(`Failed to reload skills: ${res.statusText}`);

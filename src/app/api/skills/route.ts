@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { skillsClient, type Skill } from '@/lib/skills/client';
+import { backendAuthHeaders, requireSessionRole } from '@/lib/session';
 import fs from 'fs';
 import path from 'path';
 
@@ -119,12 +120,15 @@ export async function GET() {
 /**
  * POST /api/skills
  * Reload skills from disk
+ * SECURITY (S0-Q.12): owner/admin only; the caller's token is forwarded.
  */
 export async function POST() {
+    const auth = await requireSessionRole(['owner', 'admin']);
+    if (auth instanceof Response) return auth;
     try {
         // Try to reload via backend
         try {
-            const result = await skillsClient.reload();
+            const result = await skillsClient.reload(await backendAuthHeaders());
             return NextResponse.json({
                 success: true,
                 message: `Reloaded ${result.count} skill(s)`,

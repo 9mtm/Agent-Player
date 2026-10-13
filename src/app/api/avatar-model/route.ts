@@ -1,7 +1,7 @@
 /**
  * Avatar Model Proxy & Cache
  *
- * Downloads a Ready Player Me GLB from its CDN URL, caches it in
+ * Downloads a Ready Player Me GLB from its CDN URL (allow-listed hosts only), caches it in
  * /public/avatar-cache/<hash>.glb, and returns a local URL.
  * On subsequent requests for the same URL, returns the cached version immediately.
  *
@@ -12,6 +12,9 @@ import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
+import { getSessionUser } from '@/lib/session';
+import { checkUrl, SafeFetchError } from '@/lib/net/safe-fetch';
+import { AVATAR_MODEL_HOSTS, downloadAvatarModel } from '@/lib/net/avatar-download';
 
 export const runtime = 'nodejs';
 
@@ -53,10 +56,25 @@ export async function GET(req: Request) {
 /**
  * POST — Download + cache avatar GLB (may take seconds on first call).
  * Returns { localUrl } when done, or { error } on failure.
+ *
+ * SECURITY (S0-Q.12): signed-in users only; the URL must be https on an
+ * allow-listed avatar host, every DNS answer must be a public address (the
+ * connection is pinned to it), redirects stay on the same host, and size,
+ * content type and GLB magic are checked before anything is written.
  */
 export async function POST(req: Request) {
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const { glbUrl } = await req.json().catch(() => ({ glbUrl: null }));
-  if (!glbUrl) return NextResponse.json({ error: 'Missing glbUrl' }, { status: 400 });
+  if (!glbUrl || typeof glbUrl !== 'string' || glbUrl.length > 2048) {
+    return NextResponse.json({ error: 'Missing glbUrl' }, { status: 400 });
+  }
+  try {
+    checkUrl(glbUrl, AVATAR_MODEL_HOSTS);
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof SafeFetchError ? err.message : 'Invalid URL' }, { status: 400 });
+  }
 
   await ensureCacheDir();
   const filename = urlToFilename(glbUrl);
@@ -68,16 +86,15 @@ export async function POST(req: Request) {
 
   // Download and save
   try {
-    console.log(`[Avatar Cache] Downloading: ${glbUrl}`);
-    const response = await fetch(glbUrl, { headers: { 'User-Agent': 'AgentPlayer/1.0' } });
-    if (!response.ok) return NextResponse.json({ error: `CDN error: ${response.status}` }, { status: 502 });
-    const buffer = await response.arrayBuffer();
-    const sizeKB = Math.round(buffer.byteLength / 1024);
-    await fs.writeFile(cachePath, Buffer.from(buffer));
-    console.log(`[Avatar Cache] ✅ Saved: ${filename} (${sizeKB} KB) → ${localUrl}`);
+    const buffer = await downloadAvatarModel(glbUrl);
+    const tmpPath = `${cachePath}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    await fs.writeFile(tmpPath, buffer);
+    await fs.rename(tmpPath, cachePath);
+    console.log(`[Avatar Cache] Saved ${filename} (${Math.round(buffer.byteLength / 1024)} KB)`);
     return NextResponse.json({ localUrl });
-  } catch (err: any) {
-    console.error(`[Avatar Cache] ❌ Failed to download: ${err.message}`);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+  } catch (err) {
+    const message = err instanceof SafeFetchError ? err.message : 'Download failed';
+    console.error(`[Avatar Cache] Download refused/failed: ${message}`);
+    return NextResponse.json({ error: message }, { status: 502 });
   }
 }
