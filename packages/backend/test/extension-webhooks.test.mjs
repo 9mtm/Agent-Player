@@ -180,11 +180,13 @@ test('seo: OAuth state is random, single use and bound to the user and domain', 
   const state = new URL(start.headers.location).searchParams.get('state');
   assert.match(state, /^[0-9a-f]{64}$/);
 
-  const cb = await inject({ method: 'GET', url: `/api/ext/seo/oauth/google/callback?code=c&state=${state}` });
+  // F-08: the state is also bound to the starting browser's nonce cookie.
+  const cookie = String(start.headers['set-cookie']).split(';')[0];
+  const cb = await inject({ method: 'GET', url: `/api/ext/seo/oauth/google/callback?code=c&state=${state}`, headers: { cookie } });
   assert.equal(cb.statusCode, 302);
   assert.equal(outbound.length, before + 1, 'token exchange only for a valid state');
 
-  const reuse = await inject({ method: 'GET', url: `/api/ext/seo/oauth/google/callback?code=c&state=${state}` });
+  const reuse = await inject({ method: 'GET', url: `/api/ext/seo/oauth/google/callback?code=c&state=${state}`, headers: { cookie } });
   assert.equal(reuse.statusCode, 400, 'state is single use');
   assert.equal(outbound.length, before + 1);
 });
