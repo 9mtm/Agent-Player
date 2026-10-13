@@ -167,7 +167,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     prefix: '/', // Serve files at root level (e.g., /avatars/user/1/abc/avatar.glb)
     // SECURITY (S0-A.7): runtime data zones under public/storage are not
     // served statically; see src/api/static-access.ts.
-    allowedPath: (pathName) => isPublicStaticPath(pathName),
+    allowedPath: (pathName, root) => isPublicStaticPath(pathName, root),
   });
 
   fastify.log.info(`[Server] ✅ Static files served from: ${publicDir}`);
