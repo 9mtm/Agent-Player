@@ -16,6 +16,15 @@ export type MemoryType =
   | 'relationship' // Entity relationships
   | 'task';       // User tasks and todos
 
+/** Every valid MemoryType (used to validate API input; the type is part of a file name). */
+export const MEMORY_TYPES: readonly MemoryType[] = [
+  'fact', 'event', 'context', 'insight', 'preference', 'skill', 'relationship', 'task'
+];
+
+export function isMemoryType(value: unknown): value is MemoryType {
+  return typeof value === 'string' && (MEMORY_TYPES as readonly string[]).includes(value);
+}
+
 /** Memory temporal layer (legacy) */
 export type MemoryLayer =
   | 'session'     // Current session (volatile)

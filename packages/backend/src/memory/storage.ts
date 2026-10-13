@@ -18,6 +18,11 @@ import type {
   IMemoryStorage
 } from './types.js';
 
+/** A single safe path segment: letters, digits, `_`, `-`, `.`, `@`; never `.`/`..`. */
+function isSafeSegment(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_.@-]{1,200}$/.test(value) && value !== '.' && value !== '..';
+}
+
 export class MemoryStorage implements IMemoryStorage {
   private memoryDir: string;
   private db: ReturnType<typeof getDatabase>;
@@ -102,6 +107,10 @@ export class MemoryStorage implements IMemoryStorage {
    * Save a memory to both markdown file and database
    */
   async save(memory: Memory): Promise<void> {
+    // Validate the file location first (throws on a bad id/userId/type), so an
+    // invalid memory is never written to the database either.
+    this.getMarkdownPath(memory);
+
     // Generate embedding if not provided
     if (!memory.embedding) {
       memory.embedding = await this.embeddingService.embed(memory.content);
@@ -189,10 +198,9 @@ export class MemoryStorage implements IMemoryStorage {
     // Delete from database
     this.db.getDb().prepare('DELETE FROM memories WHERE id = ?').run(id);
 
-    // Delete markdown file
-    const filePath = this.getMarkdownPath(memory);
+    // Delete markdown file (a legacy row with an unsafe id/type has no valid file path)
     try {
-      await fs.unlink(filePath);
+      await fs.unlink(this.getMarkdownPath(memory));
     } catch (err) {
       // File might not exist, ignore
     }
@@ -205,7 +213,10 @@ export class MemoryStorage implements IMemoryStorage {
     const memory = await this.get(id);
     if (!memory) throw new Error(`Memory ${id} not found`);
 
-    const updated = { ...memory, ...updates };
+    // Identity fields never change through an update.
+    const updated = { ...memory, ...updates, id: memory.id, userId: memory.userId };
+    let oldPath: string | null = null;
+    try { oldPath = this.getMarkdownPath(memory); } catch { /* legacy row with an unsafe type */ }
 
     // Regenerate embedding if content changed
     if (updates.content) {
@@ -213,6 +224,12 @@ export class MemoryStorage implements IMemoryStorage {
     }
 
     await this.save(updated);
+
+    // A type change renames the markdown file: drop the old one.
+    const newPath = this.getMarkdownPath(updated);
+    if (oldPath && newPath !== oldPath) {
+      await fs.unlink(oldPath).catch(() => { /* may not exist */ });
+    }
   }
 
   /**
@@ -314,9 +331,23 @@ ${JSON.stringify(memory.metadata, null, 2)}
    * Get markdown file path for a memory
    */
   private getMarkdownPath(memory: Memory): string {
-    const userDir = path.join(this.memoryDir, memory.userId);
-    const filename = `${memory.type}-${memory.id}.md`;
-    return path.join(userDir, filename);
+    // SECURITY: userId, id and type become path segments. Only plain names are
+    // accepted, and the resolved path must stay inside <memoryDir>/<userId>.
+    if (!isSafeSegment(memory.userId) || !isSafeSegment(memory.id)) {
+      throw new Error('Invalid memory id or user id');
+    }
+    // Not limited to MEMORY_TYPES here: the memory_save tool also stores
+    // 'conversation'/'goal'. The API routes accept only MEMORY_TYPES.
+    if (typeof memory.type !== 'string' || !/^[a-z][a-z_-]{0,31}$/.test(memory.type)) {
+      throw new Error('Invalid memory type');
+    }
+    const root = path.resolve(this.memoryDir);
+    const userDir = path.resolve(root, memory.userId);
+    const filePath = path.resolve(userDir, `${memory.type}-${memory.id}.md`);
+    if (path.dirname(userDir) !== root || path.dirname(filePath) !== userDir) {
+      throw new Error('Memory path escapes the memory directory');
+    }
+    return filePath;
   }
 
   /**

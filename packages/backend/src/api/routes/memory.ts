@@ -12,12 +12,51 @@ import { getMemoryStorage } from '../../memory/storage.js';
 import { getMemoryRetrieval } from '../../memory/retrieval.js';
 import { MemoryTiersService } from '../../services/memory-tiers.js';
 import { getConsolidationService } from '../../services/memory-consolidation.js';
+import { MEMORY_TYPES, isMemoryType } from '../../memory/types.js';
 import type { Memory, MemoryType, ImportanceLevel, MultiTierLayer } from '../../memory/types.js';
 
-// Memory type values for API responses
-const MEMORY_TYPES: MemoryType[] = [
-  'fact', 'event', 'context', 'insight', 'preference', 'skill', 'relationship', 'task'
-];
+const MAX_CONTENT = 50_000;
+const MAX_METADATA_JSON = 64 * 1024;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Editable memory fields (allowlist, S0-Q.17 review fix): content, summary,
+ * type (one of MEMORY_TYPES), importance (1-10), metadata (object), tags
+ * (strings). Anything else in the body is ignored. Returns an error string
+ * for invalid values.
+ */
+function pickMemoryUpdates(body: unknown): { updates: Partial<Memory> } | { error: string } {
+  const src = isPlainObject(body) ? body : {};
+  const updates: Partial<Memory> = {};
+  if (src.content !== undefined) {
+    if (typeof src.content !== 'string' || !src.content.trim() || src.content.length > MAX_CONTENT) return { error: 'Invalid content' };
+    updates.content = src.content;
+  }
+  if (src.summary !== undefined) {
+    if (typeof src.summary !== 'string' || src.summary.length > 2000) return { error: 'Invalid summary' };
+    updates.summary = src.summary;
+  }
+  if (src.type !== undefined) {
+    if (!isMemoryType(src.type)) return { error: 'Invalid memory type' };
+    updates.type = src.type;
+  }
+  if (src.importance !== undefined) {
+    if (!Number.isInteger(src.importance) || (src.importance as number) < 1 || (src.importance as number) > 10) return { error: 'importance must be 1-10' };
+    updates.importance = src.importance as ImportanceLevel;
+  }
+  if (src.metadata !== undefined) {
+    if (!isPlainObject(src.metadata) || JSON.stringify(src.metadata).length > MAX_METADATA_JSON) return { error: 'Invalid metadata' };
+    updates.metadata = src.metadata;
+  }
+  if (src.tags !== undefined) {
+    if (!Array.isArray(src.tags) || src.tags.length > 50 || !src.tags.every(t => typeof t === 'string' && t.length <= 100)) return { error: 'Invalid tags' };
+    updates.tags = src.tags as string[];
+  }
+  return { updates };
+}
 
 /**
  * SECURITY (S0-Q.11): every /api/memory* route needs a valid bearer token of an
@@ -107,6 +146,19 @@ export async function memoryRoutes(fastify: FastifyInstance) {
         error: 'type and content are required'
       });
     }
+    // The type is part of the markdown file name: only known types.
+    if (!isMemoryType(body.type)) {
+      return reply.code(400).send({ error: 'Invalid memory type' });
+    }
+    if (typeof body.content !== 'string' || body.content.length > MAX_CONTENT) {
+      return reply.code(400).send({ error: 'Invalid content' });
+    }
+    if (body.importance !== undefined && (!Number.isInteger(body.importance) || body.importance < 1 || body.importance > 10)) {
+      return reply.code(400).send({ error: 'importance must be 1-10' });
+    }
+    if (body.metadata !== undefined && (!isPlainObject(body.metadata) || JSON.stringify(body.metadata).length > MAX_METADATA_JSON)) {
+      return reply.code(400).send({ error: 'Invalid metadata' });
+    }
 
     // Determine memory layer based on importance (same logic as memory_save tool)
     const importance = body.importance || 5;
@@ -159,8 +211,12 @@ export async function memoryRoutes(fastify: FastifyInstance) {
       if (!ownsMemory(request, id)) {
         return reply.code(404).send({ error: 'Memory not found' });
       }
-      // Identity fields can never be changed through the API.
-      const { id: _id, userId: _userId, ...updates } = (request.body || {}) as Partial<Memory>;
+      // Allowlist of editable fields; identity and bookkeeping fields never change.
+      const picked = pickMemoryUpdates(request.body);
+      if ('error' in picked) {
+        return reply.code(400).send({ error: picked.error });
+      }
+      const { updates } = picked;
 
       try {
         await storage.update(id, updates);
