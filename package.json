@@ -11,9 +11,9 @@
   },
   "homepage": "https://github.com/Agent-Player/Agent-Player#readme",
   "scripts": {
-    "dev": "next dev --port 41521",
+    "dev": "next dev --hostname 127.0.0.1 --port 41521",
     "build": "next build",
-    "start": "next start --port 41521",
+    "start": "next start --hostname 127.0.0.1 --port 41521",
     "lint": "eslint",
     "backend:dev": "cd packages/backend && npm run dev",
     "backend:install": "cd packages/backend && npm install",

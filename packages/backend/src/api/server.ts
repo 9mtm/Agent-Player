@@ -89,6 +89,7 @@ import { startCalendarSyncScheduler } from '../services/calendar-sync.js';
 import { config } from '../config/index.js';
 import { registerCsrfProtection } from '../middleware/csrf-protection.js';
 import { registerHttpsEnforcement } from '../middleware/https-enforcement.js';
+import { registerHostCheck } from '../middleware/host-check.js';
 
 const PORT = config.port;
 const HOST = config.host;
@@ -143,6 +144,9 @@ await fastify.register(helmet, {
   },
   crossOriginEmbedderPolicy: false, // Allow embedding for local dev
 });
+
+// SECURITY: Reject unknown Host headers (DNS rebinding) (S0-Q.1)
+registerHostCheck(fastify);
 
 // SECURITY: Register CSRF protection middleware (M-01)
 // Validates Origin/Referer headers for state-changing requests

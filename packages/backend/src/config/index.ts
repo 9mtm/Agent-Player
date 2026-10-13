@@ -8,7 +8,8 @@ export const config = {
    * Server Configuration
    */
   port: parseInt(process.env.PORT || '41522', 10),
-  host: process.env.HOST || '0.0.0.0',
+  // SECURITY (S0-Q.1): loopback only unless HOST is set explicitly.
+  host: process.env.HOST || '127.0.0.1',
   nodeEnv: process.env.NODE_ENV || 'development',
 
   /**

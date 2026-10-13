@@ -417,6 +417,13 @@ function escapeXml(text: string): string {
 /**
  * Get AI agent response for user message
  */
+/** Address for calls to this backend: loopback unless bound to one specific address. */
+function selfHost(): string {
+  const host = process.env.HOST || '127.0.0.1';
+  if (host === '0.0.0.0' || host === '::') return '127.0.0.1';
+  return host.includes(':') ? `[${host}]` : host;
+}
+
 async function getAgentResponse(
   agentId: string | null,
   userMessage: string,
@@ -425,7 +432,7 @@ async function getAgentResponse(
 ): Promise<string> {
   try {
     // Call existing chat API with agent context
-    const response = await fetch(`http://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || '41522'}/api/chat`, {
+    const response = await fetch(`http://${selfHost()}:${process.env.PORT || '41522'}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
