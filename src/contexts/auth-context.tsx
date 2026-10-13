@@ -156,13 +156,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const token = getToken();
 
             if (token) {
-                // Call backend logout endpoint
-                await fetch(`${BACKEND_URL}/api/auth/logout`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                    },
-                });
+                // F-02: the Next.js route ends the session on the backend
+                // (token invalidated) and clears the auth cookie server-side.
+                let backendLoggedOut = false;
+                try {
+                    const res = await fetch('/api/auth/logout', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: { 'Authorization': `Bearer ${token}` },
+                    });
+                    if (res.ok) {
+                        const data = await res.json().catch(() => null);
+                        backendLoggedOut = data?.backendLoggedOut === true;
+                    }
+                } catch { /* fall back to the direct call below */ }
+
+                // If the Next.js server could not reach the backend, call it directly.
+                if (!backendLoggedOut) {
+                    await fetch(`${BACKEND_URL}/api/auth/logout`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                        },
+                    });
+                }
             }
         } catch (error) {
             console.error('Logout error:', error);

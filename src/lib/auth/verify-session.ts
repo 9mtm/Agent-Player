@@ -84,3 +84,28 @@ export async function verifyBackendToken(
         return null;
     }
 }
+
+/**
+ * End a session on the backend (F-02): POST /api/auth/logout bumps the user's
+ * token_version, so this token (and every other token of that user) is refused
+ * from then on. Returns true only when the backend confirmed it.
+ */
+export async function backendLogout(
+    token: string | null,
+    opts: { backendUrl?: string; fetchImpl?: typeof fetch; timeoutMs?: number } = {}
+): Promise<boolean> {
+    if (!token || token.length > 4096 || !/^[A-Za-z0-9._-]+$/.test(token)) return false;
+    const fetchImpl = opts.fetchImpl || fetch;
+    const base = opts.backendUrl || internalBackendUrl();
+    try {
+        const res = await fetchImpl(`${base}/api/auth/logout`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            cache: 'no-store',
+            signal: AbortSignal.timeout(opts.timeoutMs ?? 5000),
+        });
+        return res.ok;
+    } catch {
+        return false;
+    }
+}

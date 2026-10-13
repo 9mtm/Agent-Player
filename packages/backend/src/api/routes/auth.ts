@@ -5,7 +5,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { getRepositories } from '../../db/index.js';
-import { generateToken, verifyToken, getUserIdFromRequest } from '../../auth/jwt.js';
+import { generateToken, getUserIdFromRequest } from '../../auth/jwt.js';
 import { handleError, handleValidationError } from '../error-handler.js';
 import {
   checkAccountLock,
@@ -325,6 +325,33 @@ export async function authRoutes(fastify: FastifyInstance) {
   });
 
   /**
+   * POST /api/auth/logout
+   * End the caller's session (F-02). The token must still be valid; the user's
+   * token_version is bumped, so this token and every other token issued to the
+   * user are refused from now on (all devices are signed out).
+   */
+  fastify.post('/api/auth/logout', async (request, reply) => {
+    let userId: string;
+    try {
+      userId = getUserIdFromRequest(request);
+    } catch {
+      return reply.code(401).send({
+        error: 'Unauthorized',
+        message: 'Invalid session'
+      });
+    }
+
+    try {
+      const user = repos.users.findById(userId);
+      repos.users.incrementTokenVersion(userId);
+      logAuthEvent('auth.logout', request, userId, user?.username, true);
+      return { success: true };
+    } catch (error: any) {
+      return handleError(reply, error, 'internal', '[Auth] Logout failed');
+    }
+  });
+
+  /**
    * POST /api/auth/change-password
    * Change user password (requires authentication)
    */
@@ -340,7 +367,15 @@ export async function authRoutes(fastify: FastifyInstance) {
       });
     }
 
-    const token = authHeader.substring(7);
+    let userId: string;
+    try {
+      userId = getUserIdFromRequest(request);
+    } catch {
+      return reply.code(401).send({
+        error: 'Unauthorized',
+        message: 'Invalid session'
+      });
+    }
     const { currentPassword, newPassword } = request.body as any;
 
     if (!currentPassword || !newPassword) {
@@ -360,11 +395,10 @@ export async function authRoutes(fastify: FastifyInstance) {
     }
 
     try {
-      // SECURITY: Use centralized JWT verification (M-06)
-      const decoded = verifyToken(token);
-
+      // SECURITY: userId comes from the full token check above (M-06; F-02:
+      // includes token_version, so a logged-out token cannot change the password).
       // Get user
-      const user = repos.users.findById(decoded.userId);
+      const user = repos.users.findById(userId);
 
       if (!user) {
         // SECURITY: Use "Unauthorized" for consistency (M-12)

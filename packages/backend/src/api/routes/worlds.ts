@@ -1,20 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
-import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { handleError } from '../error-handler.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'development-secret-change-in-production';
+import { getUserIdFromRequestSafe } from '../../auth/jwt.js';
 
+// F-02: the shared check (signature with the real JWT_SECRET, expiry and
+// token_version), so tokens ended by logout are refused here too. The old
+// local copy fell back to a hard-coded secret and skipped token_version.
 function getUserIdFromRequest(request: any): string | null {
-  const authHeader = request.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
-  try {
-    const decoded = jwt.verify(authHeader.substring(7), JWT_SECRET) as any;
-    return decoded.userId || null;
-  } catch {
-    return null;
-  }
+  return getUserIdFromRequestSafe(request);
 }
 
 export async function worldsRoutes(fastify: FastifyInstance) {

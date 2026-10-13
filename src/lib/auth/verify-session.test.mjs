@@ -54,3 +54,21 @@ test('no token, rejected token, inactive user or a backend error -> null (no dev
     assert.equal(await verifyBackendToken(TOKEN, { fetchImpl: failing }), null);
   } finally { process.env.NODE_ENV = prev; }
 });
+
+// F-02: logout ends the session on the backend.
+test('backendLogout posts the bearer token to the backend logout route', async () => {
+  const { backendLogout } = await import('./verify-session.ts');
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url: String(url), method: init?.method, auth: init?.headers?.Authorization });
+    return new Response(JSON.stringify({ success: true }), { status: init?.headers?.Authorization === `Bearer ${TOKEN}` ? 200 : 401 });
+  };
+  assert.equal(await backendLogout(TOKEN, { fetchImpl, backendUrl: 'http://127.0.0.1:41522' }), true);
+  assert.deepEqual(calls[0], { url: 'http://127.0.0.1:41522/api/auth/logout', method: 'POST', auth: `Bearer ${TOKEN}` });
+  assert.equal(await backendLogout('other.token.x', { fetchImpl, backendUrl: 'http://127.0.0.1:41522' }), false);
+  assert.equal(await backendLogout(null, { fetchImpl }), false);
+  assert.equal(await backendLogout('bad token with spaces', { fetchImpl }), false);
+  assert.equal(calls.length, 2); // no call for a missing or malformed token
+  const down = async () => { throw new Error('ECONNREFUSED'); };
+  assert.equal(await backendLogout(TOKEN, { fetchImpl: down, backendUrl: 'http://127.0.0.1:1' }), false);
+});

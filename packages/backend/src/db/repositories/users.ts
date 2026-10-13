@@ -204,6 +204,21 @@ export class UsersRepository {
   }
 
   /**
+   * Invalidate every JWT issued to this user (logout, F-02).
+   * Tokens carry the token_version they were issued with; bumping it makes
+   * getUserIdFromRequest() refuse all of them.
+   */
+  incrementTokenVersion(id: string): void {
+    this.db.execute(
+      `UPDATE users
+       SET token_version = COALESCE(token_version, 0) + 1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      id
+    );
+  }
+
+  /**
    * Update last login timestamp
    */
   updateLastLogin(id: string): void {
