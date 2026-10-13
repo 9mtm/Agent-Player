@@ -124,13 +124,24 @@ test('bad, disabled and suspended tokens get 401 on every guarded route; guests 
       const res = await send(r, headers);
       if (res.statusCode !== want) wrong.push(`${who}: ${label(r)} -> ${res.statusCode}`);
     }
-    const isGuestRoute = gate.GUEST_ROUTES.has(`${r.method} ${r.url}`);
+    const isGuestRoute = gate.guestMayUse(r.method, r.url);
     if (!isGuestRoute) {
       const res = await send(r, bearer('g-guest'));
       if (res.statusCode !== 403) wrong.push(`guest: ${label(r)} -> ${res.statusCode}`);
     }
   }
   assert.deepEqual(wrong, []);
+});
+
+test('CL-06: guest tokens get 403 on every optional route outside the public-room set', async () => {
+  const wrong = [];
+  for (const r of routes.filter((x) => x.access === 'optional' && !gate.guestMayUse(x.method, x.url))) {
+    const res = await send(r, bearer('g-guest'));
+    if (res.statusCode !== 403) wrong.push(`guest: ${label(r)} -> ${res.statusCode}`);
+  }
+  assert.deepEqual(wrong, []);
+  const pw = await app.inject({ method: 'POST', url: '/api/auth/change-password', headers: bearer('g-guest'), payload: {} });
+  assert.equal(pw.statusCode, 403, 'guests: only who-am-I, logout and public rooms');
 });
 
 test('public routes answer without a token', async () => {

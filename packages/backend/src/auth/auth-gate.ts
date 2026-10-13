@@ -23,8 +23,8 @@
  * guard (S0-Q.18, extension-route-access.ts) is already deny-by-default.
  *
  * `guest` accounts and users whose status is not 'active' are refused on
- * every non-public route except the small GUEST_ROUTES set (see who they are,
- * sign out, change password).
+ * every non-public route except, for guests, GUEST_ROUTES (see who they are,
+ * sign out) and GUEST_PUBLIC_CHAT_ROUTES (public rooms only, Q-13).
  *
  * Existing per-route guards stay in place as a second line.
  */
@@ -111,8 +111,27 @@ export const SERVICE_ROUTES: ReadonlySet<string> = new Set([
 export const GUEST_ROUTES: ReadonlySet<string> = new Set([
   key('GET', '/api/auth/me'),
   key('POST', '/api/auth/logout'),
-  key('POST', '/api/auth/change-password'),
 ]);
+
+/**
+ * Public-room routes a `guest` account may use (Q-13, CL-06). The handlers
+ * additionally limit guests to rooms marked public.
+ */
+export const GUEST_PUBLIC_CHAT_ROUTES: ReadonlySet<string> = new Set([
+  key('GET', '/api/public-chat/rooms'),
+  key('GET', '/api/public-chat/rooms/:id'),
+  key('GET', '/api/public-chat/rooms/:id/messages'),
+  key('GET', '/api/public-chat/rooms/:id/participants'),
+  key('POST', '/api/public-chat/rooms/:id/messages'),
+  key('POST', '/api/public-chat/rooms/:id/join'),
+  key('POST', '/api/public-chat/rooms/:id/leave'),
+]);
+
+/** True when a guest account may use this route (method + route pattern). */
+export function guestMayUse(method: string, url: string): boolean {
+  const m = method === 'HEAD' ? 'GET' : method.toUpperCase();
+  return GUEST_ROUTES.has(key(m, url)) || GUEST_PUBLIC_CHAT_ROUTES.has(key(m, url));
+}
 
 const READ_METHODS = new Set(['GET', 'HEAD']);
 
@@ -260,6 +279,9 @@ export async function authGate(request: FastifyRequest, reply: FastifyReply) {
     if (!hasBearer) return;
     const user = authenticateActiveUser(request);
     if (!user) return deny(reply, 401, 'Authentication required');
+    if (user.role === 'guest' && !guestMayUse(request.method, url)) {
+      return deny(reply, 403, 'Guest accounts can only use public rooms');
+    }
     request.authUser = user;
     return;
   }
@@ -275,11 +297,10 @@ export async function authGate(request: FastifyRequest, reply: FastifyReply) {
   const user = hasBearer ? authenticateActiveUser(request) : null;
   if (!user) return deny(reply, 401, 'Authentication required');
 
-  const m = request.method === 'HEAD' ? 'GET' : request.method;
   if (user.role === 'guest') {
-    // Guests only reach the few account routes (all at the 'user' level).
-    if (!GUEST_ROUTES.has(key(m, url)) || access !== 'user') {
-      return deny(reply, 403, 'Guest accounts cannot use this route');
+    // Guests only reach who-am-I, logout and the public-room routes (Q-13).
+    if (!guestMayUse(request.method, url) || access !== 'user') {
+      return deny(reply, 403, 'Guest accounts can only use public rooms');
     }
   } else if (!roleAllowed(access, user.role)) {
     return deny(reply, 403, access === 'owner'

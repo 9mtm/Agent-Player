@@ -52,7 +52,10 @@ interface PublicChatRoom {
 /**
  * Check if user can access room
  */
-function canAccessRoom(room: PublicChatRoom, userId?: string): boolean {
+function canAccessRoom(room: PublicChatRoom, userId?: string, role?: string): boolean {
+  // Q-13 (CL-06): guest accounts may use public rooms only, never private ones.
+  if (role === 'guest') return !!room.is_public;
+
   // Public room without auth requirement
   if (room.is_public && !room.require_auth) return true;
 
@@ -307,7 +310,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
 
     let rooms: PublicChatRoom[];
 
-    if (filter === 'my' && userId) {
+    if (filter === 'my' && userId && request.authUser?.role !== 'guest') {
       // User's rooms
       rooms = db.prepare(`
         SELECT * FROM public_chat_rooms
@@ -341,7 +344,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
     }
 
     // Check access
-    if (!canAccessRoom(room, userId || undefined)) {
+    if (!canAccessRoom(room, userId || undefined, request.authUser?.role)) {
       return reply.code(403).send({ error: 'Access denied' });
     }
 
@@ -476,7 +479,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
       return reply.code(404).send({ error: 'Room not found' });
     }
 
-    if (!canAccessRoom(room, userId || undefined)) {
+    if (!canAccessRoom(room, userId || undefined, request.authUser?.role)) {
       return reply.code(403).send({ error: 'Access denied' });
     }
 
@@ -505,7 +508,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
       return reply.code(404).send({ error: 'Room not found' });
     }
 
-    if (!canAccessRoom(room, userId || undefined)) {
+    if (!canAccessRoom(room, userId || undefined, request.authUser?.role)) {
       return reply.code(403).send({ error: 'Access denied' });
     }
 
@@ -658,7 +661,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
       return reply.code(404).send({ error: 'Room not found' });
     }
 
-    if (!canAccessRoom(room, userId || undefined)) {
+    if (!canAccessRoom(room, userId || undefined, request.authUser?.role)) {
       return reply.code(403).send({ error: 'Access denied' });
     }
 
@@ -742,7 +745,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
       return reply.code(404).send({ error: 'Room not found' });
     }
 
-    if (!canAccessRoom(room, userId || undefined)) {
+    if (!canAccessRoom(room, userId || undefined, request.authUser?.role)) {
       return reply.code(403).send({ error: 'Access denied' });
     }
 
@@ -773,7 +776,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
       return reply.code(404).send({ error: 'Room not found' });
     }
 
-    if (!canAccessRoom(room, userId || undefined)) {
+    if (!canAccessRoom(room, userId || undefined, request.authUser?.role)) {
       return reply.code(403).send({ error: 'Access denied' });
     }
 
