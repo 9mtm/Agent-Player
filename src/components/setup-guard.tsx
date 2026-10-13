@@ -3,134 +3,68 @@
 import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
+import { config } from '@/lib/config';
+import { firstRunRedirect, parseSetupStatus } from '@/lib/auth/first-run';
 
-// Global flag to prevent multiple checks across all instances
-let globalCheckInProgress = false;
-let globalSetupStatus: { complete: boolean; checked: boolean } = {
-  complete: false,
-  checked: false
-};
+// Setup status for this page load (null = backend could not be asked).
+// A full page load (e.g. after the wizard finishes) asks again.
+let cachedStatus: { setupComplete: boolean | null } | null = null;
+let pending: Promise<boolean | null> | null = null;
 
+async function fetchSetupStatus(): Promise<boolean | null> {
+  if (cachedStatus) return cachedStatus.setupComplete;
+  if (!pending) {
+    pending = fetch(`${config.backendUrl}/api/setup/status`, { cache: 'no-store' })
+      .then(res => (res.ok ? res.json().then(parseSetupStatus) : null))
+      .catch(() => null)
+      .then(setupComplete => {
+        cachedStatus = { setupComplete };
+        pending = null;
+        return setupComplete;
+      });
+  }
+  return pending;
+}
+
+/**
+ * F-01: mounted in the root layout, outside the auth provider, so that on a
+ * fresh install every page goes to /setup before any sign-in redirect runs.
+ */
 export function SetupGuard({ children }: { children: React.ReactNode }) {
-  const [isChecking, setIsChecking] = useState(!globalSetupStatus.checked);
-  const [setupComplete, setSetupComplete] = useState(globalSetupStatus.complete);
   const router = useRouter();
-  const pathname = usePathname();
+  const pathname = usePathname() || '/';
+  const [setupComplete, setSetupComplete] = useState<boolean | null | undefined>(
+    cachedStatus ? cachedStatus.setupComplete : undefined
+  );
 
   useEffect(() => {
     let mounted = true;
-
-    const checkSetupStatus = async () => {
-      // Use global status if already checked
-      if (globalSetupStatus.checked) {
-        console.log('[SetupGuard] Using cached setup status:', globalSetupStatus.complete);
-        setSetupComplete(globalSetupStatus.complete);
-        setIsChecking(false);
-
-        // Handle redirects based on cached status
-        if (globalSetupStatus.complete && pathname === '/setup') {
-          console.log('[SetupGuard] Redirecting to /login (setup already complete)');
-          router.push('/login');
-        } else if (!globalSetupStatus.complete && pathname !== '/setup') {
-          console.log('[SetupGuard] Redirecting to /setup (setup not complete)');
-          router.push('/setup');
-        }
-        return;
-      }
-
-      // Prevent multiple simultaneous checks
-      if (globalCheckInProgress) {
-        console.log('[SetupGuard] Check already in progress, waiting...');
-        return;
-      }
-
-      globalCheckInProgress = true;
-
-      try {
-        console.log('[SetupGuard] Checking setup status...');
-        const response = await fetch('http://localhost:41522/api/setup/status', {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json' },
-          cache: 'no-cache'
-        });
-
-        if (!response.ok) {
-          console.log('[SetupGuard] Backend not responding, allowing access');
-          globalSetupStatus = { complete: true, checked: true };
-          if (mounted) {
-            setSetupComplete(true);
-            setIsChecking(false);
-          }
-          globalCheckInProgress = false;
-          return;
-        }
-
-        const data = await response.json();
-        console.log('[SetupGuard] Setup status:', data);
-
-        globalSetupStatus = { complete: data.setupComplete, checked: true };
-
-        if (mounted) {
-          setSetupComplete(data.setupComplete);
-          setIsChecking(false);
-
-          // Handle redirects
-          if (data.setupComplete && pathname === '/setup') {
-            console.log('[SetupGuard] Redirecting to /login (setup already complete)');
-            router.push('/login');
-          } else if (!data.setupComplete && pathname !== '/setup') {
-            console.log('[SetupGuard] Redirecting to /setup (setup not complete)');
-            router.push('/setup');
-          }
-        }
-      } catch (error) {
-        console.error('[SetupGuard] Setup status check failed:', error);
-        globalSetupStatus = { complete: true, checked: true };
-        if (mounted) {
-          setSetupComplete(true);
-          setIsChecking(false);
-        }
-      } finally {
-        globalCheckInProgress = false;
-      }
-    };
-
-    checkSetupStatus();
-
+    fetchSetupStatus().then(status => {
+      if (mounted) setSetupComplete(status);
+    });
     return () => {
       mounted = false;
     };
-  }, [pathname, router]);
+  }, []);
 
-  // Show loading screen while checking setup status
-  if (isChecking) {
+  const target = setupComplete === undefined ? null : firstRunRedirect(pathname, setupComplete);
+
+  useEffect(() => {
+    if (target) router.replace(target);
+  }, [target, router]);
+
+  if (setupComplete === undefined || target) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
         <div className="text-center">
           <Loader2 className="w-12 h-12 animate-spin text-blue-600 mx-auto mb-4" />
-          <p className="text-gray-600">Checking system status...</p>
+          <p className="text-gray-600">
+            {setupComplete === undefined ? 'Checking system status...' : 'Redirecting...'}
+          </p>
         </div>
       </div>
     );
   }
 
-  // If on setup page, always render (setup page handles its own logic)
-  if (pathname === '/setup') {
-    return <>{children}</>;
-  }
-
-  // If setup is complete, render children
-  if (setupComplete) {
-    return <>{children}</>;
-  }
-
-  // If setup is not complete and not on setup page, show loading (will redirect)
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-      <div className="text-center">
-        <Loader2 className="w-12 h-12 animate-spin text-blue-600 mx-auto mb-4" />
-        <p className="text-gray-600">Redirecting to setup...</p>
-      </div>
-    </div>
-  );
+  return <>{children}</>;
 }

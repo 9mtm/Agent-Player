@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/contexts/auth-context';
+import { SetupGuard } from '@/components/setup-guard';
 import { DeveloperModeProvider } from '@/contexts/developer-context';
 import { NotificationProvider } from '@/contexts/notification-context';
 import { ThemeProvider } from '@/contexts/theme-context';
@@ -27,6 +28,8 @@ export default function RootLayout({
         <ThemeProvider>
           <I18nProvider>
             <LocaleProvider>
+              {/* F-01: first-run redirect to /setup runs before any sign-in redirect */}
+              <SetupGuard>
               <AuthProvider>
               <DeveloperModeProvider>
                 <NotificationProvider>
@@ -35,6 +38,7 @@ export default function RootLayout({
                 </NotificationProvider>
               </DeveloperModeProvider>
               </AuthProvider>
+              </SetupGuard>
             </LocaleProvider>
           </I18nProvider>
         </ThemeProvider>

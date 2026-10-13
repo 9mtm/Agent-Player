@@ -16,23 +16,47 @@ function ownerExists(): boolean {
   return Boolean(getDatabase().prepare(OWNER_EXISTS_SQL).get());
 }
 
+/** Like ownerExists(), but false when the database is not usable yet. */
+function ownerExistsSafe(): boolean {
+  try {
+    return ownerExists();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * F-01: setup counts as done once the flag file exists OR an owner account
+ * exists. Installs created by older code have an owner but never wrote the
+ * flag; they must go to login, not to a wizard that can no longer create one.
+ */
+function isSetupDone(): boolean {
+  return existsSync(SETUP_FLAG_FILE) || ownerExistsSafe();
+}
+
 // SECURITY (S0-Q.2): setup steps that change the system only run before setup is complete.
 const SETUP_ONLY_ROUTES = new Set(['/api/setup/check', '/api/setup/database', '/api/setup/python', '/api/setup/complete']);
 
 export default async function setupRoutes(fastify: FastifyInstance) {
   fastify.addHook('onRequest', async (request, reply) => {
     const route = request.routeOptions?.url;
-    if (route && SETUP_ONLY_ROUTES.has(route) && existsSync(SETUP_FLAG_FILE)) {
+    if (!route || !SETUP_ONLY_ROUTES.has(route)) return;
+    // /complete only needs the flag check: it is the step right after the owner
+    // is created (and refuses without an owner). The other steps also lock as
+    // soon as an owner exists.
+    const locked = route === '/api/setup/complete' ? existsSync(SETUP_FLAG_FILE) : isSetupDone();
+    if (locked) {
       return reply.status(403).send({ error: 'Setup already completed' });
     }
   });
 
   // Check if setup is already complete
   fastify.get('/api/setup/status', async (request: FastifyRequest, reply: FastifyReply) => {
-    const isSetupComplete = existsSync(SETUP_FLAG_FILE);
+    const isSetupComplete = isSetupDone();
 
     return reply.send({
       setupComplete: isSetupComplete,
+      setupRequired: !isSetupComplete,
       message: isSetupComplete ? 'Setup already completed' : 'Setup required'
     });
   });

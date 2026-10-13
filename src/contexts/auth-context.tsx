@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import { type Role } from '@/lib/auth/roles';
+import { isPublicPath } from '@/lib/auth/first-run';
 
 export interface User {
     id: string;
@@ -68,13 +69,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Redirect to login if not authenticated (except on public pages)
     useEffect(() => {
         if (!isLoading && !user && typeof window !== 'undefined') {
-            // /avatar-lab is a static dev test page for our own avatar pipeline (no user data).
-            const publicPaths = ['/login', '/register', '/avatar-lab'];
-            const isPublicPath = publicPaths.some(path =>
-                window.location.pathname.startsWith(path)
-            );
-
-            if (!isPublicPath) {
+            // Public pages: /login, /setup (first run, F-01), /avatar-lab.
+            // There is no open self-registration page.
+            if (!isPublicPath(window.location.pathname)) {
                 window.location.href = '/login';
             }
         }

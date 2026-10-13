@@ -1,14 +1,12 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-
-// Define public paths that don't require authentication
-const publicPaths = ['/login', '/register'];
+import { isPublicPath } from '@/lib/auth/first-run';
 
 export function middleware(request: NextRequest) {
     const { pathname } = request.nextUrl;
 
-    // Check if path is public
-    if (publicPaths.some(path => pathname.startsWith(path))) {
+    // Public pages (/login, /setup, /avatar-lab); no open /register page.
+    if (isPublicPath(pathname)) {
         return NextResponse.next();
     }
 
