@@ -46,7 +46,7 @@ setInterval(() => {
   for (const [id, room] of roomSignals) {
     if (room.createdAt < cutoff) roomSignals.delete(id);
   }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref(); // housekeeping only: never keeps the process alive
 
 export async function cameraRoutes(fastify: FastifyInstance): Promise<void> {
 

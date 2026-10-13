@@ -8,6 +8,8 @@ import path from 'path';
  * Audio API Routes
  * Handles Whisper STT, TTS, and audio file serving
  */
+
+const AUDIO_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export async function registerAudioRoutes(fastify: FastifyInstance) {
   const audioService = getAudioService();
   fastify.log.info('[Audio API] ✅ Routes registered');
@@ -100,6 +102,10 @@ export async function registerAudioRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { id: string } }>('/api/audio/download/:id', async (request, reply) => {
     try {
       const { id } = request.params;
+      // SECURITY (S0-A.1): ids are server-generated UUIDs (no path traversal).
+      if (!AUDIO_ID.test(id)) {
+        return reply.status(404).send({ error: 'Audio file not found' });
+      }
 
       const audioPath = path.join(process.cwd(), '.data', 'audio', `${id}.mp3`);
 
@@ -126,6 +132,9 @@ export async function registerAudioRoutes(fastify: FastifyInstance) {
   fastify.delete<{ Params: { id: string } }>('/api/audio/:id', async (request, reply) => {
     try {
       const { id } = request.params;
+      if (!AUDIO_ID.test(id)) {
+        return reply.status(400).send({ error: 'Invalid audio id' });
+      }
 
       const audioPath = path.join(process.cwd(), '.data', 'audio', `${id}.mp3`);
 

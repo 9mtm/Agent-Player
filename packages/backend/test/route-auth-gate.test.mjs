@@ -1,0 +1,271 @@
+// S0-A.1 / S0-A.2 / S0-A.11: global deny-by-default auth gate.
+// Builds the real app (buildServer(), same as server.ts, without listening),
+// enumerates EVERY registered route and checks who may reach it.
+// Run: node --import tsx --test test/route-auth-gate.test.mjs
+// Throwaway DB + cwd, random test-only secrets, fetch stubbed (no network).
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
+
+const backendDir = process.cwd();
+const dir = mkdtempSync(join(tmpdir(), 'ap-route-gate-'));
+mkdirSync(join(dir, '.data'), { recursive: true });
+process.chdir(dir);
+process.env.HOME = dir;
+process.env.DATABASE_PATH = join(dir, '.data', 'agent-player.db');
+process.env.JWT_SECRET = randomBytes(64).toString('hex'); // throwaway, test only
+process.env.ENCRYPTION_KEY = randomBytes(32).toString('hex'); // throwaway, test only
+process.env.NODE_ENV = 'test';
+
+const realFetch = globalThis.fetch;
+globalThis.fetch = async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+
+const quiet = { log: console.log, warn: console.warn, info: console.info };
+console.log = () => {};
+console.info = () => {};
+console.warn = () => {};
+
+const { getDatabase, closeDatabase } = await import(join(backendDir, 'src/db/database.ts'));
+const db = getDatabase();
+await db.initialize();
+const addUser = (id, role, status = 'active') =>
+  db.prepare(`INSERT INTO users (id, email, username, password_hash, role, status, email_verified) VALUES (?, ?, ?, 'x', ?, ?, 1)`)
+    .run(id, `${id}@example.test`, id, role, status);
+addUser('g-owner', 'owner');
+addUser('g-admin', 'admin');
+addUser('g-member', 'user');
+addUser('g-guest', 'guest');
+addUser('g-off', 'owner', 'inactive');
+addUser('g-susp', 'user', 'suspended');
+
+const { buildServer } = await import(join(backendDir, 'src/api/app.ts'));
+const { inboxRoutes } = await import(join(backendDir, 'src/api/routes/inbox.ts'));
+const { createExtensionRouteGuard } = await import(join(backendDir, 'src/plugins/extension-route-access.ts'));
+const gate = await import(join(backendDir, 'src/auth/auth-gate.ts'));
+const { generateToken } = await import(join(backendDir, 'src/auth/jwt.ts'));
+const { beginChannelTurn, CHANNEL_TURN_HEADER } = await import(join(backendDir, 'src/tools/channel-policy.ts'));
+
+const { createInboxSystem } = await import(join(backendDir, 'src/inbox/index.ts'));
+const app = await buildServer({ logger: false });
+// Registered in server.ts start() after the inbox system initializes.
+const inbox = createInboxSystem(db);
+app.decorate('inboxGateway', inbox.inboxGateway);
+app.decorate('messageStore', inbox.messageStore);
+app.decorate('riskAnalyzer', inbox.riskAnalyzer);
+app.decorate('approvalEngine', inbox.approvalEngine);
+await app.register(inboxRoutes);
+// An extension scope exactly as extension-runner.ts mounts one.
+await app.register(async (scope) => {
+  scope.addHook('onRequest', createExtensionRouteGuard({ id: 'demo' }, '/api/ext/demo'));
+  scope.get('/status', async () => ({ ok: true }));
+}, { prefix: '/api/ext/demo' });
+await app.ready();
+
+console.log = quiet.log;
+console.info = quiet.info;
+console.warn = quiet.warn;
+
+test.after(async () => {
+  globalThis.fetch = realFetch;
+  await app.close();
+  closeDatabase();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+const bearer = (id) => ({ authorization: `Bearer ${generateToken(id, 1)}` });
+const concrete = (pattern) => pattern.replace(/:[A-Za-z0-9_]+/g, 'test-param').replace(/\*/g, 'x');
+const routes = app.routeAccessTable.filter((r) => r.method !== 'HEAD' && r.method !== 'OPTIONS');
+const send = (r, headers = {}) => app.inject({ method: r.method, url: concrete(r.url), headers });
+const GATE_401 = 'Authentication required';
+const byGate = (res) => res.statusCode === 401 && res.json().error === GATE_401;
+const label = (r) => `${r.method} ${r.url}`;
+
+test('route table: every route has a known access level and the app is not tiny', () => {
+  assert.ok(routes.length > 500, `only ${routes.length} routes collected`);
+  for (const r of routes) {
+    assert.ok(['public', 'optional', 'service', 'user', 'admin', 'owner', 'extension'].includes(r.access), label(r));
+  }
+  // Only the allow-list can be public / optional (S0-A.11).
+  for (const r of routes.filter((x) => x.access === 'public')) {
+    const k = `${r.method} ${r.url}`;
+    assert.ok(gate.PUBLIC_ROUTES.has(k), `unexpected public route ${k}`);
+  }
+  for (const r of routes.filter((x) => x.access === 'optional')) {
+    assert.ok(gate.OPTIONAL_ROUTES.has(`${r.method} ${r.url}`), `unexpected optional route ${label(r)}`);
+  }
+});
+
+test('anonymous: every non-allow-listed route answers 401', async () => {
+  const guarded = routes.filter((r) => !['public', 'optional', 'extension'].includes(r.access));
+  const leaks = [];
+  for (const r of guarded) {
+    const res = await send(r);
+    if (res.statusCode !== 401) leaks.push(`${label(r)} -> ${res.statusCode}`);
+  }
+  assert.deepEqual(leaks, []);
+  assert.ok(guarded.length > 480, `guarded ${guarded.length}`);
+  console.log(`[route-auth-gate] routes: ${routes.length} total, ${guarded.length} need a token, ` +
+    `${routes.filter((r) => r.access === 'public').length} public, ${routes.filter((r) => r.access === 'optional').length} optional, ` +
+    `${routes.filter((r) => r.access === 'extension').length} extension-guarded`);
+});
+
+test('bad, disabled and suspended tokens get 401 on every guarded route; guests get 403', async () => {
+  const guarded = routes.filter((r) => !['public', 'optional', 'extension'].includes(r.access));
+  const wrong = [];
+  for (const r of guarded) {
+    for (const [who, headers, want] of [
+      ['bad', { authorization: 'Bearer not.a.jwt' }, 401],
+      ['inactive owner', bearer('g-off'), 401],
+      ['suspended user', bearer('g-susp'), 401],
+    ]) {
+      const res = await send(r, headers);
+      if (res.statusCode !== want) wrong.push(`${who}: ${label(r)} -> ${res.statusCode}`);
+    }
+    const isGuestRoute = gate.GUEST_ROUTES.has(`${r.method} ${r.url}`);
+    if (!isGuestRoute) {
+      const res = await send(r, bearer('g-guest'));
+      if (res.statusCode !== 403) wrong.push(`guest: ${label(r)} -> ${res.statusCode}`);
+    }
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('public routes answer without a token', async () => {
+  const health = await app.inject({ method: 'GET', url: '/health' });
+  assert.equal(health.statusCode, 200);
+  assert.equal((await app.inject({ method: 'GET', url: '/' })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/setup/status' })).statusCode, 200);
+  const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'nobody@example.test', password: 'wrong-password-123' } });
+  assert.ok(!byGate(login), `login rejected by the gate: ${login.statusCode} ${login.body}`);
+  const i18n = await app.inject({ method: 'GET', url: '/api/extensions/demo/i18n/en' });
+  assert.ok(!byGate(i18n), `i18n: ${i18n.statusCode}`);
+  const stat = await app.inject({ method: 'GET', url: '/no-such-static-file.txt' });
+  assert.equal(stat.statusCode, 404);
+  // GET only: the public POST routes are login and the setup wizard (whose
+  // handlers would act); their level is checked in the route-table test.
+  for (const r of routes.filter((x) => x.access === 'public' && x.method === 'GET')) {
+    const res = await send(r);
+    assert.ok(!byGate(res), `${label(r)} rejected by the gate`);
+  }
+});
+
+test('optional routes: anonymous passes the gate, a bad token is refused', async () => {
+  for (const r of routes.filter((x) => x.access === 'optional')) {
+    const anon = await send(r);
+    assert.ok(!byGate(anon), `${label(r)} anonymous -> ${anon.statusCode}`);
+    assert.equal((await send(r, { authorization: 'Bearer not.a.jwt' })).statusCode, 401, `${label(r)} bad token`);
+    assert.equal((await send(r, bearer('g-off'))).statusCode, 401, `${label(r)} inactive`);
+  }
+});
+
+test('unknown routes still answer 404, CORS preflight is not blocked', async () => {
+  assert.equal((await app.inject({ method: 'GET', url: '/api/does-not-exist' })).statusCode, 404);
+  const pre = await app.inject({
+    method: 'OPTIONS', url: '/api/agents',
+    headers: { origin: 'http://localhost:41521', 'access-control-request-method': 'GET' },
+  });
+  assert.equal(pre.statusCode, 204);
+});
+
+test('extension routes are skipped by the gate but their own guard still denies', async () => {
+  assert.ok(routes.some((r) => r.access === 'extension' && r.url === '/api/ext/demo/status'));
+  assert.equal((await app.inject({ method: 'GET', url: '/api/ext/demo/status' })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/ext/demo/status', headers: bearer('g-member') })).statusCode, 403);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/ext/demo/status', headers: bearer('g-owner') })).statusCode, 200);
+});
+
+test('signed-in active users reach ordinary routes; the gate attaches nothing from the body', async () => {
+  for (const id of ['g-owner', 'g-admin', 'g-member']) {
+    const res = await app.inject({ method: 'GET', url: '/api/auth/me', headers: bearer(id) });
+    assert.equal(res.statusCode, 200, id);
+  }
+  const guestMe = await app.inject({ method: 'GET', url: '/api/auth/me', headers: bearer('g-guest') });
+  assert.equal(guestMe.statusCode, 200, 'guest may see who they are');
+});
+
+test('POST /api/chat: live channel-turn token passes the gate, unknown token is refused', async () => {
+  const forged = await app.inject({ method: 'POST', url: '/api/chat', headers: { [CHANNEL_TURN_HEADER]: 'f'.repeat(64) }, payload: {} });
+  assert.equal(forged.statusCode, 401);
+  const turn = beginChannelTurn({ channel: 'telegram', conversationId: 'c1' }, 'g-owner');
+  try {
+    // Empty messages: the route answers 400 after the gate let it through.
+    const live = await app.inject({ method: 'POST', url: '/api/chat', headers: { [CHANNEL_TURN_HEADER]: turn.token }, payload: { messages: [] } });
+    assert.equal(live.statusCode, 400, live.body);
+  } finally {
+    turn.end();
+  }
+  const ended = await app.inject({ method: 'POST', url: '/api/chat', headers: { [CHANNEL_TURN_HEADER]: turn.token }, payload: {} });
+  assert.equal(ended.statusCode, 401);
+});
+
+// --- S0-A.2: role tiers -----------------------------------------------------
+
+const OWNER_ONLY = [
+  ['POST', '/api/database/query'], ['POST', '/api/database/restore'], ['GET', '/api/database/stats'],
+  ['POST', '/api/sandbox/execute'], ['PUT', '/api/sandbox/config'],
+  ['POST', '/api/system/restart'],
+  ['POST', '/api/browser/sessions'], ['POST', '/api/browser/sessions/:id/evaluate'],
+  ['GET', '/api/claude-local/sessions'],
+  ['POST', '/api/encryption/keys/rotate'], ['POST', '/api/vault/credentials'],
+  ['POST', '/api/gateway/message'], ['GET', '/api/gateway/sessions/:userId'],
+  ['POST', '/api/ai-tools/:id/install'],
+  ['POST', '/api/scheduler/jobs'], ['POST', '/api/scheduler/jobs/:id/run'],
+  ['POST', '/api/workflows'], ['POST', '/api/workflows/:id/execute'],
+  ['PUT', '/api/audit/config'], ['POST', '/api/audit/cleanup'],
+];
+const OWNER_OR_ADMIN = [
+  ['POST', '/api/marketplace/install'], ['POST', '/api/marketplace/uninstall'], ['POST', '/api/marketplace/process-update/:id'],
+  ['POST', '/api/webhooks'], ['POST', '/api/webhooks/:id/test'], ['POST', '/api/webhooks/trigger'], ['GET', '/api/webhooks'],
+  ['POST', '/api/telephony/numbers/purchase'], ['POST', '/api/telephony/calls/make'], ['GET', '/api/telephony/sessions'],
+  ['GET', '/api/audit/events'], ['GET', '/api/scheduler/jobs'], ['GET', '/api/workflows'],
+  ['POST', '/api/channels/:id/send'], ['GET', '/api/channels/whatsapp/qr'],
+  ['POST', '/api/plugins/:id/enable'],
+  ['POST', '/api/agents'], ['PUT', '/api/agents/:id'], ['POST', '/api/agents/:id/set-primary'],
+  ['PUT', '/api/agents/:id/personality'], ['PUT', '/api/agents/:id/memory'], ['GET', '/api/agents/:id/memory'],
+  ['POST', '/api/evolution/:agentId/evolve'], ['POST', '/api/multi-agent/agents'],
+  ['PUT', '/api/heartbeat/config'], ['POST', '/api/cost-analytics/cleanup'], ['POST', '/api/inbox/cleanup'],
+  ['GET', '/api/dashboard/widgets/team-members'], ['GET', '/api/ai-tools'],
+];
+
+test('tier table: owner-only and owner/admin routes resolve as designed', () => {
+  for (const [m, u] of OWNER_ONLY) {
+    assert.ok(routes.some((r) => r.method === m && r.url === u), `route exists: ${m} ${u}`);
+    assert.equal(gate.resolveRouteAccess(m, u), 'owner', `${m} ${u}`);
+  }
+  for (const [m, u] of OWNER_OR_ADMIN) {
+    assert.ok(routes.some((r) => r.method === m && r.url === u), `route exists: ${m} ${u}`);
+    assert.equal(gate.resolveRouteAccess(m, u), 'admin', `${m} ${u}`);
+  }
+  // A route's own config can raise but never lower the level.
+  assert.equal(gate.resolveRouteAccess('GET', '/api/profile', 'owner'), 'owner');
+  assert.equal(gate.resolveRouteAccess('POST', '/api/database/query', 'public'), 'owner');
+  assert.equal(gate.resolveRouteAccess('GET', '/api/profile', 'public'), 'user');
+  assert.equal(gate.resolveRouteAccess('GET', '/api/profile', 'nonsense'), 'owner');
+});
+
+test('tiers enforced: user/admin tokens get 403 where the tier is higher (handlers never run)', async () => {
+  const wrong = [];
+  for (const [m, u] of OWNER_ONLY) {
+    for (const id of ['g-member', 'g-admin']) {
+      const res = await app.inject({ method: m, url: concrete(u), headers: bearer(id), payload: {} });
+      if (res.statusCode !== 403) wrong.push(`${id} ${m} ${u} -> ${res.statusCode}`);
+    }
+  }
+  for (const [m, u] of OWNER_OR_ADMIN) {
+    const res = await app.inject({ method: m, url: concrete(u), headers: bearer('g-member'), payload: {} });
+    if (res.statusCode !== 403) wrong.push(`member ${m} ${u} -> ${res.statusCode}`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('tiers enforced: the owner passes the gate (safe read-only routes)', async () => {
+  for (const url of ['/api/database/tables', '/api/audit/status', '/api/scheduler/jobs', '/api/webhooks/status']) {
+    const res = await app.inject({ method: 'GET', url, headers: bearer('g-owner') });
+    assert.ok(res.statusCode !== 401 && res.statusCode !== 403, `${url} -> ${res.statusCode} ${res.body.slice(0, 200)}`);
+  }
+  const admin = await app.inject({ method: 'GET', url: '/api/audit/status', headers: bearer('g-admin') });
+  assert.ok(admin.statusCode !== 401 && admin.statusCode !== 403, `admin audit status -> ${admin.statusCode}`);
+});

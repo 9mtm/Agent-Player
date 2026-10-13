@@ -84,6 +84,7 @@ import { registerCsrfProtection } from '../middleware/csrf-protection.js';
 import { registerHttpsEnforcement } from '../middleware/https-enforcement.js';
 import { registerHostCheck } from '../middleware/host-check.js';
 import type { FastifyInstance, FastifyServerOptions } from 'fastify';
+import { registerAuthGate } from '../auth/auth-gate.js';
 
 export interface BuildServerOptions {
   logger?: FastifyServerOptions['logger'];
@@ -150,6 +151,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   // SECURITY: Register HTTPS enforcement middleware (L-01)
   // Redirects HTTP to HTTPS in production mode
   registerHttpsEnforcement(fastify);
+
+  // SECURITY (S0-A.1): deny-by-default auth gate. Registered before any
+  // route plugin so it covers every route (see src/auth/auth-gate.ts).
+  registerAuthGate(fastify);
 
   // Serve static files from public folder (avatars, backgrounds, worlds, etc.)
   const __filename = fileURLToPath(import.meta.url);

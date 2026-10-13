@@ -56,7 +56,13 @@ const removeToken = (): void => {
 
 // Backend API URL
 import { config } from '@/lib/config';
+import { installBackendAuthFetch } from '@/lib/auth/backend-fetch-auth';
 const BACKEND_URL = config.backendUrl;
+
+// SECURITY (S0-A.1): the backend is deny-by-default; send the signed-in
+// user's token on every browser fetch to the backend origin (only there).
+// Installed at module load so it is in place before any page effect runs.
+installBackendAuthFetch(BACKEND_URL, getToken);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
