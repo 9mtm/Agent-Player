@@ -48,6 +48,7 @@ export const DEFAULT_AGENT_TOOLS: readonly string[] = [
   'memory_stats',
   'memory_edit',   // CORE-05: versioned; important memories via owner-approved proposals
   'memory_delete', // CORE-05: versioned (reversible); important memories via proposals
+  'memory_forget', // CORE-07: complete removal; every call needs one-time owner approval (S1.3)
   'storage_search',
 ];
 

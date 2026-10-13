@@ -230,6 +230,8 @@ const OWNER_ONLY = [
   ['POST', '/api/memory/proposals/:id/approve'], ['POST', '/api/memory/proposals/:id/reject'],
   // CORE-05: weekly learning summary
   ['GET', '/api/memory/weekly-summary'], ['POST', '/api/memory/weekly-summary/run'],
+  // CORE-07: forget-all + retention rules
+  ['POST', '/api/memory/forget-all'], ['GET', '/api/memory/retention'], ['PUT', '/api/memory/retention'], ['POST', '/api/memory/retention/run'],
   ['POST', '/api/database/query'], ['POST', '/api/database/restore'], ['GET', '/api/database/stats'],
   ['POST', '/api/sandbox/execute'], ['PUT', '/api/sandbox/config'],
   ['POST', '/api/system/restart'],

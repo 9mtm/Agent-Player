@@ -32,6 +32,7 @@ export const APPROVAL_REQUIRED_TOOLS: Readonly<Record<string, ApprovalCategory>>
   whatsapp_send: 'message',
   // deleting data
   storage_delete: 'delete',
+  memory_forget: 'delete', // CORE-07: complete, irreversible removal
   // spending money
   make_call: 'money',
   trading_execute: 'money',

@@ -135,6 +135,8 @@ export class MemoryTiersService {
         WHERE memory_layer = 'working'
           AND expiry_timestamp IS NOT NULL
           AND expiry_timestamp < ?
+          -- CORE-07 forgetting rule 1: owner, project and people drawers are never expired.
+          AND COALESCE(drawer_kind, CASE WHEN type IN ('skill', 'insight') THEN 'experience' ELSE 'owner' END) NOT IN ('owner', 'project', 'people')
       `).run(now);
 
       if (result.changes > 0) {
@@ -162,6 +164,8 @@ export class MemoryTiersService {
           AND expiry_timestamp IS NOT NULL
           AND expiry_timestamp < ?
           AND importance_score < 0.7
+          -- CORE-07 forgetting rule 1: owner, project and people drawers are never expired.
+          AND COALESCE(drawer_kind, CASE WHEN type IN ('skill', 'insight') THEN 'experience' ELSE 'owner' END) NOT IN ('owner', 'project', 'people')
       `).run(now);
 
       if (result.changes > 0) {

@@ -8,7 +8,6 @@
 import type { IEmbeddingService } from './types.js';
 
 export class EmbeddingService implements IEmbeddingService {
-  private vocabulary: Map<string, number> = new Map();
   private idf: Map<string, number> = new Map();
   private vectorSize = 100;
 
@@ -85,13 +84,17 @@ export class EmbeddingService implements IEmbeddingService {
   }
 
   /**
-   * Get consistent index for a token
+   * Index of a token: a stable hash (FNV-1a) of the token, so the service
+   * keeps no vocabulary of seen words (CORE-07: nothing of a forgotten memory
+   * stays cached in the process) and vectors stay comparable across restarts.
    */
   private getTokenIndex(token: string): number {
-    if (!this.vocabulary.has(token)) {
-      this.vocabulary.set(token, this.vocabulary.size);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < token.length; i++) {
+      h ^= token.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
     }
-    return this.vocabulary.get(token)! % this.vectorSize;
+    return h % this.vectorSize;
   }
 
   /**

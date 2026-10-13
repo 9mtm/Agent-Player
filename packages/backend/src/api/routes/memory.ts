@@ -17,6 +17,8 @@ import { DrawerInputError, normalizeDrawer, ownerScopeFromInput, selectDrawers, 
 import type { Memory, MemoryType, ImportanceLevel, MultiTierLayer } from '../../memory/types.js';
 import { deleteVersioned, learn, saveVersioned, updateVersioned, type LearningCandidate } from '../../memory/learning.js';
 import { memoryVersions } from '../../memory/versions.js';
+import { forgetMemory, listTombstones } from '../../memory/forget.js';
+import { logAudit } from '../../services/audit-logger.js';
 
 const MAX_CONTENT = 50_000;
 const MAX_METADATA_JSON = 64 * 1024;
@@ -303,6 +305,32 @@ export async function memoryRoutes(fastify: FastifyInstance) {
       return reply.code(404).send({ error: 'Memory not found' });
     }
     return { success: true, memoryId: request.params.id, versions };
+  });
+
+  /**
+   * POST /api/memory/:id/forget - Forget one own memory completely (CORE-07):
+   * row, version text, index rows, readable copies and exports. Only a
+   * tombstone (id, time, actor) stays. Another user's memory -> 404.
+   */
+  fastify.post<{ Params: { id: string } }>('/api/memory/:id/forget', async (request, reply) => {
+    const userId = caller(request).id;
+    const result = await forgetMemory(userId, request.params.id, userId);
+    if (!result) return reply.code(404).send({ error: 'Memory not found' });
+    logAudit({
+      event_type: 'data.delete', event_category: 'data_modification', severity: 'info',
+      user_id: userId, ip_address: request.ip, user_agent: request.headers['user-agent'],
+      request_method: request.method, request_path: request.routeOptions?.url ?? undefined,
+      resource_type: 'memory', resource_id: result.memoryId, action: 'memory.forget', success: true,
+      metadata: { drawer: result.drawerId, cancelledProposals: result.cancelledProposals.length },
+    });
+    return { success: true, forgotten: result };
+  });
+
+  /**
+   * GET /api/memory/forgotten - The caller's tombstones (id, drawer, time, actor; no text)
+   */
+  fastify.get('/api/memory/forgotten', async (request) => {
+    return { success: true, tombstones: listTombstones(caller(request).id) };
   });
 
   /**

@@ -211,6 +211,18 @@ export class MemoryIndexer implements IMemoryIndexer {
   }
 
   /**
+   * Remove a memory for good (CORE-07 forget): the index rows, and the
+   * full-text index is merged so no old token segment keeps its words.
+   * Freed pages are zeroed (secure_delete) and the WAL is checkpointed.
+   */
+  async purge(memoryId: string): Promise<void> {
+    this.db.pragma('secure_delete = ON');
+    await this.remove(memoryId);
+    this.db.prepare(`INSERT INTO memory_fts(memory_fts) VALUES('optimize')`).run();
+    try { this.db.pragma('wal_checkpoint(TRUNCATE)'); } catch { /* busy: checkpointed later */ }
+  }
+
+  /**
    * Hybrid search combining vector, keyword, and recency
    */
   async search(

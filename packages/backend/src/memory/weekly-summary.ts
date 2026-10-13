@@ -29,6 +29,8 @@ export interface DrawerDigest {
   created: number;
   updated: number;
   deleted: number;
+  /** Forgotten completely (CORE-07): counted, never shown. */
+  forgotten: number;
   pending: number;
   items: DigestItem[];
 }
@@ -37,7 +39,7 @@ export interface WeeklyDigest {
   periodStart: string;
   periodEnd: string;
   drawers: DrawerDigest[];
-  totals: { total: number; created: number; updated: number; deleted: number; pending: number };
+  totals: { total: number; created: number; updated: number; deleted: number; forgotten: number; pending: number };
 }
 
 export type Summarizer = (digestText: string) => Promise<{ text: string; model: string } | null>;
@@ -61,7 +63,7 @@ export function buildWeeklyDigest(userId: string, now = new Date(), days = SUMMA
   const get = (d: DrawerRef) => {
     const id = drawerId(d);
     let entry = byDrawer.get(id);
-    if (!entry) { entry = { drawerId: id, total: 0, created: 0, updated: 0, deleted: 0, pending: 0, items: [] }; byDrawer.set(id, entry); }
+    if (!entry) { entry = { drawerId: id, total: 0, created: 0, updated: 0, deleted: 0, forgotten: 0, pending: 0, items: [] }; byDrawer.set(id, entry); }
     return entry;
   };
 
@@ -72,13 +74,14 @@ export function buildWeeklyDigest(userId: string, now = new Date(), days = SUMMA
   const rows = db.prepare(`
     SELECT v.memory_id, v.drawer_kind, v.drawer_key, v.change, v.created_at, m.content AS current
       FROM memory_versions v LEFT JOIN memories m ON m.id = v.memory_id AND m.user_id = v.user_id
-     WHERE v.user_id = ? AND v.created_at >= ? AND v.created_at <= ? AND v.change IN ('create', 'update', 'delete')
+     WHERE v.user_id = ? AND v.created_at >= ? AND v.created_at <= ? AND v.change IN ('create', 'update', 'delete', 'forget')
      ORDER BY v.created_at ASC, v.memory_id
-  `).all(userId, start, end) as Array<{ memory_id: string; drawer_kind: string; drawer_key: string; change: 'create' | 'update' | 'delete'; created_at: string; current: string | null }>;
+  `).all(userId, start, end) as Array<{ memory_id: string; drawer_kind: string; drawer_key: string; change: 'create' | 'update' | 'delete' | 'forget'; created_at: string; current: string | null }>;
   for (const r of rows) {
     const d = drawerOf(r.drawer_kind, r.drawer_key);
     if (!d) continue;
     const e = get(d);
+    if (r.change === 'forget') { e.forgotten++; e.items = e.items.filter((i) => i.memoryId !== r.memory_id); continue; }
     if (r.change === 'create') e.created++;
     else if (r.change === 'update') e.updated++;
     else e.deleted++;
@@ -101,8 +104,8 @@ export function buildWeeklyDigest(userId: string, now = new Date(), days = SUMMA
     .sort((a, b) => a.drawerId.localeCompare(b.drawerId));
   const totals = drawers.reduce((t, d) => ({
     total: t.total + d.total, created: t.created + d.created, updated: t.updated + d.updated,
-    deleted: t.deleted + d.deleted, pending: t.pending + d.pending,
-  }), { total: 0, created: 0, updated: 0, deleted: 0, pending: 0 });
+    deleted: t.deleted + d.deleted, forgotten: t.forgotten + d.forgotten, pending: t.pending + d.pending,
+  }), { total: 0, created: 0, updated: 0, deleted: 0, forgotten: 0, pending: 0 });
   return { userId, periodStart: start, periodEnd: end, drawers, totals };
 }
 
@@ -110,11 +113,11 @@ export function buildWeeklyDigest(userId: string, now = new Date(), days = SUMMA
 export function renderDigest(d: WeeklyDigest): string {
   const lines = [
     `What I learned this week (${d.periodStart.slice(0, 10)} to ${d.periodEnd.slice(0, 10)})`,
-    `New ${d.totals.created}, changed ${d.totals.updated}, deleted ${d.totals.deleted}; ${d.totals.pending} waiting for your approval; ${d.totals.total} memories in total.`,
+    `New ${d.totals.created}, changed ${d.totals.updated}, deleted ${d.totals.deleted}, forgotten ${d.totals.forgotten ?? 0}; ${d.totals.pending} waiting for your approval; ${d.totals.total} memories in total.`,
   ];
   for (const dr of d.drawers) {
-    if (!dr.created && !dr.updated && !dr.deleted && !dr.pending) continue;
-    lines.push('', `## ${dr.drawerId}: ${dr.total} memories; new ${dr.created}, changed ${dr.updated}, deleted ${dr.deleted}, waiting ${dr.pending}`);
+    if (!dr.created && !dr.updated && !dr.deleted && !dr.forgotten && !dr.pending) continue;
+    lines.push('', `## ${dr.drawerId}: ${dr.total} memories; new ${dr.created}, changed ${dr.updated}, deleted ${dr.deleted}, forgotten ${dr.forgotten ?? 0}, waiting ${dr.pending}`);
     for (const i of dr.items) {
       const label = i.change === 'create' ? 'new' : i.change === 'update' ? 'changed' : 'deleted';
       lines.push(`- ${label}: ${i.preview ?? '(removed)'}`);
