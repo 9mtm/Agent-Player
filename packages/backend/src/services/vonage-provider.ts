@@ -6,7 +6,7 @@ import type {
   MakeCallParams,
   CallInfo,
 } from './telephony-service.js';
-import { getCredentialStorage } from '../credentials/index.js';
+import { TELEPHONY_KEYS, getTelephonySecret } from '../telephony/credentials.js';
 
 /**
  * Vonage (Nexmo) Provider Implementation
@@ -63,12 +63,10 @@ export class VonageProvider implements TelephonyProvider {
    */
   private async loadCredentialsFromDatabase() {
     try {
-      const credStorage = getCredentialStorage();
-
-      const dbApiKey = await credStorage.get('telephony.vonage.api_key');
-      const dbApiSecret = await credStorage.get('telephony.vonage.api_secret');
-      const dbAppId = await credStorage.get('telephony.vonage.application_id');
-      const dbPrivateKey = await credStorage.get('telephony.vonage.private_key');
+      const dbApiKey = await getTelephonySecret(TELEPHONY_KEYS.vonageApiKey);
+      const dbApiSecret = await getTelephonySecret(TELEPHONY_KEYS.vonageApiSecret);
+      const dbAppId = await getTelephonySecret(TELEPHONY_KEYS.vonageApplicationId);
+      const dbPrivateKey = await getTelephonySecret(TELEPHONY_KEYS.vonagePrivateKey);
 
       if (dbApiKey && dbApiSecret) {
         this.apiKey = dbApiKey;

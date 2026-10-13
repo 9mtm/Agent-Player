@@ -10,17 +10,14 @@ import {
   handleRecordingWebhook,
 } from '../../telephony/voice-handler.js';
 import { processIvrSelection } from '../../telephony/ivr-engine.js';
-import { getCredentialStorage } from '../../credentials/index.js';
-import { isMaskedSecret } from '../../credentials/secret-mask.js';
+import { maskSecret } from '../../credentials/secret-mask.js';
+import { authorizeActiveRole, OWNER_OR_ADMIN } from '../../auth/route-guards.js';
+import {
+  TELEPHONY_KEYS,
+  getTelephonySecret,
+  setTelephonySecret,
+} from '../../telephony/credentials.js';
 import { randomBytes } from 'crypto';
-
-/**
- * Helper: Mask credential (show first 4 and last 4 characters)
- */
-function maskCredential(value: string): string {
-  if (!value || value.length < 8) return '••••••••';
-  return `${value.substring(0, 4)}••••${value.substring(value.length - 4)}`;
-}
 
 /**
  * Telephony / Assistant Center API Routes
@@ -526,29 +523,28 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
   // ════════════════════════════════════════════════════════════════════════════
 
   // GET /api/telephony/settings/credentials - Get current credentials (masked)
+  // Owner/admin only; secrets are masked (S0-Q.4), never returned in full.
   fastify.get('/api/telephony/settings/credentials', async (request, reply) => {
+    if (authorizeActiveRole(request, reply, OWNER_OR_ADMIN) === null) return reply;
     try {
-      const credStorage = getCredentialStorage();
-
-      // Get credentials from database
-      const twilioSid = await credStorage.get('telephony.twilio.account_sid');
-      const twilioToken = await credStorage.get('telephony.twilio.auth_token');
-      const googleProjectId = await credStorage.get('telephony.google.project_id');
-      const googleCreds = await credStorage.get('telephony.google.credentials_json');
-      const publicUrl = await credStorage.get('telephony.public_url');
+      const twilioSid = await getTelephonySecret(TELEPHONY_KEYS.twilioAccountSid);
+      const twilioToken = await getTelephonySecret(TELEPHONY_KEYS.twilioAuthToken);
+      const googleProjectId = await getTelephonySecret(TELEPHONY_KEYS.googleProjectId);
+      const googleCreds = await getTelephonySecret(TELEPHONY_KEYS.googleCredentialsJson);
+      const publicUrl = await getTelephonySecret(TELEPHONY_KEYS.publicUrl);
 
       // Return masked credentials (only show if exists)
       return reply.send({
         success: true,
         credentials: {
           twilio: {
-            accountSid: twilioSid ? maskCredential(twilioSid) : null,
-            authToken: twilioToken ? '••••••••••••••••' : null,
+            accountSid: twilioSid ? maskSecret(twilioSid) : null,
+            authToken: twilioToken ? maskSecret(twilioToken) : null,
             configured: !!(twilioSid && twilioToken),
           },
           google: {
             projectId: googleProjectId || null,
-            credentialsJson: googleCreds ? '••••••••' : null,
+            credentialsJson: googleCreds ? maskSecret(googleCreds) : null,
             configured: !!(googleProjectId && googleCreds),
           },
           publicUrl: publicUrl || process.env.PUBLIC_URL || null,
@@ -570,32 +566,18 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
       publicUrl?: string;
     };
   }>('/api/telephony/settings/credentials', async (request, reply) => {
+    const callerId = authorizeActiveRole(request, reply, OWNER_OR_ADMIN);
+    if (callerId === null) return reply;
     try {
-      const { twilioAccountSid, twilioAuthToken, googleProjectId, googleCredentialsJson, publicUrl } = request.body;
+      const { twilioAccountSid, twilioAuthToken, googleProjectId, googleCredentialsJson, publicUrl } = request.body || {};
 
-      const credStorage = getCredentialStorage();
-
-      // A masked value echoed back by the UI (e.g. "••••") means "keep the stored secret"
-      // Save Twilio credentials
-      if (twilioAccountSid && !isMaskedSecret(twilioAccountSid)) {
-        await credStorage.set('telephony.twilio.account_sid', twilioAccountSid);
-      }
-      if (twilioAuthToken && !isMaskedSecret(twilioAuthToken)) {
-        await credStorage.set('telephony.twilio.auth_token', twilioAuthToken);
-      }
-
-      // Save Google credentials
-      if (googleProjectId) {
-        await credStorage.set('telephony.google.project_id', googleProjectId);
-      }
-      if (googleCredentialsJson && !isMaskedSecret(googleCredentialsJson)) {
-        await credStorage.set('telephony.google.credentials_json', googleCredentialsJson);
-      }
-
-      // Save public URL
-      if (publicUrl) {
-        await credStorage.set('telephony.public_url', publicUrl);
-      }
+      // Stored encrypted for the owner. Empty or masked values (e.g. "••••abcd"
+      // echoed back by the UI) keep the stored secret.
+      await setTelephonySecret(TELEPHONY_KEYS.twilioAccountSid, twilioAccountSid, callerId);
+      await setTelephonySecret(TELEPHONY_KEYS.twilioAuthToken, twilioAuthToken, callerId);
+      await setTelephonySecret(TELEPHONY_KEYS.googleProjectId, googleProjectId, callerId);
+      await setTelephonySecret(TELEPHONY_KEYS.googleCredentialsJson, googleCredentialsJson, callerId);
+      await setTelephonySecret(TELEPHONY_KEYS.publicUrl, publicUrl, callerId);
 
       fastify.log.info('[Telephony] Credentials updated successfully');
 
@@ -614,19 +596,18 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
   fastify.post<{
     Body: { provider: 'twilio' | 'google' };
   }>('/api/telephony/settings/test-connection', async (request, reply) => {
+    if (authorizeActiveRole(request, reply, OWNER_OR_ADMIN) === null) return reply;
     try {
-      const { provider } = request.body;
+      const { provider } = request.body || ({} as { provider?: 'twilio' | 'google' });
 
       if (!provider) {
         return reply.status(400).send({ error: 'provider is required (twilio or google)' });
       }
 
-      const credStorage = getCredentialStorage();
-
       if (provider === 'twilio') {
         // Test Twilio connection
-        const accountSid = await credStorage.get('telephony.twilio.account_sid') || process.env.TWILIO_ACCOUNT_SID;
-        const authToken = await credStorage.get('telephony.twilio.auth_token') || process.env.TWILIO_AUTH_TOKEN;
+        const accountSid = await getTelephonySecret(TELEPHONY_KEYS.twilioAccountSid) || process.env.TWILIO_ACCOUNT_SID;
+        const authToken = await getTelephonySecret(TELEPHONY_KEYS.twilioAuthToken) || process.env.TWILIO_AUTH_TOKEN;
 
         if (!accountSid || !authToken) {
           return reply.status(400).send({
@@ -653,8 +634,8 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
         });
       } else if (provider === 'google') {
         // Test Google Voice connection
-        const projectId = await credStorage.get('telephony.google.project_id') || process.env.GOOGLE_CLOUD_PROJECT_ID;
-        const credsJson = await credStorage.get('telephony.google.credentials_json') || process.env.GOOGLE_CLOUD_CREDENTIALS;
+        const projectId = await getTelephonySecret(TELEPHONY_KEYS.googleProjectId) || process.env.GOOGLE_CLOUD_PROJECT_ID;
+        const credsJson = await getTelephonySecret(TELEPHONY_KEYS.googleCredentialsJson) || process.env.GOOGLE_CLOUD_CREDENTIALS;
 
         if (!projectId || !credsJson) {
           return reply.status(400).send({

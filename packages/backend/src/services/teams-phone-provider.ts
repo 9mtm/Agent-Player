@@ -6,7 +6,7 @@ import type {
   MakeCallParams,
   CallInfo,
 } from './telephony-service.js';
-import { getCredentialStorage } from '../credentials/index.js';
+import { TELEPHONY_KEYS, getTelephonySecret, setTelephonySecret } from '../telephony/credentials.js';
 
 /**
  * Microsoft Teams Phone Provider Implementation
@@ -33,12 +33,10 @@ export class TeamsPhoneProvider implements TelephonyProvider {
    */
   private async loadCredentialsFromDatabase() {
     try {
-      const credStorage = getCredentialStorage();
-
-      this.tenantId = await credStorage.get('telephony.teams.tenant_id') || '';
-      this.clientId = await credStorage.get('telephony.teams.client_id') || '';
-      this.clientSecret = await credStorage.get('telephony.teams.client_secret') || '';
-      this.accessToken = await credStorage.get('telephony.teams.access_token') || '';
+      this.tenantId = await getTelephonySecret(TELEPHONY_KEYS.teamsTenantId) || '';
+      this.clientId = await getTelephonySecret(TELEPHONY_KEYS.teamsClientId) || '';
+      this.clientSecret = await getTelephonySecret(TELEPHONY_KEYS.teamsClientSecret) || '';
+      this.accessToken = await getTelephonySecret(TELEPHONY_KEYS.teamsAccessToken) || '';
 
       if (!this.tenantId || !this.clientId || !this.clientSecret) {
         throw new Error('Teams Phone credentials not configured');
@@ -92,8 +90,7 @@ export class TeamsPhoneProvider implements TelephonyProvider {
       this.accessToken = data.access_token;
 
       // Store token in database
-      const credStorage = getCredentialStorage();
-      await credStorage.set('telephony.teams.access_token', this.accessToken);
+      await setTelephonySecret(TELEPHONY_KEYS.teamsAccessToken, this.accessToken);
 
       // Initialize client
       this.client = Client.init({

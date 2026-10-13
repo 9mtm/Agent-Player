@@ -6,7 +6,7 @@ import type {
   MakeCallParams,
   CallInfo,
 } from './telephony-service.js';
-import { getCredentialStorage } from '../credentials/index.js';
+import { TELEPHONY_KEYS, getTelephonySecret } from '../telephony/credentials.js';
 
 /**
  * Twilio Provider Implementation
@@ -41,11 +41,9 @@ export class TwilioProvider implements TelephonyProvider {
    */
   private async loadCredentialsFromDatabase() {
     try {
-      const credStorage = getCredentialStorage();
-
       // Read from database - these take priority over .env
-      const dbSid = await credStorage.get('telephony.twilio.account_sid');
-      const dbToken = await credStorage.get('telephony.twilio.auth_token');
+      const dbSid = await getTelephonySecret(TELEPHONY_KEYS.twilioAccountSid);
+      const dbToken = await getTelephonySecret(TELEPHONY_KEYS.twilioAuthToken);
 
       if (dbSid && dbToken) {
         this.accountSid = dbSid;
