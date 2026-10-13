@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { extensionsAPI, Extension, ChannelConfig, SetupGuide } from '@/lib/backend/client';
+import { authHeaders } from '@/lib/auth/headers';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -1311,7 +1312,7 @@ function AgentTab() {
       }
 
       // Load AI provider settings from backend
-      const response = await fetch(`${BACKEND_URL}/api/settings`);
+      const response = await fetch(`${BACKEND_URL}/api/settings`, { headers: authHeaders() });
       if (response.ok) {
         const data = await response.json();
         if (data.success && data.settings) {
@@ -1348,7 +1349,7 @@ function AgentTab() {
       // Save AI provider settings to backend
       const response = await fetch(`${BACKEND_URL}/api/settings`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           provider: providerSettings.provider,
           local: providerSettings.local,

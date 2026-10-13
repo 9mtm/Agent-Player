@@ -6,12 +6,18 @@ import type { FastifyInstance } from 'fastify';
 import { handleError } from '../error-handler.js';
 import { getSettingsManager } from '../../settings/index.js';
 import type { AgentSettings } from '../../settings/types.js';
+import { authorizeActiveRole, OWNER_OR_ADMIN } from '../../auth/route-guards.js';
 
 export async function settingsRoutes(fastify: FastifyInstance) {
   const settingsManager = getSettingsManager();
 
+  // SECURITY (S0-Q.15): reading the (masked) provider settings needs an active
+  // owner/admin; changing them (provider, URLs, API keys) and /test, which makes
+  // outbound calls with the stored keys, need the active owner.
+
   // GET /api/settings - Get current settings
   fastify.get('/api/settings', async (request, reply) => {
+    if (authorizeActiveRole(request, reply, OWNER_OR_ADMIN) === null) return reply;
     const settings = settingsManager.getSettingsMasked();
 
     return {
@@ -24,6 +30,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   fastify.put<{ Body: Partial<AgentSettings> }>(
     '/api/settings',
     async (request, reply) => {
+      if (authorizeActiveRole(request, reply, ['owner']) === null) return reply;
       const updates = request.body;
 
       try {
@@ -45,7 +52,8 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: { provider: 'claude' | 'openai' } }>(
     '/api/settings/test',
     async (request, reply) => {
-      const { provider } = request.body;
+      if (authorizeActiveRole(request, reply, ['owner']) === null) return reply;
+      const { provider } = request.body || ({} as { provider?: string });
       const settings = settingsManager.getSettings();
 
       try {
