@@ -1,6 +1,8 @@
 // S0-Q.13: no open self-registration; only an active owner/admin creates accounts.
 // S0-Q.14: /api/credentials* need an active owner/admin and are scoped to that
 // user; the onboarding (terminal wizard) routes are not reachable anonymously.
+// S0-Q.16: the owner sees and manages every user's credentials (masked only),
+// and each such access is audit-logged; admins keep only their own.
 // Run: node --import tsx --test test/register-credentials-auth.test.mjs
 // No network: any fetch fails the test.
 import test from 'node:test';
@@ -113,7 +115,7 @@ test('S0-Q.14: every credential route answers 401 without a token and 403 for a 
   assert.ok(await getCredentialManager().get(sysCred.id)); // nothing was deleted
 });
 
-test('S0-Q.14: credentials are scoped to the caller (owner also sees unowned system ones)', async () => {
+test('S0-Q.14/16: admins are scoped to their own credentials; the owner sees all of them', async () => {
   const ownerCreate = await req('POST', '/api/credentials', bearer('u-owner'), { ...cred('owner-key'), userId: 'u-admin' });
   assert.equal(ownerCreate.statusCode, 200, ownerCreate.body);
   const ownerKey = ownerCreate.json().credential.id;
@@ -125,7 +127,7 @@ test('S0-Q.14: credentials are scoped to the caller (owner also sees unowned sys
 
   const names = async (id, query = '') =>
     (await req('GET', `/api/credentials${query}`, bearer(id))).json().credentials.map(c => c.name).sort();
-  assert.deepEqual(await names('u-owner'), ['owner-key', 'system-key']);
+  assert.deepEqual(await names('u-owner'), ['admin-key', 'owner-key', 'system-key']); // S0-Q.16
   assert.deepEqual(await names('u-admin'), ['admin-key']);
   assert.deepEqual(await names('u-admin', '?userId=u-owner'), ['admin-key']); // query userId ignored
 
@@ -139,8 +141,8 @@ test('S0-Q.14: credentials are scoped to the caller (owner also sees unowned sys
     assert.equal((await req('DELETE', `/api/credentials/${id}`, bearer('u-admin'))).statusCode, 404);
     assert.ok(await getCredentialManager().get(id));
   }
-  // ...and the owner cannot touch the admin's.
-  assert.equal((await req('GET', `/api/credentials/${adminKey}`, bearer('u-owner'))).statusCode, 404);
+  // S0-Q.16: the owner may read the admin's credential (covered in detail below).
+  assert.equal((await req('GET', `/api/credentials/${adminKey}`, bearer('u-owner'))).statusCode, 200);
   assert.equal((await req('GET', `/api/credentials/${adminKey}`, bearer('u-admin'))).statusCode, 200);
   assert.equal((await req('GET', `/api/credentials/${sys.id}?decrypt=true`, bearer('u-owner'))).statusCode, 200);
 
@@ -156,10 +158,82 @@ test('S0-Q.14: credentials are scoped to the caller (owner also sees unowned sys
   assert.equal(imp.statusCode, 200, imp.body);
   assert.equal((await getCredentialManager().get(ownerKey)).name, 'owner-key');
   assert.deepEqual(await names('u-admin'), ['admin-key', 'forged']);
-  assert.deepEqual(await names('u-owner'), ['owner-key', 'system-key']);
+  assert.deepEqual(await names('u-owner'), ['admin-key', 'forged', 'owner-key', 'system-key']);
 
   // Delete of an in-scope credential works.
   assert.equal((await req('DELETE', `/api/credentials/${adminKey}`, bearer('u-admin'))).statusCode, 200);
+});
+
+// ---- S0-Q.16: owner manages every user's credentials, audited -------------
+const auditRows = (action) => db.prepare(
+  `SELECT event_type, user_id, resource_type, resource_id, action, metadata FROM audit_logs WHERE action = ? ORDER BY id`
+).all(action);
+
+test('S0-Q.16: owner lists/reads/updates/deletes another user\'s credential masked; each access is audited', async () => {
+  const secret = `admin-only-secret-${randomBytes(6).toString('hex')}`;
+  const created = await req('POST', '/api/credentials', bearer('u-admin'), { name: 'admin-q16', type: 'api_key', value: secret });
+  assert.equal(created.statusCode, 200, created.body);
+  const id = created.json().credential.id;
+  const before = db.prepare('SELECT COUNT(*) AS n FROM audit_logs').get().n;
+
+  // The admin's own access is not a cross-user access: no audit entry.
+  assert.equal((await req('GET', '/api/credentials?decrypt=true', bearer('u-admin'))).statusCode, 200);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM audit_logs').get().n, before);
+
+  // List: the owner sees it, masked, with its owner user id.
+  const list = await req('GET', '/api/credentials?decrypt=true', bearer('u-owner'));
+  assert.equal(list.statusCode, 200);
+  assert.doesNotMatch(list.body, new RegExp(secret));
+  const row = list.json().credentials.find(c => c.id === id);
+  assert.ok(row, 'owner sees the admin credential');
+  assert.equal(row.userId, 'u-admin');
+  assert.equal(row.value, `••••${secret.slice(-4)}`);
+  const listAudit = auditRows('credentials.list.other_user').at(-1);
+  assert.equal(listAudit.event_type, 'data.read');
+  assert.equal(listAudit.user_id, 'u-owner');
+  assert.ok(JSON.parse(listAudit.metadata).credentialIds.includes(id));
+  assert.ok(JSON.parse(listAudit.metadata).ownerUserIds.includes('u-admin'));
+
+  // Get / masked value: masked, audited.
+  const one = await req('GET', `/api/credentials/${id}?decrypt=true`, bearer('u-owner'));
+  assert.equal(one.statusCode, 200);
+  assert.doesNotMatch(one.body, new RegExp(secret));
+  const val = await req('GET', `/api/credentials/${id}/value`, bearer('u-owner'));
+  assert.equal(val.statusCode, 200);
+  assert.doesNotMatch(val.body, new RegExp(secret));
+  assert.equal(auditRows('credentials.get.other_user').at(-1).resource_id, id);
+  assert.equal(auditRows('credentials.value_masked.other_user').at(-1).resource_id, id);
+
+  // Update: works, audited, ownership unchanged, no value in the audit log.
+  const upd = await req('PUT', `/api/credentials/${id}`, bearer('u-owner'), { description: 'rotated by owner' });
+  assert.equal(upd.statusCode, 200, upd.body);
+  assert.equal((await getCredentialManager().get(id)).userId, 'u-admin');
+  const updAudit = auditRows('credentials.update.other_user').at(-1);
+  assert.equal(updAudit.event_type, 'data.update');
+  assert.equal(updAudit.resource_type, 'credential');
+  assert.equal(updAudit.resource_id, id);
+
+  // The admin still cannot see the owner's credentials.
+  const ownerKey = (await getCredentialManager().list('u-owner'))[0];
+  assert.equal((await req('GET', `/api/credentials/${ownerKey.id}`, bearer('u-admin'))).statusCode, 404);
+
+  // Delete: works, audited.
+  const del = await req('DELETE', `/api/credentials/${id}`, bearer('u-owner'));
+  assert.equal(del.statusCode, 200, del.body);
+  assert.equal(await getCredentialManager().get(id), null);
+  const delAudit = auditRows('credentials.delete.other_user').at(-1);
+  assert.equal(delAudit.event_type, 'data.delete');
+  assert.equal(delAudit.resource_id, id);
+
+  // No secret value ever reaches the audit log.
+  const all = db.prepare('SELECT * FROM audit_logs').all();
+  assert.doesNotMatch(JSON.stringify(all), new RegExp(secret));
+  assert.doesNotMatch(JSON.stringify(all), /admin-q16/);
+
+  // The owner's own credentials are not audited as cross-user access.
+  const n = auditRows('credentials.get.other_user').length;
+  assert.equal((await req('GET', `/api/credentials/${ownerKey.id}`, bearer('u-owner'))).statusCode, 200);
+  assert.equal(auditRows('credentials.get.other_user').length, n);
 });
 
 // ---- S0-Q.14: onboarding (terminal wizard) -------------------------------

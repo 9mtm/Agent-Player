@@ -13,6 +13,7 @@ import { getCredentialManager } from '../../credentials/manager.js';
 import { getCredentialStorage } from '../../credentials/storage.js';
 import { CredentialType } from '../../credentials/types.js';
 import { maskSecret } from '../../credentials/secret-mask.js';
+import { logAudit, type AuditEventType } from '../../services/audit-logger.js';
 import type {
   CreateCredentialRequest,
   UpdateCredentialRequest
@@ -21,9 +22,12 @@ import type {
 /**
  * SECURITY (S0-Q.14): every /api/credentials* route needs an active owner or
  * admin (bearer token). The user always comes from the token, never from the
- * query or body. Scope: a caller sees and manages the credentials they own;
- * the owner also manages unowned (system-wide, user_id NULL) credentials such
- * as agent API keys. Credentials of other users answer 404.
+ * query or body. Scope: an admin sees and manages only the credentials they
+ * own. The owner (S0-Q.16, Mohamed's Q-8 answer) sees and manages every
+ * credential: their own, unowned system-wide ones (user_id NULL, e.g. agent API
+ * keys) and other users'. Values are always masked, and every access by the
+ * owner to another user's credential is written to the audit log. Out-of-scope
+ * credentials answer 404.
  */
 interface Caller { id: string; role: string }
 
@@ -32,8 +36,47 @@ function callerOf(request: FastifyRequest): Caller {
 }
 
 function inScope(caller: Caller, ownerId: string | null | undefined): boolean {
-  if (ownerId) return ownerId === caller.id;
-  return caller.role === 'owner';
+  if (caller.role === 'owner') return true;
+  return !!ownerId && ownerId === caller.id;
+}
+
+/** True when the credential belongs to a user other than the caller. */
+function isOtherUsers(caller: Caller, ownerId: string | null | undefined): boolean {
+  return !!ownerId && ownerId !== caller.id;
+}
+
+/**
+ * Audit the owner's access to other users' credentials (S0-Q.16).
+ * Only ids and owner user ids are logged, never names or values.
+ */
+function auditCrossUser(
+  request: FastifyRequest,
+  event: Extract<AuditEventType, `data.${string}`>,
+  action: string,
+  credentials: Array<{ id: string; userId?: string | null }>
+): void {
+  const caller = callerOf(request);
+  const others = credentials.filter(c => isOtherUsers(caller, c.userId));
+  if (others.length === 0) return;
+  logAudit({
+    event_type: event,
+    event_category: event === 'data.read' || event === 'data.export' ? 'data_access' : 'data_modification',
+    severity: event === 'data.delete' ? 'warning' : 'info',
+    user_id: caller.id,
+    ip_address: request.ip,
+    user_agent: request.headers['user-agent'],
+    request_method: request.method,
+    request_path: request.routeOptions?.url ?? undefined,
+    resource_type: 'credential',
+    resource_id: others.length === 1 ? others[0].id : undefined,
+    action: `credentials.${action}.other_user`,
+    success: true,
+    metadata: {
+      count: others.length,
+      credentialIds: others.map(c => c.id),
+      ownerUserIds: [...new Set(others.map(c => c.userId))],
+    },
+  });
 }
 
 export async function credentialsRoutes(fastify: FastifyInstance) {
@@ -57,12 +100,10 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     return credential && inScope(callerOf(request), credential.userId) ? credential : null;
   };
 
-  /** Credentials visible to the caller: their own, plus unowned ones for the owner. */
+  /** Credentials visible to the caller: their own; every credential for the owner. */
   const listScoped = async (caller: Caller) => {
-    const own = await manager.list(caller.id);
-    if (caller.role !== 'owner') return own;
-    const unowned = (await storage.getAll()).filter(c => !c.userId);
-    return [...own, ...unowned];
+    if (caller.role !== 'owner') return manager.list(caller.id);
+    return storage.getAll();
   };
 
   /**
@@ -87,6 +128,7 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     } else {
       credentials = await listScoped(caller);
     }
+    auditCrossUser(request, 'data.read', 'list', credentials);
 
     // Remove sensitive data from response (unless decrypt=true)
     const safe = await Promise.all(credentials.map(async c => {
@@ -138,6 +180,7 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
       if (!credential) {
         return reply.code(404).send({ error: 'Credential not found' });
       }
+      auditCrossUser(request, 'data.read', 'get', [credential]);
 
       const safe: Record<string, any> = {
         id: credential.id,
@@ -206,12 +249,14 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
       const { id } = request.params;
       const updates = request.body as UpdateCredentialRequest;
 
-      if (!(await getScoped(request, id))) {
+      const existing = await getScoped(request, id);
+      if (!existing) {
         return reply.code(404).send({ error: 'Credential not found' });
       }
 
       try {
         await manager.update(id, updates);
+        auditCrossUser(request, 'data.update', 'update', [existing]);
         const updated = await manager.get(id);
 
         return {
@@ -238,12 +283,14 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const { id } = request.params;
 
-      if (!(await getScoped(request, id))) {
+      const existing = await getScoped(request, id);
+      if (!existing) {
         return reply.code(404).send({ error: 'Credential not found' });
       }
 
       try {
         await manager.delete(id);
+        auditCrossUser(request, 'data.delete', 'delete', [existing]);
 
         return {
           success: true,
@@ -266,9 +313,11 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const { id } = request.params;
 
-      if (!(await getScoped(request, id))) {
+      const existing = await getScoped(request, id);
+      if (!existing) {
         return reply.code(404).send({ error: 'Credential not found' });
       }
+      auditCrossUser(request, 'data.read', 'value_masked', [existing]);
 
       try {
         const value = await manager.getValue(id);
@@ -293,9 +342,11 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const { id } = request.params;
 
-      if (!(await getScoped(request, id))) {
+      const existing = await getScoped(request, id);
+      if (!existing) {
         return reply.code(404).send({ error: 'Credential not found' });
       }
+      auditCrossUser(request, 'data.read', 'test', [existing]);
 
       const valid = await manager.test(id);
 
@@ -324,6 +375,7 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
   fastify.post('/api/credentials/export', async (request, reply) => {
     // A body `userId` is ignored (S0-Q.14): only the caller's scope is exported.
     const credentials = await listScoped(callerOf(request));
+    auditCrossUser(request, 'data.export', 'export', credentials);
 
     // Encode as base64 JSON (frontend expects { data: string })
     const data = Buffer.from(JSON.stringify(credentials)).toString('base64');
@@ -366,12 +418,15 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     // id instead of overwriting their credential.
     const caller = callerOf(request);
     const prepared: any[] = [];
+    const touchedOthers: Array<{ id: string; userId?: string | null }> = [];
     for (const raw of credentials) {
       if (!raw || typeof raw !== 'object') continue;
       const c: any = { ...raw };
       if (!inScope(caller, c.userId)) c.userId = caller.id;
       const existing = typeof c.id === 'string' && c.id ? await manager.get(c.id) : null;
       if (!c.id || typeof c.id !== 'string' || (existing && !inScope(caller, existing.userId))) c.id = randomUUID();
+      if (existing && c.id === existing.id && isOtherUsers(caller, existing.userId)) touchedOthers.push(existing);
+      else if (isOtherUsers(caller, c.userId)) touchedOthers.push({ id: c.id, userId: c.userId });
       for (const key of ['createdAt', 'updatedAt', 'expiresAt', 'lastUsed']) {
         if (typeof c[key] === 'string') c[key] = new Date(c[key]);
       }
@@ -381,6 +436,7 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     }
 
     const imported = await manager.import(prepared);
+    auditCrossUser(request, 'data.import', 'import', touchedOthers);
 
     return {
       success: true,
