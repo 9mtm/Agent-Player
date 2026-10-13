@@ -8,6 +8,7 @@ import { getDatabase } from '../../db/index.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { randomUUID } from 'crypto';
 import { readPersonality, readMemory } from '../../services/agent-files.js';
+import { outsiderAgentMemoryEnabled } from '../../services/outsider-memory.js';
 import { handleError } from '../error-handler.js';
 import { OLLAMA_URL } from '../../llm/ollama.js';
 import { anonymousChatLimiter } from '../public-chat-limits.js';
@@ -531,7 +532,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
 
     // Get username
     const displayName = userId
-      ? (db.prepare('SELECT name FROM users WHERE id = ?').get(userId) as any)?.name || 'User'
+      ? (db.prepare('SELECT COALESCE(full_name, username) AS name FROM users WHERE id = ?').get(userId) as any)?.name || 'User'
       : (username || 'Anonymous');
 
     // Store user message
@@ -558,13 +559,23 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
       content: msg.content,
     }));
 
+    // SECURITY (S0-A.14): the agent's MEMORY.md is the owner's private data.
+    // Only the room owner, when allowed to read agent memory anyway (owner or
+    // admin role), gets it in the prompt; anonymous and other visitors do not,
+    // unless the server opts in (OUTSIDER_AGENT_MEMORY=true).
+    const senderRole = userId
+      ? (db.prepare('SELECT role FROM users WHERE id = ?').get(userId) as { role?: string } | undefined)?.role
+      : undefined;
+    const senderIsOwner = !!userId && userId === room.owner_user_id && (senderRole === 'owner' || senderRole === 'admin');
+    const includeAgentMemory = senderIsOwner || outsiderAgentMemoryEnabled();
+
     // Load agent files if agent is configured
     let personalityContent = '';
     let memoryContent = '';
     if (room.agent_id) {
       try {
         personalityContent = await readPersonality(room.agent_id);
-        memoryContent = await readMemory(room.agent_id);
+        memoryContent = includeAgentMemory ? await readMemory(room.agent_id) : '';
       } catch {
         // No agent files, will use room system_prompt
       }

@@ -17,6 +17,7 @@ import { geminiCliTool } from '../../tools/cli/gemini-cli.js';
 import { claudeCliTool } from '../../tools/cli/claude-cli.js';
 import { getJsonRenderPrompt } from './json-render-prompt.js';
 import { readPersonality, readMemory } from '../../services/agent-files.js';
+import { outsiderAgentMemoryEnabled } from '../../services/outsider-memory.js';
 import { createModelRouter, ModelRouter } from '../../services/model-router.js';
 import { CostTracker } from '../../services/cost-tracker.js';
 import { OLLAMA_URL, DEFAULT_OLLAMA_MODEL, ollamaThinkOption } from '../../llm/ollama.js';
@@ -158,7 +159,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
       sessionId = 'default-session',
       systemPrompt,
       systemPromptAppend,
-      memoryContext,
+      memoryContext: bodyMemoryContext,
       chatContext,
     } = request.body || ({} as ChatRequest);
 
@@ -196,13 +197,19 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const resolvedMaxTokens = maxTokens ?? agentConfig?.max_tokens;
     const agentName = agentConfig?.name;
 
+    // SECURITY (S0-A.14): a channel turn answers an outside sender, so the
+    // agent's private MEMORY.md and recalled memory context stay out of the
+    // prompt unless the server opts in (OUTSIDER_AGENT_MEMORY=true).
+    const includeAgentMemory = !channelTurn || outsiderAgentMemoryEnabled();
+    const memoryContext = includeAgentMemory ? bodyMemoryContext : undefined;
+
     // Load PERSONALITY.md and MEMORY.md from agent files if agent has ID
     let personalityContent = '';
     let memoryFileContent = '';
     if (agentConfig?.id) {
       try {
         personalityContent = await readPersonality(agentConfig.id);
-        memoryFileContent = await readMemory(agentConfig.id);
+        memoryFileContent = includeAgentMemory ? await readMemory(agentConfig.id) : '';
         console.log(`[Chat] 📝 Loaded PERSONALITY.md (${personalityContent.length} chars) and MEMORY.md (${memoryFileContent.length} chars) for agent ${agentConfig.name}`);
       } catch (err) {
         console.log('[Chat] No agent files found, using database system_prompt');
