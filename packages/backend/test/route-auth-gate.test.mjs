@@ -223,6 +223,11 @@ const OWNER_ONLY = [
   ['GET', '/api/agents/:id/personality/current'], ['GET', '/api/agents/:id/personality/versions'],
   ['POST', '/api/agents/:id/personality/versions'], ['POST', '/api/agents/:id/personality/lock'],
   ['POST', '/api/agents/:id/personality/unlock'], ['POST', '/api/agents/:id/personality/rollback'],
+  // CORE-04: memory files + reviewed proposals
+  ['GET', '/api/memory/files'], ['GET', '/api/memory/files/:drawer'], ['GET', '/api/memory/files/:drawer/versions'],
+  ['POST', '/api/memory/files/:drawer/export'], ['POST', '/api/memory/files/:drawer/proposal'],
+  ['GET', '/api/memory/proposals'], ['GET', '/api/memory/proposals/:id'],
+  ['POST', '/api/memory/proposals/:id/approve'], ['POST', '/api/memory/proposals/:id/reject'],
   ['POST', '/api/database/query'], ['POST', '/api/database/restore'], ['GET', '/api/database/stats'],
   ['POST', '/api/sandbox/execute'], ['PUT', '/api/sandbox/config'],
   ['POST', '/api/system/restart'],
