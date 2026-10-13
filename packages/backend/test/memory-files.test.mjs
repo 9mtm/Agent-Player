@@ -137,6 +137,8 @@ test('export: generated header, path-safe under the agent folder, DB unchanged',
 
 test('no automatic file -> DB writes: an edited file changes nothing by itself', async () => {
   const before = memRows();
+  // CORE-05: the API adds of the setup are versioned ('create' rows); nothing more may appear.
+  const versionsBefore = db.prepare('SELECT COUNT(*) AS n FROM memory_versions').get().n;
   const edited = readFileSync(ownerFile(), 'utf-8').replace('alpha memory a1', 'EDITED ON DISK');
   writeFileSync(ownerFile(), edited);
   await sleep(300);
@@ -147,7 +149,7 @@ test('no automatic file -> DB writes: an edited file changes nothing by itself',
   await call('GET', '/api/memory');
   assert.deepEqual(memRows(), before);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memory_file_proposals').get().n, 0);
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memory_versions').get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memory_versions').get().n, versionsBefore);
 });
 
 let proposalId;
@@ -193,11 +195,11 @@ test('edit file -> proposal (diff against the DB) -> approve -> new version', as
   assert.deepEqual([added.content, added.type, added.drawer_kind, added.drawer_key], ['السيرفر الجديد في المشروع', 'fact', 'project', 'alpha']);
   assert.equal(after[ids.b1].content, before.find((r) => r.id === ids.b1).content, 'other drawer untouched');
 
-  // History: baseline + new version for each updated memory, create for the new one.
+  // History: the API add (CORE-05: 'create') + new version for each updated memory, create for the new one.
   const versions = (await call('GET', '/api/memory/files/project:alpha/versions')).json();
   assert.equal(versions.revision, 1);
   const a1v = versions.versions.filter((v) => v.memoryId === ids.a1).sort((x, y) => x.version - y.version);
-  assert.deepEqual(a1v.map((v) => [v.version, v.change, v.drawerRevision]), [[1, 'baseline', 0], [2, 'update', 1]]);
+  assert.deepEqual(a1v.map((v) => [v.version, v.change, v.drawerRevision]), [[1, 'create', 0], [2, 'update', 1]]);
   assert.equal(a1v[0].content, 'alpha memory a1\n### not a heading');
   assert.ok(versions.versions.some((v) => v.change === 'create' && v.memoryId === result.applied.added[0]));
 

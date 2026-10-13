@@ -15,6 +15,8 @@ import { getConsolidationService } from '../../services/memory-consolidation.js'
 import { MEMORY_TYPES, isMemoryType } from '../../memory/types.js';
 import { DrawerInputError, normalizeDrawer, ownerScopeFromInput, selectDrawers, type DrawerRef } from '../../memory/drawers.js';
 import type { Memory, MemoryType, ImportanceLevel, MultiTierLayer } from '../../memory/types.js';
+import { deleteVersioned, learn, saveVersioned, updateVersioned, type LearningCandidate } from '../../memory/learning.js';
+import { memoryVersions } from '../../memory/versions.js';
 
 const MAX_CONTENT = 50_000;
 const MAX_METADATA_JSON = 64 * 1024;
@@ -229,7 +231,8 @@ export async function memoryRoutes(fastify: FastifyInstance) {
       ...(drawer ? { drawer } : {}),
     };
 
-    await storage.save(memory);
+    // CORE-05: the account's own add, versioned (actor = the caller).
+    await saveVersioned(memory, caller(request).id, 'api');
 
     return {
       success: true,
@@ -255,8 +258,9 @@ export async function memoryRoutes(fastify: FastifyInstance) {
       const { updates } = picked;
 
       try {
-        await storage.update(id, updates);
-        const updated = await storage.get(id);
+        // CORE-05: baseline + new version, actor = the caller.
+        const updated = await updateVersioned(caller(request).id, id, updates, caller(request).id, 'api');
+        if (!updated) return reply.code(404).send({ error: 'Memory not found' });
 
         return {
           success: true,
@@ -279,7 +283,8 @@ export async function memoryRoutes(fastify: FastifyInstance) {
         return reply.code(404).send({ error: 'Memory not found' });
       }
 
-      await storage.delete(id);
+      // CORE-05: the history keeps the old text (reversible); forget (CORE-07) removes everything.
+      await deleteVersioned(caller(request).id, id, caller(request).id, 'api');
 
       return {
         success: true,
@@ -287,6 +292,18 @@ export async function memoryRoutes(fastify: FastifyInstance) {
       };
     }
   );
+
+  /**
+   * GET /api/memory/:id/versions - Version history of one own memory (CORE-05)
+   */
+  fastify.get<{ Params: { id: string } }>('/api/memory/:id/versions', async (request, reply) => {
+    const userId = caller(request).id;
+    const versions = memoryVersions(userId, request.params.id);
+    if (versions.length === 0 && !ownsMemory(request, request.params.id)) {
+      return reply.code(404).send({ error: 'Memory not found' });
+    }
+    return { success: true, memoryId: request.params.id, versions };
+  });
 
   /**
    * POST /api/memory/search - Search memories by semantic similarity (with Multi-Tier Memory support)
@@ -347,12 +364,22 @@ export async function memoryRoutes(fastify: FastifyInstance) {
       });
     }
 
-    const memories = await retrieval.extractMemories(body.text, body.userId);
+    // CORE-05: extracted items are classified; routine ones are saved, important
+    // ones become proposals for the owner (or are not saved for other accounts).
+    const candidates = await retrieval.extractCandidates(body.text, body.userId);
+    const outcome = await learn({
+      userId: body.userId,
+      candidates: candidates as LearningCandidate[],
+      actor: 'extraction',
+      metadata: { source: 'conversation' },
+    });
 
     return {
       success: true,
-      count: memories.length,
-      memories
+      count: outcome.saved.length,
+      memories: outcome.saved,
+      proposals: outcome.proposed.map((p) => ({ id: p.id, drawerId: p.drawerId, reasons: p.reasons, status: p.status })),
+      skipped: outcome.skipped,
     };
   });
 

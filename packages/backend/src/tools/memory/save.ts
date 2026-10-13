@@ -6,9 +6,9 @@
  */
 
 import type { Tool, ToolResult } from './types.js';
-import { getMemoryStorage } from '../../memory/storage.js';
-import type { Memory, MemoryType, ImportanceLevel } from '../../memory/types.js';
-import { v4 as uuidv4 } from 'uuid';
+import type { MemoryType } from '../../memory/types.js';
+import { learn } from '../../memory/learning.js';
+import { agentActor } from '../../memory/versions.js';
 import type { ToolExecutionContext } from '../types.js';
 import { toolMemoryDrawers, toolMemoryUser } from './scope.js';
 import { DrawerInputError, defaultDrawerForType, parseDrawerId, sameDrawer, type DrawerRef } from '../../memory/drawers.js';
@@ -41,8 +41,13 @@ Use this tool when you learn something important about:
 - Important conversation context
 - User's habits or patterns
 
+Routine facts are saved at once. Important items (owner identity or
+preferences, people, money, credentials, health, legal, permissions,
+decisions, or anything contradicting an existing memory) wait for the
+owner's approval; the result then says "Waiting for owner approval".
+
 The saved information will be:
-- Stored permanently in the memory system
+- Stored in the memory system (every change is versioned)
 - Searchable via memory_search tool
 - Automatically recalled in relevant future conversations
 
@@ -120,7 +125,6 @@ Examples:
 
   async execute(params: MemorySaveParams, context?: ToolExecutionContext): Promise<ToolResult> {
     try {
-      const storage = getMemoryStorage();
       // CORE-03: the run's own user; a drawer only from those open for this turn.
       const userId = toolMemoryUser(context);
       if (!userId) throw new Error('No user for this memory');
@@ -140,48 +144,40 @@ Examples:
 
       // Validate importance
       const importance = Math.max(1, Math.min(10, params.importance || 5));
+      const type = params.type || 'conversation';
 
-      // Determine memory layer based on importance (Multi-Tier Memory System)
-      let memoryLayer: 'working' | 'experiential' | 'factual' = 'working';
-      let expiryTimestamp: number | null = Date.now() + (24 * 60 * 60 * 1000); // 24h default
-
-      if (importance >= 8) {
-        // High importance → Factual (permanent)
-        memoryLayer = 'factual';
-        expiryTimestamp = null; // Never expires
-      } else if (importance >= 6) {
-        // Medium importance → Experiential (90 days)
-        memoryLayer = 'experiential';
-        expiryTimestamp = Date.now() + (90 * 24 * 60 * 60 * 1000);
-      }
-      // Low importance stays in working memory (24h expiry)
-
-      // Create memory object
-      const memory: Memory = {
-        id: uuidv4(),
+      // CORE-05: routine facts are saved (versioned); important ones become a
+      // proposal the owner approves. Outsider turns never auto-save.
+      const outcome = await learn({
         userId,
-        drawer,
-        type: params.type || 'conversation',
-        content: params.content,
-        importance: importance as ImportanceLevel,
-        importanceScore: importance / 10, // Convert 1-10 to 0-1
-        memoryLayer,
-        consolidationStatus: 'pending',
-        expiryTimestamp,
-        metadata: {
-          ...params.metadata,
-          tags: params.tags || [],
-          source: 'agent',
-          savedAt: new Date().toISOString(),
-        },
-        status: 'active',
-        createdAt: new Date(),
-        lastAccessedAt: Date.now(),
-        accessCount: 0,
-      };
+        candidates: [{ content: params.content, type, importance, drawer, origin: context?.toolPolicy ? 'outsider' : 'agent' }],
+        actor: agentActor(context?.agentId),
+        agentId: context?.agentId,
+        openDrawers: open,
+        metadata: { ...params.metadata, tags: params.tags || [], savedAt: new Date().toISOString() },
+      });
+      const memory = outcome.saved[0];
+      const proposal = outcome.proposed[0];
 
-      // Save to storage
-      await storage.save(memory);
+      if (proposal) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Waiting for owner approval: this memory touches ${proposal.reasons.filter((r) => !r.startsWith('conflicts-with:')).join(', ') || 'an important topic'}. ` +
+              `It is saved only after the owner approves proposal ${proposal.id}.`,
+          }],
+          data: { success: true, pendingApproval: true, proposalId: proposal.id, reasons: proposal.reasons },
+        };
+      }
+      if (!memory) {
+        const reason = outcome.skipped[0]?.reason || 'not saved';
+        if (reason === 'already known') {
+          return { content: [{ type: 'text', text: 'Already in memory; nothing new saved.' }], data: { success: true, duplicate: true } };
+        }
+        throw new Error(reason === 'needs owner approval' ? 'This memory needs owner approval and was not saved' : reason);
+      }
+      const memoryLayer = memory.memoryLayer;
+      const expiryTimestamp = memory.expiryTimestamp;
 
       // Layer display name
       const layerDisplay = memoryLayer === 'working'

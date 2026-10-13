@@ -1,0 +1,95 @@
+/**
+ * memory_edit / memory_delete tools (CORE-05).
+ *
+ * The agent may edit or delete its user's memories, only in drawers open for
+ * the turn. Every change is versioned (actor = agent:<agentId>). A change to
+ * an important memory, or one that makes a memory important, becomes a
+ * proposal the owner approves; nothing changes before that. A delete keeps
+ * the history (reversible); "forget" is memory_forget.
+ */
+
+import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
+import { toolMemoryDrawers, toolMemoryUser } from './scope.js';
+import { agentChange, type AgentChangeResult } from '../../memory/learning.js';
+import { agentActor } from '../../memory/versions.js';
+
+function text(t: string, data?: Record<string, unknown>, error?: string): ToolResult {
+  return { content: [{ type: 'text', text: t }], ...(data ? { data } : {}), ...(error ? { error } : {}) };
+}
+
+function answer(result: AgentChangeResult, op: 'update' | 'delete', id: string): ToolResult {
+  if (result.status === 'refused') return text(`Memory ${op === 'delete' ? 'delete' : 'edit'} refused: ${result.reason}`, undefined, result.reason);
+  if (result.status === 'proposed') {
+    return text(
+      `Waiting for owner approval (${result.reasons.join(', ')}). Nothing changes until the owner approves proposal ${result.proposal.id}.`,
+      { success: true, pendingApproval: true, proposalId: result.proposal.id, reasons: result.reasons },
+    );
+  }
+  return text(op === 'delete' ? `Memory ${id} deleted (kept in its history).` : `Memory ${id} updated (new version saved).`,
+    { success: true, memoryId: id, op });
+}
+
+export const memoryEditTool: Tool = {
+  name: 'memory_edit',
+  description: `Correct or update an existing memory by id (from memory_search).
+Only memories in drawers open for this conversation. Every edit is versioned.
+Edits of important memories (owner identity/preferences, people, money,
+credentials, health, legal, permissions, decisions) wait for the owner's approval.`,
+  input_schema: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: 'Memory id' },
+      content: { type: 'string', description: 'New text' },
+      importance: { type: 'number', description: 'New importance 1-10' },
+      reason: { type: 'string', description: 'Why the memory changes (kept in the history)' },
+    },
+    required: ['id'],
+  },
+  async execute(params: { id?: unknown; content?: unknown; importance?: unknown; reason?: unknown }, context?: ToolExecutionContext): Promise<ToolResult> {
+    const userId = toolMemoryUser(context);
+    if (!userId) return text('Error: no user for this memory', undefined, 'No user for this memory');
+    if (typeof params.id !== 'string' || !params.id) return text('Error: id is required', undefined, 'id is required');
+    if (params.content !== undefined && (typeof params.content !== 'string' || !params.content.trim())) {
+      return text('Error: content must be text', undefined, 'Invalid content');
+    }
+    const result = await agentChange({
+      userId, memoryId: params.id, op: 'update',
+      updates: {
+        content: params.content as string | undefined,
+        importance: typeof params.importance === 'number' ? params.importance : undefined,
+      },
+      actor: agentActor(context?.agentId), agentId: context?.agentId,
+      openDrawers: toolMemoryDrawers(context), outsider: !!context?.toolPolicy,
+      reason: typeof params.reason === 'string' ? params.reason : null,
+    });
+    return answer(result, 'update', params.id);
+  },
+};
+
+export const memoryDeleteTool: Tool = {
+  name: 'memory_delete',
+  description: `Delete a memory that is wrong or no longer true, by id (from memory_search).
+Only memories in drawers open for this conversation. The deletion is versioned
+and can be traced; deleting an important memory waits for the owner's approval.
+To erase something completely because the owner said "forget this", use memory_forget.`,
+  input_schema: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: 'Memory id' },
+      reason: { type: 'string', description: 'Why the memory is deleted (kept in the history)' },
+    },
+    required: ['id'],
+  },
+  async execute(params: { id?: unknown; reason?: unknown }, context?: ToolExecutionContext): Promise<ToolResult> {
+    const userId = toolMemoryUser(context);
+    if (!userId) return text('Error: no user for this memory', undefined, 'No user for this memory');
+    if (typeof params.id !== 'string' || !params.id) return text('Error: id is required', undefined, 'id is required');
+    const result = await agentChange({
+      userId, memoryId: params.id, op: 'delete',
+      actor: agentActor(context?.agentId), agentId: context?.agentId,
+      openDrawers: toolMemoryDrawers(context), outsider: !!context?.toolPolicy,
+      reason: typeof params.reason === 'string' ? params.reason : null,
+    });
+    return answer(result, 'delete', params.id);
+  },
+};

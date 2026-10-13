@@ -210,6 +210,19 @@ async function start() {
     consolidationService.startScheduler();
     console.log('[Server] ✅ Memory consolidation scheduler started (runs daily at 3 AM)\n');
 
+    // CORE-05/07: owner-scoped memory jobs (weekly summary), in-process.
+    try {
+      const { ensureMemoryJobs } = await import('../memory/jobs.js');
+      for (const job of ensureMemoryJobs()) {
+        cronEngine.scheduleJob({
+          id: job.id, name: job.name, cronExpression: job.cronExpression, actionType: 'memory-job',
+          actionData: job.actionData as any, enabled: true, createdAt: new Date(), updatedAt: new Date(),
+        });
+      }
+    } catch (err) {
+      console.warn('[Server] Memory jobs not scheduled:', (err as Error).message);
+    }
+
     // Initialize Agent Evolution Scheduler
     const { initializeEvolutionScheduler } = await import('../services/agent-evolution-scheduler.js');
     await initializeEvolutionScheduler();

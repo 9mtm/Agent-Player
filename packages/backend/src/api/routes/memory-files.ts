@@ -43,7 +43,7 @@ import {
   type MemoryProposal,
 } from '../../memory/memory-files.js';
 
-const STATUSES = new Set(['pending', 'approved', 'rejected', 'stale']);
+const STATUSES = new Set(['pending', 'approved', 'rejected', 'stale', 'cancelled']);
 
 function ownerOf(request: FastifyRequest, reply: FastifyReply): string | null {
   const user = request.authUser;

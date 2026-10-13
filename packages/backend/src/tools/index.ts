@@ -45,6 +45,8 @@ import {
   memorySearchTool,
   memoryReflectTool,
   memoryStatsTool,
+  memoryEditTool,
+  memoryDeleteTool,
 } from './memory/index.js';
 
 import {
@@ -83,7 +85,7 @@ const extensionTools: Tool[] = [];
 const CORE_TOOLS: Tool[] = [
   execTool, readTool, writeTool, webFetchTool, executeCodeTool,
   browserNavigateTool, browserScreenshotTool, browserExtractTool, browserInteractTool,
-  memorySaveTool, memorySearchTool, memoryReflectTool, memoryStatsTool,
+  memorySaveTool, memorySearchTool, memoryReflectTool, memoryStatsTool, memoryEditTool, memoryDeleteTool,
   desktopControlTool,
   storageSaveTool, storageSearchTool, storageDeleteTool,
   createReminderTool,

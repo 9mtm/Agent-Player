@@ -12,6 +12,7 @@ export type CronActionType =
   | 'api-call' // HTTP API call
   | 'run-workflow' // Execute workflow
   | 'evolve-agent' // Run one agent evolution cycle in-process (S0-A.4)
+  | 'memory-job' // Owner-scoped memory job in-process: weekly summary, retention (CORE-05/07)
   | 'custom'; // Custom function
 
 /**

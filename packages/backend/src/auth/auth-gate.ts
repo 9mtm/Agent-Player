@@ -161,6 +161,7 @@ export const TIER_RULES: readonly Rule[] = [
   { methods: '*', pattern: /^\/api\/agents\/:id\/personality\/(current|versions|lock|unlock|rollback)$/, access: 'owner' }, // versioned personality (CORE-01)
   { methods: '*', prefix: '/api/memory/files', access: 'owner' },     // memory export files + edit proposals (CORE-04)
   { methods: '*', prefix: '/api/memory/proposals', access: 'owner' }, // review / apply memory edits (CORE-04)
+  { methods: '*', prefix: '/api/memory/weekly-summary', access: 'owner' }, // what the agent learned this week (CORE-05)
 
   // --- owner or admin: configuration, outbound requests, money, other users' data ---
   { methods: '*', prefix: '/api/ai-tools', access: 'admin' },        // scans the home directory

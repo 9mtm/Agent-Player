@@ -228,6 +228,13 @@ export class MemoryStorage implements IMemoryStorage {
     return rows.map((r) => (r.key ? { kind: r.kind, key: r.key, count: r.count } : { kind: r.kind, count: r.count }));
   }
 
+  /** A memory of this user by id, without the access-count side effect (or null). */
+  getOwned(userId: string, id: string): Memory | null {
+    if (typeof id !== 'string' || !id) return null;
+    const row = this.db.prepare('SELECT * FROM memories WHERE id = ? AND user_id = ?').get(id, userId) as any;
+    return row ? this.rowToMemory(row) : null;
+  }
+
   /**
    * Get a memory by ID
    */

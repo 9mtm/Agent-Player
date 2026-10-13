@@ -51,6 +51,7 @@ Each item must have:
   type: "fact" | "preference" | "task" | "skill" | "relationship" | "context" | "credential"
   content: string  (third-person description — for credentials, do NOT include the actual value)
   importance: number  (1-10)
+  confidence: number  (0-1, how sure you are that this is true and meant)
   metadata: object  (for credentials: { credentialName: "...", credentialType: "api_key|token|password", value: "ACTUAL_VALUE_HERE" })
 
 Rules:
@@ -171,11 +172,17 @@ export class MemoryRetrieval implements IMemoryRetrieval {
   }
 
   /**
-   * Extract memories from conversation text using AI.
-   * Tries Claude first, falls back to Ollama.
-   * Works for any language (Arabic, English, German, etc.).
+   * Extract learning candidates from conversation text using AI.
+   * Tries Claude first (only when a key is configured), falls back to the
+   * local Ollama model. Works for any language (Arabic, English, German, etc.).
+   *
+   * Nothing is saved to memory here (CORE-05: the caller classifies each
+   * candidate with memory/learning.ts). A shared secret goes to the encrypted
+   * credential store; only a safe reference becomes a candidate.
    */
-  async extractMemories(text: string, userId: string): Promise<Memory[]> {
+  async extractCandidates(text: string, userId: string): Promise<Array<{
+    content: string; type: string; importance: number; confidence?: number; origin: 'extraction'; credentialRef?: boolean;
+  }>> {
     if (!text.trim()) return [];
 
     let extractions: MemoryExtractionResult[] = [];
@@ -205,22 +212,19 @@ export class MemoryRetrieval implements IMemoryRetrieval {
       }
     }
 
-    if (extractions.length === 0) {
-      console.log('[Memory] No memories extracted from conversation');
-      return [];
-    }
-
-    const memories: Memory[] = [];
+    const out: Array<{ content: string; type: string; importance: number; confidence?: number; origin: 'extraction'; credentialRef?: boolean }> = [];
     const credentialManager = getCredentialManager();
 
     for (const extraction of extractions) {
+      if (typeof extraction?.content !== 'string' || !extraction.content.trim()) continue;
+      const rawConfidence = (extraction as any).confidence ?? extraction.metadata?.confidence;
+      const confidence = typeof rawConfidence === 'number' && rawConfidence >= 0 && rawConfidence <= 1 ? rawConfidence : undefined;
       // Credentials go to encrypted credentials store, NOT plain memory
-      if ((extraction.type as string) === 'credential' && extraction.metadata?.value) {
+      if ((extraction.type as string) === 'credential') {
+        if (!extraction.metadata?.value) continue;
         try {
           const credName = String(extraction.metadata.credentialName || extraction.content);
           const credType = String(extraction.metadata.credentialType || 'api_key');
-
-          // Save to credentials store (encrypted)
           await credentialManager.create({
             name: credName,
             type: credType as any,
@@ -228,50 +232,35 @@ export class MemoryRetrieval implements IMemoryRetrieval {
             description: `Auto-saved from chat: ${extraction.content}`,
             userId,
           });
-
-          // Save a safe memory reference (no actual value)
-          const refMemory: Memory = {
-            id: uuidv4(),
-            userId,
-            type: 'fact' as MemoryType,
-            content: `${extraction.content} (stored securely in credentials)`,
-            metadata: { source: 'conversation', credentialName: credName, isCredentialRef: true },
-            importance: 8 as ImportanceLevel,
-            layer: 'session' as MemoryLayer,
-            status: 'active',
-            createdAt: new Date(),
-            accessCount: 0,
-          };
-          await this.storage.save(refMemory);
-          memories.push(refMemory);
-
-          console.log('[Memory] 🔐 Credential saved to store:', credName);
+          out.push({ content: `${extraction.content} (stored securely in credentials)`, type: 'fact', importance: 8, origin: 'extraction', credentialRef: true, ...(confidence !== undefined ? { confidence } : {}) });
+          console.log('[Memory] Credential saved to store');
         } catch (err) {
           console.warn('[Memory] Failed to save credential:', (err as Error).message);
         }
         continue;
       }
-
-      // Regular memory
-      const memory: Memory = {
-        id: uuidv4(),
-        userId,
-        type: (extraction.type as MemoryType) || 'fact',
+      out.push({
         content: extraction.content,
-        metadata: extraction.metadata || { source: 'conversation' },
-        importance: Math.min(10, Math.max(1, extraction.importance || 5)) as ImportanceLevel,
-        layer: 'session' as MemoryLayer,
-        status: 'active',
-        createdAt: new Date(),
-        accessCount: 0,
-      };
-
-      await this.storage.save(memory);
-      memories.push(memory);
+        type: typeof extraction.type === 'string' ? extraction.type : 'fact',
+        importance: Math.min(10, Math.max(1, Number(extraction.importance) || 5)),
+        origin: 'extraction',
+        ...(confidence !== undefined ? { confidence } : {}),
+      });
     }
 
-    console.log('[Memory] Saved', memories.length, 'items for user:', userId);
-    return memories;
+    console.log('[Memory] Extracted', out.length, 'candidates');
+    return out;
+  }
+
+  /**
+   * Extract and learn (CORE-05): routine items are saved, important ones wait
+   * for owner approval. Returns the saved memories.
+   */
+  async extractMemories(text: string, userId: string): Promise<Memory[]> {
+    const candidates = await this.extractCandidates(text, userId);
+    const { learn } = await import('./learning.js');
+    const outcome = await learn({ userId, candidates, actor: 'extraction', metadata: { source: 'conversation' } });
+    return outcome.saved;
   }
 
   /**

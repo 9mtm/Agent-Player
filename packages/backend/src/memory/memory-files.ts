@@ -59,14 +59,22 @@ export interface MemoryProposal {
   baseHash: string;
   baseRevision: number;
   changes: MemoryChange[];
-  status: 'pending' | 'approved' | 'rejected' | 'stale';
-  source: 'upload' | 'file';
+  status: 'pending' | 'approved' | 'rejected' | 'stale' | 'cancelled';
+  /** upload/file: edited export (CORE-04); learning/agent: important learned item or agent change (CORE-05). */
+  source: 'upload' | 'file' | 'learning' | 'agent';
   note: string | null;
   createdBy: string;
   createdAt: string;
   decidedBy: string | null;
   decidedAt: string | null;
   appliedRevision: number | null;
+  /** Why it needs review (learning/agent proposals), e.g. ["people", "money"]. */
+  reasons: string[];
+}
+
+/** Proposals reviewed against the whole drawer (hash) vs. against each changed memory. */
+export function isFileProposal(p: Pick<MemoryProposal, 'source'>): boolean {
+  return p.source === 'upload' || p.source === 'file';
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +336,28 @@ export async function exportDrawerFile(userId: string, agentId: string, drawer: 
   return view;
 }
 
+/**
+ * Re-export a drawer in every agent folder where its file already exists, so
+ * exported copies follow the database after a direct change (CORE-05/07).
+ * Best effort: the database stays canonical. Returns the agents re-exported.
+ */
+export async function exportDrawerFileIfPresent(userId: string, drawer: DrawerRef): Promise<string[]> {
+  const done: string[] = [];
+  let agents: string[] = [];
+  try { agents = await fs.readdir(agentsRoot()); } catch { return done; }
+  for (const agentId of agents) {
+    if (!isValidAgentId(agentId)) continue;
+    let file: string;
+    try { file = drawerFilePath(agentId, userId, drawer); } catch { continue; }
+    try {
+      const st = await fs.lstat(file);
+      if (!st.isFile()) continue;
+    } catch { continue; }
+    try { await exportDrawerFile(userId, agentId, drawer); done.push(agentId); } catch { /* re-export later */ }
+  }
+  return done;
+}
+
 /** Read the exported file of a drawer as it is on disk (owner edited it). */
 export async function readDrawerFile(userId: string, agentId: string, drawer: DrawerRef): Promise<string> {
   const file = drawerFilePath(agentId, userId, drawer);
@@ -345,7 +375,51 @@ function rowToProposal(row: any): MemoryProposal {
     status: row.status, source: row.source, note: row.note ?? null,
     createdBy: row.created_by, createdAt: row.created_at,
     decidedBy: row.decided_by ?? null, decidedAt: row.decided_at ?? null, appliedRevision: row.applied_revision ?? null,
+    reasons: parseReasons(row.reasons),
   };
+}
+
+function parseReasons(value: unknown): string[] {
+  if (typeof value !== 'string' || !value) return [];
+  try {
+    const list = JSON.parse(value);
+    return Array.isArray(list) ? list.filter((x) => typeof x === 'string') : [];
+  } catch { return []; }
+}
+
+/** Pending proposals per user before new learning/agent proposals are refused. */
+export const MAX_PENDING_PROPOSALS = 200;
+
+export function pendingProposalCount(userId: string): number {
+  const row = getDatabase().prepare(`SELECT COUNT(*) AS n FROM memory_file_proposals WHERE user_id = ? AND status = 'pending'`).get(userId) as { n: number };
+  return row.n;
+}
+
+/**
+ * Create a pending proposal from explicit changes (CORE-05: an important
+ * learned item, or an agent edit/delete of an important memory). Reviewed
+ * per changed memory: on approval every updated/deleted memory must still
+ * be exactly as `before`, otherwise the proposal goes stale.
+ */
+export function createChangeProposal(input: {
+  userId: string; agentId: string; drawer: DrawerRef; changes: MemoryChange[]; source: 'learning' | 'agent';
+  reasons: string[]; note?: string | null; createdBy: string;
+}): MemoryProposal {
+  const d = normalizeDrawer(input.drawer);
+  if (!Array.isArray(input.changes) || input.changes.length === 0) throw new MemoryFileError('The proposal has no changes');
+  if (input.changes.length > MAX_CHANGES) throw new MemoryFileError('Too many changes in one proposal');
+  if (pendingProposalCount(input.userId) >= MAX_PENDING_PROPOSALS) {
+    throw new MemoryFileError('Too many proposals are waiting for review', 409);
+  }
+  const current = currentMemories(input.userId, d);
+  const id = uuidv4();
+  getDatabase().prepare(`
+    INSERT INTO memory_file_proposals (id, user_id, agent_id, drawer_kind, drawer_key, base_hash, base_revision, changes, status, source, note, created_by, reasons)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+  `).run(id, input.userId, input.agentId, d.kind, d.key || '', drawerHash(current), drawerRevision(input.userId, d),
+    JSON.stringify(input.changes), input.source, typeof input.note === 'string' ? input.note.slice(0, 500) : null,
+    input.createdBy, JSON.stringify(input.reasons.slice(0, 20)));
+  return getProposal(input.userId, id)!;
 }
 
 /**
@@ -426,14 +500,15 @@ export async function approveProposal(userId: string, id: string, decidedBy: str
   let stale = false;
 
   const versionStmt = db.prepare(`
-    INSERT INTO memory_versions (id, memory_id, user_id, drawer_kind, drawer_key, drawer_revision, version, change, type, content, importance_score, proposal_id, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO memory_versions (id, memory_id, user_id, drawer_kind, drawer_key, drawer_revision, version, change, type, content, importance_score, proposal_id, created_by, reason)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const reason = `proposal:${proposal.source}`;
   const lastVersion = db.prepare('SELECT MAX(version) AS v FROM memory_versions WHERE memory_id = ?');
   const record = (memoryId: string, change: string, e: Entry | null, rev: number) => {
     const v = ((lastVersion.get(memoryId) as { v: number | null }).v ?? 0) + 1;
     versionStmt.run(uuidv4(), memoryId, userId, drawer.kind, drawer.key || '', rev, v, change,
-      e?.type ?? null, e?.content ?? null, e ? e.importance / 10 : null, proposal.id, decidedBy);
+      e?.type ?? null, e?.content ?? null, e ? e.importance / 10 : null, proposal.id, decidedBy, change === 'baseline' ? 'before first change' : reason);
   };
   const recordBaseline = (m: Memory, rev: number) => {
     if ((lastVersion.get(m.id) as { v: number | null }).v === null) record(m.id, 'baseline', entryOf(m), rev);
@@ -441,8 +516,17 @@ export async function approveProposal(userId: string, id: string, decidedBy: str
 
   db.transaction(() => {
     const current = storage.getByDrawers(userId, [drawer]);
-    if (drawerHash(current) !== proposal.baseHash) { stale = true; return; }
     const byId = new Map(current.map((m) => [m.id, m]));
+    if (isFileProposal(proposal)) {
+      if (drawerHash(current) !== proposal.baseHash) { stale = true; return; }
+    } else {
+      // CORE-05: each changed memory must still be exactly what was reviewed.
+      for (const c of proposal.changes) {
+        if (c.op === 'add') continue;
+        const now = byId.get(c.id);
+        if (!now || JSON.stringify(entryOf(now)) !== JSON.stringify(c.before)) { stale = true; return; }
+      }
+    }
     const prev = drawerRevision(userId, drawer);
     revision = prev + 1;
     for (const [i, c] of proposal.changes.entries()) {
@@ -452,7 +536,7 @@ export async function approveProposal(userId: string, id: string, decidedBy: str
           id: uuidv4(), userId, type: c.after.type as MemoryType, content: c.after.content,
           importance: c.after.importance as ImportanceLevel, importanceScore: c.after.importance / 10,
           ...layerFor(c.after.importance), consolidationStatus: 'pending', status: 'active',
-          metadata: { source: 'memory_file', proposalId: proposal.id }, createdAt: new Date(now), lastAccessedAt: now,
+          metadata: { source: isFileProposal(proposal) ? 'memory_file' : proposal.source, proposalId: proposal.id }, createdAt: new Date(now), lastAccessedAt: now,
           accessCount: 0, embedding: embeddings.get(i), drawer,
         };
         storage.writeRow(mem);

@@ -173,6 +173,13 @@ export class CronEngine extends EventEmitter implements ICronEngine {
           output = await this.executeEvolveAgent(job.actionData as any);
           break;
 
+        case 'memory-job': {
+          // CORE-05/07: in-process, owner-scoped, local only.
+          const { runMemoryJob } = await import('../memory/jobs.js');
+          output = await runMemoryJob(job.actionData as any);
+          break;
+        }
+
         case 'custom':
           output = await this.executeCustom(job.actionData as any);
           break;

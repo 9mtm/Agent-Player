@@ -228,6 +228,8 @@ const OWNER_ONLY = [
   ['POST', '/api/memory/files/:drawer/export'], ['POST', '/api/memory/files/:drawer/proposal'],
   ['GET', '/api/memory/proposals'], ['GET', '/api/memory/proposals/:id'],
   ['POST', '/api/memory/proposals/:id/approve'], ['POST', '/api/memory/proposals/:id/reject'],
+  // CORE-05: weekly learning summary
+  ['GET', '/api/memory/weekly-summary'], ['POST', '/api/memory/weekly-summary/run'],
   ['POST', '/api/database/query'], ['POST', '/api/database/restore'], ['GET', '/api/database/stats'],
   ['POST', '/api/sandbox/execute'], ['PUT', '/api/sandbox/config'],
   ['POST', '/api/system/restart'],
