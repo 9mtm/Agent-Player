@@ -9,6 +9,7 @@ import type { Tool, ToolResult, ToolExecutionContext } from './types.js';
 import { execToolRefusal, isToolAllowedByExecPolicy, isToolObjectAllowedByExecPolicy } from './exec-policy.js';
 import { channelToolCallRefusal, isToolAllowedInChannel } from './channel-policy.js';
 import { defaultGrants, grantCallRefusal, isToolGranted, type AgentToolGrants } from './grants.js';
+import { approvalCategory, consumeApprovalTicket, isConfinedChannelReply, requestApproval } from './approvals.js';
 
 export class ToolsRegistry {
   private tools = new Map<string, Tool>();
@@ -80,7 +81,8 @@ export class ToolsRegistry {
    */
   async execute(
     toolName: string,
-    params: Record<string, any>
+    params: Record<string, any>,
+    options: { approvalTicket?: unknown } = {}
   ): Promise<ToolResult> {
     const tool = this.tools.get(toolName);
 
@@ -112,6 +114,21 @@ export class ToolsRegistry {
     if (grantRefused) {
       console.warn(`[ToolsRegistry] ⛔ Refused ungranted tool for agent ${this.context.agentId ?? '(none)'}: ${toolName}`);
       return grantRefused;
+    }
+
+    // SECURITY (S1.3): risky tools (send, delete, spend, install, settings) wait
+    // for a one-time owner approval. Only approveAndRun() holds a valid ticket.
+    const category = approvalCategory(tool);
+    if (category && !isConfinedChannelReply(policy, toolName) && !consumeApprovalTicket(options.approvalTicket, toolName)) {
+      try {
+        return await requestApproval(tool, params, this.context, category);
+      } catch (error: any) {
+        console.error('[ToolsRegistry] ❌ Could not store approval request:', error?.message);
+        return {
+          content: [{ type: 'text', text: `Tool "${toolName}" was not run: it needs owner approval and the request could not be stored.` }],
+          error: 'Approval request failed',
+        };
+      }
     }
 
     try {

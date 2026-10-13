@@ -45,6 +45,10 @@ declare module 'fastify' {
     /** Set by the auth gate for every authenticated request. */
     authUser: AuthUser | null;
   }
+  interface FastifyContextConfig {
+    /** Raise a route's access level (read by the gate; can never lower it). */
+    access?: RouteAccess;
+  }
 }
 
 const key = (method: string, url: string) => `${method.toUpperCase()} ${url}`;
@@ -133,6 +137,8 @@ export const TIER_RULES: readonly Rule[] = [
   { methods: 'write', prefix: '/api/workflows', access: 'owner' },   // workflows run as the first (owner) user
   { methods: ['PUT', 'POST'], exact: '/api/audit/config', access: 'owner' },
   { methods: ['POST'], exact: '/api/audit/cleanup', access: 'owner' }, // erases the audit trail
+  { methods: '*', prefix: '/api/approvals', access: 'owner' },      // runs held agent tool calls (S1.3)
+  { methods: '*', exact: '/api/agents/:id/tool-grants', access: 'owner' }, // agent permissions (S1.4)
 
   // --- owner or admin: configuration, outbound requests, money, other users' data ---
   { methods: '*', prefix: '/api/ai-tools', access: 'admin' },        // scans the home directory

@@ -204,6 +204,8 @@ test('POST /api/chat: live channel-turn token passes the gate, unknown token is 
 // --- S0-A.2: role tiers -----------------------------------------------------
 
 const OWNER_ONLY = [
+  // S1.3: held agent tool calls
+  ['GET', '/api/approvals'], ['GET', '/api/approvals/:id'], ['POST', '/api/approvals/:id/approve'], ['POST', '/api/approvals/:id/deny'],
   ['POST', '/api/database/query'], ['POST', '/api/database/restore'], ['GET', '/api/database/stats'],
   ['POST', '/api/sandbox/execute'], ['PUT', '/api/sandbox/config'],
   ['POST', '/api/system/restart'],
