@@ -20,6 +20,7 @@ import type {
   MemoryLayer
 } from './types.js';
 import { OLLAMA_URL, DEFAULT_OLLAMA_MODEL } from '../llm/ollama.js';
+import type { DrawerRef } from './drawers.js';
 
 const CLAUDE_KEY_PATTERN = /^sk-ant-/;
 
@@ -155,12 +156,15 @@ export class MemoryRetrieval implements IMemoryRetrieval {
   async findRelevant(
     query: string,
     userId: string,
-    limit = 5
+    limit = 5,
+    drawers?: DrawerRef[]
   ): Promise<Memory[]> {
+    // CORE-03: chat recall reads only the drawers selected for the turn.
     const results = await this.storage.search({
       query,
       userId,
-      limit
+      limit,
+      drawers
     });
 
     return results.map(result => result.memory);

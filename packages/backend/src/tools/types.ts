@@ -62,4 +62,6 @@ export interface ToolExecutionContext {
   grants?: import('./grants.js').AgentToolGrants;
   /** Present for channel-originated turns: restricts which tools may be offered/run (S0-Q.8). */
   toolPolicy?: import('./channel-policy.js').ChannelToolPolicy;
+  /** Memory drawers this run may read (CORE-03, memory/drawers.ts selectDrawers). */
+  memoryDrawers?: import('../memory/drawers.js').DrawerRef[];
 }

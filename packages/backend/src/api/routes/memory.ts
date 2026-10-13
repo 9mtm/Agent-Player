@@ -13,6 +13,7 @@ import { getMemoryRetrieval } from '../../memory/retrieval.js';
 import { MemoryTiersService } from '../../services/memory-tiers.js';
 import { getConsolidationService } from '../../services/memory-consolidation.js';
 import { MEMORY_TYPES, isMemoryType } from '../../memory/types.js';
+import { DrawerInputError, normalizeDrawer, ownerScopeFromInput, selectDrawers, type DrawerRef } from '../../memory/drawers.js';
 import type { Memory, MemoryType, ImportanceLevel, MultiTierLayer } from '../../memory/types.js';
 
 const MAX_CONTENT = 50_000;
@@ -56,6 +57,21 @@ function pickMemoryUpdates(body: unknown): { updates: Partial<Memory> } | { erro
     updates.tags = src.tags as string[];
   }
   return { updates };
+}
+
+/**
+ * CORE-03: drawers a recall request reads. Scope parameters `project`,
+ * `task`, `people` (comma list) and `experience` (false to skip) select the
+ * caller's own owner drawer + experience + only the named project/task/people
+ * drawers. Returns null for invalid input.
+ */
+function recallDrawers(input: Record<string, unknown>): { drawers: DrawerRef[] } | null {
+  try {
+    return { drawers: selectDrawers(ownerScopeFromInput(input)) };
+  } catch (err) {
+    if (err instanceof DrawerInputError) return null;
+    throw err;
+  }
 }
 
 /**
@@ -109,6 +125,13 @@ export async function memoryRoutes(fastify: FastifyInstance) {
   });
 
   /**
+   * GET /api/memory/drawers - The caller's drawers with memory counts (CORE-03)
+   */
+  fastify.get('/api/memory/drawers', async (request) => {
+    return { success: true, drawers: storage.listDrawers(caller(request).id) };
+  });
+
+  /**
    * GET /api/memory/:id - Get a specific memory
    */
   fastify.get<{ Params: { id: string } }>(
@@ -139,7 +162,19 @@ export async function memoryRoutes(fastify: FastifyInstance) {
       content: string;
       importance?: number;
       metadata?: Record<string, any>;
+      drawer?: unknown;
     };
+
+    // CORE-03: optional drawer { kind, key? }; default by type.
+    let drawer: DrawerRef | undefined;
+    if (body.drawer !== undefined && body.drawer !== null) {
+      try {
+        drawer = normalizeDrawer(body.drawer);
+      } catch (err) {
+        if (err instanceof DrawerInputError) return reply.code(400).send({ error: err.message });
+        throw err;
+      }
+    }
 
     if (!body.type || !body.content) {
       return reply.code(400).send({
@@ -190,7 +225,8 @@ export async function memoryRoutes(fastify: FastifyInstance) {
       metadata: body.metadata || {},
       createdAt: new Date(),
       lastAccessedAt: Date.now(),
-      accessCount: 0
+      accessCount: 0,
+      ...(drawer ? { drawer } : {}),
     };
 
     await storage.save(memory);
@@ -271,8 +307,15 @@ export async function memoryRoutes(fastify: FastifyInstance) {
         error: 'query is required'
       });
     }
+    // Browsing one's own memory searches every drawer; with scope parameters
+    // (project/task/people/experience) it reads only those drawers (CORE-03).
+    const input = body as Record<string, unknown>;
+    const scoped = ['project', 'task', 'people', 'experience'].some((k) => input[k] !== undefined);
+    const scope = scoped ? recallDrawers(input) : {};
+    if (!scope) return reply.code(400).send({ error: 'Invalid drawer scope' });
 
     const results = await storage.search({
+      ...scope,
       query: body.query,
       userId: body.userId,
       type: body.type,
@@ -328,11 +371,15 @@ export async function memoryRoutes(fastify: FastifyInstance) {
         error: 'query is required'
       });
     }
+    // CORE-03: chat recall reads only the drawers of this turn (never "all").
+    const scope = recallDrawers(request.query as Record<string, unknown>);
+    if (!scope) return reply.code(400).send({ error: 'Invalid drawer scope' });
 
     const memories = await retrieval.findRelevant(
       query,
       userId,
-      limit ? parseInt(limit) : 5
+      limit ? parseInt(limit) : 5,
+      scope.drawers
     );
 
     return {

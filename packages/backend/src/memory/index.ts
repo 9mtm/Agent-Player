@@ -14,3 +14,4 @@ export { getMemoryStorage } from './storage.js';
 export { getMemoryRetrieval } from './retrieval.js';
 export { getEmbeddingService } from './embedding.js';
 export { getMemoryIndexer } from './indexer.js';
+export * from './drawers.js';

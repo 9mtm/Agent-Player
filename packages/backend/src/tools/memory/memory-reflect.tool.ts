@@ -7,7 +7,7 @@
  * Inspired by the 6Rs pipeline — implements the "Reflect" and "Reduce" steps.
  */
 
-import type { Tool, ToolResult } from '../types.js';
+import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
 import { getMemoryStorage } from '../../memory/storage.js';
 import { v4 as uuidv4 } from 'uuid';
 import type { Memory } from '../../memory/types.js';
@@ -66,8 +66,10 @@ Parameters:
     ],
   },
 
-  async execute(params: Record<string, any>): Promise<ToolResult> {
-    const { userId, lookbackCount = 20, focus } = params as MemoryReflectParams;
+  async execute(params: Record<string, any>, context?: ToolExecutionContext): Promise<ToolResult> {
+    const { lookbackCount = 20, focus } = params as MemoryReflectParams;
+    // The run's own user, never a model-supplied id (CORE-03).
+    const userId = context?.userId || (params as MemoryReflectParams).userId;
     const limit = Math.min(50, Math.max(1, lookbackCount));
 
     try {

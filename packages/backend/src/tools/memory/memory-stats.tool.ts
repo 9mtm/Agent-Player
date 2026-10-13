@@ -8,7 +8,7 @@
  * deciding whether to save new information or run a reflection.
  */
 
-import type { Tool, ToolResult } from '../types.js';
+import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
 import { getDatabase } from '../../db/index.js';
 
 interface MemoryStatsParams {
@@ -44,8 +44,9 @@ Use this before memory_reflect or memory_search to understand what you know.`,
     ],
   },
 
-  async execute(params: Record<string, any>): Promise<ToolResult> {
-    const { userId } = params as MemoryStatsParams;
+  async execute(params: Record<string, any>, context?: ToolExecutionContext): Promise<ToolResult> {
+    // The run's own user, never a model-supplied id (CORE-03).
+    const userId = context?.userId || (params as MemoryStatsParams).userId;
 
     try {
       const db = getDatabase().getDb();

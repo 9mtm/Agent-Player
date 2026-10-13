@@ -9,6 +9,9 @@ import type { Tool, ToolResult } from './types.js';
 import { getMemoryStorage } from '../../memory/storage.js';
 import type { Memory, MemoryType, ImportanceLevel } from '../../memory/types.js';
 import { v4 as uuidv4 } from 'uuid';
+import type { ToolExecutionContext } from '../types.js';
+import { toolMemoryDrawers, toolMemoryUser } from './scope.js';
+import { DrawerInputError, defaultDrawerForType, parseDrawerId, sameDrawer, type DrawerRef } from '../../memory/drawers.js';
 
 interface MemorySaveParams {
   /** The information to remember */
@@ -23,6 +26,8 @@ interface MemorySaveParams {
   metadata?: Record<string, any>;
   /** User ID (provided by context) */
   userId: string;
+  /** Drawer id, e.g. "project:alpha" (only a drawer loaded for this turn) */
+  drawer?: string;
 }
 
 export const memorySaveTool: Tool = {
@@ -91,6 +96,10 @@ Examples:
         type: 'string',
         description: 'User ID (automatically provided)',
       },
+      drawer: {
+        type: 'string',
+        description: 'Memory drawer: "owner", "experience", or one of the drawers open for this conversation such as "project:<slug>", "task:<id>", "people:<id>". Default: chosen by type.',
+      },
     },
     required: ['content', 'userId'],
     examples: [
@@ -116,9 +125,25 @@ Examples:
     ],
   },
 
-  async execute(params: MemorySaveParams): Promise<ToolResult> {
+  async execute(params: MemorySaveParams, context?: ToolExecutionContext): Promise<ToolResult> {
     try {
       const storage = getMemoryStorage();
+      // CORE-03: the run's own user; a drawer only from those open for this turn.
+      const userId = toolMemoryUser(params, context);
+      if (!userId) throw new Error('No user for this memory');
+      const open = toolMemoryDrawers(context);
+      let drawer: DrawerRef = defaultDrawerForType(params.type || 'conversation');
+      if (params.drawer !== undefined && params.drawer !== null && params.drawer !== '') {
+        try {
+          drawer = parseDrawerId(params.drawer);
+        } catch (err) {
+          if (err instanceof DrawerInputError) throw new Error('Invalid drawer');
+          throw err;
+        }
+      }
+      if (!open.some((d) => sameDrawer(d, drawer))) {
+        throw new Error('That memory drawer is not open for this conversation');
+      }
 
       // Validate importance
       const importance = Math.max(1, Math.min(10, params.importance || 5));
@@ -141,7 +166,8 @@ Examples:
       // Create memory object
       const memory: Memory = {
         id: uuidv4(),
-        userId: params.userId,
+        userId,
+        drawer,
         type: params.type || 'conversation',
         content: params.content,
         importance: importance as ImportanceLevel,

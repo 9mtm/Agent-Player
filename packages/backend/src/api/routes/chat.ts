@@ -21,6 +21,7 @@ import { readPersonality, readMemory } from '../../services/agent-files.js';
 import { getCurrentPersonality } from '../../services/personality-store.js';
 import { stripPersonalityExport, traitsToBehavior, type Behavior } from '../../services/personality.js';
 import { outsiderAgentMemoryEnabled } from '../../services/outsider-memory.js';
+import { DrawerInputError, chatTurnDrawers, type DrawerRef } from '../../memory/drawers.js';
 import { createModelRouter, ModelRouter } from '../../services/model-router.js';
 import { CostTracker } from '../../services/cost-tracker.js';
 import { OLLAMA_URL, DEFAULT_OLLAMA_MODEL, ollamaThinkOption } from '../../llm/ollama.js';
@@ -151,6 +152,8 @@ interface ChatRequest {
   systemPrompt?: string;
   systemPromptAppend?: string; // Extra instructions appended AFTER agent system prompt (does not replace it)
   memoryContext?: string;  // Injected relevant memories for this user
+  /** CORE-03: the turn's active project / task / mentioned people (memory drawers to open). */
+  memoryScope?: { project?: string; task?: string; people?: string[] | string; experience?: boolean };
   userId?: string;         // IGNORED (S0-Q.9): the user comes from the bearer token or the server-side channel turn
   chatContext?: {
     hasAvatarViewer?: boolean;
@@ -174,6 +177,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
       systemPrompt,
       systemPromptAppend,
       memoryContext: bodyMemoryContext,
+      memoryScope,
       chatContext,
     } = request.body || ({} as ChatRequest);
 
@@ -221,6 +225,17 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // prompt unless the server opts in (OUTSIDER_AGENT_MEMORY=true).
     const includeAgentMemory = !channelTurn || outsiderAgentMemoryEnabled();
     const memoryContext = includeAgentMemory ? bodyMemoryContext : undefined;
+
+    // CORE-03: memory drawers the agent's memory tools may read this turn. The
+    // user's own chat opens owner + experience + only the named project/task/
+    // people drawers; a channel turn (outsider) opens none.
+    let memoryDrawers: DrawerRef[];
+    try {
+      memoryDrawers = chatTurnDrawers(includeAgentMemory, memoryScope);
+    } catch (err) {
+      if (err instanceof DrawerInputError) return reply.status(400).send({ error: 'Invalid memoryScope' });
+      throw err;
+    }
 
     // Load PERSONALITY.md and MEMORY.md from agent files if agent has ID
     let personalityContent = '';
@@ -281,9 +296,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     try {
       if (stream) {
-        return streamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id);
+        return streamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id, memoryDrawers);
       } else {
-        return nonStreamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id);
+        return nonStreamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id, memoryDrawers);
       }
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
@@ -307,7 +322,8 @@ async function streamChat(
   userId: string = 'default',
   chatContext?: any,
   toolPolicy?: ChannelToolPolicy,
-  agentId?: string
+  agentId?: string,
+  memoryDrawers?: DrawerRef[]
 ) {
   console.log('[Chat] 🚀 Starting stream chat');
   console.log('[Chat]   📦 Model:', model);
@@ -372,7 +388,7 @@ async function streamChat(
   });
 
   // Get real tools from the tools registry (11 tools: exec, read, write, browser×4, memory×2, desktop)
-  const toolsRegistry = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId });
+  const toolsRegistry = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers });
   const tools = toolsRegistry.getToolsForAPI();
 
   console.log('[Chat] 🔧 Available tools:', tools.length);
@@ -466,7 +482,8 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       chatContext,
       toolPolicy,
       agentId,
-      maxTokens
+      maxTokens,
+      memoryDrawers
     );
   }
 
@@ -664,7 +681,8 @@ async function nonStreamChat(
   userId: string = 'default',
   chatContext?: any,
   toolPolicy?: ChannelToolPolicy,
-  agentId?: string
+  agentId?: string,
+  memoryDrawers?: DrawerRef[]
 ) {
   console.log('[Chat] 🚀 Starting non-stream chat');
   console.log('[Chat]   📦 Model:', model);
@@ -726,11 +744,11 @@ async function nonStreamChat(
   });
 
   // Get real tools from the tools registry
-  const toolsRegistryNS = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId });
+  const toolsRegistryNS = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers });
   const tools = toolsRegistryNS.getToolsForAPI();
   if (provider === 'claude' && apiKey) {
     console.log('[Chat] 🤖 Using Claude API (non-stream)');
-    return streamChatClaude(reply, apiKey, model || getSettingsManager().getSettings().claude?.model || 'claude-sonnet-4-5-20250929', ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext, toolPolicy, agentId, maxTokens);
+    return streamChatClaude(reply, apiKey, model || getSettingsManager().getSettings().claude?.model || 'claude-sonnet-4-5-20250929', ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext, toolPolicy, agentId, maxTokens, memoryDrawers);
   }
 
   // Gemini CLI provider (non-stream path)

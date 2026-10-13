@@ -10,6 +10,15 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { getDatabase } from '../db/index.js';
 import { getEmbeddingService } from './embedding.js';
+import {
+  DRAWER_KEY_SQL,
+  DRAWER_KIND_SQL,
+  backfillMemoryDrawers,
+  defaultDrawerForType,
+  drawerSqlFilter,
+  normalizeDrawer,
+  type DrawerRef,
+} from './drawers.js';
 import type {
   Memory,
   MemoryType,
@@ -90,6 +99,13 @@ export class MemoryStorage implements IMemoryStorage {
       if (!columns.includes('last_accessed_at')) {
         db.exec("ALTER TABLE memories ADD COLUMN last_accessed_at INTEGER");
       }
+      // CORE-03 drawers (normally added by migration 058)
+      if (!columns.includes('drawer_kind')) {
+        db.exec("ALTER TABLE memories ADD COLUMN drawer_kind TEXT");
+      }
+      if (!columns.includes('drawer_key')) {
+        db.exec("ALTER TABLE memories ADD COLUMN drawer_key TEXT");
+      }
 
       // Create indexes for Multi-Tier Memory System
       db.exec(`
@@ -100,6 +116,13 @@ export class MemoryStorage implements IMemoryStorage {
     } catch (err) {
       // Columns already exist or other error, continue
       console.log('[Memory] Migration check completed');
+    }
+
+    // CORE-03: rows saved before drawers get the default drawer for their type.
+    try {
+      backfillMemoryDrawers(db);
+    } catch (err) {
+      console.warn('[Memory] Drawer backfill failed:', (err as Error).message);
     }
   }
 
@@ -116,13 +139,37 @@ export class MemoryStorage implements IMemoryStorage {
       memory.embedding = await this.embeddingService.embed(memory.content);
     }
 
-    // Save to database
+    this.writeRow(memory);
+
+    // Save to markdown file
+    await this.saveToMarkdown(memory);
+  }
+
+  /**
+   * Embedding for a text (exposed so callers can prepare rows before a
+   * synchronous database transaction, e.g. applying a reviewed proposal).
+   */
+  async embed(text: string): Promise<number[]> {
+    return this.embeddingService.embed(text);
+  }
+
+  /**
+   * Write (insert or replace) the database row of a memory, synchronously.
+   * The embedding must already be set. The drawer defaults by type (CORE-03).
+   * Does not write the per-memory markdown copy (see writeMarkdownCopy).
+   */
+  writeRow(memory: Memory): void {
+    this.getMarkdownPath(memory);
+    if (!memory.embedding) throw new Error('Memory embedding missing');
+    const drawer = memory.drawer ? normalizeDrawer(memory.drawer) : defaultDrawerForType(memory.type);
+    memory.drawer = drawer;
+
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO memories (
         id, user_id, type, content, embedding, memory_layer, status,
         metadata, importance_score, tags, created_at, last_accessed_at, access_count,
-        expiry_timestamp, consolidation_status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        expiry_timestamp, consolidation_status, drawer_kind, drawer_key
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -140,11 +187,45 @@ export class MemoryStorage implements IMemoryStorage {
       memory.lastAccessedAt || null,
       memory.accessCount ?? 0,
       memory.expiryTimestamp || null,
-      memory.consolidationStatus || 'pending'
+      memory.consolidationStatus || 'pending',
+      drawer.kind,
+      drawer.key || ''
     );
+  }
 
-    // Save to markdown file
+  /** Write the per-memory markdown copy (human-readable, not canonical). */
+  async writeMarkdownCopy(memory: Memory): Promise<void> {
     await this.saveToMarkdown(memory);
+  }
+
+  /** Remove the per-memory markdown copy, if any. */
+  async removeMarkdownCopy(memory: Memory): Promise<void> {
+    try {
+      await fs.unlink(this.getMarkdownPath(memory));
+    } catch {
+      // missing file or legacy row with an unsafe id/type
+    }
+  }
+
+  /**
+   * Memories of one user in the given drawers (no access-count side effect),
+   * oldest first. CORE-03/04.
+   */
+  getByDrawers(userId: string, drawers: DrawerRef[]): Memory[] {
+    const filter = drawerSqlFilter(drawers);
+    const rows = this.db.prepare(
+      `SELECT * FROM memories WHERE user_id = ? AND ${filter.sql} ORDER BY created_at ASC, id ASC`
+    ).all(userId, ...filter.params) as any[];
+    return rows.map((row) => this.rowToMemory(row));
+  }
+
+  /** The user's drawers that hold memories, with counts. */
+  listDrawers(userId: string): Array<DrawerRef & { count: number }> {
+    const rows = this.db.prepare(
+      `SELECT ${DRAWER_KIND_SQL} AS kind, ${DRAWER_KEY_SQL} AS key, COUNT(*) AS count
+         FROM memories WHERE user_id = ? GROUP BY 1, 2 ORDER BY 1, 2`
+    ).all(userId) as Array<{ kind: DrawerRef['kind']; key: string; count: number }>;
+    return rows.map((r) => (r.key ? { kind: r.kind, key: r.key, count: r.count } : { kind: r.kind, count: r.count }));
   }
 
   /**
@@ -251,6 +332,13 @@ export class MemoryStorage implements IMemoryStorage {
     if (query.layer) {
       sql += ' AND memory_layer = ?';
       params.push(query.layer);
+    }
+
+    // CORE-03: only the selected drawers ([] selects nothing).
+    if (query.drawers) {
+      const filter = drawerSqlFilter(query.drawers);
+      sql += ` AND ${filter.sql}`;
+      params.push(...filter.params);
     }
 
     // Support both legacy minImportance (1-10) and new minImportanceScore (0-1)
@@ -378,8 +466,20 @@ ${JSON.stringify(memory.metadata, null, 2)}
       tags: row.tags ? JSON.parse(row.tags) : [],
       expiryTimestamp: row.expiry_timestamp || null,
       consolidationStatus: row.consolidation_status || 'pending',
+      drawer: rowDrawer(row),
     };
   }
+}
+
+function rowDrawer(row: any): DrawerRef {
+  if (row.drawer_kind) {
+    try {
+      return normalizeDrawer(row.drawer_key ? { kind: row.drawer_kind, key: row.drawer_key } : { kind: row.drawer_kind });
+    } catch {
+      // unknown stored value: fall through to the type default
+    }
+  }
+  return defaultDrawerForType(row.type);
 }
 
 // Singleton instance

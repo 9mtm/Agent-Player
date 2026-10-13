@@ -102,6 +102,8 @@ export interface Memory {
   consolidationStatus?: ConsolidationStatus;
   /** Custom metadata */
   metadata: Record<string, unknown>;
+  /** Drawer this memory belongs to (CORE-03); default by type when absent. */
+  drawer?: import('./drawers.js').DrawerRef;
 }
 
 /** Memory relationship */
@@ -176,6 +178,8 @@ export interface MemorySearchQuery {
   recencyBoost?: boolean;
   /** Legacy: single type filter */
   type?: MemoryType;
+  /** Only these drawers (CORE-03). Absent = all of the user's drawers; [] = none. */
+  drawers?: import('./drawers.js').DrawerRef[];
 }
 
 /** Memory search result */
