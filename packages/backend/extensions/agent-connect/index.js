@@ -1,9 +1,8 @@
 import { CHANNEL_CATALOG, PythonTransport } from 'agent-connect-dpro';
 import { registerChannelRoutes, stopChannel } from '../shared/channel-host.js';
-import { isValidEnvironment, isValidStateDirectory, transportOptions } from './policy.js';
+import { isValidEnvironment, isValidSettings, isValidStateDirectory, transportOptions } from './policy.js';
 
 const channels = CHANNEL_CATALOG.filter(channel => !['telegram', 'discord'].includes(channel.id));
-const object = value => value && typeof value === 'object' && !Array.isArray(value);
 
 export default {
   id: 'agent-connect', name: 'Agent Connect', version: '0.2.0',
@@ -42,7 +41,7 @@ export default {
           // S0-Q.6: the interpreter path is never configurable over HTTP; it comes
           // from the server environment (AGENT_CONNECT_PYTHON) only.
           configKeys: ['configured', 'settings', 'environment', 'state_directory', 'allowed_users', 'allowed_channels', 'auto_reply'],
-          validateConfig: config => config.configured === true && object(config.settings || {})
+          validateConfig: config => config.configured === true && isValidSettings(channel.id, config.settings || {})
             && isValidEnvironment(channel.id, config.environment || {})
             && isValidStateDirectory(config.state_directory),
           redactConfig: config => ({ config: {
