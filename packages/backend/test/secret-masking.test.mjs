@@ -50,7 +50,12 @@ test.after(async () => {
 });
 
 const SECRET = 'sk-test-' + randomBytes(24).toString('hex');
-const call = (method, url, payload) => app.inject({ method, url, payload });
+// S0-Q.14: credential routes need an active owner/admin token.
+const { generateToken: ownerToken } = await import('../src/auth/jwt.ts');
+db.prepare(`INSERT OR IGNORE INTO users (id, email, username, password_hash, role, status)
+  VALUES ('mask-owner', 'mask-owner@example.test', 'mask-owner', 'x', 'owner', 'active')`).run();
+const ownerAuth = { authorization: `Bearer ${ownerToken('mask-owner', 1)}` };
+const call = (method, url, payload) => app.inject({ method, url, payload, headers: ownerAuth });
 const noSecret = (res, secret = SECRET) => assert.ok(!res.body.includes(secret), `secret leaked in ${res.body}`);
 
 test('a generated encryption key is never printed', () => {

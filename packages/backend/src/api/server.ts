@@ -33,7 +33,7 @@ import { skillsRoutes } from './routes/skills.js';
 import { schedulerRoutes } from './routes/scheduler.js';
 import { memoryRoutes } from './routes/memory.js';
 import { credentialsRoutes } from './routes/credentials.js';
-import { onboardingRoutes } from './routes/onboarding.js';
+// import { onboardingRoutes } from './routes/onboarding.js'; // S0-Q.14: disabled, see below
 import { gatewayRoutes } from './routes/gateway.js';
 import { authRoutes } from './routes/auth.js';
 import { databaseRoutes } from './routes/database.js';
@@ -253,7 +253,11 @@ await fastify.register(skillsRoutes); // 🛠️ Skills System
 await fastify.register(schedulerRoutes); // ⏰ Scheduler System
 await fastify.register(memoryRoutes); // 🧠 Memory System
 await fastify.register(credentialsRoutes); // 🔐 Credentials System
-await fastify.register(onboardingRoutes); // 🎯 Onboarding Wizard
+// SECURITY (S0-Q.14): the /api/onboarding/* routes started the interactive
+// terminal wizard inside the server process for any caller. They are disabled
+// here (the routes themselves are owner-only as a second line); the web
+// first-run flow is /setup. Re-enable only with a reviewed design.
+// await fastify.register(onboardingRoutes); // 🎯 Onboarding Wizard
 await fastify.register(gatewayRoutes); // 🌐 Multi-Interface Gateway
 await fastify.register(sandboxRoutes); // 🐳 Docker Sandbox System
 await fastify.register(auditRoutes); // 🛡️ Security Audit System

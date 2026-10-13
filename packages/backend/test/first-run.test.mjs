@@ -80,7 +80,9 @@ test('-> login with the new owner -> /api/auth/me', async () => {
   assert.equal(me.json().user.role, 'owner');
 });
 
-test('/api/credentials is registered on the fresh database', async () => {
-  const res = await get('/api/credentials');
+test('/api/credentials is registered on the fresh database (owner token, S0-Q.14)', async () => {
+  assert.equal((await get('/api/credentials')).statusCode, 401); // no anonymous access
+  const login = await post('/api/auth/login', { email: OWNER.email, password: OWNER.password });
+  const res = await get('/api/credentials', { authorization: `Bearer ${login.json().token}` });
   assert.equal(res.statusCode, 200, res.body);
 });

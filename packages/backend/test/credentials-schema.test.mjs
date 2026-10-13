@@ -46,15 +46,20 @@ test('fresh database: /api/credentials registers and can store a credential', as
   const app = Fastify();
   await app.register(credentialsRoutes);
   await app.ready();
+  // S0-Q.14: credential routes need an active owner/admin token.
+  const { generateToken } = await import('../src/auth/jwt.ts');
+  db.prepare(`INSERT OR IGNORE INTO users (id, email, username, password_hash, role, status)
+    VALUES ('schema-owner', 'schema-owner@example.test', 'schema-owner', 'x', 'owner', 'active')`).run();
+  const headers = { authorization: `Bearer ${generateToken('schema-owner', 1)}` };
   try {
-    const list = await app.inject({ method: 'GET', url: '/api/credentials' });
+    const list = await app.inject({ method: 'GET', url: '/api/credentials', headers });
     assert.equal(list.statusCode, 200, list.body);
     const created = await app.inject({
-      method: 'POST', url: '/api/credentials',
+      method: 'POST', url: '/api/credentials', headers,
       payload: { name: 'test-key', type: 'secret', value: 'v-' + randomBytes(8).toString('hex'), skillId: 'skill-x' },
     });
     assert.ok(created.statusCode < 300, created.body);
-    const bySkill = await app.inject({ method: 'GET', url: '/api/credentials?skillId=skill-x' });
+    const bySkill = await app.inject({ method: 'GET', url: '/api/credentials?skillId=skill-x', headers });
     assert.equal(bySkill.json().credentials?.length ?? bySkill.json().length, 1, bySkill.body);
   } finally {
     await app.close();

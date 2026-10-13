@@ -706,16 +706,18 @@ export interface CredentialWithValue extends Credential {
   value: string;
 }
 
+// S0-Q.14: the backend credential routes need an owner/admin bearer token.
 export const credentialsAPI = {
   async list(): Promise<Credential[]> {
-    const data = await fetchAPI<{ credentials: Credential[] }>('/api/credentials');
+    const data = await fetchAPI<{ credentials: Credential[] }>('/api/credentials', { headers: authHeaders() });
     return data.credentials;
   },
 
   async get(id: string, decrypt: boolean = false): Promise<CredentialWithValue | Credential> {
     const query = decrypt ? '?decrypt=true' : '';
     const data = await fetchAPI<{ credential: CredentialWithValue | Credential }>(
-      `/api/credentials/${id}${query}`
+      `/api/credentials/${id}${query}`,
+      { headers: authHeaders() }
     );
     return data.credential;
   },
@@ -729,6 +731,7 @@ export const credentialsAPI = {
   }): Promise<Credential> {
     const data = await fetchAPI<{ credential: Credential }>('/api/credentials', {
       method: 'POST',
+      headers: authHeaders(),
       body: JSON.stringify(input),
     });
     return data.credential;
@@ -745,19 +748,21 @@ export const credentialsAPI = {
   ): Promise<Credential> {
     const data = await fetchAPI<{ credential: Credential }>(`/api/credentials/${id}`, {
       method: 'PUT',
+      headers: authHeaders(),
       body: JSON.stringify(input),
     });
     return data.credential;
   },
 
   async delete(id: string): Promise<boolean> {
-    await fetchAPI(`/api/credentials/${id}`, { method: 'DELETE' });
+    await fetchAPI(`/api/credentials/${id}`, { method: 'DELETE', headers: authHeaders() });
     return true;
   },
 
   async export(password: string): Promise<{ data: string }> {
     return fetchAPI('/api/credentials/export', {
       method: 'POST',
+      headers: authHeaders(),
       body: JSON.stringify({ password }),
     });
   },
@@ -765,6 +770,7 @@ export const credentialsAPI = {
   async import(data: string, password: string): Promise<{ imported: number }> {
     return fetchAPI('/api/credentials/import', {
       method: 'POST',
+      headers: authHeaders(),
       body: JSON.stringify({ data, password }),
     });
   },

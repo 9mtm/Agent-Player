@@ -1,14 +1,24 @@
 /**
  * Onboarding API Routes
+ *
+ * SECURITY (S0-Q.14): these routes only drive the interactive *terminal*
+ * wizard inside the server process (prompts on the server's stdin/stdout).
+ * They are NOT registered in api/server.ts any more; the web first-run flow is
+ * /setup (F-01). If they are ever registered again, every route still needs an
+ * active owner (bearer token).
  */
 
 import { FastifyInstance } from 'fastify';
 import { OnboardingWizard } from '../../onboarding/index.js';
 import type { OnboardingState } from '../../onboarding/index.js';
+import { requireActiveRole } from '../../auth/route-guards.js';
 
 export async function onboardingRoutes(fastify: FastifyInstance) {
   let wizard: OnboardingWizard | null = null;
   let currentState: OnboardingState | null = null;
+
+  // Encapsulated to this plugin: owner only for every onboarding route.
+  fastify.addHook('preHandler', requireActiveRole(['owner']));
 
   // Start onboarding wizard
   fastify.post('/api/onboarding/start', async (request, reply) => {

@@ -4,7 +4,10 @@
  * RESTful endpoints for credential management
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { randomUUID } from 'node:crypto';
+import { authorizeActiveRole, OWNER_OR_ADMIN } from '../../auth/route-guards.js';
+import { getDatabase } from '../../db/index.js';
 import { handleError, handleValidationError } from '../error-handler.js';
 import { getCredentialManager } from '../../credentials/manager.js';
 import { getCredentialStorage } from '../../credentials/storage.js';
@@ -15,6 +18,24 @@ import type {
   UpdateCredentialRequest
 } from '../../credentials/types.js';
 
+/**
+ * SECURITY (S0-Q.14): every /api/credentials* route needs an active owner or
+ * admin (bearer token). The user always comes from the token, never from the
+ * query or body. Scope: a caller sees and manages the credentials they own;
+ * the owner also manages unowned (system-wide, user_id NULL) credentials such
+ * as agent API keys. Credentials of other users answer 404.
+ */
+interface Caller { id: string; role: string }
+
+function callerOf(request: FastifyRequest): Caller {
+  return (request as any).credentialsCaller as Caller;
+}
+
+function inScope(caller: Caller, ownerId: string | null | undefined): boolean {
+  if (ownerId) return ownerId === caller.id;
+  return caller.role === 'owner';
+}
+
 export async function credentialsRoutes(fastify: FastifyInstance) {
   const manager = getCredentialManager();
   const storage = getCredentialStorage();
@@ -22,26 +43,49 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
   // Initialize storage
   await storage.initialize();
 
+  // Encapsulated to this plugin: applies to the credential routes only.
+  fastify.addHook('preHandler', async (request, reply) => {
+    const userId = authorizeActiveRole(request, reply, OWNER_OR_ADMIN);
+    if (userId === null) return reply;
+    const row = getDatabase().prepare('SELECT role FROM users WHERE id = ?').get(userId) as { role: string } | undefined;
+    (request as any).credentialsCaller = { id: userId, role: row?.role ?? '' } satisfies Caller;
+  });
+
+  /** Load a credential only if the caller may see it. */
+  const getScoped = async (request: FastifyRequest, id: string) => {
+    const credential = await manager.get(id);
+    return credential && inScope(callerOf(request), credential.userId) ? credential : null;
+  };
+
+  /** Credentials visible to the caller: their own, plus unowned ones for the owner. */
+  const listScoped = async (caller: Caller) => {
+    const own = await manager.list(caller.id);
+    if (caller.role !== 'owner') return own;
+    const unowned = (await storage.getAll()).filter(c => !c.userId);
+    return [...own, ...unowned];
+  };
+
   /**
    * GET /api/credentials - List all credentials
    * Pass ?decrypt=true to include a masked hint of each value ("••••abcd").
    * SECURITY (S0-Q.4): full secret values are never returned by the API.
    */
   fastify.get('/api/credentials', async (request, reply) => {
-    const { userId, skillId, decrypt } = request.query as {
-      userId?: string;
+    // `userId` in the query is ignored (S0-Q.14): the scope comes from the token.
+    const { skillId, decrypt } = request.query as {
       skillId?: string;
       decrypt?: string;
     };
 
     const wantDecrypt = decrypt === 'true';
+    const caller = callerOf(request);
 
     let credentials;
 
     if (skillId) {
-      credentials = await manager.listBySkill(skillId);
+      credentials = (await manager.listBySkill(skillId)).filter(c => inScope(caller, c.userId));
     } else {
-      credentials = await manager.list(userId);
+      credentials = await listScoped(caller);
     }
 
     // Remove sensitive data from response (unless decrypt=true)
@@ -89,7 +133,7 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
       const { id } = request.params;
       const wantDecrypt = request.query.decrypt === 'true';
 
-      const credential = await manager.get(id);
+      const credential = await getScoped(request, id);
 
       if (!credential) {
         return reply.code(404).send({ error: 'Credential not found' });
@@ -135,7 +179,8 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     }
 
     try {
-      const credential = await manager.create(body);
+      // The owner is always the caller; a body `userId` is ignored (S0-Q.14).
+      const credential = await manager.create({ ...body, userId: callerOf(request).id });
 
       return {
         success: true,
@@ -160,6 +205,10 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const { id } = request.params;
       const updates = request.body as UpdateCredentialRequest;
+
+      if (!(await getScoped(request, id))) {
+        return reply.code(404).send({ error: 'Credential not found' });
+      }
 
       try {
         await manager.update(id, updates);
@@ -189,6 +238,10 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const { id } = request.params;
 
+      if (!(await getScoped(request, id))) {
+        return reply.code(404).send({ error: 'Credential not found' });
+      }
+
       try {
         await manager.delete(id);
 
@@ -213,6 +266,10 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const { id } = request.params;
 
+      if (!(await getScoped(request, id))) {
+        return reply.code(404).send({ error: 'Credential not found' });
+      }
+
       try {
         const value = await manager.getValue(id);
 
@@ -235,6 +292,10 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     '/api/credentials/:id/test',
     async (request, reply) => {
       const { id } = request.params;
+
+      if (!(await getScoped(request, id))) {
+        return reply.code(404).send({ error: 'Credential not found' });
+      }
 
       const valid = await manager.test(id);
 
@@ -261,9 +322,8 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
    * Returns { success, data } where data is a base64 JSON string
    */
   fastify.post('/api/credentials/export', async (request, reply) => {
-    const { userId } = request.body as { password?: string; userId?: string };
-
-    const credentials = await manager.export(userId);
+    // A body `userId` is ignored (S0-Q.14): only the caller's scope is exported.
+    const credentials = await listScoped(callerOf(request));
 
     // Encode as base64 JSON (frontend expects { data: string })
     const data = Buffer.from(JSON.stringify(credentials)).toString('base64');
@@ -301,7 +361,26 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ error: 'credentials must be an array' });
     }
 
-    const imported = await manager.import(credentials);
+    // S0-Q.14: imported credentials land in the caller's scope. Storage uses
+    // INSERT OR REPLACE by id, so an id that belongs to someone else gets a new
+    // id instead of overwriting their credential.
+    const caller = callerOf(request);
+    const prepared: any[] = [];
+    for (const raw of credentials) {
+      if (!raw || typeof raw !== 'object') continue;
+      const c: any = { ...raw };
+      if (!inScope(caller, c.userId)) c.userId = caller.id;
+      const existing = typeof c.id === 'string' && c.id ? await manager.get(c.id) : null;
+      if (!c.id || typeof c.id !== 'string' || (existing && !inScope(caller, existing.userId))) c.id = randomUUID();
+      for (const key of ['createdAt', 'updatedAt', 'expiresAt', 'lastUsed']) {
+        if (typeof c[key] === 'string') c[key] = new Date(c[key]);
+      }
+      if (!(c.createdAt instanceof Date)) c.createdAt = new Date();
+      if (!(c.updatedAt instanceof Date)) c.updatedAt = new Date();
+      prepared.push(c);
+    }
+
+    const imported = await manager.import(prepared);
 
     return {
       success: true,
