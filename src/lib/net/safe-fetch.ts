@@ -77,7 +77,8 @@ for (const [net, prefix] of [
     ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4],
 ] as const) blocked.addSubnet(net, prefix, 'ipv4');
 for (const [net, prefix] of [
-    ['::', 128], ['::1', 128], ['64:ff9b::', 96], ['64:ff9b:1::', 48],
+    // ::/96 also covers the deprecated IPv4-compatible form (::7f00:1).
+    ['::', 96], ['::1', 128], ['64:ff9b::', 96], ['64:ff9b:1::', 48],
     ['100::', 64], ['2001::', 23], ['2001:db8::', 32], ['2002::', 16],
     ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8],
 ] as const) blocked.addSubnet(net, prefix, 'ipv6');

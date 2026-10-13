@@ -39,6 +39,13 @@ async function refused(promise, code) {
   });
 }
 
+test('IPv4-compatible IPv6 (::/96) is blocked in every spelling', () => {
+  for (const a of ['::7f00:1', '::127.0.0.1', '0:0:0:0:0:0:7f00:1', '::a00:1', '::c0a8:101', '::a9fe:a9fe', '::808:808']) {
+    assert.ok(isBlockedAddress(a), a);
+  }
+  assert.ok(!isBlockedAddress('2606:4700::6810:101'), 'public IPv6 still allowed');
+});
+
 test('non-public addresses are blocked (v4, v6, mapped)', () => {
   for (const a of [
     '127.0.0.1', '127.1.2.3', '10.0.0.1', '172.16.0.1', '172.31.255.255', '192.168.1.1', '169.254.169.254',
