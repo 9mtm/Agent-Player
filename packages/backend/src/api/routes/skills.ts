@@ -8,10 +8,23 @@ import { getSkillsRegistry } from '../../skills/registry.js';
 import { getSkillsExecutor } from '../../skills/executor.js';
 import { handleError } from '../error-handler.js';
 import { anthropicSkillsService } from '../../services/anthropic-skills-service.js';
+import { authorizeActiveRole, OWNER_OR_ADMIN } from '../../auth/route-guards.js';
 
 export async function skillsRoutes(fastify: FastifyInstance) {
   const skillsRegistry = getSkillsRegistry();
   const skillsExecutor = getSkillsExecutor();
+
+  // POST /api/skills/reload - Reload all skills from disk (F-07)
+  // SECURITY: active owner/admin only.
+  fastify.post('/api/skills/reload', async (request, reply) => {
+    if (authorizeActiveRole(request, reply, OWNER_OR_ADMIN) === null) return reply;
+    try {
+      await skillsRegistry.reload();
+      return { success: true, count: skillsRegistry.getAll().length };
+    } catch (error: any) {
+      return handleError(reply, error, 'internal', '[Skills] Reload failed');
+    }
+  });
 
   // GET /api/skills - List all skills
   fastify.get('/api/skills', async (request, reply) => {

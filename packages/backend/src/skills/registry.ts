@@ -4,6 +4,7 @@
  */
 
 import EventEmitter from 'events';
+import { dirname } from 'path';
 import chokidar from 'chokidar';
 import type { Skill, SkillSource, ISkillsRegistry } from './types.js';
 import { getSkillsParser } from './parser.js';
@@ -12,6 +13,8 @@ export class SkillsRegistry extends EventEmitter implements ISkillsRegistry {
   private skills: Map<string, Skill> = new Map();
   private parser = getSkillsParser();
   private watcher: any = null;
+  /** Directories passed to load(), so reload() also rescans ones that were empty. */
+  private loadedDirectories = new Set<string>();
 
   // Precedence (higher = more priority)
   private readonly precedence: Record<SkillSource, number> = {
@@ -31,6 +34,7 @@ export class SkillsRegistry extends EventEmitter implements ISkillsRegistry {
     console.log('[SkillsRegistry] 📂 Loading skills from directories...');
 
     for (const dir of directories) {
+      this.loadedDirectories.add(dir);
       await this.loadDirectory(dir);
     }
 
@@ -210,14 +214,10 @@ export class SkillsRegistry extends EventEmitter implements ISkillsRegistry {
   async reload(): Promise<void> {
     console.log('[SkillsRegistry] 🔄 Reloading all skills...');
 
-    // Store directories from current skills
+    // Directories given to load() plus those of the current skills.
+    // (Used `require('path')`, which does not exist in this ES module.)
     const directories = [
-      ...new Set(
-        this.getAll().map((s) => {
-          const path = require('path');
-          return path.dirname(s.filePath);
-        })
-      ),
+      ...new Set([...this.loadedDirectories, ...this.getAll().map((s) => dirname(s.filePath))]),
     ];
 
     // Clear and reload

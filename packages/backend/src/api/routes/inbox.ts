@@ -4,7 +4,8 @@
  * Endpoints for inbox messages, approvals, and statistics
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { authenticateActiveUser } from '../../auth/route-guards.js';
 import type {
   CreateInboxMessageRequest,
   ListInboxMessagesQuery,
@@ -17,6 +18,32 @@ export async function inboxRoutes(fastify: FastifyInstance) {
   // Ensure inbox components are available
   if (!inboxGateway || !messageStore) {
     throw new Error('Inbox system not initialized');
+  }
+
+  // SECURITY (F-07): every inbox route needs a valid token of an active user;
+  // the user id comes from the verified token only, and every message is
+  // scoped to that user. (Nothing ever set `request.user`, so all routes used
+  // to answer 401.)
+  fastify.addHook('onRequest', async (request, reply) => {
+    const user = authenticateActiveUser(request);
+    if (!user) return reply.code(401).send({ error: 'Authentication required' });
+    (request as any).authUserId = user.id;
+  });
+  const currentUserId = (request: FastifyRequest): string => (request as any).authUserId;
+
+  /** The caller's own message, or null after sending 404 (missing or someone else's). */
+  async function ownMessage(id: string, userId: string, reply: any) {
+    let message;
+    try {
+      message = await messageStore.getById(id);
+    } catch {
+      message = null;
+    }
+    if (!message || message.userId !== userId) {
+      reply.code(404).send({ error: 'Inbox message not found' });
+      return null;
+    }
+    return message;
   }
 
   // ==================
@@ -41,12 +68,8 @@ export async function inboxRoutes(fastify: FastifyInstance) {
       }
     }
   }, async (request, reply) => {
-    // @ts-ignore - user is added by auth middleware
-    const userId = request.user?.id;
+    const userId = currentUserId(request);
 
-    if (!userId) {
-      return reply.code(401).send({ error: 'Unauthorized' });
-    }
 
     const query = request.query as ListInboxMessagesQuery;
 
@@ -66,20 +89,12 @@ export async function inboxRoutes(fastify: FastifyInstance) {
    * GET /api/inbox/:id
    */
   fastify.get('/api/inbox/:id', async (request, reply) => {
-    // @ts-ignore
-    const userId = request.user?.id;
+    const userId = currentUserId(request);
     const { id } = request.params as { id: string };
 
-    if (!userId) {
-      return reply.code(401).send({ error: 'Unauthorized' });
-    }
 
-    const message = await messageStore.getById(id);
-
-    // Check ownership
-    if (message.userId !== userId) {
-      return reply.code(403).send({ error: 'Forbidden' });
-    }
+    const message = await ownMessage(id, userId, reply);
+    if (!message) return reply;
 
     return { message };
   });
@@ -102,12 +117,8 @@ export async function inboxRoutes(fastify: FastifyInstance) {
       }
     }
   }, async (request, reply) => {
-    // @ts-ignore
-    const userId = request.user?.id;
+    const userId = currentUserId(request);
 
-    if (!userId) {
-      return reply.code(401).send({ error: 'Unauthorized' });
-    }
 
     const body = request.body as CreateInboxMessageRequest;
 
@@ -127,19 +138,11 @@ export async function inboxRoutes(fastify: FastifyInstance) {
    * DELETE /api/inbox/:id
    */
   fastify.delete('/api/inbox/:id', async (request, reply) => {
-    // @ts-ignore
-    const userId = request.user?.id;
+    const userId = currentUserId(request);
     const { id } = request.params as { id: string };
 
-    if (!userId) {
-      return reply.code(401).send({ error: 'Unauthorized' });
-    }
 
-    const message = await messageStore.getById(id);
-
-    if (message.userId !== userId) {
-      return reply.code(403).send({ error: 'Forbidden' });
-    }
+    if (!(await ownMessage(id, userId, reply))) return reply;
 
     await messageStore.delete(id);
 
@@ -151,12 +154,8 @@ export async function inboxRoutes(fastify: FastifyInstance) {
    * GET /api/inbox/stats
    */
   fastify.get('/api/inbox/stats', async (request, reply) => {
-    // @ts-ignore
-    const userId = request.user?.id;
+    const userId = currentUserId(request);
 
-    if (!userId) {
-      return reply.code(401).send({ error: 'Unauthorized' });
-    }
 
     const stats = await inboxGateway.getStats(userId);
 
@@ -172,12 +171,8 @@ export async function inboxRoutes(fastify: FastifyInstance) {
    * GET /api/inbox/approvals
    */
   fastify.get('/api/inbox/approvals', async (request, reply) => {
-    // @ts-ignore
-    const userId = request.user?.id;
+    const userId = currentUserId(request);
 
-    if (!userId) {
-      return reply.code(401).send({ error: 'Unauthorized' });
-    }
 
     const pending = await inboxGateway.getPendingApprovals(userId);
 
@@ -198,13 +193,11 @@ export async function inboxRoutes(fastify: FastifyInstance) {
       }
     }
   }, async (request, reply) => {
-    // @ts-ignore
-    const userId = request.user?.id;
+    const userId = currentUserId(request);
     const { id } = request.params as { id: string };
 
-    if (!userId) {
-      return reply.code(401).send({ error: 'Unauthorized' });
-    }
+
+    if (!(await ownMessage(id, userId, reply))) return reply;
 
     const decision: ApprovalDecision = {
       decision: 'approved',
@@ -230,13 +223,11 @@ export async function inboxRoutes(fastify: FastifyInstance) {
       }
     }
   }, async (request, reply) => {
-    // @ts-ignore
-    const userId = request.user?.id;
+    const userId = currentUserId(request);
     const { id } = request.params as { id: string };
 
-    if (!userId) {
-      return reply.code(401).send({ error: 'Unauthorized' });
-    }
+
+    if (!(await ownMessage(id, userId, reply))) return reply;
 
     const decision: ApprovalDecision = {
       decision: 'denied',
@@ -257,12 +248,8 @@ export async function inboxRoutes(fastify: FastifyInstance) {
    * POST /api/inbox/cleanup
    */
   fastify.post('/api/inbox/cleanup', async (request, reply) => {
-    // @ts-ignore
-    const userId = request.user?.id;
+    const userId = currentUserId(request);
 
-    if (!userId) {
-      return reply.code(401).send({ error: 'Unauthorized' });
-    }
 
     const deleted = await messageStore.deleteOldCompleted(userId, 30);
 
