@@ -3,6 +3,9 @@
  * Universal server monitoring for WHM/cPanel, Linux, AWS S3, and SSH infrastructure
  */
 
+import { authorizeActiveRole, OWNER_OR_ADMIN } from '../../../src/auth/route-guards.js';
+import { sanitizeServerInput, publicServer, ServerConfigError } from './server-config.js';
+
 export default {
   id: 'server-monitor',
   name: 'Server Monitor',
@@ -13,6 +16,13 @@ export default {
 
     // Dashboard & main endpoints
     api.registerRoutes(async (fastify) => {
+      // SECURITY (S0-Q.18): every route manages remote servers (SSH/WHM
+      // credentials), so each request needs an active owner/admin token,
+      // checked before any handler (and before any outbound connection).
+      fastify.addHook('onRequest', async (request, reply) => {
+        if (authorizeActiveRole(request, reply, OWNER_OR_ADMIN) === null) return reply;
+      });
+
       // Dashboard endpoint - Enhanced with full data
       fastify.get('/dashboard', async (request, reply) => {
         try {
@@ -737,87 +747,68 @@ export default {
         },
       ];
 
-      // Get all servers
+      const sendConfigError = (reply, error, what) => {
+        if (error instanceof ServerConfigError) return reply.code(400).send({ error: error.message });
+        api.log('error', `[ServerMonitor] ${what} error: ${error.message}`);
+        return reply.code(500).send({ error: `Failed to ${what.toLowerCase()}` });
+      };
+      const findServer = (id) => mockServers.findIndex((s) => s.id === String(id));
+
+      // Get all servers (secrets masked)
       fastify.get('/settings/servers', async (request, reply) => {
-        try {
-          return { servers: mockServers };
-        } catch (error) {
-          api.log('error', `[ServerMonitor] Settings servers error: ${error.message}`);
-          return reply.code(500).send({ error: 'Failed to load servers' });
-        }
+        return { servers: mockServers.map(publicServer) };
       });
 
-      // Add new server
+      // Add new server (only known fields; host/port validated)
       fastify.post('/settings/servers', async (request, reply) => {
         try {
-          const newServer = request.body;
-          newServer.id = Date.now().toString();
-          newServer.status = 'pending';
-          newServer.lastCheck = new Date().toISOString();
-          mockServers.push(newServer);
-          return { success: true, server: newServer };
+          const server = sanitizeServerInput(request.body);
+          server.id = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+          server.status = 'pending';
+          server.lastCheck = new Date().toISOString();
+          mockServers.push(server);
+          return { success: true, server: publicServer(server) };
         } catch (error) {
-          api.log('error', `[ServerMonitor] Add server error: ${error.message}`);
-          return reply.code(500).send({ error: 'Failed to add server' });
+          return sendConfigError(reply, error, 'Add server');
         }
       });
 
-      // Update server
+      // Update server (masked or missing secrets keep the stored value)
       fastify.put('/settings/servers/:id', async (request, reply) => {
         try {
-          const { id } = request.params;
-          const updates = request.body;
-          const index = mockServers.findIndex((s) => s.id === id);
-          if (index === -1) {
-            return reply.code(404).send({ error: 'Server not found' });
-          }
-          mockServers[index] = { ...mockServers[index], ...updates };
-          return { success: true, server: mockServers[index] };
+          const index = findServer(request.params.id);
+          if (index === -1) return reply.code(404).send({ error: 'Server not found' });
+          const current = mockServers[index];
+          const updated = sanitizeServerInput(request.body, current);
+          mockServers[index] = { ...updated, id: current.id, status: current.status, lastCheck: current.lastCheck };
+          return { success: true, server: publicServer(mockServers[index]) };
         } catch (error) {
-          api.log('error', `[ServerMonitor] Update server error: ${error.message}`);
-          return reply.code(500).send({ error: 'Failed to update server' });
+          return sendConfigError(reply, error, 'Update server');
         }
       });
 
       // Delete server
       fastify.delete('/settings/servers/:id', async (request, reply) => {
-        try {
-          const { id } = request.params;
-          const index = mockServers.findIndex((s) => s.id === id);
-          if (index === -1) {
-            return reply.code(404).send({ error: 'Server not found' });
-          }
-          mockServers.splice(index, 1);
-          return { success: true };
-        } catch (error) {
-          api.log('error', `[ServerMonitor] Delete server error: ${error.message}`);
-          return reply.code(500).send({ error: 'Failed to delete server' });
-        }
+        const index = findServer(request.params.id);
+        if (index === -1) return reply.code(404).send({ error: 'Server not found' });
+        mockServers.splice(index, 1);
+        return { success: true };
       });
 
-      // Test server connection
+      // Test server connection (mock: no outbound connection is made)
       fastify.post('/settings/servers/:id/test', async (request, reply) => {
-        try {
-          const { id } = request.params;
-          const server = mockServers.find((s) => s.id === id);
-          if (!server) {
-            return reply.code(404).send({ error: 'Server not found' });
-          }
-          // Mock connection test - always succeeds for demo
-          return {
-            success: true,
-            message: 'Connection successful',
-            details: {
-              host: server.host,
-              port: server.port,
-              type: server.type,
-              responseTime: Math.floor(Math.random() * 200) + 50,
-            },
-          };
-        } catch (error) {
-          api.log('error', `[ServerMonitor] Test connection error: ${error.message}`);
-          return reply.code(500).send({ error: 'Failed to test connection' });
-        }
+        const server = mockServers[findServer(request.params.id)];
+        if (!server) return reply.code(404).send({ error: 'Server not found' });
+        return {
+          success: true,
+          message: 'Connection successful',
+          details: {
+            host: server.host,
+            port: server.port,
+            type: server.type,
+            responseTime: Math.floor(Math.random() * 200) + 50,
+          },
+        };
       });
 
       api.log('info', '[ServerMonitor] Routes registered');
@@ -853,6 +844,10 @@ export default {
 
     // ── Server Health Monitoring Cron Job ──────────────────────────────
     // Runs every 10 minutes to check server health and send notifications
+    // The manifest does not grant the "cron" permission (the checks below use
+    // mock data), so registration is refused; that must not stop the routes
+    // from loading.
+    try {
     api.registerCronJob('*/10 * * * *', async () => {
       api.log('info', '[ServerMonitor] Running health checks...');
 
@@ -970,6 +965,9 @@ export default {
     }, 'server-health-check');
 
     api.log('info', '[ServerMonitor] Health monitoring cron job registered (runs every 10 min)');
+    } catch (error) {
+      api.log('warn', `[ServerMonitor] Health monitoring cron job not registered: ${error.message}`);
+    }
     api.log('info', '[ServerMonitor] Extension initialized successfully');
   },
 

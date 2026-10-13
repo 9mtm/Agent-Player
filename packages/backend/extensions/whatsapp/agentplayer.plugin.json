@@ -6,6 +6,7 @@
   "type": "channel",
   "author": "Agent Player Team",
   "main": "index.js",
+  "routeAccess": "public",
   "permissions": ["network", "database", "tools"],
   "settingsUI": {
     "type": "form",

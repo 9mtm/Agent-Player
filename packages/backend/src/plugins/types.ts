@@ -135,6 +135,11 @@ export interface PluginManifest {
   // Permissions
   permissions?: string[]; // e.g., ['network', 'filesystem', 'process']
 
+  // Route access for /api/ext/<id> (S0-Q.18). Default: 'owner-admin'.
+  routeAccess?: 'owner-admin' | 'authenticated' | 'public';
+  /** Route patterns relative to /api/ext/<id> that skip the access check (e.g. provider webhooks). */
+  publicRoutes?: string[];
+
   // Compatibility
   compatibleWith?: string[]; // Other plugin IDs
   conflicts?: string[]; // Conflicting plugin IDs

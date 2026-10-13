@@ -6,6 +6,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { PluginManifest } from './types.js';
 import { createExtensionApi } from './sdk.js';
+import { createExtensionRouteGuard } from './extension-route-access.js';
 import { getDatabase } from '../db/index.js';
 import { readdirSync, existsSync, readFileSync, watch } from 'fs';
 import { resolve, join } from 'path';
@@ -144,10 +145,14 @@ export class ExtensionRunner {
     api.registerTranslations(i18nDir);
 
     // Register routes (collected during register() call)
+    // SECURITY (S0-Q.18): deny by default — owner/admin only unless the
+    // manifest declares routeAccess / publicRoutes (see extension-route-access.ts).
     const routesToRegister = api.__getRoutesToRegister();
     for (const { fn, prefix } of routesToRegister) {
       const fullPrefix = `/api/ext/${id}${prefix || ''}`;
+      const guard = createExtensionRouteGuard(manifest, `/api/ext/${id}`);
       await fastify.register(async (scope) => {
+        if (guard) scope.addHook('onRequest', guard);
         await fn(scope);
       }, { prefix: fullPrefix });
       console.log(`[ExtensionRunner] ✅ Routes registered under: ${fullPrefix}`);

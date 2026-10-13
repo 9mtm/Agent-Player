@@ -6,6 +6,7 @@
   "author": "Agent Player Team",
   "type": "app",
   "main": "src/index.js",
+  "routeAccess": "authenticated",
   "permissions": ["database", "routes", "cron"],
 
   "capabilities": {

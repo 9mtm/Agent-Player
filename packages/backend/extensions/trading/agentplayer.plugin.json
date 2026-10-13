@@ -6,6 +6,7 @@
   "type": "app",
   "author": "Agent Player Team",
   "main": "index.js",
+  "routeAccess": "public",
   "permissions": [
     "database",
     "routes",

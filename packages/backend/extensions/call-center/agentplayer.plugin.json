@@ -6,6 +6,7 @@
   "type": "channel",
   "author": "Agent Player",
   "main": "index.js",
+  "publicRoutes": ["/webhooks/call-status", "/webhooks/recording-status"],
   "permissions": ["network", "database", "tools", "api", "credentials"],
   "icon": "phone",
   "capabilities": {
