@@ -17,6 +17,7 @@ import { ClaudeClient } from '../llm/claude-client.js';
 import { createToolsRegistry } from '../tools/index.js';
 import { logActivity } from './activity-logger.js';
 import { resolveProviderApiKey } from '../credentials/authority.js';
+import { UNKNOWN_PRINCIPAL } from '../tools/grants.js';
 
 const HEARTBEAT_OK_TOKEN = 'HEARTBEAT_OK';
 const HEARTBEAT_ACK_MAX_CHARS = 300;
@@ -102,7 +103,7 @@ async function runHeartbeat(agent: AgentRow, heartbeatContent: string): Promise<
   });
 }
 
-interface AgentRow {
+export interface AgentRow {
   id: string;
   name: string;
   model: string;
@@ -117,25 +118,35 @@ interface AgentRow {
 const activeJobs = new Map<string, cron.ScheduledTask>();
 
 /**
- * Agents a task was delegated from: the spawner of the task and of every
- * parent task, plus the parent tasks' assignees (S1.2).
+ * Agents a task was delegated from (S1.2), from server-recorded fields only:
+ * the spawner of the task and of every parent task, plus the parent tasks'
+ * assignees. A task in the chain without a spawner that was not created by
+ * the owner through the API (origin 'owner') counts as delegated from an
+ * unknown principal: the run gets at most the minimal default set.
  */
 export function delegatingAgents(taskId: string): string[] {
   const orchestrator = getOrchestrator();
   const out = new Set<string>();
   let task: any = orchestrator.getTask(taskId);
-  for (let depth = 0; task && depth < 16; depth++) {
+  if (!task) return [UNKNOWN_PRINCIPAL];
+  for (let depth = 0; task; depth++) {
+    if (depth >= 16) { out.add(UNKNOWN_PRINCIPAL); break; }
     if (typeof task.spawnedBy === 'string' && task.spawnedBy) out.add(task.spawnedBy);
+    else if (task.origin !== 'owner') out.add(UNKNOWN_PRINCIPAL);
     if (depth > 0 && typeof task.assignedTo === 'string' && task.assignedTo) out.add(task.assignedTo);
-    task = task.parentId ? orchestrator.getTask(task.parentId) : null;
+    if (!task.parentId) break;
+    const parent = orchestrator.getTask(task.parentId);
+    if (!parent) { out.add(UNKNOWN_PRINCIPAL); break; }
+    task = parent;
   }
   return [...out];
 }
 
 /**
  * Run a single task for a given agent using the agentic tool loop (no streaming).
+ * Exported for tests.
  */
-async function runAgentTask(agent: AgentRow, taskId: string, taskDescription: string): Promise<string> {
+export async function runAgentTask(agent: AgentRow, taskId: string, taskDescription: string): Promise<string> {
   const orchestrator = getOrchestrator();
 
   // Mark task as in-progress
@@ -166,6 +177,7 @@ async function runAgentTask(agent: AgentRow, taskId: string, taskDescription: st
     sessionId: `cron-${taskId}`,
     workspaceDir: process.cwd(),
     agentId: agent.id,
+    taskId,
     delegatedFrom: delegatingAgents(taskId),
   });
 
@@ -246,7 +258,7 @@ async function runAgentTask(agent: AgentRow, taskId: string, taskDescription: st
   // Read recurring metadata before completing (it's on the task's input)
   const completedTask = orchestrator.getTask(taskId);
   const taskMeta = (completedTask?.input as any)?._meta as
-    | { repeat_schedule?: string; repeat_assigned_to?: string }
+    | { repeat_schedule?: string }
     | undefined;
 
   // Mark task done
@@ -261,7 +273,9 @@ async function runAgentTask(agent: AgentRow, taskId: string, taskDescription: st
   // Auto-recreate if this is a recurring task
   if (taskMeta?.repeat_schedule && completedTask) {
     try {
-      const assignToId = taskMeta.repeat_assigned_to ?? completedTask.assignedTo ?? agent.id;
+      // SECURITY (S1.2): never take the assignee from task input; keep the
+      // original delegation origin on the copy.
+      const assignToId = completedTask.assignedTo ?? agent.id;
       // Preserve _meta but strip _upstream from input for the fresh run
       const { _upstream, ...cleanInput } = (completedTask.input as Record<string, unknown> | undefined) ?? {};
       const newTask = orchestrator.createTask({
@@ -269,6 +283,9 @@ async function runAgentTask(agent: AgentRow, taskId: string, taskDescription: st
         description: completedTask.description,
         priority: completedTask.priority as any,
         inputData: Object.keys(cleanInput).length > 0 ? cleanInput : undefined,
+        parentId: completedTask.parentId,
+        spawnedBy: (completedTask as any).spawnedBy,
+        origin: (completedTask as any).origin,
       });
       orchestrator.assignTask(newTask.id, assignToId);
       console.log(`[AgentCron] 🔄 Recurring task "${completedTask.title}" re-queued (schedule: ${taskMeta.repeat_schedule})`);

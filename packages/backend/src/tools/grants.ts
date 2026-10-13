@@ -58,6 +58,9 @@ export const DESTINATION_PARAMS: Readonly<Record<string, string>> = {
   make_call: 'toNumber',
 };
 
+/** Delegation from a principal without grants of its own: at most the default set. */
+export const UNKNOWN_PRINCIPAL = '(unknown-principal)';
+
 export const TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_PARENT_DEPTH = 8;
 
@@ -224,7 +227,8 @@ export function loadAgentGrants(
     const own = loadOwn(agentId, available, new Set());
     let grants = own;
     for (const parent of delegatedFrom) {
-      if (!parent || parent === agentId) continue;
+      if (parent === UNKNOWN_PRINCIPAL || !parent) { grants = intersectGrants(grants, defaultGrants()); continue; }
+      if (parent === agentId) continue;
       grants = intersectGrants(grants, loadOwn(parent, available, new Set()));
     }
     return grants;

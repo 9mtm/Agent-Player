@@ -9,7 +9,7 @@
  * in the Kanban board.
  */
 
-import type { Tool, ToolResult } from '../types.js';
+import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
 import { getOrchestrator } from '../../multi-agent/index.js';
 import { getDatabase } from '../../db/index.js';
 
@@ -36,11 +36,6 @@ export const taskCreateTool: Tool = {
         enum: ['low', 'medium', 'high', 'urgent'],
         description: 'Task priority. Default: medium',
       },
-      requires_approval: {
-        type: 'string',
-        enum: ['true', 'false'],
-        description: 'Whether a human must approve before execution. Default: based on agent auto_approve setting.',
-      },
       dependencies: {
         type: 'array',
         items: { type: 'string' },
@@ -54,16 +49,20 @@ export const taskCreateTool: Tool = {
     required: ['title', 'description', 'assigned_to'],
   },
 
-  async execute(params): Promise<ToolResult> {
-    const { title, description, assigned_to, priority = 'medium', requires_approval, dependencies, input_data } = params as {
+  async execute(params, context?: ToolExecutionContext): Promise<ToolResult> {
+    const { title, description, assigned_to, priority = 'medium', dependencies, input_data } = params as {
       title: string;
       description: string;
       assigned_to: string;
       priority?: string;
-      requires_approval?: string;
       dependencies?: string[];
       input_data?: Record<string, unknown>;
     };
+    // SECURITY (S1.2): the model may not set reserved keys (recurrence, assignee
+    // override, upstream results) nor the approval flag.
+    const safeInput = input_data && typeof input_data === 'object' && !Array.isArray(input_data)
+      ? Object.fromEntries(Object.entries(input_data).filter(([k]) => !k.startsWith('_')))
+      : undefined;
 
     try {
       // Resolve agent name → id from agents_config
@@ -79,12 +78,8 @@ export const taskCreateTool: Tool = {
         };
       }
 
-      // Determine if approval is required
-      const needsApproval = requires_approval === 'true'
-        ? true
-        : requires_approval === 'false'
-          ? false
-          : !agent.auto_approve_tasks; // default: inverse of auto_approve
+      // Approval follows the target agent's owner-set auto_approve flag only.
+      const needsApproval = !agent.auto_approve_tasks;
 
       const orchestrator = getOrchestrator();
 
@@ -95,7 +90,12 @@ export const taskCreateTool: Tool = {
         priority: priority as 'low' | 'medium' | 'high' | 'urgent',
         requiredCapabilities: [],
         dependencies: dependencies ?? [],
-        inputData: input_data,
+        inputData: safeInput && Object.keys(safeInput).length ? safeInput : undefined,
+        // SECURITY (S1.2): origin recorded server-side, never from model input.
+        // No calling agent -> no spawner -> runs fail closed to the minimal set.
+        spawnedBy: context?.agentId,
+        parentId: context?.taskId,
+        origin: 'agent',
       });
 
       // If approved, immediately assign to agent

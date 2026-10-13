@@ -43,6 +43,8 @@ export interface Tool {
   execClass?: boolean;
   /** Parameter holding the destination (chat id, channel, number) for destination scopes (S1.2). */
   destinationParam?: string;
+  /** Extension tools may ask for one-time owner approval per call (S1.3); built-in risky tools always need it. */
+  requiresApproval?: boolean;
 }
 
 export interface ToolExecutionContext {
@@ -52,6 +54,8 @@ export interface ToolExecutionContext {
   sessionId?: string;
   /** Agent the tools run for (agents_config.id). Its grants limit the tools (S1.2). */
   agentId?: string;
+  /** Orchestrator task this run executes (cron runner); new tasks become its subtasks. */
+  taskId?: string;
   /** Agents this run was delegated from (task spawners): grants are intersected with theirs. */
   delegatedFrom?: string[];
   /** Effective grants; computed by createToolsRegistry from agentId when absent (S1.2). */

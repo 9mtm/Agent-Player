@@ -113,6 +113,12 @@ export class AgentOrchestrator {
       CREATE INDEX IF NOT EXISTS idx_tasks_team ON tasks(team_id);
       CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
     `);
+
+    // S1.2: server-recorded origin of a task ('owner' = created by the owner
+    // through the API, 'agent' = created by an agent tool, 'requeue' = recurring
+    // copy). Never taken from model input.
+    const cols = this.db!.prepare("SELECT name FROM pragma_table_info('tasks')").all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'origin')) this.db!.exec('ALTER TABLE tasks ADD COLUMN origin TEXT');
   }
 
   /**
@@ -387,6 +393,8 @@ export class AgentOrchestrator {
     deadline?: Date;
     maxRetries?: number;
     spawnedBy?: string;
+    /** Server-recorded origin (S1.2): 'owner' | 'agent' | 'requeue' | other principal. */
+    origin?: string;
   }): Task {
     const id = `task_${uuidv4()}`;
     const now = new Date();
@@ -427,6 +435,7 @@ export class AgentOrchestrator {
     // Add spawn metadata
     (task as any).spawnDepth = spawnDepth;
     (task as any).spawnedBy = input.spawnedBy;
+    (task as any).origin = input.origin;
 
     this.tasks.set(id, task);
 
@@ -473,6 +482,7 @@ export class AgentOrchestrator {
       teamId: parentTask.teamId,
       parentId: parentTaskId,
       spawnedBy: parentTask.assignedTo,
+      origin: 'agent',
     });
   }
 
@@ -861,8 +871,8 @@ export class AgentOrchestrator {
         id, title, description, priority, status, required_capabilities,
         assigned_to, team_id, parent_id, subtasks, dependencies, input, output,
         progress, created_at, started_at, completed_at, deadline, error,
-        retry_count, max_retries, spawn_depth, spawned_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        retry_count, max_retries, spawn_depth, spawned_by, origin
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       task.id,
       task.title,
@@ -886,7 +896,8 @@ export class AgentOrchestrator {
       task.retryCount,
       task.maxRetries,
       (task as any).spawnDepth || 0,
-      (task as any).spawnedBy || null
+      (task as any).spawnedBy || null,
+      (task as any).origin || null
     );
   }
 
@@ -913,7 +924,11 @@ export class AgentOrchestrator {
       error: row.error || undefined,
       retryCount: row.retry_count,
       maxRetries: row.max_retries,
-    };
+      // S1.2: delegation origin survives a restart (used for the grants subset rule)
+      spawnDepth: row.spawn_depth || 0,
+      spawnedBy: row.spawned_by || undefined,
+      origin: row.origin || undefined,
+    } as Task;
   }
 
   /**

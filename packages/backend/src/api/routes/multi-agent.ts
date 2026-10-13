@@ -280,6 +280,9 @@ export async function multiAgentRoutes(fastify: FastifyInstance): Promise<void> 
       inputData: body.inputData,
       deadline: body.deadline ? new Date(body.deadline) : undefined,
       maxRetries: body.maxRetries,
+      // S1.2: only the owner's own API tasks count as undelegated; anyone else
+      // is a principal without grants of its own (runs get the minimal set).
+      origin: request.authUser?.role === 'owner' ? 'owner' : `user:${request.authUser?.id ?? 'unknown'}`,
     });
 
     // If an agent was specified, resolve it and auto-assign
