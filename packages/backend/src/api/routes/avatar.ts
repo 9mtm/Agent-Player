@@ -6,6 +6,12 @@ import fs from 'fs';
 import path from 'path';
 import { randomBytes } from 'crypto';
 import { handleError } from '../error-handler.js';
+import {
+  downloadAvatarModel,
+  downloadAvatarPreview,
+  writeFileAtomic,
+  avatarDownloadErrorStatus,
+} from '../../services/net/avatar-download.js';
 
 /**
  * Avatar API Routes
@@ -841,29 +847,21 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       if (avatar.localGlbPath) return reply.send({ success: true, message: 'Already local' });
       if (!avatar.glbUrl) return reply.status(400).send({ error: 'No remote URL to download' });
 
+      // SECURITY (S0-A.13): the stored glbUrl came from the user -> SSRF guard
+      // (Ready Player Me hosts only, public DNS answers, pinned IP, limits, GLB check).
+      const glbBuffer = await downloadAvatarModel(avatar.glbUrl);
+      const previewBuf = await downloadAvatarPreview(avatar.glbUrl);
+
       const projectRoot = path.join(process.cwd(), '..', '..');
       const avatarDir = path.join(projectRoot, 'public', 'storage', 'avatars', 'user', avatar.userId, id);
       fs.mkdirSync(avatarDir, { recursive: true });
-
-      // Download GLB
-      const glbResponse = await fetch(avatar.glbUrl);
-      if (!glbResponse.ok) throw new Error(`Failed to download GLB: HTTP ${glbResponse.status}`);
-      const glbBuffer = await glbResponse.arrayBuffer();
-      fs.writeFileSync(path.join(avatarDir, 'avatar.glb'), Buffer.from(glbBuffer));
+      writeFileAtomic(path.join(avatarDir, 'avatar.glb'), glbBuffer);
       const localGlbPath = `/storage/avatars/user/${avatar.userId}/${id}/avatar.glb`;
 
-      // Try preview (RPM)
       let localPreviewUrl: string | null = null;
-      const rpmMatch = avatar.glbUrl.match(/models\.readyplayer\.me\/([a-f0-9]+)\.glb/);
-      if (rpmMatch) {
-        try {
-          const previewRes = await fetch(`https://models.readyplayer.me/${rpmMatch[1]}.png`);
-          if (previewRes.ok) {
-            const previewBuf = await previewRes.arrayBuffer();
-            fs.writeFileSync(path.join(avatarDir, 'preview.png'), Buffer.from(previewBuf));
-            localPreviewUrl = `/storage/avatars/user/${avatar.userId}/${id}/preview.png`;
-          }
-        } catch {}
+      if (previewBuf) {
+        writeFileAtomic(path.join(avatarDir, 'preview.png'), previewBuf);
+        localPreviewUrl = `/storage/avatars/user/${avatar.userId}/${id}/preview.png`;
       }
 
       db.prepare(`
@@ -881,6 +879,8 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       return reply.send({ success: true, avatar: updated });
     } catch (error: any) {
       fastify.log.error('Avatar localize error:', error);
+      const refused = avatarDownloadErrorStatus(error);
+      if (refused) return reply.status(refused).send({ error: 'Avatar model could not be downloaded from this URL' });
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Avatar] Localize failed');
     }
@@ -895,30 +895,26 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       if (!userId) return reply.status(400).send({ error: 'userId is required' });
       if (!glbUrl) return reply.status(400).send({ error: 'glbUrl is required' });
 
+      if (typeof glbUrl !== 'string') return reply.status(400).send({ error: 'glbUrl must be a string' });
+
+      // SECURITY (S0-A.13): glbUrl is user input fetched by the server -> SSRF
+      // guard (https, default port, Ready Player Me hosts only, every DNS answer
+      // public, connection pinned to the checked IP, same-host redirects <= 3,
+      // size + content-type limits, GLB magic). Nothing is written before it passes.
+      const glbBuffer = await downloadAvatarModel(glbUrl);
+      const previewBuf = await downloadAvatarPreview(glbUrl); // optional
+
       const id = randomBytes(8).toString('hex');
       const projectRoot = path.join(process.cwd(), '..', '..');
       const avatarDir = path.join(projectRoot, 'public', 'storage', 'avatars', 'user', userId, id);
       fs.mkdirSync(avatarDir, { recursive: true });
-
-      // Download GLB file
-      const glbResponse = await fetch(glbUrl);
-      if (!glbResponse.ok) throw new Error(`Failed to download GLB: HTTP ${glbResponse.status}`);
-      const glbBuffer = await glbResponse.arrayBuffer();
-      fs.writeFileSync(path.join(avatarDir, 'avatar.glb'), Buffer.from(glbBuffer));
+      writeFileAtomic(path.join(avatarDir, 'avatar.glb'), glbBuffer);
       const localGlbPath = `/storage/avatars/user/${userId}/${id}/avatar.glb`;
 
-      // Try to download preview image (auto-detect RPM avatars)
       let localPreviewUrl: string | null = null;
-      const rpmMatch = glbUrl.match(/models\.readyplayer\.me\/([a-f0-9]+)\.glb/);
-      if (rpmMatch) {
-        try {
-          const previewRes = await fetch(`https://models.readyplayer.me/${rpmMatch[1]}.png`);
-          if (previewRes.ok) {
-            const previewBuf = await previewRes.arrayBuffer();
-            fs.writeFileSync(path.join(avatarDir, 'preview.png'), Buffer.from(previewBuf));
-            localPreviewUrl = `/storage/avatars/user/${userId}/${id}/preview.png`;
-          }
-        } catch {} // preview is optional
+      if (previewBuf) {
+        writeFileAtomic(path.join(avatarDir, 'preview.png'), previewBuf);
+        localPreviewUrl = `/storage/avatars/user/${userId}/${id}/preview.png`;
       }
 
       const db = getDatabase();
@@ -942,6 +938,8 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       return reply.send({ success: true, avatar });
     } catch (error: any) {
       fastify.log.error('Avatar download error:', error);
+      const refused = avatarDownloadErrorStatus(error);
+      if (refused) return reply.status(refused).send({ error: 'Avatar model could not be downloaded from this URL' });
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Avatar] Download failed');
     }
