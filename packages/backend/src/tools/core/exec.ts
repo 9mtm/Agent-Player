@@ -8,8 +8,13 @@
 
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
-import path from 'node:path';
-import type { Tool, ToolResult } from './types.js';
+import type { Tool, ToolResult } from '../types.js';
+import {
+  execToolRefusal,
+  isExecToolsEnabled,
+  minimalChildEnv,
+  safeChildCwd,
+} from '../exec-policy.js';
 
 const execAsync = promisify(exec);
 
@@ -115,19 +120,6 @@ function isCommandAllowed(command: string): { allowed: boolean; reason?: string 
   return { allowed: true };
 }
 
-/**
- * Get safe working directory
- * SECURITY: Restrict command execution to workspace directory (H-12)
- */
-function getSafeWorkingDirectory(): string {
-  const cwd = process.cwd();
-
-  // Resolve to absolute path to prevent directory traversal
-  const safeCwd = path.resolve(cwd);
-
-  return safeCwd;
-}
-
 export const execTool: Tool = {
   name: 'exec',
   description: 'Execute whitelisted shell commands in the workspace. Allowed: git, npm, pnpm, curl, gh, node, python, docker, and read-only file operations.',
@@ -172,8 +164,11 @@ export const execTool: Tool = {
     ],
   },
 
-  async execute(params): Promise<ToolResult> {
+  async execute(params, context): Promise<ToolResult> {
     const { command, timeout = DEFAULT_TIMEOUT } = params;
+
+    // SECURITY: exec-class tools are off unless AGENT_EXEC_TOOLS=true (S0-Q.5)
+    if (!isExecToolsEnabled()) return execToolRefusal('exec');
 
     // SECURITY: Validate command against whitelist (H-12)
     const validation = isCommandAllowed(command);
@@ -192,8 +187,16 @@ export const execTool: Tool = {
       };
     }
 
-    // Get safe working directory
-    const cwd = getSafeWorkingDirectory();
+    // SECURITY: never run inside the data directory (S0-Q.5)
+    let cwd: string;
+    try {
+      cwd = safeChildCwd(context?.workspaceDir);
+    } catch (error: any) {
+      return {
+        content: [{ type: 'text', text: `❌ Blocked: ${error.message}` }],
+        error: 'Working directory not allowed by security policy',
+      };
+    }
 
     try {
       console.log(`[ExecTool] 🚀 Executing: ${command}`);
@@ -205,13 +208,8 @@ export const execTool: Tool = {
         maxBuffer: 1024 * 1024 * 10, // 10MB buffer
         cwd, // SECURITY: Restrict to workspace directory
         shell: process.platform === 'win32' ? 'powershell.exe' : '/bin/bash',
-        // SECURITY: Sanitize environment variables
-        env: {
-          ...process.env,
-          // Remove potentially dangerous env vars
-          LD_PRELOAD: undefined,
-          LD_LIBRARY_PATH: undefined,
-        },
+        // SECURITY: minimal environment, no server secrets (S0-Q.5)
+        env: minimalChildEnv(),
       });
 
       const output = stdout || stderr || '(no output)';

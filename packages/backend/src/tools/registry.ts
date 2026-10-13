@@ -6,6 +6,7 @@
  */
 
 import type { Tool, ToolResult, ToolExecutionContext } from './types.js';
+import { execToolRefusal, isToolAllowedByExecPolicy } from './exec-policy.js';
 
 export class ToolsRegistry {
   private tools = new Map<string, Tool>();
@@ -39,10 +40,13 @@ export class ToolsRegistry {
   }
 
   /**
-   * Get all registered tools
+   * Get all tools usable right now. Exec-class tools are left out unless the
+   * server enables them (AGENT_EXEC_TOOLS=true), see exec-policy.ts.
    */
   getAll(): Tool[] {
-    return Array.from(this.tools.values());
+    return Array.from(this.tools.values()).filter((tool) =>
+      isToolAllowedByExecPolicy(tool.name)
+    );
   }
 
   /**
@@ -60,6 +64,12 @@ export class ToolsRegistry {
     params: Record<string, any>
   ): Promise<ToolResult> {
     const tool = this.tools.get(toolName);
+
+    // SECURITY: exec-class tools are refused unless enabled by server env (S0-Q.5)
+    if (!isToolAllowedByExecPolicy(toolName)) {
+      console.warn(`[ToolsRegistry] ⛔ Refused exec-class tool: ${toolName}`);
+      return execToolRefusal(toolName);
+    }
 
     if (!tool) {
       return {

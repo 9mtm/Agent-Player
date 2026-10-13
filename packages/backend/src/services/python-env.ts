@@ -158,11 +158,11 @@ export function getPythonPath(): string {
  * Returns environment variables for spawning Python processes.
  * Sets PYTHONIOENCODING and adjusts PATH for embedded/venv.
  */
-export function getPythonSpawnEnv(): NodeJS.ProcessEnv {
+export function getPythonSpawnEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   // Ensure path is resolved
   getPythonPath();
 
-  const env: NodeJS.ProcessEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' };
+  const env: NodeJS.ProcessEnv = { ...baseEnv, PYTHONIOENCODING: 'utf-8' };
 
   if (process.platform === 'win32' && _resolvedSource === 'embedded' && _resolvedPlatformDir) {
     // For embeddable: add python dir and Scripts to PATH
@@ -182,18 +182,22 @@ export function getPythonSpawnEnv(): NodeJS.ProcessEnv {
 /**
  * Spawn a Python script with the correct executable and environment.
  * Drop-in replacement for child_process.spawn().
+ *
+ * `baseEnv` replaces process.env as the starting environment; agent tools
+ * pass minimalChildEnv() so the child never sees server secrets.
  */
 export function spawnPython(
   scriptPath: string,
   args: string[] = [],
-  extraOptions?: SpawnOptions
+  extraOptions?: SpawnOptions & { baseEnv?: NodeJS.ProcessEnv }
 ): ChildProcess {
   const pythonPath = getPythonPath();
-  const env = getPythonSpawnEnv();
+  const { baseEnv, ...spawnOptions } = extraOptions ?? {};
+  const env = getPythonSpawnEnv(baseEnv);
 
   return spawn(pythonPath, [scriptPath, ...args], {
     env,
-    ...extraOptions,
+    ...spawnOptions,
   });
 }
 

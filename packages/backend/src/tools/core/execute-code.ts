@@ -10,6 +10,7 @@
 
 import { VM } from 'vm2';
 import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
+import { execToolRefusal, isExecToolsEnabled } from '../exec-policy.js';
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 const MAX_MEMORY_MB = 128; // 128MB memory limit
@@ -254,6 +255,9 @@ if (pkg.scripts?.test) {
 
   async execute(params, context): Promise<ToolResult> {
     const { code, timeout = DEFAULT_TIMEOUT } = params;
+
+    // SECURITY: exec-class tools are off unless AGENT_EXEC_TOOLS=true (S0-Q.5)
+    if (!isExecToolsEnabled()) return execToolRefusal('execute_code');
 
     // Validate timeout
     const safeTimeout = Math.min(timeout, 60000); // Max 60 seconds

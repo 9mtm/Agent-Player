@@ -17,6 +17,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { Tool, ToolResult } from '../types.js';
 import { spawnPython } from '../../services/python-env.js';
+import {
+  execToolRefusal,
+  isExecToolsEnabled,
+  minimalChildEnv,
+  safeChildCwd,
+} from '../exec-policy.js';
 
 // ─── Python script runner ─────────────────────────────────────────────────────
 
@@ -38,7 +44,11 @@ function runDesktopScript(args: Record<string, unknown>): Promise<Record<string,
       return reject(new Error(`Failed to write args file: ${writeErr.message}`));
     }
 
-    const child = spawnPython(SCRIPT_PATH, ['--args-file', argsFile]);
+    // SECURITY: minimal env (no server secrets), cwd outside the data dir (S0-Q.5)
+    const child = spawnPython(SCRIPT_PATH, ['--args-file', argsFile], {
+      baseEnv: minimalChildEnv(),
+      cwd: safeChildCwd(),
+    });
 
     let stdout = '';
     let stderr = '';
@@ -217,6 +227,10 @@ Multi-monitor workflow:
 
   async execute(params): Promise<ToolResult> {
     const { action } = params;
+
+    // SECURITY: exec-class tools are off unless AGENT_EXEC_TOOLS=true (S0-Q.5)
+    if (!isExecToolsEnabled()) return execToolRefusal('desktop_control');
+
     console.log(`[DesktopControl] 🖥️  action=${action}`, params);
 
     try {

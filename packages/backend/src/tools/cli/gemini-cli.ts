@@ -18,6 +18,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import type { Tool, ToolResult } from '../types.js';
+import { execToolRefusal, isExecToolsEnabled, minimalChildEnv } from '../exec-policy.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -83,6 +84,10 @@ export const geminiCliTool: Tool = {
   async execute(params): Promise<ToolResult> {
     const { prompt, model, timeout = 120_000 } = params;
 
+    // SECURITY: the CLI runs a host process with its own shell tools; off
+    // unless AGENT_EXEC_TOOLS=true (S0-Q.5)
+    if (!isExecToolsEnabled()) return execToolRefusal('gemini_cli');
+
     console.log(`[GeminiCLI] 🚀 Sending prompt (${prompt.length} chars)`);
     if (model) console.log(`[GeminiCLI]   Model: ${model}`);
 
@@ -95,11 +100,12 @@ export const geminiCliTool: Tool = {
     }
     args.push('-p', prompt);
 
-    const childEnv: NodeJS.ProcessEnv = {
-      ...process.env,
+    // SECURITY: minimal environment; only the CLI's own key is passed (S0-Q.5)
+    const childEnv = minimalChildEnv({
       NO_COLOR: '1',
       TERM: 'dumb',
-    };
+      GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    });
 
     try {
       let stdout: string;

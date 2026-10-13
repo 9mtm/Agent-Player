@@ -14,6 +14,7 @@ import {
   DANGEROUS_PATTERNS,
 } from './types.js';
 import { DEFAULT_SANDBOX_CONFIG } from './config.js';
+import { isInsideDataDir, minimalChildEnv, safeChildCwd } from '../tools/exec-policy.js';
 
 const execAsync = promisify(exec);
 
@@ -108,6 +109,10 @@ export class SandboxExecutor {
 
     if (!hostExecAllowed()) {
       return this.refused(startTime, 'Host command execution is disabled (SANDBOX_ALLOW_HOST_EXEC is not true)');
+    }
+    // SECURITY (S0-Q.5): host commands never run inside the data directory
+    if (request.cwd && isInsideDataDir(request.cwd)) {
+      return this.refused(startTime, 'Working directory inside the data directory is not allowed');
     }
     return this.executeNative(request, startTime);
   }
@@ -231,13 +236,9 @@ export class SandboxExecutor {
         maxBuffer: 10 * 1024 * 1024, // 10MB
       };
 
-      if (request.cwd) {
-        options.cwd = request.cwd;
-      }
-
-      if (request.env) {
-        options.env = { ...process.env, ...request.env };
-      }
+      // SECURITY (S0-Q.5): cwd outside the data dir; minimal env, no server secrets
+      options.cwd = safeChildCwd(request.cwd);
+      options.env = minimalChildEnv(request.env ?? {});
 
       const { stdout, stderr } = await execAsync(request.command, options);
       const duration = Date.now() - startTime;

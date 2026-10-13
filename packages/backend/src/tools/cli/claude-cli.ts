@@ -18,6 +18,12 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import type { Tool, ToolResult } from '../types.js';
 import { getDatabase } from '../../db/index.js';
+import {
+  execToolRefusal,
+  isExecToolsEnabled,
+  minimalChildEnv,
+  safeChildCwd,
+} from '../exec-policy.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -90,6 +96,21 @@ export const claudeCliTool: Tool = {
   async execute(params): Promise<ToolResult> {
     const { prompt, workdir, model, timeout = 180_000 } = params;
 
+    // SECURITY: the CLI runs a host process with its own shell tools; off
+    // unless AGENT_EXEC_TOOLS=true (S0-Q.5)
+    if (!isExecToolsEnabled()) return execToolRefusal('claude_cli');
+
+    // SECURITY: never run inside the data directory (S0-Q.5)
+    let cwd: string;
+    try {
+      cwd = safeChildCwd(workdir);
+    } catch (error: any) {
+      return {
+        content: [{ type: 'text', text: `❌ Blocked: ${error.message}` }],
+        error: 'Working directory not allowed by security policy',
+      };
+    }
+
     console.log(`[ClaudeCLI] 🚀 Sending prompt (${prompt.length} chars)`);
     if (workdir) console.log(`[ClaudeCLI]   Workdir: ${workdir}`);
     if (model) console.log(`[ClaudeCLI]   Model: ${model}`);
@@ -118,15 +139,13 @@ export const claudeCliTool: Tool = {
     const claudeBin = await findClaudeExecutable();
     console.log(`[ClaudeCLI] Binary: ${claudeBin}, API key: ${anthropicApiKey ? 'found' : 'MISSING'}`);
 
-    // Build env: remove CLAUDECODE to allow nested sessions
-    const childEnv: NodeJS.ProcessEnv = {
-      ...process.env,
+    // SECURITY: minimal environment (no server secrets, no CLAUDECODE);
+    // only the CLI's own API key is passed (S0-Q.5)
+    const childEnv = minimalChildEnv({
       NO_COLOR: '1',
       TERM: 'dumb',
-    };
-    // CRITICAL: Delete CLAUDECODE completely (not just empty string)
-    delete childEnv.CLAUDECODE;
-    if (anthropicApiKey) childEnv.ANTHROPIC_API_KEY = anthropicApiKey;
+      ANTHROPIC_API_KEY: anthropicApiKey || undefined,
+    });
 
     // claude -p "prompt" [--model model]
     const args: string[] = ['-p', prompt];
@@ -145,14 +164,14 @@ export const claudeCliTool: Tool = {
         ({ stdout, stderr } = await execAsync(shellCmd, {
           timeout,
           maxBuffer: 1024 * 1024 * 10,
-          cwd: workdir || process.cwd(),
+          cwd,
           env: childEnv,
         }));
       } else {
         ({ stdout, stderr } = await execFileAsync(claudeBin, args, {
           timeout,
           maxBuffer: 1024 * 1024 * 10,
-          cwd: workdir || process.cwd(),
+          cwd,
           env: childEnv,
         }));
       }
@@ -162,7 +181,7 @@ export const claudeCliTool: Tool = {
 
       return {
         content: [{ type: 'text', text: output }],
-        details: { model: model || 'default', workdir: workdir || process.cwd() },
+        details: { model: model || 'default', workdir: cwd },
       };
     } catch (err: any) {
       const msg = err.killed
