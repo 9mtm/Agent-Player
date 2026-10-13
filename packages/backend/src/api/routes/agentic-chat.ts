@@ -89,7 +89,8 @@ export async function streamChatClaude(
   userId: string = 'default',
   sessionId: string = 'default',
   chatContext?: Partial<ChatContext>,
-  toolPolicy?: ChannelToolPolicy
+  toolPolicy?: ChannelToolPolicy,
+  agentId?: string
 ): Promise<FastifyReply> {
   console.log('[Chat] 🚀 Starting Claude agentic stream');
   console.log('[Chat]   Model:', model);
@@ -108,8 +109,8 @@ export async function streamChatClaude(
     const claude = new ClaudeClient(apiKey, model);
 
     // Build tools registry for execution
-    // Same tool policy as the offered list: a channel turn cannot run a tool it was not offered.
-    const toolsRegistry = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy });
+    // Same tool policy and agent grants as the offered list: a turn cannot run a tool it was not offered.
+    const toolsRegistry = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId });
 
     // Convert messages to Claude format (filter out system role)
     let loopMessages: Array<{ role: 'user' | 'assistant'; content: string | any[] }> = messages

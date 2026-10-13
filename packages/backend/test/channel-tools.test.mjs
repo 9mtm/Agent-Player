@@ -196,7 +196,9 @@ test('extension tools: reserved names refused; manifest `process` makes a tool e
 
   procApi.registerTool(tool('proc_runner'));
   plainApi.registerTool({ ...tool('plain_tool'), execClass: false });
-  const reg = tools.createToolsRegistry({ userId: 'u-owner', workspaceDir: dir });
+  // S1.2: this test checks the exec gate / channel policy, so both tools are granted.
+  const granted = tools.staticGrants(['proc_runner', 'plain_tool']);
+  const reg = tools.createToolsRegistry({ userId: 'u-owner', workspaceDir: dir, grants: granted });
   const names = reg.getAll().map(t => t.name);
   assert.ok(!names.includes('proc_runner'), 'process-permission tool hidden without AGENT_EXEC_TOOLS');
   assert.ok(names.includes('plain_tool'));
@@ -205,14 +207,14 @@ test('extension tools: reserved names refused; manifest `process` makes a tool e
     assert.ok(reg.getAll().some(t => t.name === 'proc_runner'));
     // Never in a channel turn, even when opted in.
     await withEnv({ CHANNEL_AGENT_TOOLS_TELEGRAM: 'proc_runner,plain_tool' }, async () => {
-      const chReg = tools.createToolsRegistry({ userId: 'u-owner', workspaceDir: dir,
+      const chReg = tools.createToolsRegistry({ userId: 'u-owner', workspaceDir: dir, grants: granted,
         toolPolicy: policy.createChannelToolPolicy({ channel: 'telegram', conversationId: 'c' }) });
       assert.deepEqual(chReg.getAll().map(t => t.name).sort(), ['plain_tool']);
       assert.match((await chReg.execute('proc_runner', {})).error, /channel policy/);
     });
   });
   // Unknown extension tools are not in a channel turn unless opted in.
-  const chReg = tools.createToolsRegistry({ userId: 'u-owner', workspaceDir: dir,
+  const chReg = tools.createToolsRegistry({ userId: 'u-owner', workspaceDir: dir, grants: granted,
     toolPolicy: policy.createChannelToolPolicy({ channel: 'telegram', conversationId: 'c' }) });
   assert.match((await chReg.execute('plain_tool', {})).error, /channel policy/);
   procApi.unregisterTool('proc_runner');

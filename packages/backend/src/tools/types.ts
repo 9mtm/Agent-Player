@@ -41,6 +41,8 @@ export interface Tool {
   extensionId?: string; // Optional: tracks which extension registered this tool
   /** Set by the Extension SDK when the extension's manifest declares `process`/`exec`. */
   execClass?: boolean;
+  /** Parameter holding the destination (chat id, channel, number) for destination scopes (S1.2). */
+  destinationParam?: string;
 }
 
 export interface ToolExecutionContext {
@@ -50,6 +52,10 @@ export interface ToolExecutionContext {
   sessionId?: string;
   /** Agent the tools run for (agents_config.id). Its grants limit the tools (S1.2). */
   agentId?: string;
+  /** Agents this run was delegated from (task spawners): grants are intersected with theirs. */
+  delegatedFrom?: string[];
+  /** Effective grants; computed by createToolsRegistry from agentId when absent (S1.2). */
+  grants?: import('./grants.js').AgentToolGrants;
   /** Present for channel-originated turns: restricts which tools may be offered/run (S0-Q.8). */
   toolPolicy?: import('./channel-policy.js').ChannelToolPolicy;
 }

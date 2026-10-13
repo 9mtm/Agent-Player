@@ -256,9 +256,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     try {
       if (stream) {
-        return streamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy);
+        return streamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id);
       } else {
-        return nonStreamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy);
+        return nonStreamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id);
       }
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
@@ -281,7 +281,8 @@ async function streamChat(
   systemPromptAppend?: string,
   userId: string = 'default',
   chatContext?: any,
-  toolPolicy?: ChannelToolPolicy
+  toolPolicy?: ChannelToolPolicy,
+  agentId?: string
 ) {
   console.log('[Chat] 🚀 Starting stream chat');
   console.log('[Chat]   📦 Model:', model);
@@ -346,7 +347,7 @@ async function streamChat(
   });
 
   // Get real tools from the tools registry (11 tools: exec, read, write, browser×4, memory×2, desktop)
-  const toolsRegistry = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy });
+  const toolsRegistry = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId });
   const tools = toolsRegistry.getToolsForAPI();
 
   console.log('[Chat] 🔧 Available tools:', tools.length);
@@ -438,7 +439,8 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       userId,
       sessionId,
       chatContext,
-      toolPolicy
+      toolPolicy,
+      agentId
     );
   }
 
@@ -492,7 +494,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
         prompt: claudeFullPrompt,
         model: model || undefined,
         timeout: 180000  // 3 minutes
-      }, { workspaceDir: process.cwd(), userId, sessionId });
+      }, { workspaceDir: process.cwd(), userId, sessionId, agentId });
       const text = result.content?.[0]?.text || '(no response)';
       const claudeModel = (result.details as any)?.model || model || 'claude-sonnet-4-5-20250929';
       console.log(`[Chat] ✅ Claude CLI responded | model: ${claudeModel} | length: ${text.length}`);
@@ -635,7 +637,8 @@ async function nonStreamChat(
   systemPromptAppend?: string,
   userId: string = 'default',
   chatContext?: any,
-  toolPolicy?: ChannelToolPolicy
+  toolPolicy?: ChannelToolPolicy,
+  agentId?: string
 ) {
   console.log('[Chat] 🚀 Starting non-stream chat');
   console.log('[Chat]   📦 Model:', model);
@@ -697,11 +700,11 @@ async function nonStreamChat(
   });
 
   // Get real tools from the tools registry
-  const toolsRegistryNS = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy });
+  const toolsRegistryNS = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId });
   const tools = toolsRegistryNS.getToolsForAPI();
   if (provider === 'claude' && apiKey) {
     console.log('[Chat] 🤖 Using Claude API (non-stream)');
-    return streamChatClaude(reply, apiKey, model || getSettingsManager().getSettings().claude?.model || 'claude-sonnet-4-5-20250929', ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext, toolPolicy);
+    return streamChatClaude(reply, apiKey, model || getSettingsManager().getSettings().claude?.model || 'claude-sonnet-4-5-20250929', ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext, toolPolicy, agentId);
   }
 
   // Gemini CLI provider (non-stream path)
@@ -719,7 +722,7 @@ async function nonStreamChat(
       prompt: userMessage,
       model: model || undefined,
       timeout: 180000
-    }, { workspaceDir: process.cwd(), userId, sessionId });
+    }, { workspaceDir: process.cwd(), userId, sessionId, agentId });
     const text = result.content?.[0]?.text || '(no response)';
     return reply.send({ message: { role: 'assistant', content: text } });
   }

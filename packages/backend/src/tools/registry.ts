@@ -8,6 +8,7 @@
 import type { Tool, ToolResult, ToolExecutionContext } from './types.js';
 import { execToolRefusal, isToolAllowedByExecPolicy, isToolObjectAllowedByExecPolicy } from './exec-policy.js';
 import { channelToolCallRefusal, isToolAllowedInChannel } from './channel-policy.js';
+import { defaultGrants, grantCallRefusal, isToolGranted, type AgentToolGrants } from './grants.js';
 
 export class ToolsRegistry {
   private tools = new Map<string, Tool>();
@@ -44,13 +45,27 @@ export class ToolsRegistry {
    * Get all tools usable right now. Exec-class tools are left out unless the
    * server enables them (AGENT_EXEC_TOOLS=true), see exec-policy.ts.
    * In a channel-originated turn only the channel policy's tools are left
-   * (see channel-policy.ts).
+   * (see channel-policy.ts). Only tools granted to the agent are kept
+   * (see grants.ts).
    */
   getAll(): Tool[] {
     const policy = this.context.toolPolicy;
+    const grants = this.grants();
     return Array.from(this.tools.values()).filter((tool) =>
-      isToolObjectAllowedByExecPolicy(tool) && (!policy || isToolAllowedInChannel(policy, tool))
+      isToolObjectAllowedByExecPolicy(tool)
+      && (!policy || isToolAllowedInChannel(policy, tool))
+      && isToolGranted(grants, tool.name)
     );
+  }
+
+  /** The agent's effective grants; no agent -> the minimal default set (fail closed, S1.2). */
+  private grants(): AgentToolGrants {
+    return this.context.grants ?? defaultGrants();
+  }
+
+  /** All registered tools, unfiltered (used to seed grants and for the owner grants view). */
+  listRegistered(): Tool[] {
+    return Array.from(this.tools.values());
   }
 
   /**
@@ -92,9 +107,17 @@ export class ToolsRegistry {
       };
     }
 
+    // SECURITY (S1.2): only tools granted to this agent run, even if the model emits others
+    const grantRefused = grantCallRefusal(this.grants(), toolName, tool, params);
+    if (grantRefused) {
+      console.warn(`[ToolsRegistry] ⛔ Refused ungranted tool for agent ${this.context.agentId ?? '(none)'}: ${toolName}`);
+      return grantRefused;
+    }
+
     try {
       console.log(`[ToolsRegistry] 🔧 Executing tool: ${toolName}`);
-      console.log(`[ToolsRegistry]   Params:`, JSON.stringify(params, null, 2));
+      // Parameter names only: values may hold secrets (e.g. credentials_save).
+      console.log(`[ToolsRegistry]   Params:`, Object.keys(params || {}).join(', '));
 
       const result = await tool.execute(params, this.context);
 

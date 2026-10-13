@@ -117,6 +117,22 @@ interface AgentRow {
 const activeJobs = new Map<string, cron.ScheduledTask>();
 
 /**
+ * Agents a task was delegated from: the spawner of the task and of every
+ * parent task, plus the parent tasks' assignees (S1.2).
+ */
+export function delegatingAgents(taskId: string): string[] {
+  const orchestrator = getOrchestrator();
+  const out = new Set<string>();
+  let task: any = orchestrator.getTask(taskId);
+  for (let depth = 0; task && depth < 16; depth++) {
+    if (typeof task.spawnedBy === 'string' && task.spawnedBy) out.add(task.spawnedBy);
+    if (depth > 0 && typeof task.assignedTo === 'string' && task.assignedTo) out.add(task.assignedTo);
+    task = task.parentId ? orchestrator.getTask(task.parentId) : null;
+  }
+  return [...out];
+}
+
+/**
  * Run a single task for a given agent using the agentic tool loop (no streaming).
  */
 async function runAgentTask(agent: AgentRow, taskId: string, taskDescription: string): Promise<string> {
@@ -143,10 +159,14 @@ async function runAgentTask(agent: AgentRow, taskId: string, taskDescription: st
   }
 
   const claude = new ClaudeClient(apiKey, agent.model);
+  // SECURITY (S1.2): the agent's own grants, intersected with every agent this
+  // task was delegated from (delegation never expands permissions).
   const toolsRegistry = createToolsRegistry({
     userId: agent.id,
     sessionId: `cron-${taskId}`,
     workspaceDir: process.cwd(),
+    agentId: agent.id,
+    delegatedFrom: delegatingAgents(taskId),
   });
 
   const tools = toolsRegistry.getToolsForAPI();

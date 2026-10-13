@@ -7,6 +7,7 @@
 
 export * from './types.js';
 export * from './registry.js';
+export * from './grants.js';
 
 // Re-export organized tools
 export * from './core/index.js';
@@ -21,6 +22,7 @@ export * from './credentials/index.js';
 // Utility function to create a pre-configured registry
 import { ToolsRegistry } from './registry.js';
 import type { ToolExecutionContext } from './types.js';
+import { defaultGrants, loadAgentGrants } from './grants.js';
 
 // Import tools from organized directories
 import {
@@ -146,6 +148,16 @@ export function createToolsRegistry(context: ToolExecutionContext): ToolsRegistr
   // Register extension-provided tools
   for (const tool of extensionTools) {
     registry.register(tool);
+  }
+
+  // SECURITY (S1.2): the agent's grants (∩ parents / delegating agents).
+  // No agent -> minimal default set (fail closed).
+  if (!context.grants) {
+    registry.updateContext({
+      grants: context.agentId
+        ? loadAgentGrants(context.agentId, registry.listRegistered(), context.delegatedFrom || [])
+        : defaultGrants(),
+    });
   }
 
   const coreToolsCount = 19;  // Increased from 18 (added execute_code)

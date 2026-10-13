@@ -23,7 +23,7 @@ const FAKE = {
 Object.assign(process.env, FAKE);
 
 const policy = await import('../src/tools/exec-policy.ts');
-const { createToolsRegistry } = await import('../src/tools/index.ts');
+const { createToolsRegistry, staticGrants } = await import('../src/tools/index.ts');
 const { SandboxExecutor } = await import('../src/sandbox/executor.ts');
 
 const EXEC_TOOLS = ['exec', 'execute_code', 'desktop_control'];
@@ -38,7 +38,10 @@ const withFlag = async (value, fn) => {
   }
 };
 
-const registry = () => createToolsRegistry({ userId: 'u1', sessionId: 's1', workspaceDir: dir });
+// S1.2: these tests check the exec gate, so the agent is granted every tool
+// (grants and the exec gate are intersected; grants alone never enable exec).
+const ALL = staticGrants(['exec', 'execute_code', 'desktop_control', 'claude_cli', 'gemini_cli', 'read', 'write', 'web_fetch']);
+const registry = () => createToolsRegistry({ userId: 'u1', sessionId: 's1', workspaceDir: dir, grants: ALL });
 
 test.after(() => {
   process.chdir(tmpdir());
@@ -133,7 +136,7 @@ test('child processes never get a cwd inside .data/', async () => {
   assert.throws(() => policy.safeChildCwd(join(dir, '.data', 'encryption')), /data directory/);
   assert.equal(policy.safeChildCwd(dir), dir);
   await withFlag('true', async () => {
-    const reg = createToolsRegistry({ userId: 'u1', sessionId: 's1', workspaceDir: join(dir, '.data') });
+    const reg = createToolsRegistry({ userId: 'u1', sessionId: 's1', workspaceDir: join(dir, '.data'), grants: ALL });
     const result = await reg.execute('exec', { command: 'pwd' });
     assert.ok(result.error, 'exec ran inside .data');
   });
