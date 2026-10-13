@@ -9,6 +9,7 @@ import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { randomUUID } from 'crypto';
 import { readPersonality, readMemory } from '../../services/agent-files.js';
 import { handleError } from '../error-handler.js';
+import { OLLAMA_URL } from '../../llm/ollama.js';
 
 interface PublicChatRoom {
   id: string;
@@ -136,7 +137,6 @@ async function streamPublicChatResponse(
       }
     } else if (provider === 'ollama') {
       // Ollama streaming
-      const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 
       const ollamaMessages = [
         { role: 'system', content: systemPrompt },

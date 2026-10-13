@@ -6,7 +6,7 @@
 import type { FastifyInstance } from 'fastify';
 import { getSettingsManager } from '../../settings/index.js';
 
-const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
+import { OLLAMA_URL } from '../../llm/ollama.js';
 
 interface OllamaModel {
   name: string;

@@ -35,8 +35,8 @@ export interface AgentSettings {
 export const DEFAULT_SETTINGS: AgentSettings = {
   provider: 'local',
   local: {
-    url: 'http://localhost:11434',
-    model: 'qwen2.5:latest',
+    url: 'http://127.0.0.1:11434',
+    model: 'qwen3.8:27b',
   },
   temperature: 0.7,
   enableTools: true,

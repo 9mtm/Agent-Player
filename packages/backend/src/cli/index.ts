@@ -9,8 +9,9 @@ import chalk from 'chalk';
 import ora from 'ora';
 import readline from 'readline';
 
-const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
-const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'qwen2.5:7b';
+import { OLLAMA_URL, DEFAULT_OLLAMA_MODEL } from '../llm/ollama.js';
+
+const DEFAULT_MODEL = DEFAULT_OLLAMA_MODEL;
 
 const program = new Command();
 

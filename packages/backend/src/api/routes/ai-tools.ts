@@ -11,6 +11,7 @@ import type { FastifyInstance } from 'fastify';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
+import { OLLAMA_URL } from '../../llm/ollama.js';
 
 // ─── Tool Definitions ─────────────────────────────────────────────────────────
 
@@ -181,7 +182,7 @@ async function extractClaudeCodeMeta(basePath: string): Promise<Record<string, a
 async function extractOllamaMeta(_basePath: string): Promise<Record<string, any>> {
   const meta: Record<string, any> = {};
   try {
-    const res = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(2000) });
+    const res = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(2000) });
     if (res.ok) {
       const data: any = await res.json();
       const models: string[] = (data.models ?? []).map((m: any) => m.name as string);
@@ -447,7 +448,7 @@ export async function aiToolsRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /api/ai-tools/ollama/models — list Ollama models via local API
   fastify.get('/api/ai-tools/ollama/models', async (_req, reply) => {
     try {
-      const res = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(3000) });
+      const res = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(3000) });
       if (!res.ok) return reply.status(503).send({ error: 'Ollama not running' });
       const data: any = await res.json();
       return reply.send({ models: data.models ?? [] });

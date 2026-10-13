@@ -17,9 +17,9 @@ import { getJsonRenderPrompt } from './json-render-prompt.js';
 import { readPersonality, readMemory } from '../../services/agent-files.js';
 import { createModelRouter, ModelRouter } from '../../services/model-router.js';
 import { CostTracker } from '../../services/cost-tracker.js';
+import { OLLAMA_URL, DEFAULT_OLLAMA_MODEL, ollamaThinkOption } from '../../llm/ollama.js';
 
-const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
-const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'qwen2.5:7b';
+const DEFAULT_MODEL = DEFAULT_OLLAMA_MODEL;
 
 interface AgentConfig {
   id: string;
@@ -207,7 +207,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
     if (memoryContext) {
       resolvedSystemPrompt += `\n\n## Recent Context\nThe following information was recalled from previous interactions with this user:\n${memoryContext}`;
     }
-    const resolvedProvider = agentConfig?.provider || 'ollama';
+    // An agent's explicit provider wins; without one, follow the global settings provider.
+    const resolvedProvider = agentConfig?.provider
+      || (getSettingsManager().getSettings().provider === 'claude' ? 'claude' : 'ollama');
     const resolvedApiKey = agentConfig?.api_key || '';
 
     console.log('[Chat] Agent:', agentConfig?.name || 'none (fallback)', '| Provider:', resolvedProvider, '| Model:', resolvedModel);
@@ -391,7 +393,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
   // Fallback: check global settings for claude
   const settingsManager = getSettingsManager();
   const settings = settingsManager.getSettings();
-  if ((provider === 'claude' || settings.provider === 'claude') && settings.claude?.apiKey) {
+  if (provider === 'claude' && settings.claude?.apiKey) {
     console.log('[Chat] 🤖 Using Claude API (global settings)');
     return streamChatClaude(
       reply,
@@ -481,6 +483,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       model,
       messages: ollamaMessages,
       stream: true,
+      ...ollamaThinkOption(),
       tools: tools.length > 0 ? tools : undefined, // Add tools support
       options: {
         temperature,
@@ -668,7 +671,7 @@ async function nonStreamChat(
   }
   const settingsManagerNS = getSettingsManager();
   const settingsNS = settingsManagerNS.getSettings();
-  if ((provider === 'claude' || settingsNS.provider === 'claude') && settingsNS.claude?.apiKey) {
+  if (provider === 'claude' && settingsNS.claude?.apiKey) {
     console.log('[Chat] 🤖 Using Claude API (global settings, non-stream)');
     return streamChatClaude(reply, settingsNS.claude.apiKey, model || settingsNS.claude.model || 'claude-sonnet-4-5-20250929', ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext);
   }
@@ -700,6 +703,7 @@ async function nonStreamChat(
       model,
       messages: ollamaMessages,
       stream: false,
+      ...ollamaThinkOption(),
       tools: tools.length > 0 ? tools : undefined, // Add tools support
       options: {
         temperature,

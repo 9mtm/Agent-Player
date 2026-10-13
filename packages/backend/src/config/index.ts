@@ -45,9 +45,9 @@ export const config = {
     anthropic: process.env.ANTHROPIC_API_KEY || '',
     google: process.env.GOOGLE_API_KEY || '',
     ollama: {
-      url: process.env.OLLAMA_URL || 'http://localhost:11434',
-      apiUrl: process.env.LOCAL_MODEL_API_URL || 'http://localhost:11434/v1',
-      modelName: process.env.LOCAL_MODEL_NAME || 'qwen2.5:7b',
+      url: process.env.OLLAMA_URL || 'http://127.0.0.1:11434',
+      apiUrl: process.env.LOCAL_MODEL_API_URL || 'http://127.0.0.1:11434/v1',
+      modelName: process.env.DEFAULT_MODEL || process.env.LOCAL_MODEL_NAME || 'qwen3.8:27b',
       apiKey: process.env.LOCAL_MODEL_API_KEY || 'sk-dummy',
     },
   },

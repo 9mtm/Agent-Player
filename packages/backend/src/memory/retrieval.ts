@@ -19,10 +19,9 @@ import type {
   ImportanceLevel,
   MemoryLayer
 } from './types.js';
+import { OLLAMA_URL, DEFAULT_OLLAMA_MODEL } from '../llm/ollama.js';
 
 const CLAUDE_KEY_PATTERN = /^sk-ant-/;
-const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
-const DEFAULT_OLLAMA_MODEL = process.env.DEFAULT_MODEL || process.env.LOCAL_MODEL_NAME || 'qwen2.5:7b';
 
 /** Validate that an API key looks like a real Anthropic key (not masked bullets) */
 function isValidClaudeKey(key: string): boolean {

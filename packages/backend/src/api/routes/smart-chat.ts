@@ -7,8 +7,9 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { AgentRuntime, type Message, type Skill } from '../../agent/index.js';
 import { handleError } from '../error-handler.js';
 
-const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
-const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'qwen2.5:7b';
+import { OLLAMA_URL, DEFAULT_OLLAMA_MODEL } from '../../llm/ollama.js';
+
+const DEFAULT_MODEL = DEFAULT_OLLAMA_MODEL;
 
 interface SmartChatRequest {
   message: string;
