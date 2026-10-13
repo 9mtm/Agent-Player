@@ -15,6 +15,7 @@ import {
 } from '../../webhooks/index.js';
 import { getAuditLogger } from '../../audit/index.js';
 import { handleError } from '../error-handler.js';
+import { registerRawBodyParsers, verifyWebhookSignature } from '../../webhooks/verify.js';
 
 export async function webhooksRoutes(fastify: FastifyInstance) {
   // ============ Outbound Webhooks ============
@@ -404,51 +405,52 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
 
   /**
    * POST /webhook/:path (*)
-   * Handle inbound webhook calls
+   * Handle inbound webhook calls.
+   * SECURITY (S0-A.5): public in the auth gate, so the caller must sign the
+   * raw body: X-Webhook-Signature = hex HMAC-SHA256(webhook secret, body),
+   * optionally prefixed "sha256=". Missing secret or signature -> 403.
    */
-  fastify.post('/webhook/*', async (request, reply) => {
-    try {
-      const path = `/webhook/${(request.params as any)['*']}`;
-      const manager = getWebhookManager();
+  await fastify.register(async (inbound) => {
+    registerRawBodyParsers(inbound);
+    inbound.post('/webhook/*', async (request, reply) => {
+      try {
+        const path = `/webhook/${(request.params as any)['*']}`;
+        const manager = getWebhookManager();
 
-      const webhook = manager.getInboundByPath(path);
-      if (!webhook || webhook.status !== 'active') {
-        return reply.status(404).send({ error: 'Webhook not found' });
-      }
-
-      // Verify signature if secret provided
-      const signature = request.headers['x-webhook-signature'] as string;
-      if (webhook.secret && signature) {
-        // Verification would happen here
-      }
-
-      // Check IP allowlist
-      if (webhook.allowedIps && webhook.allowedIps.length > 0) {
-        const clientIp = request.ip;
-        if (!webhook.allowedIps.includes(clientIp)) {
-          return reply.status(403).send({ error: 'IP not allowed' });
+        const webhook = manager.getInboundByPath(path);
+        if (!webhook || webhook.status !== 'active') {
+          return reply.status(404).send({ error: 'Webhook not found' });
         }
+
+        if (!verifyWebhookSignature(webhook.secret, request.rawBody, request.headers['x-webhook-signature'])) {
+          return reply.status(403).send({ error: 'Invalid webhook signature' });
+        }
+
+        // Check IP allowlist
+        if (webhook.allowedIps && webhook.allowedIps.length > 0) {
+          const clientIp = request.ip;
+          if (!webhook.allowedIps.includes(clientIp)) {
+            return reply.status(403).send({ error: 'IP not allowed' });
+          }
+        }
+
+        // Record trigger
+        manager.recordInboundTrigger(webhook.id);
+
+        // For now, just acknowledge receipt
+        // In full implementation, this would trigger workflows/agents/skills
+
+        return {
+          success: true,
+          webhookId: webhook.id,
+          received: true,
+          timestamp: new Date().toISOString(),
+        };
+      } catch (error: any) {
+        // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
+        return handleError(reply, error, 'internal', '[Webhooks] Process inbound failed');
       }
-
-      // Record trigger
-      manager.recordInboundTrigger(webhook.id);
-
-      // Handle based on handler type
-      const data = request.body as Record<string, unknown>;
-
-      // For now, just acknowledge receipt
-      // In full implementation, this would trigger workflows/agents/skills
-
-      return {
-        success: true,
-        webhookId: webhook.id,
-        received: true,
-        timestamp: new Date().toISOString(),
-      };
-    } catch (error: any) {
-      // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
-      return handleError(reply, error, 'internal', '[Webhooks] Process inbound failed');
-    }
+    });
   });
 
   /**

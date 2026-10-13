@@ -18,6 +18,8 @@ import {
   setTelephonySecret,
 } from '../../telephony/credentials.js';
 import { randomBytes } from 'crypto';
+import { registerRawBodyParsers } from '../../webhooks/verify.js';
+import { verifyTwilioWebhook } from '../../telephony/webhook-auth.js';
 
 /**
  * Telephony / Assistant Center API Routes
@@ -497,26 +499,35 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
   });
 
   // ════════════════════════════════════════════════════════════════════════════
-  // TWILIO WEBHOOKS (PUBLIC - NO AUTH REQUIRED)
+  // TWILIO WEBHOOKS (PUBLIC - TWILIO SIGNATURE REQUIRED)
   // ════════════════════════════════════════════════════════════════════════════
 
-  // POST /api/telephony/voice-webhook - Incoming call handler (returns TwiML)
-  fastify.post('/api/telephony/voice-webhook', handleIncomingCall);
+  // SECURITY (S0-A.5): these routes are public in the auth gate, so every
+  // request must be signed by Twilio (X-Twilio-Signature, stored auth token,
+  // PUBLIC_URL). Unsigned or wrongly signed requests get 403; without an auth
+  // token or public URL all are refused. Twilio posts form-encoded bodies.
+  await fastify.register(async (hooks) => {
+    registerRawBodyParsers(hooks);
+    hooks.addHook('preHandler', verifyTwilioWebhook);
 
-  // POST /api/telephony/outbound-twiml - Outbound call TwiML
-  fastify.post('/api/telephony/outbound-twiml', handleOutboundTwiml);
+    // POST /api/telephony/voice-webhook - Incoming call handler (returns TwiML)
+    hooks.post('/api/telephony/voice-webhook', handleIncomingCall);
 
-  // POST /api/telephony/process-speech - Process speech input from caller
-  fastify.post('/api/telephony/process-speech', processSpeech);
+    // POST /api/telephony/outbound-twiml - Outbound call TwiML
+    hooks.post('/api/telephony/outbound-twiml', handleOutboundTwiml);
 
-  // POST /api/telephony/process-ivr - Process IVR menu selection
-  fastify.post('/api/telephony/process-ivr', processIvrSelection);
+    // POST /api/telephony/process-speech - Process speech input from caller
+    hooks.post('/api/telephony/process-speech', processSpeech);
 
-  // POST /api/telephony/status-webhook - Call status updates
-  fastify.post('/api/telephony/status-webhook', handleStatusWebhook);
+    // POST /api/telephony/process-ivr - Process IVR menu selection
+    hooks.post('/api/telephony/process-ivr', processIvrSelection);
 
-  // POST /api/telephony/recording-webhook - Recording ready notification
-  fastify.post('/api/telephony/recording-webhook', handleRecordingWebhook);
+    // POST /api/telephony/status-webhook - Call status updates
+    hooks.post('/api/telephony/status-webhook', handleStatusWebhook);
+
+    // POST /api/telephony/recording-webhook - Recording ready notification
+    hooks.post('/api/telephony/recording-webhook', handleRecordingWebhook);
+  });
 
   // ════════════════════════════════════════════════════════════════════════════
   // TELEPHONY SETTINGS / CREDENTIALS

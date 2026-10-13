@@ -65,6 +65,16 @@ export const PUBLIC_ROUTES: ReadonlySet<string> = new Set([
   key('GET', '/*'),
   // Login page translations.
   key('GET', '/api/extensions/:extensionId/i18n/:locale'),
+  // Provider callbacks: each verifies the provider signature itself and
+  // fails closed (S0-A.5): Twilio X-Twilio-Signature (telephony/webhook-auth.ts)
+  // and HMAC-SHA256 X-Webhook-Signature for inbound webhooks (webhooks/verify.ts).
+  key('POST', '/api/telephony/voice-webhook'),
+  key('POST', '/api/telephony/outbound-twiml'),
+  key('POST', '/api/telephony/process-speech'),
+  key('POST', '/api/telephony/process-ivr'),
+  key('POST', '/api/telephony/status-webhook'),
+  key('POST', '/api/telephony/recording-webhook'),
+  key('POST', '/webhook/*'),
 ]);
 
 /** Anonymous allowed; a sent token must be valid. */
