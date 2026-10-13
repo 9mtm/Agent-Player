@@ -17,6 +17,14 @@ import { DEFAULT_SANDBOX_CONFIG } from './config.js';
 
 const execAsync = promisify(exec);
 
+/**
+ * SECURITY (S0-Q.3): running commands directly on the host is OFF unless the server
+ * operator sets SANDBOX_ALLOW_HOST_EXEC=true. A missing Docker never enables it.
+ */
+export function hostExecAllowed(): boolean {
+  return process.env.SANDBOX_ALLOW_HOST_EXEC === 'true';
+}
+
 export class SandboxExecutor {
   private config: SandboxConfig;
   private stats: SandboxStats = {
@@ -46,16 +54,14 @@ export class SandboxExecutor {
     const available = await docker.isDockerAvailable();
 
     if (!available) {
-      console.warn('[Sandbox] Docker not available, falling back to non-sandboxed execution');
-      this.config.mode = 'off';
+      console.warn('[Sandbox] Docker not available; command execution is disabled until it is');
       return;
     }
 
     // Ensure image exists
     const imageReady = await docker.ensureImage(this.config.docker.image);
     if (!imageReady) {
-      console.warn('[Sandbox] Failed to prepare Docker image, falling back to non-sandboxed');
-      this.config.mode = 'off';
+      console.warn('[Sandbox] Failed to prepare Docker image; command execution is disabled');
       return;
     }
 
@@ -92,11 +98,31 @@ export class SandboxExecutor {
     // Determine if we should sandbox
     const shouldSandbox = this.shouldSandbox(request);
 
-    if (shouldSandbox && this.sessionId) {
-      return this.executeInSandbox(request, startTime);
-    } else {
-      return this.executeNative(request, startTime);
+    if (shouldSandbox) {
+      if (this.sessionId) {
+        return this.executeInSandbox(request, startTime);
+      }
+      // SECURITY (S0-Q.3): no silent fallback to the host shell
+      return this.refused(startTime, 'Sandbox is not available (Docker missing or not initialized)');
     }
+
+    if (!hostExecAllowed()) {
+      return this.refused(startTime, 'Host command execution is disabled (SANDBOX_ALLOW_HOST_EXEC is not true)');
+    }
+    return this.executeNative(request, startTime);
+  }
+
+  private refused(startTime: number, reason: string): ExecutionResult {
+    this.stats.blockedExecutions++;
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: '',
+      duration: Date.now() - startTime,
+      sandboxed: false,
+      blocked: true,
+      blockReason: reason,
+    };
   }
 
   /**
@@ -155,7 +181,7 @@ export class SandboxExecutor {
     const docker = getDockerManager();
 
     if (!this.sessionId) {
-      return this.executeNative(request, startTime);
+      return this.refused(startTime, 'Sandbox is not available (Docker missing or not initialized)');
     }
 
     try {
@@ -267,7 +293,17 @@ export class SandboxExecutor {
    * Update configuration
    */
   updateConfig(config: Partial<SandboxConfig>): void {
-    this.config = { ...this.config, ...config };
+    // SECURITY (S0-Q.3): isolation settings come from the server environment only,
+    // never from an API call (no switching to host execution, privileged or host network).
+    const { mode, docker, ...rest } = config;
+    if (mode !== undefined && mode !== 'off') {
+      this.config.mode = mode;
+    }
+    if (docker) {
+      const { privileged: _privileged, network: _network, ...safeDocker } = docker;
+      this.config.docker = { ...this.config.docker, ...safeDocker };
+    }
+    this.config = { ...this.config, ...rest };
   }
 
   /**
