@@ -12,6 +12,7 @@ import { outsiderAgentMemoryEnabled } from '../../services/outsider-memory.js';
 import { handleError } from '../error-handler.js';
 import { OLLAMA_URL } from '../../llm/ollama.js';
 import { anonymousChatLimiter } from '../public-chat-limits.js';
+import { anonymousPublicRoomsEnabled } from '../../services/public-rooms.js';
 
 interface PublicChatRoom {
   id: string;
@@ -337,6 +338,9 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
     const { id } = request.params as { id: string };
     const userId = getOptionalUserId(request);
 
+    // Q-14 (CL-07): anonymous visitors only when the owner turned it on.
+    if (!userId && !anonymousPublicRoomsEnabled()) return reply.code(404).send({ error: 'Room not found' });
+
     const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(id) as PublicChatRoom | undefined;
 
     if (!room) {
@@ -473,6 +477,9 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
     const { limit = 50, offset = 0 } = request.query as { limit?: number; offset?: number };
     const userId = getOptionalUserId(request);
 
+    // Q-14 (CL-07): anonymous visitors only when the owner turned it on.
+    if (!userId && !anonymousPublicRoomsEnabled()) return reply.code(404).send({ error: 'Room not found' });
+
     const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(id) as PublicChatRoom | undefined;
 
     if (!room) {
@@ -501,6 +508,9 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
     const { id: roomId } = request.params as { id: string };
     const { content, username } = request.body as { content: string; username?: string };
     const userId = getOptionalUserId(request);
+
+    // Q-14 (CL-07): anonymous visitors only when the owner turned it on.
+    if (!userId && !anonymousPublicRoomsEnabled()) return reply.code(404).send({ error: 'Room not found' });
 
     const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(roomId) as PublicChatRoom | undefined;
 
@@ -657,6 +667,9 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
     const { username } = request.body as { username?: string };
     const userId = getOptionalUserId(request);
 
+    // Q-14 (CL-07): anonymous visitors only when the owner turned it on.
+    if (!userId && !anonymousPublicRoomsEnabled()) return reply.code(404).send({ error: 'Room not found' });
+
     const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(roomId) as PublicChatRoom | undefined;
 
     if (!room) {
@@ -740,6 +753,9 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
   fastify.get('/api/public-chat/rooms/:id/participants', async (request, reply) => {
     const { id: roomId } = request.params as { id: string };
     const userId = getOptionalUserId(request);
+
+    // Q-14 (CL-07): anonymous visitors only when the owner turned it on.
+    if (!userId && !anonymousPublicRoomsEnabled()) return reply.code(404).send({ error: 'Room not found' });
 
     const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(roomId) as PublicChatRoom | undefined;
 

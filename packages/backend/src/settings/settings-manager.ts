@@ -113,6 +113,11 @@ export class SettingsManager {
       (updated as any)[provider] = merged;
     }
 
+    // Owner switch for anonymous public-room access: strictly boolean, default off.
+    if (Object.prototype.hasOwnProperty.call(settings, 'publicRooms')) {
+      updated.publicRooms = { allowAnonymous: (settings.publicRooms as any)?.allowAnonymous === true };
+    }
+
     // Encrypt API keys before saving
     if (updated.claude?.apiKey && !isEncrypted(updated.claude.apiKey)) {
       updated.claude.apiKey = encrypt(updated.claude.apiKey);

@@ -30,6 +30,11 @@ export interface AgentSettings {
   temperature?: number;
   enableTools?: boolean;
   enableSkills?: boolean;
+
+  // Public rooms (Q-14, CL-07): anonymous visitors may read/post only when on.
+  publicRooms?: {
+    allowAnonymous: boolean;
+  };
 }
 
 export const DEFAULT_SETTINGS: AgentSettings = {

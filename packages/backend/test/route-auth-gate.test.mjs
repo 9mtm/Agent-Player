@@ -309,6 +309,11 @@ test('Swagger UI and spec are not registered outside development', async () => {
 
 test('anonymous public-chat post over the limit gets 429 (before any model call)', async () => {
   db.prepare(`INSERT INTO public_chat_rooms (id, name, owner_user_id, is_public, require_auth) VALUES ('room-pub', 'Pub', 'g-owner', 1, 0)`).run();
+  // CL-07: anonymous access is off by default; the owner turns it on in Settings.
+  const { getSettingsManager } = await import(join(backendDir, 'src/settings/index.ts'));
+  const off = await app.inject({ method: 'POST', url: '/api/public-chat/rooms/room-pub/messages', payload: { content: 'hi' } });
+  assert.equal(off.statusCode, 404, 'anonymous refused while the setting is off');
+  getSettingsManager().updateSettings({ publicRooms: { allowAnonymous: true } });
   process.env.PUBLIC_CHAT_ANON_PER_IP_PER_MIN = '0';
   try {
     const res = await app.inject({ method: 'POST', url: '/api/public-chat/rooms/room-pub/messages', payload: { content: 'hi' } });
@@ -318,5 +323,6 @@ test('anonymous public-chat post over the limit gets 429 (before any model call)
     assert.equal(empty.statusCode, 400, 'missing content is a 400, not a crash');
   } finally {
     delete process.env.PUBLIC_CHAT_ANON_PER_IP_PER_MIN;
+    getSettingsManager().updateSettings({ publicRooms: { allowAnonymous: false } });
   }
 });
