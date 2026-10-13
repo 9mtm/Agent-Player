@@ -11,9 +11,10 @@ import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
 import { getMemoryStorage } from '../../memory/storage.js';
 import { v4 as uuidv4 } from 'uuid';
 import type { Memory } from '../../memory/types.js';
+import { sameDrawer } from '../../memory/drawers.js';
+import { narrowestDrawer, toolMemoryDrawers, toolMemoryUser } from './scope.js';
 
 interface MemoryReflectParams {
-  userId: string;
   lookbackCount?: number;
   focus?: string;
 }
@@ -30,18 +31,16 @@ Use this tool after completing a complex task or conversation to:
 
 Returns a structured reflection that helps build long-term understanding.
 
+Only the memory drawers open for this conversation are read; the reflection
+is saved into the narrowest of the drawers it was built from.
+
 Parameters:
-- userId: User whose memories to analyze (auto-provided)
 - lookbackCount: How many recent memories to analyze (default: 20, max: 50)
 - focus: Optional topic to focus the reflection on (e.g. "coding preferences")`,
 
   input_schema: {
     type: 'object',
     properties: {
-      userId: {
-        type: 'string',
-        description: 'User ID (automatically provided)',
-      },
       lookbackCount: {
         type: 'number',
         description: 'Number of recent memories to analyze (default: 20, max: 50)',
@@ -51,15 +50,13 @@ Parameters:
         description: 'Optional topic to focus the reflection on',
       },
     },
-    required: ['userId'],
+    required: [],
     examples: [
       {
-        userId: 'user-123',
         lookbackCount: 30,
         description: 'Analyze patterns from last 30 memories',
       },
       {
-        userId: 'user-123',
         focus: 'coding preferences',
         description: 'Reflect on coding-related patterns',
       },
@@ -68,13 +65,20 @@ Parameters:
 
   async execute(params: Record<string, any>, context?: ToolExecutionContext): Promise<ToolResult> {
     const { lookbackCount = 20, focus } = params as MemoryReflectParams;
-    // The run's own user, never a model-supplied id (CORE-03).
-    const userId = context?.userId || (params as MemoryReflectParams).userId;
-    const limit = Math.min(50, Math.max(1, lookbackCount));
+    const limit = Math.min(50, Math.max(1, Number(lookbackCount) || 20));
+    // CORE-03: the run's own user (never a model-supplied id) and only the
+    // drawers open for this turn. No user or no drawers -> nothing to read.
+    const userId = toolMemoryUser(context);
+    const drawers = toolMemoryDrawers(context);
+    if (!userId || drawers.length === 0) {
+      return { content: [{ type: 'text', text: 'No memories found to reflect on.' }] };
+    }
 
     try {
       const storage = getMemoryStorage();
-      const allMemories = await storage.getByUser(userId);
+      // Same order as before: importance first, then newest.
+      const allMemories = storage.getByDrawers(userId, drawers).sort((a, b) =>
+        (b.importanceScore ?? 0.5) - (a.importanceScore ?? 0.5) || b.createdAt.getTime() - a.createdAt.getTime());
 
       if (allMemories.length === 0) {
         return {
@@ -187,6 +191,10 @@ Parameters:
 
       const reflectionContent = lines.join('\n');
 
+      // Saved into the narrowest drawer the analyzed memories came from (an open drawer).
+      const sourceDrawers = drawers.filter((d) => targetMemories.some((m) => m.drawer && sameDrawer(m.drawer, d)));
+      const drawer = narrowestDrawer(sourceDrawers) ?? narrowestDrawer(drawers)!;
+
       // Save reflection as a new memory (Multi-Tier Memory: experiential layer)
       const reflectionMemory: Memory = {
         id: uuidv4(),
@@ -208,6 +216,7 @@ Parameters:
         createdAt: new Date(),
         lastAccessedAt: Date.now(),
         accessCount: 0,
+        drawer,
       };
 
       await storage.save(reflectionMemory);

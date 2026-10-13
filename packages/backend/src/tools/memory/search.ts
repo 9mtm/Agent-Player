@@ -14,8 +14,8 @@ import { toolMemoryDrawers, toolMemoryUser } from './scope.js';
 interface MemorySearchParams {
   /** Search query */
   query: string;
-  /** User ID (provided by context) */
-  userId: string;
+  /** Ignored: the user comes from the run context (CORE-03) */
+  userId?: unknown;
   /** Maximum number of results (default: 5) */
   limit?: number;
   /** Filter by memory type (optional) */
@@ -89,10 +89,6 @@ Returns:
         type: 'string',
         description: 'What to search for',
       },
-      userId: {
-        type: 'string',
-        description: 'User ID (automatically provided)',
-      },
       limit: {
         type: 'number',
         minimum: 1,
@@ -138,24 +134,21 @@ Returns:
         description: 'Filter by which agent created the memory',
       },
     },
-    required: ['query', 'userId'],
+    required: ['query'],
     examples: [
       {
         query: 'user preferences',
-        userId: 'user-123',
         description: 'Search for user preferences in memory',
       },
       {
         query: 'authentication discussion',
         type: 'conversation',
-        userId: 'user-123',
         description: 'Find conversations about authentication',
       },
       {
         query: 'API keys',
         tags: ['security', 'credentials'],
         limit: 5,
-        userId: 'user-123',
         description: 'Search for API key related memories with tags',
       },
     ],
@@ -165,7 +158,7 @@ Returns:
     try {
       const storage = getMemoryStorage();
       // CORE-03: the run's own user and only the drawers selected for this turn.
-      const userId = toolMemoryUser(params, context);
+      const userId = toolMemoryUser(context);
       if (!userId) throw new Error('No user for this memory search');
 
       // Search memories using new Multi-Tier Memory API

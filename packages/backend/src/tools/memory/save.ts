@@ -24,8 +24,8 @@ interface MemorySaveParams {
   tags?: string[];
   /** Additional metadata (optional) */
   metadata?: Record<string, any>;
-  /** User ID (provided by context) */
-  userId: string;
+  /** Ignored: the user comes from the run context (CORE-03) */
+  userId?: unknown;
   /** Drawer id, e.g. "project:alpha" (only a drawer loaded for this turn) */
   drawer?: string;
 }
@@ -92,34 +92,27 @@ Examples:
         type: 'object',
         description: 'Additional metadata',
       },
-      userId: {
-        type: 'string',
-        description: 'User ID (automatically provided)',
-      },
       drawer: {
         type: 'string',
         description: 'Memory drawer: "owner", "experience", or one of the drawers open for this conversation such as "project:<slug>", "task:<id>", "people:<id>". Default: chosen by type.',
       },
     },
-    required: ['content', 'userId'],
+    required: ['content'],
     examples: [
       {
         content: 'User prefers dark mode and concise responses',
         type: 'preference',
-        userId: 'user-123',
         description: 'Save user preference to memory',
       },
       {
         content: 'Discussed implementing authentication using JWT tokens',
         type: 'conversation',
         tags: ['auth', 'jwt', 'security'],
-        userId: 'user-123',
         description: 'Save conversation topic with tags',
       },
       {
         content: 'User birthday is March 15th',
         type: 'fact',
-        userId: 'user-123',
         description: 'Save personal fact about user',
       },
     ],
@@ -129,7 +122,7 @@ Examples:
     try {
       const storage = getMemoryStorage();
       // CORE-03: the run's own user; a drawer only from those open for this turn.
-      const userId = toolMemoryUser(params, context);
+      const userId = toolMemoryUser(context);
       if (!userId) throw new Error('No user for this memory');
       const open = toolMemoryDrawers(context);
       let drawer: DrawerRef = defaultDrawerForType(params.type || 'conversation');

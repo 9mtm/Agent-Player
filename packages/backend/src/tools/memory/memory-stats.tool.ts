@@ -10,10 +10,8 @@
 
 import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
 import { getDatabase } from '../../db/index.js';
-
-interface MemoryStatsParams {
-  userId: string;
-}
+import { drawerSqlFilter } from '../../memory/drawers.js';
+import { toolMemoryDrawers, toolMemoryUser } from './scope.js';
 
 export const memoryStatsTool: Tool = {
   name: 'memory_stats',
@@ -25,34 +23,37 @@ Returns:
 - Oldest and newest memory timestamps
 - How many high-importance (>= 7) memories exist
 
+Only the memory drawers open for this conversation are counted.
+
 Use this before memory_reflect or memory_search to understand what you know.`,
 
   input_schema: {
     type: 'object',
-    properties: {
-      userId: {
-        type: 'string',
-        description: 'User ID (automatically provided)',
-      },
-    },
-    required: ['userId'],
+    properties: {},
+    required: [],
     examples: [
       {
-        userId: 'user-123',
         description: 'Get overview of stored memories and knowledge base',
       },
     ],
   },
 
-  async execute(params: Record<string, any>, context?: ToolExecutionContext): Promise<ToolResult> {
-    // The run's own user, never a model-supplied id (CORE-03).
-    const userId = context?.userId || (params as MemoryStatsParams).userId;
+  async execute(_params: Record<string, any>, context?: ToolExecutionContext): Promise<ToolResult> {
+    // CORE-03: the run's own user (never a model-supplied id), open drawers only.
+    const userId = toolMemoryUser(context);
+    const drawers = toolMemoryDrawers(context);
+    if (!userId || drawers.length === 0) {
+      return { content: [{ type: 'text', text: 'No memories stored yet for this user.' }] };
+    }
+    const scope = drawerSqlFilter(drawers);
+    const where = `user_id = ? AND ${scope.sql}`;
+    const args = [userId, ...scope.params];
 
     try {
       const db = getDatabase().getDb();
 
       // Total count
-      const total = (db.prepare('SELECT COUNT(*) as n FROM memories WHERE user_id = ?').get(userId) as any)?.n ?? 0;
+      const total = (db.prepare(`SELECT COUNT(*) as n FROM memories WHERE ${where}`).get(...args) as any)?.n ?? 0;
 
       if (total === 0) {
         return {
@@ -63,25 +64,25 @@ Use this before memory_reflect or memory_search to understand what you know.`,
       // Count by type
       const byType = db.prepare(`
         SELECT type, COUNT(*) as n
-        FROM memories WHERE user_id = ?
+        FROM memories WHERE ${where}
         GROUP BY type ORDER BY n DESC
-      `).all(userId) as Array<{ type: string; n: number }>;
+      `).all(...args) as Array<{ type: string; n: number }>;
 
       // Count by importance bracket
       const highImp = (db.prepare(`
-        SELECT COUNT(*) as n FROM memories WHERE user_id = ? AND importance >= 7
-      `).get(userId) as any)?.n ?? 0;
+        SELECT COUNT(*) as n FROM memories WHERE ${where} AND importance_score >= 0.7
+      `).get(...args) as any)?.n ?? 0;
 
       // Date range
       const dates = db.prepare(`
         SELECT MIN(created_at) as oldest, MAX(created_at) as newest
-        FROM memories WHERE user_id = ?
-      `).get(userId) as any;
+        FROM memories WHERE ${where}
+      `).get(...args) as any;
 
       // Top tags (tags is stored as JSON array string)
       const allTagRows = db.prepare(`
-        SELECT tags FROM memories WHERE user_id = ? AND tags IS NOT NULL
-      `).all(userId) as Array<{ tags: string }>;
+        SELECT tags FROM memories WHERE ${where} AND tags IS NOT NULL
+      `).all(...args) as Array<{ tags: string }>;
 
       const tagCounts: Record<string, number> = {};
       for (const row of allTagRows) {
@@ -100,7 +101,7 @@ Use this before memory_reflect or memory_search to understand what you know.`,
 
       // Build readable output
       const lines: string[] = [];
-      lines.push(`Memory Stats for user: ${userId}`);
+      lines.push('Memory stats (drawers open for this conversation)');
       lines.push(`Total: ${total} memories`);
       lines.push(`High importance (>= 7): ${highImp}`);
       lines.push('');

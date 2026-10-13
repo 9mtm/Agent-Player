@@ -47,6 +47,8 @@ const { memoryRoutes } = await import(join(backendDir, 'src/api/routes/memory.ts
 const { chatRoutes } = await import(join(backendDir, 'src/api/routes/chat.ts'));
 const { memorySearchTool } = await import(join(backendDir, 'src/tools/memory/search.ts'));
 const { memorySaveTool } = await import(join(backendDir, 'src/tools/memory/save.ts'));
+const { memoryReflectTool } = await import(join(backendDir, 'src/tools/memory/memory-reflect.tool.ts'));
+const { memoryStatsTool } = await import(join(backendDir, 'src/tools/memory/memory-stats.tool.ts'));
 const { generateToken } = await import(join(backendDir, 'src/auth/jwt.ts'));
 const { default: Fastify } = await import('fastify');
 
@@ -198,6 +200,55 @@ test('memory tools: run user from context, only the turn\'s drawers; channel tur
   const row = db.prepare('SELECT user_id, drawer_kind, drawer_key FROM memories WHERE id = ?').get(ok.data.memoryId);
   assert.deepEqual({ ...row }, { user_id: 'dr-owner', drawer_kind: 'project', drawer_key: 'alpha' });
   db.prepare('DELETE FROM memories WHERE id = ?').run(ok.data.memoryId);
+});
+
+test('memory tools fail closed without a run user; no userId in any schema', async () => {
+  for (const tool of [memorySearchTool, memorySaveTool, memoryReflectTool, memoryStatsTool]) {
+    assert.ok(!('userId' in (tool.input_schema.properties || {})), `${tool.name} schema has no userId`);
+    assert.ok(!(tool.input_schema.required || []).includes('userId'), `${tool.name} does not require userId`);
+    assert.ok(!JSON.stringify(tool.input_schema.examples || []).includes('userId'), `${tool.name} examples`);
+  }
+  const before = db.prepare('SELECT COUNT(*) AS n FROM memories').get().n;
+  const noUser = { workspaceDir: dir };
+  const r1 = await quietly(() => memorySearchTool.execute({ query: TEXT, userId: 'dr-owner' }, noUser));
+  assert.ok(r1.error && !(r1.data?.memories?.length), 'search without a run user');
+  const r2 = await quietly(() => memorySaveTool.execute({ content: `${TEXT} x`, userId: 'dr-owner' }, noUser));
+  assert.ok(r2.error, 'save without a run user');
+  const r3 = await quietly(() => memoryReflectTool.execute({ userId: 'dr-owner' }, noUser));
+  assert.ok(!r3.data, 'reflect without a run user');
+  const r4 = await quietly(() => memoryStatsTool.execute({ userId: 'dr-owner' }, noUser));
+  assert.ok(!r4.data, 'stats without a run user');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memories').get().n, before, 'nothing written');
+});
+
+test('memory_reflect / memory_stats: open drawers only, reflection saved in the narrowest source drawer', async () => {
+  const count = () => db.prepare('SELECT COUNT(*) AS n FROM memories').get().n;
+  const before = count();
+  // Outsider (channel turn): nothing read, nothing written.
+  const channel = { workspaceDir: dir, userId: 'dr-owner', toolPolicy: { channel: 'telegram', allowedTools: new Set() } };
+  assert.ok(!(await quietly(() => memoryReflectTool.execute({}, channel))).data);
+  assert.ok(!(await quietly(() => memoryStatsTool.execute({}, channel))).data);
+  assert.equal(count(), before);
+
+  const alphaCtx = { workspaceDir: dir, userId: 'dr-owner', memoryDrawers: D.selectDrawers({ audience: 'owner', project: 'alpha' }) };
+  const stats = await quietly(() => memoryStatsTool.execute({ userId: 'dr-other' }, alphaCtx));
+  assert.equal(stats.data.total, 7, 'owner 3 + experience 3 + project alpha 1 (not beta/tasks/people/other user)');
+  const sub = { workspaceDir: dir, userId: 'dr-owner', memoryDrawers: [{ kind: 'project', key: 'beta' }] };
+  assert.equal((await quietly(() => memoryStatsTool.execute({}, sub))).data.total, 1);
+
+  const refl = await quietly(() => memoryReflectTool.execute({ userId: 'dr-other', lookbackCount: 50 }, alphaCtx));
+  assert.ok(refl.data, refl.content?.[0]?.text);
+  assert.equal(refl.data.analyzedCount, 7);
+  const text = refl.content[0].text;
+  assert.ok(!/beta|person-p|task-t|other-/.test(text), 'closed drawers never appear in the reflection');
+  const row = db.prepare('SELECT user_id, drawer_kind, drawer_key FROM memories WHERE id = ?').get(refl.data.reflectionId);
+  assert.deepEqual({ ...row }, { user_id: 'dr-owner', drawer_kind: 'project', drawer_key: 'alpha' });
+  db.prepare('DELETE FROM memories WHERE id = ?').run(refl.data.reflectionId);
+
+  const subRefl = await quietly(() => memoryReflectTool.execute({}, sub));
+  const subRow = db.prepare('SELECT drawer_kind, drawer_key FROM memories WHERE id = ?').get(subRefl.data.reflectionId);
+  assert.deepEqual({ ...subRow }, { drawer_kind: 'project', drawer_key: 'beta' });
+  db.prepare('DELETE FROM memories WHERE id = ?').run(subRefl.data.reflectionId);
 });
 
 test('chat: memoryScope is validated (drawers chosen server side)', async () => {
