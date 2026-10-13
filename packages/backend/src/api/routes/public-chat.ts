@@ -10,6 +10,7 @@ import { randomUUID } from 'crypto';
 import { readPersonality, readMemory } from '../../services/agent-files.js';
 import { handleError } from '../error-handler.js';
 import { OLLAMA_URL } from '../../llm/ollama.js';
+import { anonymousChatLimiter } from '../public-chat-limits.js';
 
 interface PublicChatRoom {
   id: string;
@@ -505,6 +506,20 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
 
     if (!canAccessRoom(room, userId || undefined)) {
       return reply.code(403).send({ error: 'Access denied' });
+    }
+
+    if (typeof content !== 'string' || content.trim().length === 0) {
+      return reply.code(400).send({ error: 'Message content is required' });
+    }
+
+    // SECURITY (S0-A.10): anonymous messages make the agent answer on the
+    // owner's model keys -> per-IP, per-room and daily limits.
+    if (!userId) {
+      const retryAfter = anonymousChatLimiter.check(request.ip, roomId);
+      if (retryAfter !== null) {
+        return reply.code(429).header('Retry-After', String(retryAfter))
+          .send({ error: 'Too many messages, please wait and try again' });
+      }
     }
 
     // Validate message length

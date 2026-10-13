@@ -289,3 +289,19 @@ test('Swagger UI and spec are not registered outside development', async () => {
     process.env.NODE_ENV = saved;
   }
 });
+
+// --- S0-A.10: anonymous public chat is rate limited -------------------------
+
+test('anonymous public-chat post over the limit gets 429 (before any model call)', async () => {
+  db.prepare(`INSERT INTO public_chat_rooms (id, name, owner_user_id, is_public, require_auth) VALUES ('room-pub', 'Pub', 'g-owner', 1, 0)`).run();
+  process.env.PUBLIC_CHAT_ANON_PER_IP_PER_MIN = '0';
+  try {
+    const res = await app.inject({ method: 'POST', url: '/api/public-chat/rooms/room-pub/messages', payload: { content: 'hi' } });
+    assert.equal(res.statusCode, 429, res.body);
+    assert.ok(Number(res.headers['retry-after']) > 0);
+    const empty = await app.inject({ method: 'POST', url: '/api/public-chat/rooms/room-pub/messages', payload: {} });
+    assert.equal(empty.statusCode, 400, 'missing content is a 400, not a crash');
+  } finally {
+    delete process.env.PUBLIC_CHAT_ANON_PER_IP_PER_MIN;
+  }
+});
