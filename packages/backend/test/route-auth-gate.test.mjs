@@ -269,3 +269,23 @@ test('tiers enforced: the owner passes the gate (safe read-only routes)', async 
   const admin = await app.inject({ method: 'GET', url: '/api/audit/status', headers: bearer('g-admin') });
   assert.ok(admin.statusCode !== 401 && admin.statusCode !== 403, `admin audit status -> ${admin.statusCode}`);
 });
+
+// --- S0-A.9: Swagger only in development ------------------------------------
+
+test('Swagger UI and spec are not registered outside development', async () => {
+  for (const url of ['/docs', '/docs/json', '/docs/yaml', '/docs/static/index.html']) {
+    const res = await app.inject({ method: 'GET', url });
+    assert.equal(res.statusCode, 404, `${url} -> ${res.statusCode}`);
+  }
+  assert.ok(!routes.some((r) => r.url.startsWith('/docs')), 'no /docs routes');
+  // If they are registered (development), the gate treats them as public only there.
+  const saved = process.env.NODE_ENV;
+  try {
+    process.env.NODE_ENV = 'development';
+    assert.equal(gate.resolveRouteAccess('GET', '/docs/json'), 'public');
+    process.env.NODE_ENV = 'production';
+    assert.equal(gate.resolveRouteAccess('GET', '/docs/json'), 'admin');
+  } finally {
+    process.env.NODE_ENV = saved;
+  }
+});

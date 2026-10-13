@@ -14,9 +14,15 @@ export async function registerSwagger(fastify: FastifyInstance): Promise<void> {
   const swagger = await import('@fastify/swagger');
   const swaggerUi = await import('@fastify/swagger-ui');
 
-  // Register schemas
+  // Register schemas (always: route schemas may reference them)
   for (const [name, schema] of Object.entries(schemas)) {
     fastify.addSchema({ $id: name, ...schema });
+  }
+
+  // SECURITY (S0-A.9): the OpenAPI spec and Swagger UI publish the complete
+  // route map, so they exist only in development.
+  if (process.env.NODE_ENV !== 'development') {
+    return;
   }
 
   // Register Swagger
