@@ -517,9 +517,11 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
     }
 
     // SECURITY (S0-A.10): anonymous messages make the agent answer on the
-    // owner's model keys -> per-IP, per-room and daily limits.
-    if (!userId) {
-      const retryAfter = anonymousChatLimiter.check(request.ip, roomId);
+    // owner's model keys -> per-IP, per-room and daily limits. Guest accounts
+    // (public rooms only, CL-06) get the same limits, keyed by IP + user id.
+    const isGuest = request.authUser?.role === 'guest';
+    if (!userId || isGuest) {
+      const retryAfter = anonymousChatLimiter.check(`${request.ip}:${userId ?? ''}`, roomId);
       if (retryAfter !== null) {
         return reply.code(429).header('Retry-After', String(retryAfter))
           .send({ error: 'Too many messages, please wait and try again' });

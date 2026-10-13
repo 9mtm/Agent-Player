@@ -6,7 +6,8 @@
  *   - per IP:   PUBLIC_CHAT_ANON_PER_IP_PER_MIN   (default 5) per minute
  *   - per room: PUBLIC_CHAT_ANON_PER_ROOM_PER_MIN (default 20) per minute
  *   - per room: PUBLIC_CHAT_ANON_PER_ROOM_PER_DAY (default 200) per UTC day
- * Signed-in users are not limited here. State is in memory (one process).
+ * Guest accounts (public rooms only) get the same limits (IP key = ip:userId);
+ * other signed-in users are not limited here. State is in memory (one process).
  */
 
 type Bucket = { count: number; resetAt: number };

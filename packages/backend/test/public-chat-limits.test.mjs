@@ -44,9 +44,9 @@ test('daily room budget and env overrides; refused requests do not use up budget
   }
 });
 
-test('the route applies the limiter only to anonymous senders', async () => {
+test('the route applies the limiter to anonymous and guest senders', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(join(process.cwd(), 'src/api/routes/public-chat.ts'), 'utf-8');
-  assert.match(src, /if \(!userId\) \{\s*const retryAfter = anonymousChatLimiter\.check\(request\.ip, roomId\);/);
+  assert.match(src, /const isGuest = request\.authUser\?\.role === 'guest';\s*if \(!userId \|\| isGuest\) \{\s*const retryAfter = anonymousChatLimiter\.check\(`\$\{request\.ip\}:\$\{userId \?\? ''\}`, roomId\);/);
   assert.match(src, /code\(429\)/);
 });

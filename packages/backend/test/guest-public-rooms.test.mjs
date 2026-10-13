@@ -77,6 +77,17 @@ test('guest uses public rooms: read, list, participants, join/leave, post (valid
   assert.equal((await req('POST', '/api/public-chat/rooms/room-pub/leave', {})).statusCode, 200);
 });
 
+test('guest posts get the anonymous rate limits before any model call', async () => {
+  process.env.PUBLIC_CHAT_ANON_PER_IP_PER_MIN = '0';
+  try {
+    const res = await req('POST', '/api/public-chat/rooms/room-pub/messages', { content: 'hello' });
+    assert.equal(res.statusCode, 429, res.body);
+    assert.ok(Number(res.headers['retry-after']) > 0);
+  } finally {
+    delete process.env.PUBLIC_CHAT_ANON_PER_IP_PER_MIN;
+  }
+});
+
 test('guest is refused on private rooms even when listed in allowed_users', async () => {
   for (const [m, u, p] of [['GET', '/api/public-chat/rooms/room-priv'], ['GET', '/api/public-chat/rooms/room-priv/messages'],
     ['GET', '/api/public-chat/rooms/room-priv/participants'], ['POST', '/api/public-chat/rooms/room-priv/messages', { content: 'x' }],
