@@ -9,7 +9,6 @@ export function AdapterChannelPanel({ channel, name, backendUrl, getAccessToken 
   const [channels, setChannels] = useState('');
   const [settings, setSettings] = useState('');
   const [environment, setEnvironment] = useState('');
-  const [python, setPython] = useState('');
   const [autoReply, setAutoReply] = useState(false);
   const [destination, setDestination] = useState('');
   const [text, setText] = useState('');
@@ -61,7 +60,6 @@ export function AdapterChannelPanel({ channel, name, backendUrl, getAccessToken 
       const config: Record<string, unknown> = { configured: true, allowed_users: users, allowed_channels: channels, auto_reply: autoReply };
       if (settings.trim()) config.settings = JSON.parse(settings);
       if (environment.trim()) config.environment = JSON.parse(environment);
-      if (python.trim()) config.python_executable = python.trim();
       await request(base + '/config', 'PUT', { config }); setSettings(''); setEnvironment('');
       setNotice('Saved. Connection is starting in the background.');
     }); }}>
@@ -71,7 +69,7 @@ export function AdapterChannelPanel({ channel, name, backendUrl, getAccessToken 
       <label className="block">Provider settings JSON<textarea className={input} rows={5} placeholder={'{"extra": {}}'} value={settings} onChange={event => setSettings(event.target.value)} autoComplete="off" /></label>
       <label className="block">Provider environment JSON<input className={input} type="password" autoComplete="new-password" placeholder={'{"PROVIDER_TOKEN": "..."}'} value={environment} onChange={event => setEnvironment(event.target.value)} /></label>
       <p className="text-sm">Saved provider settings and secrets are never returned to this screen. Blank fields preserve them; supplying JSON replaces that section.</p>
-      <label className="block">Python executable<input className={input} value={python} onChange={event => setPython(event.target.value)} placeholder="Leave blank to use the configured runtime" /></label>
+      <p className="text-sm">The Python runtime is set by the server operator (AGENT_CONNECT_PYTHON). Environment names must belong to this channel provider.</p>
       <label className="flex gap-2"><input type="checkbox" checked={autoReply} onChange={event => setAutoReply(event.target.checked)} />Enable primary-agent replies</label>
       <button className={button} disabled={busy || !loaded}>Save settings</button>
     </form>

@@ -9,6 +9,9 @@ import extension from '../extensions/agent-connect/index.js';
 
 test('expanded host protects all catalog routes, hides provider settings and preserves blank credential updates', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-connect-host-'));
+  // Server-side runtime settings (S0-Q.6): state stays in the temp dir, interpreter does not exist.
+  process.env.AGENT_CONNECT_STATE_DIR = directory;
+  process.env.AGENT_CONNECT_PYTHON = join(directory, 'missing-python');
   const db = new Database(':memory:');
   db.exec('CREATE TABLE extension_configs (extension_id TEXT PRIMARY KEY, enabled INTEGER); INSERT INTO extension_configs VALUES (\'agent-connect\', 1)');
   let config = {};
@@ -36,7 +39,7 @@ test('expanded host protects all catalog routes, hides provider settings and pre
     const url = '/api/ext/agent-connect/ntfy/config';
     const saved = await app.inject({ method: 'PUT', url, headers: auth, payload: { config: {
       configured: true, environment: { NTFY_TOKEN: 'private-test-value' }, settings: { token: 'private-settings-value' },
-      allowed_users: 'topic', allowed_channels: 'topic', python_executable: join(directory, 'missing-python'), state_directory: directory,
+      allowed_users: 'topic', allowed_channels: 'topic', state_directory: 'ntfy-test',
     } } });
     assert.equal(saved.statusCode, 200);
     const read = await app.inject({ url, headers: auth });
