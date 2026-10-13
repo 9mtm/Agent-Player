@@ -4,6 +4,7 @@
 
 import chalk from 'chalk';
 import { success, error, info, header } from '../utils/formatting.js';
+import { getBackendUrl, readSession } from '../utils/auth-store.js';
 
 type ConfigAction = 'show' | 'set' | 'reset';
 
@@ -35,8 +36,8 @@ function showConfig(): void {
   header('Current Configuration');
 
   console.log(chalk.cyan('Backend:'));
-  console.log(`  URL: ${process.env.BACKEND_URL || 'http://localhost:3001'}`);
-  console.log(`  Port: ${process.env.PORT || '3001'}`);
+  console.log(`  URL: ${getBackendUrl()}`);
+  console.log(`  Signed in: ${readSession() ? 'yes' : 'no'}`);
 
   console.log(chalk.cyan('\nPaths:'));
   console.log(`  Data: ${process.env.DATA_DIR || './data'}`);

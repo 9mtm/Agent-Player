@@ -1,48 +1,31 @@
 /**
  * Onboard Command
  *
- * Interactive onboarding wizard for first-time setup
+ * First-time setup happens in the web wizard: /setup creates the owner
+ * account, then /onboarding (shown after the first sign-in) configures the
+ * agent. The backend's old /api/onboarding/start route (a terminal wizard run
+ * inside the server) has been removed, so this command points to the web
+ * wizard instead of calling it.
  */
 
 import chalk from 'chalk';
-import { getApiClient } from '../utils/api-client.js';
-import { error } from '../utils/formatting.js';
+import { ApiClient } from '../utils/api-client.js';
+import { getFrontendUrl } from '../utils/auth-store.js';
 
-export async function onboardCommand(): Promise<void> {
-  const client = getApiClient();
+export async function onboardCommand(deps: { log?: (msg: string) => void; client?: ApiClient } = {}): Promise<void> {
+  const log = deps.log ?? ((m: string) => console.log(m));
+  const client = deps.client ?? new ApiClient();
+  const web = getFrontendUrl();
 
-  try {
-    // Check if backend is running
-    const isRunning = await client.isBackendRunning();
-
-    if (!isRunning) {
-      console.log(chalk.yellow('\n⚠️  Backend is not running'));
-      console.log(chalk.cyan('\nStarting backend...\n'));
-
-      // Start backend first
-      const { spawn } = await import('child_process');
-      const backendProcess = spawn('pnpm', ['--filter', '@agent-player/backend', 'dev'], {
-        stdio: 'inherit',
-        shell: true
-      });
-
-      // Wait for backend to start
-      await new Promise(resolve => setTimeout(resolve, 3000));
-    }
-
-    // Trigger onboarding via API
-    console.log(chalk.cyan('\n🚀 Starting Onboarding Wizard...\n'));
-
-    const response = await client.startOnboarding();
-
-    if (response.success) {
-      console.log(chalk.green('\n✅ Onboarding completed successfully!\n'));
-      console.log(chalk.cyan('You can now use Agent Player with:'));
-      console.log(chalk.white('  agent-player start\n'));
-    }
-
-  } catch (err: any) {
-    error('Onboarding failed');
-    console.error(err.message);
+  const isRunning = await client.isBackendRunning();
+  if (!isRunning) {
+    log(chalk.yellow(`\nBackend is not running at ${client.getBaseUrl()}`));
+    log(chalk.gray('Start it with "agent-player start", then run "agent-player onboard" again.\n'));
+    return;
   }
+
+  log(chalk.cyan('\nOnboarding runs in the web wizard:'));
+  log(chalk.white(`  ${web}/onboarding`));
+  log(chalk.gray(`\nOn a new installation ${web}/setup creates the owner account first.`));
+  log(chalk.gray('Then use "agent-player login" to sign in from the terminal.\n'));
 }

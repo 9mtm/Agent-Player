@@ -18,6 +18,7 @@ import { jobsCommand } from './commands/jobs.js';
 import { configCommand } from './commands/config.js';
 import { doctorCommand } from './commands/doctor.js';
 import { onboardCommand } from './commands/onboard.js';
+import { loginCommand, logoutCommand } from './commands/auth.js';
 
 const program = new Command();
 
@@ -29,8 +30,25 @@ program
 // Essential Commands
 program
   .command('onboard')
-  .description('Interactive onboarding wizard (first-time setup)')
-  .action(onboardCommand);
+  .description('First-time setup (opens the web onboarding wizard)')
+  .action(() => onboardCommand());
+
+program
+  .command('login')
+  .description('Sign in to the backend (email + password); the session is saved privately')
+  .option('-e, --email <email>', 'Account email')
+  .option('-u, --url <url>', 'Backend URL (default http://127.0.0.1:41522)')
+  .action(async (options: { email?: string; url?: string }) => {
+    const ok = await loginCommand(options);
+    if (!ok) process.exitCode = 1;
+  });
+
+program
+  .command('logout')
+  .description('Sign out and remove the saved session')
+  .action(async () => {
+    await logoutCommand();
+  });
 
 program
   .command('start')

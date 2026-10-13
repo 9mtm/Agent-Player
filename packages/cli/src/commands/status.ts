@@ -45,7 +45,7 @@ export async function statusCommand(): Promise<void> {
     console.log(table.toString());
 
     // API Info
-    console.log(chalk.gray(`\nAPI: http://localhost:3001`));
+    console.log(chalk.gray(`\nAPI: ${client.getBaseUrl()}`));
     console.log(chalk.gray(`Last check: ${new Date(status.timestamp).toLocaleTimeString()}\n`));
 
   } catch (err: any) {

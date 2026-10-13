@@ -1,43 +1,86 @@
 /**
  * API Client
  *
- * Communicates with Agent Player backend
+ * Communicates with the Agent Player backend. Authenticated calls send the
+ * token saved by `agent-player login` as a bearer token. The token is never
+ * printed or included in error messages.
  */
 
-import axios, { AxiosInstance } from 'axios';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { getBackendUrl, getStoredToken } from './auth-store.js';
 
-// Load .env from CLI package directory
+// Load .env from CLI package directory (optional BACKEND_URL)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-dotenv.config({ path: join(__dirname, '..', '..', '.env') });
+dotenv.config({ path: join(__dirname, '..', '..', '.env'), quiet: true } as any);
+
+export class ApiError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+export const NOT_SIGNED_IN =
+  'Not signed in or the session has ended. Run "agent-player login" first.';
+
+interface RequestOptions {
+  body?: unknown;
+  /** Send the saved token (default true). */
+  auth?: boolean;
+  timeoutMs?: number;
+}
 
 export class ApiClient {
-  private client: AxiosInstance;
   private baseURL: string;
 
   constructor(baseURL?: string) {
-    // Read from .env file (no hardcoded fallback)
-    const envBackendUrl = process.env.BACKEND_URL;
+    this.baseURL = (baseURL || getBackendUrl()).replace(/\/+$/, '');
+  }
 
-    if (!baseURL && !envBackendUrl) {
-      throw new Error(
-        'BACKEND_URL must be set in .env file or passed to constructor.\n' +
-        'Create packages/cli/.env with:\n' +
-        'BACKEND_URL=http://localhost:41522'
-      );
+  getBaseUrl(): string {
+    return this.baseURL;
+  }
+
+  async request<T = any>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+    const headers: Record<string, string> = {};
+    if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+    const token = options.auth === false ? null : getStoredToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseURL}${path}`, {
+        method,
+        headers,
+        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+        signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
+      });
+    } catch {
+      throw new ApiError(`Cannot reach the backend at ${this.baseURL}`, 0);
     }
 
-    this.baseURL = baseURL || envBackendUrl!;
-    this.client = axios.create({
-      baseURL: this.baseURL,
-      timeout: 30000,
-      headers: {
-        'Content-Type': 'application/json'
+    const text = await response.text();
+    let data: any = undefined;
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = text;
       }
-    });
+    }
+
+    if (!response.ok) {
+      if (response.status === 401) throw new ApiError(NOT_SIGNED_IN, 401);
+      const detail = data && typeof data === 'object' ? data.message || data.error : undefined;
+      throw new ApiError(
+        `Request failed (${response.status})${detail ? `: ${String(detail)}` : ''}`,
+        response.status
+      );
+    }
+    return data as T;
   }
 
   /**
@@ -45,9 +88,9 @@ export class ApiClient {
    */
   async isBackendRunning(): Promise<boolean> {
     try {
-      const response = await this.client.get('/health');
-      return response.data.status === 'ok';
-    } catch (err) {
+      const data = await this.request('GET', '/health', { auth: false, timeoutMs: 5_000 });
+      return data?.status === 'ok';
+    } catch {
       return false;
     }
   }
@@ -56,106 +99,102 @@ export class ApiClient {
    * Get backend status
    */
   async getStatus(): Promise<any> {
-    const response = await this.client.get('/health');
-    return response.data;
+    return this.request('GET', '/health', { auth: false });
+  }
+
+  /**
+   * Auth API
+   */
+  async login(email: string, password: string): Promise<{ token: string; user?: any }> {
+    let data: any;
+    try {
+      data = await this.request('POST', '/api/auth/login', { body: { email, password }, auth: false });
+    } catch (err: any) {
+      // A 401 here means wrong credentials, not an ended session.
+      if (err?.status === 401) throw new ApiError('Login failed: wrong email or password', 401);
+      throw err;
+    }
+    if (!data || typeof data.token !== 'string' || !data.token) {
+      throw new ApiError('Login failed: the backend returned no session', 500);
+    }
+    return { token: data.token, user: data.user };
+  }
+
+  async logout(): Promise<void> {
+    await this.request('POST', '/api/auth/logout');
   }
 
   /**
    * Skills API
    */
   async getSkills(): Promise<any[]> {
-    const response = await this.client.get('/api/skills');
-    return response.data.skills || [];
+    const data = await this.request('GET', '/api/skills');
+    return data?.skills || [];
   }
 
   async installSkill(name: string): Promise<any> {
-    const response = await this.client.post('/api/skills/install', { name });
-    return response.data;
+    return this.request('POST', '/api/skills/install', { body: { name } });
   }
 
   async removeSkill(id: string): Promise<any> {
-    const response = await this.client.delete(`/api/skills/${id}`);
-    return response.data;
+    return this.request('DELETE', `/api/skills/${encodeURIComponent(id)}`);
   }
 
   async updateSkill(id: string, data: any): Promise<any> {
-    const response = await this.client.put(`/api/skills/${id}`, data);
-    return response.data;
+    return this.request('PUT', `/api/skills/${encodeURIComponent(id)}`, { body: data });
   }
 
   /**
    * Channels API
    */
   async getChannels(): Promise<any[]> {
-    const response = await this.client.get('/api/channels');
-    return response.data.channels || [];
+    const data = await this.request('GET', '/api/channels');
+    return data?.channels || [];
   }
 
   async connectChannel(id: string): Promise<any> {
-    const response = await this.client.post(`/api/channels/${id}/connect`);
-    return response.data;
+    return this.request('POST', `/api/channels/${encodeURIComponent(id)}/connect`);
   }
 
   async disconnectChannel(id: string): Promise<any> {
-    const response = await this.client.post(`/api/channels/${id}/disconnect`);
-    return response.data;
+    return this.request('POST', `/api/channels/${encodeURIComponent(id)}/disconnect`);
   }
 
   /**
    * Jobs API
    */
   async getJobs(): Promise<any[]> {
-    const response = await this.client.get('/api/scheduler/jobs');
-    return response.data.jobs || [];
+    const data = await this.request('GET', '/api/scheduler/jobs');
+    return data?.jobs || [];
   }
 
   async createJob(data: any): Promise<any> {
-    const response = await this.client.post('/api/scheduler/jobs', data);
-    return response.data;
+    return this.request('POST', '/api/scheduler/jobs', { body: data });
   }
 
   async runJob(id: string): Promise<any> {
-    const response = await this.client.post(`/api/scheduler/jobs/${id}/execute`);
-    return response.data;
+    return this.request('POST', `/api/scheduler/jobs/${encodeURIComponent(id)}/execute`);
   }
 
   async deleteJob(id: string): Promise<any> {
-    const response = await this.client.delete(`/api/scheduler/jobs/${id}`);
-    return response.data;
+    return this.request('DELETE', `/api/scheduler/jobs/${encodeURIComponent(id)}`);
   }
 
   /**
-   * Chat API
+   * Chat API (non-streaming). Returns the assistant's reply text.
    */
-  async sendMessage(message: string, sessionId?: string): Promise<any> {
-    const response = await this.client.post('/api/chat', {
-      message,
-      sessionId: sessionId || 'cli-session'
+  async sendMessage(message: string, sessionId?: string): Promise<string> {
+    if (!getStoredToken()) throw new ApiError(NOT_SIGNED_IN, 401);
+    const data = await this.request('POST', '/api/chat', {
+      body: {
+        messages: [{ role: 'user', content: message }],
+        stream: false,
+        sessionId: sessionId || 'cli-session',
+      },
+      timeoutMs: 240_000,
     });
-    return response.data;
-  }
-
-  /**
-   * Onboarding API
-   */
-  async startOnboarding(): Promise<{ success: boolean }> {
-    const response = await this.client.post('/api/onboarding/start');
-    return response.data;
-  }
-
-  async getOnboardingStatus(): Promise<any> {
-    const response = await this.client.get('/api/onboarding/status');
-    return response.data;
-  }
-
-  async resumeOnboarding(): Promise<{ success: boolean }> {
-    const response = await this.client.post('/api/onboarding/resume');
-    return response.data;
-  }
-
-  async skipOnboarding(): Promise<{ success: boolean }> {
-    const response = await this.client.post('/api/onboarding/skip');
-    return response.data;
+    const content = data?.message?.content;
+    return typeof content === 'string' ? content : '';
   }
 }
 

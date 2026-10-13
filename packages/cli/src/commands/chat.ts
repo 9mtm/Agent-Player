@@ -6,7 +6,7 @@
 
 import ora from 'ora';
 import chalk from 'chalk';
-import * as prompts from '@clack/prompts';
+import { ask } from '../utils/prompt.js';
 import { getApiClient } from '../utils/api-client.js';
 import { error, success } from '../utils/formatting.js';
 
@@ -25,17 +25,7 @@ export async function chatCommand(initialMessage?: string): Promise<void> {
 
   // If no message provided, prompt for it
   if (!message) {
-    const result = await prompts.text({
-      message: 'What would you like to ask?',
-      placeholder: 'Type your message...'
-    });
-
-    if (prompts.isCancel(result)) {
-      console.log(chalk.gray('\nCancelled\n'));
-      return;
-    }
-
-    message = result as string;
+    message = await ask('What would you like to ask? ');
   }
 
   if (!message || message.trim().length === 0) {
@@ -47,11 +37,11 @@ export async function chatCommand(initialMessage?: string): Promise<void> {
   const spinner = ora('Thinking...').start();
 
   try {
-    const response = await client.sendMessage(message);
+    const reply = await client.sendMessage(message);
     spinner.stop();
 
     console.log(chalk.bold.cyan('\n🤖 Agent:'));
-    console.log(chalk.white(response.reply || response.message || 'No response'));
+    console.log(chalk.white(reply || 'No response'));
     console.log();
 
   } catch (err: any) {
