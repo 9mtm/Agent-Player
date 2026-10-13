@@ -11,6 +11,7 @@ import { getSettingsManager } from '../../settings/index.js';
 import { getDatabase } from '../../db/index.js';
 import { streamChatClaude } from './agentic-chat.js';
 import { createToolsRegistry } from '../../tools/index.js';
+import { channelPolicyFromHeaders, type ChannelToolPolicy } from '../../tools/channel-policy.js';
 import { geminiCliTool } from '../../tools/cli/gemini-cli.js';
 import { claudeCliTool } from '../../tools/cli/claude-cli.js';
 import { getJsonRenderPrompt } from './json-render-prompt.js';
@@ -167,6 +168,11 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     console.log('[Chat] 📦 Received chatContext:', JSON.stringify(chatContext));
 
+    // SECURITY (S0-Q.8): a channel-originated turn (Telegram/Discord/Agent Connect sender)
+    // gets the restricted channel tool policy. It is bound to a server-created token,
+    // never to anything in the request body.
+    const toolPolicy = channelPolicyFromHeaders(request.headers);
+
     // Resolve agent config: specific agent > primary agent > fallback defaults
     const agentConfig = agentId ? getAgentById(agentId) : getPrimaryAgent();
     const resolvedModel = model || agentConfig?.model || DEFAULT_MODEL;
@@ -215,11 +221,16 @@ export async function chatRoutes(fastify: FastifyInstance) {
     console.log('[Chat] Agent:', agentConfig?.name || 'none (fallback)', '| Provider:', resolvedProvider, '| Model:', resolvedModel);
     if (memoryContext) console.log('[Chat] 🧠 Memory context injected:', memoryContext.slice(0, 80) + '...');
 
+    // CLI bridge providers run a separate local agent with its own tools; never for channel turns.
+    if (toolPolicy && (resolvedProvider === 'gemini-cli' || resolvedProvider === 'claude-cli')) {
+      return reply.status(403).send({ error: 'This agent provider is not available for channel messages' });
+    }
+
     try {
       if (stream) {
-        return streamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext);
+        return streamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy);
       } else {
-        return nonStreamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext);
+        return nonStreamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy);
       }
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
@@ -241,7 +252,8 @@ async function streamChat(
   customSystemPrompt?: string,
   systemPromptAppend?: string,
   userId: string = 'default',
-  chatContext?: any
+  chatContext?: any,
+  toolPolicy?: ChannelToolPolicy
 ) {
   console.log('[Chat] 🚀 Starting stream chat');
   console.log('[Chat]   📦 Model:', model);
@@ -306,7 +318,7 @@ async function streamChat(
   });
 
   // Get real tools from the tools registry (11 tools: exec, read, write, browser×4, memory×2, desktop)
-  const toolsRegistry = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd() });
+  const toolsRegistry = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy });
   const tools = toolsRegistry.getToolsForAPI();
 
   console.log('[Chat] 🔧 Available tools:', tools.length);
@@ -387,7 +399,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
   // Route to the correct provider
   if (provider === 'claude' && apiKey) {
     console.log('[Chat] 🤖 Using Claude API (agent api_key)');
-    return streamChatClaude(reply, apiKey, selectedModel, ollamaMessages, finalSystemPrompt, tools, temperature, userId, sessionId, chatContext);
+    return streamChatClaude(reply, apiKey, selectedModel, ollamaMessages, finalSystemPrompt, tools, temperature, userId, sessionId, chatContext, toolPolicy);
   }
 
   // Fallback: check global settings for claude
@@ -405,7 +417,8 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       temperature,
       userId,
       sessionId,
-      chatContext
+      chatContext,
+      toolPolicy
     );
   }
 
@@ -601,7 +614,8 @@ async function nonStreamChat(
   customSystemPrompt?: string,
   systemPromptAppend?: string,
   userId: string = 'default',
-  chatContext?: any
+  chatContext?: any,
+  toolPolicy?: ChannelToolPolicy
 ) {
   console.log('[Chat] 🚀 Starting non-stream chat');
   console.log('[Chat]   📦 Model:', model);
@@ -663,17 +677,17 @@ async function nonStreamChat(
   });
 
   // Get real tools from the tools registry
-  const toolsRegistryNS = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd() });
+  const toolsRegistryNS = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy });
   const tools = toolsRegistryNS.getToolsForAPI();
   if (provider === 'claude' && apiKey) {
     console.log('[Chat] 🤖 Using Claude API (agent api_key, non-stream)');
-    return streamChatClaude(reply, apiKey, model, ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext);
+    return streamChatClaude(reply, apiKey, model, ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext, toolPolicy);
   }
   const settingsManagerNS = getSettingsManager();
   const settingsNS = settingsManagerNS.getSettings();
   if (provider === 'claude' && settingsNS.claude?.apiKey) {
     console.log('[Chat] 🤖 Using Claude API (global settings, non-stream)');
-    return streamChatClaude(reply, settingsNS.claude.apiKey, model || settingsNS.claude.model || 'claude-sonnet-4-5-20250929', ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext);
+    return streamChatClaude(reply, settingsNS.claude.apiKey, model || settingsNS.claude.model || 'claude-sonnet-4-5-20250929', ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext, toolPolicy);
   }
 
   // Gemini CLI provider (non-stream path)

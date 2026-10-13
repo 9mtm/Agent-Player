@@ -12,6 +12,7 @@ import * as os from 'node:os';
 import type { FastifyReply } from 'fastify';
 import { ClaudeClient } from '../../llm/claude-client.js';
 import { createToolsRegistry } from '../../tools/index.js';
+import type { ChannelToolPolicy } from '../../tools/channel-policy.js';
 import { loadClaudeProjectMemory } from './claude-local.js';
 import { buildAiToolsContext } from './ai-tools.js';
 import { getJsonRenderPrompt } from './json-render-prompt.js';
@@ -87,7 +88,8 @@ export async function streamChatClaude(
   temperature: number,
   userId: string = 'default',
   sessionId: string = 'default',
-  chatContext?: Partial<ChatContext>
+  chatContext?: Partial<ChatContext>,
+  toolPolicy?: ChannelToolPolicy
 ): Promise<FastifyReply> {
   console.log('[Chat] 🚀 Starting Claude agentic stream');
   console.log('[Chat]   Model:', model);
@@ -106,7 +108,8 @@ export async function streamChatClaude(
     const claude = new ClaudeClient(apiKey, model);
 
     // Build tools registry for execution
-    const toolsRegistry = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd() });
+    // Same tool policy as the offered list: a channel turn cannot run a tool it was not offered.
+    const toolsRegistry = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy });
 
     // Convert messages to Claude format (filter out system role)
     let loopMessages: Array<{ role: 'user' | 'assistant'; content: string | any[] }> = messages
@@ -123,11 +126,14 @@ export async function streamChatClaude(
     let consecutiveErrors = 0;
     const MAX_CONSECUTIVE_ERRORS = 4;
 
-    // Load project MEMORY.md and AI tools context
-    const [projectMemory, aiToolsContext] = await Promise.all([
-      loadClaudeProjectMemory(),
-      buildAiToolsContext(),
-    ]);
+    // Load project MEMORY.md and AI tools context. Not for channel turns: that is the
+    // owner's private local context and the reply goes to an outside sender (S0-Q.8).
+    const [projectMemory, aiToolsContext]: [string | null, string] = toolPolicy
+      ? [null, '']
+      : await Promise.all([
+          loadClaudeProjectMemory(),
+          buildAiToolsContext(),
+        ]);
 
     // Detect chat context (auto-detect or use explicit context from caller)
     const context = detectChatContext(

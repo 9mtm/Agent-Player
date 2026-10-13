@@ -65,8 +65,11 @@ export async function registerChannelRoutes(fastify, api, id, options = {}) {
             AND sender_id = ? ORDER BY timestamp DESC LIMIT 20`)
             .all(id, message.conversationId, message.senderId).reverse()
             .map(row => ({ role: row.direction === 'incoming' ? 'user' : 'assistant', content: row.content }));
+          // The turn runs with the restricted channel tool set; send tools may only
+          // answer this conversation or a configured allowed channel.
           const response = await api.processChannelMessage(config.owner_user_id,
-            `${id}:${message.conversationId}:${message.senderId}`, message.text, history);
+            `${id}:${message.conversationId}:${message.senderId}`, message.text, history,
+            { channel: id, conversationId: message.conversationId, allowedDestinations: values(config.allowed_channels) });
           if (!active() || !allowed(message, read()) || JSON.stringify(config) !== JSON.stringify(read())) throw new Error('Channel access revoked');
           // Split plain text at provider limits; outbound mentions are disabled by the Discord transport.
           const size = Math.max(1, channelInfo(id).maxTextLength - 100);

@@ -6,13 +6,15 @@
 import type { FastifyInstance } from 'fastify';
 import type { Database } from 'better-sqlite3';
 import type { Tool } from '../tools/types.js';
-import { registerExtensionTool, unregisterExtensionTool } from '../tools/index.js';
+import { registerExtensionTool, unregisterExtensionTool, isReservedToolName } from '../tools/index.js';
+import { EXEC_EXTENSION_PERMISSIONS } from '../tools/exec-policy.js';
+import { beginChannelTurn, CHANNEL_TURN_HEADER, type ChannelOrigin } from '../tools/channel-policy.js';
 import { getDatabase } from '../db/index.js';
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, resolve, sep, join } from 'path';
 import { getTranslator, registerExtensionBackendTranslations } from '../i18n/index.js';
-import { checkPermissions } from '../middleware/extension-permissions.js';
+import { checkPermissions, getExtensionPermissions } from '../middleware/extension-permissions.js';
 import { logSecurityEvent } from '../services/audit-logger.js';
 import { getUserIdFromRequest } from '../auth/jwt.js';
 import type { FastifyRequest } from 'fastify';
@@ -26,7 +28,12 @@ import { extractAgentReply } from '../../extensions/shared/agent-reply.js';
 export interface ExtensionApi {
   authorizeChannelRequest(request: FastifyRequest): string;
   authorizeChannelUser(userId: string): void;
-  processChannelMessage(userId: string, sessionId: string, message: string, history: Message[]): Promise<string>;
+  /**
+   * Run one inbound channel message through the agent as `userId` (the channel
+   * owner). The turn gets the restricted channel tool set (S0-Q.8); `origin`
+   * names the channel and inbound conversation so send tools can only reply there.
+   */
+  processChannelMessage(userId: string, sessionId: string, message: string, history: Message[], origin?: Partial<ChannelOrigin>): Promise<string>;
   // Route registration — routes registered at startup, mounted under /api/ext/:extensionId/
   registerRoutes(routesFn: (fastify: FastifyInstance) => Promise<void>, prefix?: string): void;
 
@@ -168,19 +175,34 @@ export function createExtensionApi(
         throw new Error('Channel administration requires an active owner or admin');
       }
     },
-    async processChannelMessage(userId, sessionId, message, history) {
+    async processChannelMessage(userId, sessionId, message, history, origin) {
       this.authorizeChannelUser(userId);
-      // Reuse the configured primary agent, provider and tool loop from the real chat route.
-      const response = await fastify.inject({
-        method: 'POST', url: '/api/chat',
-        headers: { origin: (process.env.ALLOWED_ORIGINS || 'http://localhost:41521').split(',')[0].trim() },
-        payload: { userId, sessionId, stream: false,
-          messages: [...history, { role: 'user', content: message }],
-          systemPromptAppend: 'Reply in plain text suitable for a messaging channel. Do not output UI specifications.',
-          chatContext: { sessionType: 'minimal', hasAvatarViewer: false, hasDesktopControl: false } },
+      // SECURITY (S0-Q.8): the message comes from an outside sender, so the turn runs
+      // with the restricted channel tool policy, not the owner's full tool set. The
+      // policy is bound to a random per-turn token only server code can create.
+      const turn = beginChannelTurn({
+        channel: origin?.channel || extensionId,
+        conversationId: origin?.conversationId || '',
+        allowedDestinations: origin?.allowedDestinations || [],
       });
-      this.authorizeChannelUser(userId);
-      return extractAgentReply(response);
+      try {
+        // Reuse the configured primary agent, provider and tool loop from the real chat route.
+        const response = await fastify.inject({
+          method: 'POST', url: '/api/chat',
+          headers: {
+            origin: (process.env.ALLOWED_ORIGINS || 'http://localhost:41521').split(',')[0].trim(),
+            [CHANNEL_TURN_HEADER]: turn.token,
+          },
+          payload: { userId, sessionId, stream: false,
+            messages: [...history, { role: 'user', content: message }],
+            systemPromptAppend: 'Reply in plain text suitable for a messaging channel. Do not output UI specifications.',
+            chatContext: { sessionType: 'minimal', hasAvatarViewer: false, hasDesktopControl: false } },
+        });
+        this.authorizeChannelUser(userId);
+        return extractAgentReply(response);
+      } finally {
+        turn.end();
+      }
     },
 
     // Database access with permission check
@@ -239,8 +261,38 @@ export function createExtensionApi(
         throw new Error(error);
       }
 
+      // SECURITY: an extension tool may not replace a built-in tool (and its policy)
+      if (isReservedToolName(tool.name)) {
+        const error = `Extension "${extensionId}" may not register reserved tool name: ${tool.name}`;
+        console.error(`[ExtensionApi:${extensionId}] ❌ ${error}`);
+        try {
+          logSecurityEvent({
+            event_type: 'extension.permission.denied',
+            severity: 'error',
+            user_id: null,
+            ip_address: null,
+            user_agent: null,
+            resource_type: 'extension',
+            resource_id: extensionId,
+            action: 'register_tool',
+            status: 'blocked',
+            metadata: { tool_name: tool.name, reason: 'reserved_name' },
+          });
+        } catch (logError) {
+          console.error('[ExtensionApi] Failed to log blocked tool registration:', logError);
+        }
+        throw new Error(error);
+      }
+
+      // SECURITY: tools of extensions that declare `process`/`exec` in their manifest may
+      // spawn processes, so they follow the exec gate (AGENT_EXEC_TOOLS) and are never
+      // used in channel conversations. The extension cannot clear this flag.
+      const declared: unknown = getExtensionPermissions(extensionId);
+      const execClass = tool.execClass === true
+        || (Array.isArray(declared) && EXEC_EXTENSION_PERMISSIONS.some((p) => declared.includes(p)));
+
       // Tag tool with extensionId for tracking
-      const taggedTool = { ...tool, extensionId };
+      const taggedTool = { ...tool, extensionId, execClass };
       registerExtensionTool(taggedTool);
       console.log(`[ExtensionApi:${extensionId}] ✅ Tool registered globally: ${tool.name}`);
 

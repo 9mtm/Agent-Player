@@ -77,10 +77,33 @@ import type { Tool } from './types.js';
 
 const extensionTools: Tool[] = [];
 
+/** Built-in tools, in registration order. */
+const CORE_TOOLS: Tool[] = [
+  execTool, readTool, writeTool, webFetchTool, executeCodeTool,
+  browserNavigateTool, browserScreenshotTool, browserExtractTool, browserInteractTool,
+  memorySaveTool, memorySearchTool, memoryReflectTool, memoryStatsTool,
+  desktopControlTool,
+  storageSaveTool, storageSearchTool, storageDeleteTool,
+  createReminderTool,
+  credentialsSaveTool,
+  skillInstallTool,
+];
+
+/**
+ * Names an extension tool may not use: built-in tools (and the CLI bridges),
+ * so an extension cannot replace a core tool or inherit its policy.
+ */
+export function isReservedToolName(name: string): boolean {
+  return CORE_TOOLS.some((t) => t.name === name) || name === geminiCliTool.name || name === claudeCliTool.name;
+}
+
 /**
  * Register an extension tool globally (used by Extension SDK)
  */
 export function registerExtensionTool(tool: Tool): void {
+  if (isReservedToolName(tool.name)) {
+    throw new Error(`Extension tool name "${tool.name}" is reserved for a built-in tool`);
+  }
   // Remove if already exists
   const existingIndex = extensionTools.findIndex((t) => t.name === tool.name);
   if (existingIndex !== -1) {
@@ -115,45 +138,10 @@ export function getExtensionTools(extensionId?: string): Tool[] {
 export function createToolsRegistry(context: ToolExecutionContext): ToolsRegistry {
   const registry = new ToolsRegistry(context);
 
-  // Register core tools
-  registry.register(execTool);
-  registry.register(readTool);
-  registry.register(writeTool);
-  registry.register(webFetchTool);
-  registry.register(executeCodeTool);
-
-  // Register browser tools
-  registry.register(browserNavigateTool);
-  registry.register(browserScreenshotTool);
-  registry.register(browserExtractTool);
-  registry.register(browserInteractTool);
-
-  // Register memory tools
-  registry.register(memorySaveTool);
-  registry.register(memorySearchTool);
-  registry.register(memoryReflectTool);
-  registry.register(memoryStatsTool);
-
-  // Register desktop control tool
-  registry.register(desktopControlTool);
-
-  // Register storage tools (Cache + CDN)
-  registry.register(storageSaveTool);
-  registry.register(storageSearchTool);
-  registry.register(storageDeleteTool);
-
-  // Register CLI bridge tools (DISABLED - not needed when using API directly)
-  // registry.register(geminiCliTool);
-  // registry.register(claudeCliTool);
-
-  // Register notification tools
-  registry.register(createReminderTool);
-
-  // Register credentials tools
-  registry.register(credentialsSaveTool);
-
-  // Register skill install tool
-  registry.register(skillInstallTool);
+  // Register core tools (CLI bridges gemini_cli/claude_cli stay unregistered)
+  for (const tool of CORE_TOOLS) {
+    registry.register(tool);
+  }
 
   // Register extension-provided tools
   for (const tool of extensionTools) {

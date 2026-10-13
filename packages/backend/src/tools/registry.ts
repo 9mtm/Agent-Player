@@ -6,7 +6,8 @@
  */
 
 import type { Tool, ToolResult, ToolExecutionContext } from './types.js';
-import { execToolRefusal, isToolAllowedByExecPolicy } from './exec-policy.js';
+import { execToolRefusal, isToolAllowedByExecPolicy, isToolObjectAllowedByExecPolicy } from './exec-policy.js';
+import { channelToolCallRefusal, isToolAllowedInChannel } from './channel-policy.js';
 
 export class ToolsRegistry {
   private tools = new Map<string, Tool>();
@@ -42,10 +43,13 @@ export class ToolsRegistry {
   /**
    * Get all tools usable right now. Exec-class tools are left out unless the
    * server enables them (AGENT_EXEC_TOOLS=true), see exec-policy.ts.
+   * In a channel-originated turn only the channel policy's tools are left
+   * (see channel-policy.ts).
    */
   getAll(): Tool[] {
+    const policy = this.context.toolPolicy;
     return Array.from(this.tools.values()).filter((tool) =>
-      isToolAllowedByExecPolicy(tool.name)
+      isToolObjectAllowedByExecPolicy(tool) && (!policy || isToolAllowedInChannel(policy, tool))
     );
   }
 
@@ -66,9 +70,19 @@ export class ToolsRegistry {
     const tool = this.tools.get(toolName);
 
     // SECURITY: exec-class tools are refused unless enabled by server env (S0-Q.5)
-    if (!isToolAllowedByExecPolicy(toolName)) {
+    if (!isToolAllowedByExecPolicy(toolName) || (tool && !isToolObjectAllowedByExecPolicy(tool))) {
       console.warn(`[ToolsRegistry] ⛔ Refused exec-class tool: ${toolName}`);
       return execToolRefusal(toolName);
+    }
+
+    // SECURITY: channel-originated turns may only run the channel policy's tools (S0-Q.8)
+    const policy = this.context.toolPolicy;
+    if (policy) {
+      const refused = channelToolCallRefusal(policy, toolName, tool, params);
+      if (refused) {
+        console.warn(`[ToolsRegistry] ⛔ Refused tool in ${policy.channel} channel turn: ${toolName}`);
+        return refused;
+      }
     }
 
     if (!tool) {

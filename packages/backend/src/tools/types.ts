@@ -39,6 +39,8 @@ export interface Tool {
   input_schema: ToolParameters;
   execute: (params: Record<string, any>, context?: ToolExecutionContext) => Promise<ToolResult>;
   extensionId?: string; // Optional: tracks which extension registered this tool
+  /** Set by the Extension SDK when the extension's manifest declares `process`/`exec`. */
+  execClass?: boolean;
 }
 
 export interface ToolExecutionContext {
@@ -46,4 +48,6 @@ export interface ToolExecutionContext {
   timeout?: number;
   userId?: string;
   sessionId?: string;
+  /** Present for channel-originated turns: restricts which tools may be offered/run (S0-Q.8). */
+  toolPolicy?: import('./channel-policy.js').ChannelToolPolicy;
 }

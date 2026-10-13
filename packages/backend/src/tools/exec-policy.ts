@@ -40,6 +40,23 @@ export function isToolAllowedByExecPolicy(name: string): boolean {
   return !isExecClassTool(name) || isExecToolsEnabled();
 }
 
+/**
+ * Extension manifest permissions that mark an extension's tools as
+ * exec-class (they may spawn processes). Such tools follow the same gate as
+ * the built-in exec tools and are never used in channel conversations.
+ */
+export const EXEC_EXTENSION_PERMISSIONS: readonly string[] = ['process', 'exec'];
+
+/** Exec-class by name, or an extension tool marked exec-class at registration. */
+export function isToolExecClass(tool: { name: string; execClass?: boolean }): boolean {
+  return isExecClassTool(tool.name) || tool.execClass === true;
+}
+
+/** Like isToolAllowedByExecPolicy, but also honours the tool's own exec flag. */
+export function isToolObjectAllowedByExecPolicy(tool: { name: string; execClass?: boolean }): boolean {
+  return !isToolExecClass(tool) || isExecToolsEnabled();
+}
+
 export function execToolRefusal(name: string): ToolResult {
   return {
     content: [
