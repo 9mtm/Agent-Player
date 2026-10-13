@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { skillsClient } from '@/lib/skills/client';
 import fs from 'fs';
 import path from 'path';
+import { requireSessionRole } from '@/lib/session';
 
 const SKILLS_DIR = path.join(process.cwd(), 'skills');
 
@@ -45,6 +46,10 @@ export async function DELETE(
     request: NextRequest,
     { params }: { params: Promise<{ name: string }> }
 ) {
+    // SECURITY (S0-Q.9): owner/admin only, verified by the backend JWT check
+    const auth = await requireSessionRole();
+    if (auth instanceof Response) return auth;
+
     try {
         const { name } = await params;
 

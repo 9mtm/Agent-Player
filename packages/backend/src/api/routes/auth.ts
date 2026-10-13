@@ -287,16 +287,16 @@ export async function authRoutes(fastify: FastifyInstance) {
       });
     }
 
-    const token = authHeader.substring(7);
-
     try {
-      // SECURITY: Use centralized JWT verification (M-06)
-      const decoded = verifyToken(token);
+      // SECURITY: Use centralized JWT verification (M-06). S0-Q.9: also checks
+      // token_version, and only active accounts count as signed in (the Next.js
+      // server verifies its callers through this endpoint).
+      const userId = getUserIdFromRequest(request);
 
       // Get user
-      const user = repos.users.findById(decoded.userId);
+      const user = repos.users.findById(userId);
 
-      if (!user) {
+      if (!user || (user as any).status !== 'active') {
         // SECURITY: Use "Unauthorized" for consistency (M-12)
         return reply.code(401).send({
           error: 'Unauthorized',

@@ -4,6 +4,7 @@
  */
 
 import type { FastifyRequest, FastifyReply } from 'fastify';
+import { authenticateActiveUser } from '../auth/route-guards.js';
 
 export type Role = 'owner' | 'admin' | 'user' | 'guest';
 
@@ -107,34 +108,14 @@ export function hasPermission(role: Role, permission: Permission): boolean {
 }
 
 /**
- * Get user from request
- * In production, this would extract user from JWT token or session
+ * Get the authenticated user from the request.
+ * SECURITY (S0-Q.9): verified backend JWT (signature, expiry, token_version) and
+ * an active user row only. No mock user, no NODE_ENV bypass, no session object.
  */
-function getUserFromRequest(request: FastifyRequest): { role: Role } | null {
-    // TODO: Implement actual authentication
-    // For now, return mock user from session/header
-
-    // Check for user in session (if using session auth)
-    const session = (request as any).session;
-    if (session?.user) {
-        return session.user;
-    }
-
-    // Check for Authorization header (if using JWT)
-    const authHeader = request.headers.authorization;
-    if (authHeader) {
-        // TODO: Verify JWT and extract user
-        // const token = authHeader.replace('Bearer ', '');
-        // const user = verifyToken(token);
-        // return user;
-    }
-
-    // Development: Allow all requests as owner
-    if (process.env.NODE_ENV === 'development') {
-        return { role: 'owner' };
-    }
-
-    return null;
+export function getUserFromRequest(request: FastifyRequest): { id: string; role: Role } | null {
+    const user = authenticateActiveUser(request);
+    if (!user || !Object.prototype.hasOwnProperty.call(rolePermissions, user.role)) return null;
+    return user;
 }
 
 /**

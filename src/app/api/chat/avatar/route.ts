@@ -4,7 +4,7 @@
  * (Avatar needs complete text at once for TTS processing)
  */
 
-import { getSessionUser } from '@/lib/session';
+import { getSessionUser, backendAuthHeaders } from '@/lib/session';
 import { config } from '@/lib/config';
 import { NextResponse } from 'next/server';
 
@@ -22,7 +22,7 @@ export async function POST(req: Request) {
         const body = await req.json();
 
         // 🧠 Fetch relevant memories for context injection
-        const userId = String(user.id);
+        const userId = user.email; // same memory key as /api/chat and /api/memory (was String(undefined))
         const lastUserMsg = body.messages?.findLast?.((m: any) => m.role === 'user')?.content || '';
         let memoryContext = '';
         if (lastUserMsg) {
@@ -43,7 +43,8 @@ export async function POST(req: Request) {
         // Always stream from backend — we'll collect and return as JSON
         const res = await fetch(`${BACKEND_URL}/api/chat`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            // S0-Q.9: the backend takes the user from this token, not from `userId`
+            headers: { 'Content-Type': 'application/json', ...(await backendAuthHeaders()) },
             body: JSON.stringify({ ...body, stream: true, userId, memoryContext: memoryContext || undefined }),
         });
 

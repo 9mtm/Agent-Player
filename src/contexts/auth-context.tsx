@@ -29,14 +29,27 @@ const getToken = (): string | null => {
     return localStorage.getItem(TOKEN_KEY);
 };
 
+// The same token is mirrored into a SameSite=Strict cookie so same-origin
+// Next.js API routes (/api/chat, /api/memory, ...) can verify it with the
+// backend (S0-Q.9). The cookie carries only the backend-signed JWT.
+const syncTokenCookie = (token: string | null): void => {
+    if (typeof document === 'undefined') return;
+    const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+    document.cookie = token
+        ? `${TOKEN_KEY}=${encodeURIComponent(token)}; Path=/; SameSite=Strict; Max-Age=${60 * 60 * 24 * 7}${secure}`
+        : `${TOKEN_KEY}=; Path=/; SameSite=Strict; Max-Age=0${secure}`;
+};
+
 const setToken = (token: string): void => {
     if (typeof window === 'undefined') return;
     localStorage.setItem(TOKEN_KEY, token);
+    syncTokenCookie(token);
 };
 
 const removeToken = (): void => {
     if (typeof window === 'undefined') return;
     localStorage.removeItem(TOKEN_KEY);
+    syncTokenCookie(null);
 };
 
 // Backend API URL
@@ -86,6 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
             if (response.ok) {
                 const data = await response.json();
+                syncTokenCookie(token); // keep the cookie in step for existing sessions
                 // Map backend user to frontend User interface
                 setUser({
                     id: data.user.id,

@@ -1,125 +1,16 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import bcrypt from 'bcryptjs';
-
-// Demo users (in production, use backend API for auth)
-const DEMO_USERS = [
-    {
-        id: 'demo-user-1',
-        email: 'admin@example.com',
-        password: '$2a$10$rPQ.ZxQYx9L7gL0QRjZ5xO5qQQ5W5x5x5x5x5x5x5x5x5x5x5x', // placeholder hash, never matches
-        name: 'Admin User',
-        role: 'admin',
-    },
-    {
-        id: 'demo-user-2',
-        email: 'demo@example.com',
-        password: '$2a$10$rPQ.ZxQYx9L7gL0QRjZ5xO5qQQ5W5x5x5x5x5x5x5x5x5x5x5x', // placeholder hash, never matches
-        name: 'Demo User',
-        role: 'user',
-    },
-];
+import { NextResponse } from 'next/server';
 
 /**
- * POST /api/auth/login
- * Simple login for demo mode
+ * POST /api/auth/login (Next.js) - disabled.
+ *
+ * SECURITY (S0-Q.9): this route used to create an unsigned `session` cookie
+ * that other Next.js routes trusted (any role could be forged). Sign-in is
+ * handled only by the backend (`POST {backend}/api/auth/login`), which returns
+ * the JWT the app sends as a bearer token.
  */
-export async function POST(request: NextRequest) {
-    try {
-        const body = await request.json();
-        const { email, password } = body;
-
-        console.log('Login attempt:', { email });
-
-        if (!email || !password) {
-            return NextResponse.json(
-                { error: 'Email and password are required' },
-                { status: 400 }
-            );
-        }
-
-        // Check environment-based auth first
-        // SECURITY (S0-Q.2): no built-in password; env login only when ADMIN_PASSWORD is set (12+ chars)
-        const envEmail = process.env.ADMIN_EMAIL || 'admin@agentplayer.local';
-        const envPassword = process.env.ADMIN_PASSWORD;
-
-        if (envPassword && envPassword.length >= 12 && email === envEmail && password === envPassword) {
-            const cookieStore = await cookies();
-            cookieStore.set('session', JSON.stringify({
-                userId: 'env-admin',
-                email: envEmail,
-                role: 'admin',
-                name: 'Admin',
-            }), {
-                httpOnly: true,
-                secure: process.env.NODE_ENV === 'production',
-                sameSite: 'lax',
-                maxAge: 60 * 60 * 24 * 7, // 7 days
-                path: '/',
-            });
-
-            return NextResponse.json({
-                success: true,
-                user: {
-                    id: 'env-admin',
-                    email: envEmail,
-                    name: 'Admin',
-                    role: 'admin',
-                },
-            });
-        }
-
-        // Check demo users
-        const user = DEMO_USERS.find(u => u.email === email);
-
-        if (!user) {
-            return NextResponse.json(
-                { error: 'Invalid credentials' },
-                { status: 401 }
-            );
-        }
-
-        // For demo, accept any password or check hashed
-        const isPasswordValid = await bcrypt.compare(password, user.password).catch(() => false);
-
-        if (!isPasswordValid) {
-            return NextResponse.json(
-                { error: 'Invalid credentials' },
-                { status: 401 }
-            );
-        }
-
-        // Set session cookie
-        const cookieStore = await cookies();
-        cookieStore.set('session', JSON.stringify({
-            userId: user.id,
-            email: user.email,
-            role: user.role,
-            name: user.name,
-        }), {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax',
-            maxAge: 60 * 60 * 24 * 7, // 7 days
-            path: '/',
-        });
-
-        console.log('Login successful');
-
-        return NextResponse.json({
-            success: true,
-            user: {
-                id: user.id,
-                email: user.email,
-                name: user.name,
-                role: user.role,
-            },
-        });
-    } catch (error) {
-        console.error('Login error:', error);
-        return NextResponse.json(
-            { error: 'Internal server error: ' + (error instanceof Error ? error.message : 'Unknown') },
-            { status: 500 }
-        );
-    }
+export async function POST() {
+    return NextResponse.json(
+        { error: 'Sign in through the backend /api/auth/login' },
+        { status: 410 }
+    );
 }

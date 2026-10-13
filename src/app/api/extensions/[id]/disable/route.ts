@@ -1,10 +1,15 @@
 import { NextResponse } from 'next/server';
 import { disableExtension } from '@/lib/extensions/manager';
+import { requireSessionRole } from '@/lib/session';
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+    // SECURITY (S0-Q.9): owner/admin only, verified by the backend JWT check
+    const auth = await requireSessionRole();
+    if (auth instanceof Response) return auth;
+
   try {
     const { id } = await params;
 

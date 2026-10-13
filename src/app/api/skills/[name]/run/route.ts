@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { skillExecutor } from '@/lib/skills/executor';
+import { requireSessionRole } from '@/lib/session';
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ name: string }> }) {
+    // SECURITY (S0-Q.9): owner/admin only, verified by the backend JWT check
+    const auth = await requireSessionRole();
+    if (auth instanceof Response) return auth;
+
     const { name } = await params;
 
     try {

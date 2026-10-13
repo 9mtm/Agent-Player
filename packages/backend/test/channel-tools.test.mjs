@@ -93,7 +93,10 @@ const withEnv = async (vars, fn) => {
 
 test('owner chat (no channel turn) still gets the normal tool set', async () => {
   modelRequests.length = 0; emitToolCalls = null;
-  const res = await app.inject({ method: 'POST', url: '/api/chat', payload: { userId: 'u-owner', stream: false, messages: [{ role: 'user', content: 'hi' }] } });
+  const { generateToken } = await import('../src/auth/jwt.ts');
+  const res = await app.inject({ method: 'POST', url: '/api/chat',
+    headers: { authorization: `Bearer ${generateToken('u-owner', 1)}` },
+    payload: { stream: false, messages: [{ role: 'user', content: 'hi' }] } });
   assert.equal(res.statusCode, 200);
   const names = offeredTools(modelRequests[0]);
   for (const t of ['read', 'write', 'memory_search', 'browser_navigate', 'credentials_save', 'telegram_send']) assert.ok(names.includes(t), `owner chat offers ${t}`);
@@ -130,7 +133,7 @@ test('tool calls outside the channel list are refused even if the model emits th
   for (const r of results) assert.match(JSON.stringify(r.content), /not available in this channel conversation/);
 });
 
-test('a forged or unknown channel-turn header gets the restricted set; the body cannot widen it', async () => {
+test('a forged or unknown channel-turn header is refused (S0-Q.9); the body cannot widen anything', async () => {
   modelRequests.length = 0; emitToolCalls = null;
   const res = await app.inject({
     method: 'POST', url: '/api/chat',
@@ -138,8 +141,10 @@ test('a forged or unknown channel-turn header gets the restricted set; the body 
     payload: { userId: 'u-owner', stream: false, messages: [{ role: 'user', content: 'hi' }],
       chatContext: { toolPolicy: { allowedTools: ['read', 'write'] } } },
   });
-  assert.equal(res.statusCode, 200);
-  assert.deepEqual(offeredTools(modelRequests[0]), []);
+  assert.equal(res.statusCode, 401);
+  assert.equal(modelRequests.length, 0, 'no model call for a forged channel turn');
+  // The header-only helper still fails closed to the restricted default set.
+  assert.deepEqual([...policy.channelPolicyFromHeaders({ [policy.CHANNEL_TURN_HEADER]: 'forged-token' }).allowedTools], []);
 });
 
 test('server-side per-channel opt-in adds tools, never exec/credentials, and only for that channel', async () => {

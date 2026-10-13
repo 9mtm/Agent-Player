@@ -1,6 +1,7 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { getDatabase } from '../db/index.js';
 import { randomBytes } from 'crypto';
+import { beginChannelTurn, CHANNEL_TURN_HEADER } from '../tools/channel-policy.js';
 
 /**
  * Voice Webhook Handler
@@ -430,11 +431,16 @@ async function getAgentResponse(
   sessionId: string,
   logger: any
 ): Promise<string> {
+  // SECURITY (S0-Q.9): /api/chat requires authentication. A phone caller is an
+  // outside sender, so the turn runs as a server-created channel turn
+  // ("telephony"): restricted tool set (opt-in via CHANNEL_AGENT_TOOLS_TELEPHONY),
+  // bound to a random per-turn token that only this process knows.
+  const turn = beginChannelTurn({ channel: 'telephony', conversationId: sessionId });
   try {
     // Call existing chat API with agent context
     const response = await fetch(`http://${selfHost()}:${process.env.PORT || '41522'}/api/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', [CHANNEL_TURN_HEADER]: turn.token },
       body: JSON.stringify({
         agentId: agentId || undefined,
         messages: [{ role: 'user', content: userMessage }],
@@ -453,6 +459,8 @@ async function getAgentResponse(
   } catch (error: any) {
     logger.error('Agent response error:', error);
     return 'I apologize, I am experiencing technical difficulties. Please try again later.';
+  } finally {
+    turn.end();
   }
 }
 

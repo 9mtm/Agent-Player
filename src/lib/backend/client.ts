@@ -4,6 +4,7 @@
  */
 
 import { config } from '@/lib/config';
+import { authHeaders } from '@/lib/auth/headers';
 
 const BACKEND_URL = config.backendUrl;
 
@@ -180,6 +181,7 @@ export const chatAPI = {
   async send(options: ChatOptions): Promise<{ message: Message; usage?: any }> {
     return fetchAPI('/api/chat', {
       method: 'POST',
+      headers: authHeaders(), // S0-Q.9: /api/chat requires the bearer token
       body: JSON.stringify({ ...options, stream: false }),
     });
   },
@@ -189,7 +191,7 @@ export const chatAPI = {
 
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }), // S0-Q.9
       body: JSON.stringify({ ...options, stream: true }),
     });
 

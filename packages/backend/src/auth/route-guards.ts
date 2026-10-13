@@ -16,6 +16,27 @@ export type UserRole = 'owner' | 'admin' | 'user' | 'guest';
 export const OWNER_OR_ADMIN: readonly UserRole[] = ['owner', 'admin'];
 
 /**
+ * Verify the bearer token (signature, expiry, token_version) and load the user.
+ * Returns the active user's id and role, or null. Never trusts anything else in
+ * the request (no body/query user ids, no unsigned cookies, no NODE_ENV bypass).
+ */
+export function authenticateActiveUser(
+  request: FastifyRequest
+): { id: string; role: UserRole } | null {
+  let userId: string;
+  try {
+    userId = getUserIdFromRequest(request);
+  } catch {
+    return null;
+  }
+  const user = getDatabase()
+    .prepare('SELECT role, status FROM users WHERE id = ?')
+    .get(userId) as { role: string; status: string } | undefined;
+  if (!user || user.status !== 'active') return null;
+  return { id: userId, role: user.role as UserRole };
+}
+
+/**
  * Check the bearer token and the user's role/status.
  * Returns the user id, or sends 401/403 and returns null.
  */

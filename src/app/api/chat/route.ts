@@ -1,4 +1,4 @@
-import { getSessionUser } from '@/lib/session';
+import { getSessionUser, backendAuthHeaders } from '@/lib/session';
 import { config } from '@/lib/config';
 
 export const runtime = 'nodejs';
@@ -89,7 +89,9 @@ export async function POST(req: Request) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Origin': config.appUrl
+                'Origin': config.appUrl,
+                // S0-Q.9: the backend takes the user from this token, not from `userId`
+                ...(await backendAuthHeaders()),
             },
             body: JSON.stringify({
                 model: agentId ? undefined : modelName,

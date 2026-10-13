@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { useMicVAD } from '@ricky0123/vad-react';
 import { Mic, MicOff, Volume2, VolumeX, X, Send } from 'lucide-react';
 import { config } from '@/lib/config';
+import { authHeaders } from '@/lib/auth/headers';
 import { useAuth } from '@/contexts/auth-context';
 
 // ── Dynamic AvatarViewer (R3F — SSR off) ─────────────────────────────────────
@@ -218,11 +219,11 @@ export function SupportChatBlock({ agentName = 'Assistant', height = 500, remova
     };
 
     try {
-      // Call backend directly — no session auth required for widget use
+      // Call backend directly with the signed-in user's token (S0-Q.9: /api/chat requires it)
       // Backend always returns SSE stream; read it fully then use accumulated text
       const res = await fetch(`${config.backendUrl}/api/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ messages: [{ role: 'user', content: text }], stream: true }),
       });
 

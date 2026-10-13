@@ -184,7 +184,7 @@ export function createExtensionApi(
         channel: origin?.channel || extensionId,
         conversationId: origin?.conversationId || '',
         allowedDestinations: origin?.allowedDestinations || [],
-      });
+      }, userId); // S0-Q.9: /api/chat takes the user from this server-side turn, not the body
       try {
         // Reuse the configured primary agent, provider and tool loop from the real chat route.
         const response = await fastify.inject({
@@ -193,7 +193,7 @@ export function createExtensionApi(
             origin: (process.env.ALLOWED_ORIGINS || 'http://localhost:41521').split(',')[0].trim(),
             [CHANNEL_TURN_HEADER]: turn.token,
           },
-          payload: { userId, sessionId, stream: false,
+          payload: { sessionId, stream: false,
             messages: [...history, { role: 'user', content: message }],
             systemPromptAppend: 'Reply in plain text suitable for a messaging channel. Do not output UI specifications.',
             chatContext: { sessionType: 'minimal', hasAvatarViewer: false, hasDesktopControl: false } },

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { toolsAPI } from '@/lib/backend';
+import { requireSessionRole } from '@/lib/session';
 
 /**
  * POST /api/tools/[name]
@@ -9,6 +10,10 @@ export async function POST(
     request: NextRequest,
     { params }: { params: Promise<{ name: string }> }
 ) {
+    // SECURITY (S0-Q.9): owner/admin only, verified by the backend JWT check
+    const auth = await requireSessionRole();
+    if (auth instanceof Response) return auth;
+
     try {
         const { name } = await params;
         const body = await request.json();

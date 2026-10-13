@@ -3,6 +3,7 @@
 // Run: node --import tsx --test test/ollama-chat.integration.test.mjs
 // Skipped when Ollama is not reachable or the model is not pulled.
 import test from 'node:test';
+import { randomBytes } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -28,6 +29,7 @@ test('POST /api/chat answers through local Ollama', { skip: !available && `Ollam
   const dir = mkdtempSync(join(tmpdir(), 'ap-ollama-chat-'));
   process.env.DATABASE_PATH = join(dir, 'agent-player.db');
   process.env.OLLAMA_THINK ??= 'false';
+  process.env.JWT_SECRET = randomBytes(64).toString('hex'); // throwaway, test only
 
   const { getDatabase, closeDatabase } = await import('../src/db/database.ts');
   const { default: Fastify } = await import('fastify');
@@ -39,6 +41,10 @@ test('POST /api/chat answers through local Ollama', { skip: !available && `Ollam
     `INSERT INTO agents_config (id, name, system_prompt, model, provider, is_primary, temperature, max_tokens)
      VALUES ('local-qwen', 'Local Qwen', 'Answer in one short sentence.', ?, 'ollama', 0, 0, 128)`
   ).run(MODEL);
+  // S0-Q.9: /api/chat needs a verified bearer token.
+  db.prepare(`INSERT INTO users (id, email, username, password_hash, role, status) VALUES ('u-test', 'u-test@example.test', 'u-test', 'x', 'owner', 'active')`).run();
+  const { generateToken } = await import('../src/auth/jwt.ts');
+  const headers = { authorization: `Bearer ${generateToken('u-test', 1)}` };
 
   const app = Fastify();
   await app.register(chatRoutes);
@@ -51,6 +57,7 @@ test('POST /api/chat answers through local Ollama', { skip: !available && `Ollam
   const nonStream = await app.inject({
     method: 'POST',
     url: '/api/chat',
+    headers,
     payload: {
       agentId: 'local-qwen',
       stream: false,
@@ -64,6 +71,7 @@ test('POST /api/chat answers through local Ollama', { skip: !available && `Ollam
   const streamed = await app.inject({
     method: 'POST',
     url: '/api/chat',
+    headers,
     payload: {
       agentId: 'local-qwen',
       stream: true,

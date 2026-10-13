@@ -1,10 +1,15 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { requireSessionRole } from '@/lib/session';
 
 const SKILLS_DIR = path.join(process.cwd(), 'skills');
 
 export async function POST(request: Request) {
+    // SECURITY (S0-Q.9): owner/admin only, verified by the backend JWT check
+    const auth = await requireSessionRole();
+    if (auth instanceof Response) return auth;
+
   try {
     const body = await request.json();
     const { name, config, instructions, includeScripts, includeReferences, includeAssets } = body;

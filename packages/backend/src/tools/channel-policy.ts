@@ -139,13 +139,28 @@ export function channelToolCallRefusal(
 // Per-turn tokens: only server code (processChannelMessage) can create them.
 // ---------------------------------------------------------------------------
 
-const activeTurns = new Map<string, ChannelToolPolicy>();
+interface ActiveTurn { policy: ChannelToolPolicy; userId?: string }
+const activeTurns = new Map<string, ActiveTurn>();
 
-export function beginChannelTurn(origin: Partial<ChannelOrigin>): { token: string; policy: ChannelToolPolicy; end: () => void } {
+/**
+ * Start a server-side channel turn. `userId` is the account the turn runs as
+ * (checked by the caller, e.g. the channel owner); /api/chat takes the user
+ * from here, never from the request body (S0-Q.9).
+ */
+export function beginChannelTurn(
+  origin: Partial<ChannelOrigin>,
+  userId?: string
+): { token: string; policy: ChannelToolPolicy; end: () => void } {
   const token = randomBytes(32).toString('hex');
   const policy = createChannelToolPolicy(origin);
-  activeTurns.set(token, policy);
+  activeTurns.set(token, { policy, userId });
   return { token, policy, end: () => { activeTurns.delete(token); } };
+}
+
+function headerToken(headers: Record<string, string | string[] | undefined>): string | undefined {
+  const value = headers[CHANNEL_TURN_HEADER];
+  if (value === undefined) return undefined;
+  return (Array.isArray(value) ? value[0] : value) || '';
 }
 
 /**
@@ -155,8 +170,20 @@ export function beginChannelTurn(origin: Partial<ChannelOrigin>): { token: strin
 export function channelPolicyFromHeaders(
   headers: Record<string, string | string[] | undefined>
 ): ChannelToolPolicy | undefined {
-  const value = headers[CHANNEL_TURN_HEADER];
-  if (value === undefined) return undefined;
-  const token = Array.isArray(value) ? value[0] : value;
-  return (token && activeTurns.get(token)) || createChannelToolPolicy({});
+  const token = headerToken(headers);
+  if (token === undefined) return undefined;
+  return activeTurns.get(token)?.policy || createChannelToolPolicy({});
+}
+
+/**
+ * The live channel turn a request belongs to.
+ * - no channel-turn header -> undefined (not a channel turn)
+ * - header with an unknown/ended token -> null (reject the request)
+ */
+export function channelTurnFromHeaders(
+  headers: Record<string, string | string[] | undefined>
+): { policy: ChannelToolPolicy; userId?: string } | null | undefined {
+  const token = headerToken(headers);
+  if (token === undefined) return undefined;
+  return (token && activeTurns.get(token)) || null;
 }

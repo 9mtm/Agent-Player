@@ -11,7 +11,8 @@ import { getSettingsManager } from '../../settings/index.js';
 import { getDatabase } from '../../db/index.js';
 import { streamChatClaude } from './agentic-chat.js';
 import { createToolsRegistry } from '../../tools/index.js';
-import { channelPolicyFromHeaders, type ChannelToolPolicy } from '../../tools/channel-policy.js';
+import { channelTurnFromHeaders, type ChannelToolPolicy } from '../../tools/channel-policy.js';
+import { authenticateActiveUser } from '../../auth/route-guards.js';
 import { geminiCliTool } from '../../tools/cli/gemini-cli.js';
 import { claudeCliTool } from '../../tools/cli/claude-cli.js';
 import { getJsonRenderPrompt } from './json-render-prompt.js';
@@ -135,7 +136,7 @@ interface ChatRequest {
   systemPrompt?: string;
   systemPromptAppend?: string; // Extra instructions appended AFTER agent system prompt (does not replace it)
   memoryContext?: string;  // Injected relevant memories for this user
-  userId?: string;         // For memory tracking
+  userId?: string;         // IGNORED (S0-Q.9): the user comes from the bearer token or the server-side channel turn
   chatContext?: {
     hasAvatarViewer?: boolean;
     isInteractiveMode?: boolean;
@@ -158,9 +159,24 @@ export async function chatRoutes(fastify: FastifyInstance) {
       systemPrompt,
       systemPromptAppend,
       memoryContext,
-      userId,
       chatContext,
-    } = request.body;
+    } = request.body || ({} as ChatRequest);
+
+    // SECURITY (S0-Q.9): authenticate before anything else. The user is the
+    // bearer-token user, or - for a channel/phone turn started by server code -
+    // the user bound to that turn's server-created token. `userId` in the body
+    // is ignored. A channel-turn header with an unknown/ended token is refused.
+    const channelTurn = channelTurnFromHeaders(request.headers);
+    let userId: string;
+    if (channelTurn === null) {
+      return reply.status(401).send({ error: 'Authentication required' });
+    } else if (channelTurn) {
+      userId = channelTurn.userId || 'default';
+    } else {
+      const authUser = authenticateActiveUser(request);
+      if (!authUser) return reply.status(401).send({ error: 'Authentication required' });
+      userId = authUser.id;
+    }
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return reply.status(400).send({ error: 'Messages array is required' });
@@ -171,7 +187,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // SECURITY (S0-Q.8): a channel-originated turn (Telegram/Discord/Agent Connect sender)
     // gets the restricted channel tool policy. It is bound to a server-created token,
     // never to anything in the request body.
-    const toolPolicy = channelPolicyFromHeaders(request.headers);
+    const toolPolicy: ChannelToolPolicy | undefined = channelTurn?.policy;
 
     // Resolve agent config: specific agent > primary agent > fallback defaults
     const agentConfig = agentId ? getAgentById(agentId) : getPrimaryAgent();
