@@ -30,7 +30,7 @@ const fakeExtensions = {
   'private-ext': {},
   'hook-ext': { publicRoutes: ['/webhook', 'no-leading-slash', 42] },
   'member-ext': { routeAccess: 'authenticated' },
-  'open-ext': { routeAccess: 'public' },
+  'open-ext': { routeAccess: 'public' }, // no whole-extension public level -> owner/admin
   'typo-ext': { routeAccess: 'PUBLIC' }, // unknown value -> owner/admin
 };
 for (const [id, extra] of Object.entries(fakeExtensions)) {
@@ -110,8 +110,18 @@ test('routeAccess "authenticated": any active signed-in user', async () => {
   assert.equal((await call('GET', '/api/ext/member-ext/data', 'u-owner')).statusCode, 200);
 });
 
-test('routeAccess "public": no check by the runner', async () => {
-  assert.equal((await call('GET', '/api/ext/open-ext/data')).statusCode, 200);
+test('routeAccess "public" is not a level: the extension stays owner/admin', async () => {
+  assert.equal((await call('GET', '/api/ext/open-ext/data')).statusCode, 401);
+  assert.equal((await call('GET', '/api/ext/open-ext/data', 'u-user')).statusCode, 403);
+  assert.equal((await call('GET', '/api/ext/open-ext/data', 'u-owner')).statusCode, 200);
+});
+
+test('no real extension declares a blanket public level', () => {
+  for (const id of ['agent-connect', 'calendar', 'call-center', 'discord', 'public-chat', 'seo', 'server-monitor', 'slack', 'team', 'telegram', 'trading', 'waf-security', 'whatsapp']) {
+    const manifest = JSON.parse(readFileSync(join(backendDir, 'extensions', id, 'agentplayer.plugin.json'), 'utf8'));
+    assert.notEqual(manifest.routeAccess, 'public', id);
+    assert.ok(['owner-admin', 'authenticated'].includes(getExtensionRouteAccess(manifest)), id);
+  }
 });
 
 test('real channel extensions stay owner/admin (default) and their manifests parse', () => {

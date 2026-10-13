@@ -6,6 +6,8 @@
  * 2. trading_analyze - Analyze stocks/crypto and provide recommendations
  */
 
+import { internalAuthHeaders } from '../../shared/internal-auth.js';
+
 /**
  * Trading Execute Tool
  * Allows AI agents to interact with user's trading account
@@ -93,7 +95,7 @@ export const tradingExecuteTool = {
         case 'get_portfolio': {
           const response = await fetch(`${backendUrl}/api/ext/trading/portfolio`, {
             headers: {
-              'X-User-ID': userId,
+              ...internalAuthHeaders(userId),
             },
           });
 
@@ -120,7 +122,7 @@ export const tradingExecuteTool = {
         case 'get_positions': {
           const response = await fetch(`${backendUrl}/api/ext/trading/positions`, {
             headers: {
-              'X-User-ID': userId,
+              ...internalAuthHeaders(userId),
             },
           });
 
@@ -155,7 +157,7 @@ export const tradingExecuteTool = {
 
           const response = await fetch(`${backendUrl}/api/ext/trading/quote/${symbol}`, {
             headers: {
-              'X-User-ID': userId,
+              ...internalAuthHeaders(userId),
             },
           });
 
@@ -187,7 +189,7 @@ export const tradingExecuteTool = {
             `${backendUrl}/api/ext/trading/bars/${symbol}?timeframe=${timeframe || '1Day'}&limit=${limit || 30}`,
             {
               headers: {
-                'X-User-ID': userId,
+                ...internalAuthHeaders(userId),
               },
             }
           );
@@ -225,7 +227,7 @@ export const tradingExecuteTool = {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'X-User-ID': userId,
+              ...internalAuthHeaders(userId),
             },
             body: JSON.stringify({
               symbol,
@@ -264,7 +266,7 @@ export const tradingExecuteTool = {
         case 'get_orders': {
           const response = await fetch(`${backendUrl}/api/ext/trading/orders?limit=10`, {
             headers: {
-              'X-User-ID': userId,
+              ...internalAuthHeaders(userId),
             },
           });
 
@@ -298,7 +300,7 @@ export const tradingExecuteTool = {
           const response = await fetch(`${backendUrl}/api/ext/trading/orders/${order_id}`, {
             method: 'DELETE',
             headers: {
-              'X-User-ID': userId,
+              ...internalAuthHeaders(userId),
             },
           });
 
@@ -317,7 +319,7 @@ export const tradingExecuteTool = {
         case 'get_watchlist': {
           const response = await fetch(`${backendUrl}/api/ext/trading/watchlist`, {
             headers: {
-              'X-User-ID': userId,
+              ...internalAuthHeaders(userId),
             },
           });
 
@@ -352,7 +354,7 @@ export const tradingExecuteTool = {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'X-User-ID': userId,
+              ...internalAuthHeaders(userId),
             },
             body: JSON.stringify({ symbol }),
           });
@@ -377,7 +379,7 @@ export const tradingExecuteTool = {
           const response = await fetch(`${backendUrl}/api/ext/trading/watchlist/${symbol}`, {
             method: 'DELETE',
             headers: {
-              'X-User-ID': userId,
+              ...internalAuthHeaders(userId),
             },
           });
 
@@ -445,7 +447,7 @@ export const tradingAnalyzeTool = {
     try {
       // Fetch current quote
       const quoteResponse = await fetch(`${backendUrl}/api/ext/trading/quote/${symbol}`, {
-        headers: { 'X-User-ID': userId },
+        headers: internalAuthHeaders(userId),
       });
 
       if (!quoteResponse.ok) {
@@ -458,7 +460,7 @@ export const tradingAnalyzeTool = {
       const barsResponse = await fetch(
         `${backendUrl}/api/ext/trading/bars/${symbol}?timeframe=${timeframe || '1Day'}&limit=50`,
         {
-          headers: { 'X-User-ID': userId },
+          headers: internalAuthHeaders(userId),
         }
       );
 

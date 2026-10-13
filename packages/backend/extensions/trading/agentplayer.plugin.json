@@ -6,7 +6,7 @@
   "type": "app",
   "author": "Agent Player Team",
   "main": "index.js",
-  "routeAccess": "public",
+  "queryTokenRoutes": ["/stream"],
   "permissions": [
     "database",
     "routes",

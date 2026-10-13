@@ -36,13 +36,19 @@ import { randomBytes } from 'crypto';
 import { getCredentialManager } from '../../../src/credentials/index.js';
 
 /**
- * Get user ID from request headers
- * @param {Request} request - Hono request object
+ * User of this request, as verified by the extension route guard (S0-Q.18).
+ * Never taken from a client header; there is no fallback user.
+ * @param {FastifyRequest} request
  * @returns {string} User ID
  */
 function getUserId(request) {
-  // Fastify request object
-  return request.headers['x-user-id'] || '1'; // Fallback for development
+  const userId = request.authUserId;
+  if (!userId) {
+    const error = new Error('Authentication required');
+    error.statusCode = 401;
+    throw error;
+  }
+  return userId;
 }
 
 /**
@@ -2520,15 +2526,10 @@ export async function registerTradingRoutes(fastify) {
    */
   fastify.get('/stream', async (request, reply) => {
     try {
-      // Get user ID from header (fallback to query token if needed)
-      let userId = request.headers['x-user-id'];
-
-      // If no x-user-id, try to extract from token query parameter
-      if (!userId && request.query.token) {
-        // For development: fallback to '1' if token is present but can't be validated
-        // In production, you'd verify JWT token here
-        userId = '1'; // TEMPORARY: In production, verify JWT and extract user_id
-      }
+      // The token (header, or ?token= because EventSource cannot send
+      // headers) is verified by the extension route guard (manifest
+      // "queryTokenRoutes"), which sets request.authUserId.
+      const userId = request.authUserId;
 
       if (!userId) {
         reply.code(401);
@@ -2586,7 +2587,7 @@ export async function registerTradingRoutes(fastify) {
       // Set up CORS headers (required for EventSource from different origin)
       reply.raw.setHeader('Access-Control-Allow-Origin', '*');
       reply.raw.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-      reply.raw.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-user-id');
+      reply.raw.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
       // Set up SSE headers
       reply.raw.setHeader('Content-Type', 'text/event-stream');

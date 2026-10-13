@@ -3,6 +3,8 @@
  * Allows AI agents to send WhatsApp messages
  */
 
+import { internalAuthHeaders } from '../../shared/internal-auth.js';
+
 export const whatsappSendTool = {
   name: 'whatsapp_send',
   description: 'Send a WhatsApp message. Requires Twilio WhatsApp Business account to be configured.',
@@ -25,14 +27,15 @@ export const whatsappSendTool = {
     required: ['to', 'body'],
   },
 
-  async execute(params) {
+  async execute(params, context) {
     const { to, body, mediaUrl } = params;
     const backendUrl = process.env.BACKEND_URL || `http://${process.env.HOST || 'localhost'}:${process.env.PORT || '41522'}`;
 
     try {
       const response = await fetch(`${backendUrl}/api/ext/whatsapp/send`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // Extension routes are owner/admin only (S0-Q.18): act as the turn's user.
+        headers: { 'Content-Type': 'application/json', ...internalAuthHeaders(context?.userId) },
         body: JSON.stringify({ to, body, mediaUrl }),
       });
 

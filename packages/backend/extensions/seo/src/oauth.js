@@ -4,11 +4,40 @@
 
 import { randomBytes } from 'crypto';
 
+/** User of this request, as verified by the extension route guard (S0-Q.18). */
 function getUserIdFromRequest(request) {
-  const token = request.headers.authorization?.replace('Bearer ', '');
-  if (!token) return null;
-  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
-  return payload.userId || payload.sub || '1';
+  return request.authUserId || null;
+}
+
+/**
+ * OAuth `state` values (S0-Q.18): random, single use, bound server-side to
+ * the user and domain that started the flow, valid for 10 minutes. The
+ * callback trusts only what is stored here, never data decoded from `state`.
+ */
+const STATE_TTL_MS = 10 * 60 * 1000;
+const MAX_PENDING_STATES = 1000;
+const pendingStates = new Map();
+
+export function createOAuthState(userId, domainId, now = Date.now()) {
+  for (const [key, entry] of pendingStates) {
+    if (entry.expiresAt <= now) pendingStates.delete(key);
+  }
+  while (pendingStates.size >= MAX_PENDING_STATES) {
+    pendingStates.delete(pendingStates.keys().next().value);
+  }
+  const state = randomBytes(32).toString('hex');
+  pendingStates.set(state, { userId, domainId: String(domainId), expiresAt: now + STATE_TTL_MS });
+  return state;
+}
+
+/** Consume a state: returns { userId, domainId } once, or null (unknown, reused or expired). */
+export function consumeOAuthState(state, now = Date.now()) {
+  if (typeof state !== 'string' || !/^[0-9a-f]{64}$/.test(state)) return null;
+  const entry = pendingStates.get(state);
+  if (!entry) return null;
+  pendingStates.delete(state);
+  if (entry.expiresAt <= now) return null;
+  return { userId: entry.userId, domainId: entry.domainId };
 }
 
 export async function registerOAuthRoutes(fastify) {
@@ -29,8 +58,14 @@ export async function registerOAuthRoutes(fastify) {
         return reply.code(400).send({ error: 'Missing userId or domain_id' });
       }
 
-      // Store state for callback
-      const state = Buffer.from(JSON.stringify({ userId, domain_id })).toString('base64');
+      // Only the user's own domain can be connected.
+      const domain = db().prepare('SELECT id FROM seo_domains WHERE id = ? AND user_id = ?').get(domain_id, userId);
+      if (!domain) {
+        return reply.code(404).send({ error: 'Domain not found' });
+      }
+
+      // Random single-use state, bound server-side to this user and domain
+      const state = createOAuthState(userId, domain.id);
 
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
         `client_id=${GOOGLE_CLIENT_ID}&` +
@@ -39,7 +74,7 @@ export async function registerOAuthRoutes(fastify) {
         `scope=${encodeURIComponent('https://www.googleapis.com/auth/webmasters.readonly')}&` +
         `access_type=offline&` +
         `prompt=consent&` +
-        `state=${state}`;
+        `state=${encodeURIComponent(state)}`;
 
       return reply.redirect(authUrl);
     } catch (error) {
@@ -52,12 +87,18 @@ export async function registerOAuthRoutes(fastify) {
     try {
       const { code, state } = request.query;
 
-      if (!code) {
+      // Public route (Google redirects the browser here without our token):
+      // the state must be one this server issued, unused and unexpired,
+      // before anything else happens.
+      const pending = consumeOAuthState(state);
+      if (!pending) {
+        return reply.code(400).send({ error: 'Invalid or expired OAuth state' });
+      }
+      const { userId, domainId: domain_id } = pending;
+
+      if (!code || typeof code !== 'string') {
         return reply.code(400).send({ error: 'No authorization code' });
       }
-
-      // Decode state
-      const { userId, domain_id } = JSON.parse(Buffer.from(state, 'base64').toString());
 
       // Exchange code for tokens
       const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {

@@ -5,9 +5,15 @@
  * unless its manifest says otherwise:
  *   "routeAccess": "owner-admin"   (default) active owner or admin
  *                  "authenticated" any active signed-in user
- *                  "public"        no check here; the extension authorizes itself
+ *                  (no whole-extension "public" level; any other value
+ *                  means owner-admin)
  *   "publicRoutes": ["/webhook"]   route patterns (relative to /api/ext/<id>)
- *                                  that skip the check, e.g. provider webhooks
+ *                                  that skip the check, e.g. provider webhooks;
+ *                                  each must verify the provider itself
+ *                                  (signature / OAuth state)
+ *   "queryTokenRoutes": ["/stream"] GET route patterns that may carry the token
+ *                                  as ?token= (EventSource cannot send headers);
+ *                                  the token is verified exactly like a header
  *
  * Public routes are matched against the route pattern Fastify dispatched to
  * (request.routeOptions.url), never against the raw URL string.
@@ -16,9 +22,9 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { authenticateActiveUser, authorizeActiveRole, OWNER_OR_ADMIN } from '../auth/route-guards.js';
 
-export type ExtensionRouteAccess = 'owner-admin' | 'authenticated' | 'public';
+export type ExtensionRouteAccess = 'owner-admin' | 'authenticated';
 
-const ACCESS_LEVELS: readonly ExtensionRouteAccess[] = ['owner-admin', 'authenticated', 'public'];
+const ACCESS_LEVELS: readonly ExtensionRouteAccess[] = ['owner-admin', 'authenticated'];
 
 /** Read the access level from a manifest; unknown or missing values mean owner-admin. */
 export function getExtensionRouteAccess(manifest: { routeAccess?: unknown }): ExtensionRouteAccess {
@@ -26,26 +32,34 @@ export function getExtensionRouteAccess(manifest: { routeAccess?: unknown }): Ex
   return ACCESS_LEVELS.includes(value as ExtensionRouteAccess) ? (value as ExtensionRouteAccess) : 'owner-admin';
 }
 
-/**
- * onRequest hook for one extension's route scope, or null when the manifest
- * declares the whole extension public.
- */
-export function createExtensionRouteGuard(
-  manifest: { routeAccess?: unknown; publicRoutes?: unknown },
-  extensionPrefix: string
-) {
-  const access = getExtensionRouteAccess(manifest);
-  if (access === 'public') return null;
-
-  const publicPatterns = new Set(
-    (Array.isArray(manifest.publicRoutes) ? manifest.publicRoutes : [])
+function routePatterns(list: unknown, extensionPrefix: string): Set<string> {
+  return new Set(
+    (Array.isArray(list) ? list : [])
       .filter((r): r is string => typeof r === 'string' && r.startsWith('/'))
       .map((r) => `${extensionPrefix}${r}`)
   );
+}
+
+/** onRequest hook for one extension's route scope. */
+export function createExtensionRouteGuard(
+  manifest: { routeAccess?: unknown; publicRoutes?: unknown; queryTokenRoutes?: unknown },
+  extensionPrefix: string
+) {
+  const access = getExtensionRouteAccess(manifest);
+
+  const publicPatterns = routePatterns(manifest.publicRoutes, extensionPrefix);
+  const queryTokenPatterns = routePatterns(manifest.queryTokenRoutes, extensionPrefix);
 
   return async function extensionRouteGuard(request: FastifyRequest, reply: FastifyReply) {
     const pattern = request.routeOptions?.url;
     if (pattern && publicPatterns.has(pattern)) return;
+
+    if (pattern && queryTokenPatterns.has(pattern) && request.method === 'GET' && !request.headers.authorization) {
+      const queryToken = (request.query as Record<string, unknown> | undefined)?.token;
+      if (typeof queryToken === 'string' && queryToken) {
+        request.headers.authorization = `Bearer ${queryToken}`;
+      }
+    }
 
     if (access === 'authenticated') {
       const user = authenticateActiveUser(request);

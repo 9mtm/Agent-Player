@@ -152,7 +152,7 @@ export class ExtensionRunner {
       const fullPrefix = `/api/ext/${id}${prefix || ''}`;
       const guard = createExtensionRouteGuard(manifest, `/api/ext/${id}`);
       await fastify.register(async (scope) => {
-        if (guard) scope.addHook('onRequest', guard);
+        scope.addHook('onRequest', guard);
         await fn(scope);
       }, { prefix: fullPrefix });
       console.log(`[ExtensionRunner] ✅ Routes registered under: ${fullPrefix}`);

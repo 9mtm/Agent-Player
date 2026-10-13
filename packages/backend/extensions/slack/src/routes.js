@@ -3,7 +3,12 @@
  * Mounted at /api/ext/slack/
  */
 
+import { registerRawBodyParsers, verifySlackRequest } from '../../shared/webhook-verify.js';
+
 export async function registerSlackRoutes(fastify) {
+  // Keep the raw body: /webhook verifies Slack's signature over it.
+  registerRawBodyParsers(fastify);
+
   /**
    * POST /api/ext/slack/send - Send message to Slack channel
    */
@@ -79,6 +84,19 @@ export async function registerSlackRoutes(fastify) {
   }, async (request, reply) => {
     const event = request.body;
     const db = fastify.db || request.server.db;
+
+    // SECURITY (S0-Q.18): public route — only requests signed with the
+    // configured Slack signing secret (5-minute replay window) are accepted.
+    // No secret configured → every request is refused.
+    let signingSecret = null;
+    try {
+      signingSecret = db.prepare('SELECT signing_secret FROM slack_config WHERE id = 1').get()?.signing_secret || null;
+    } catch {
+      signingSecret = null;
+    }
+    if (!verifySlackRequest(request, signingSecret)) {
+      return reply.status(401).send({ error: 'Invalid Slack signature' });
+    }
 
     try {
       // Handle URL verification challenge

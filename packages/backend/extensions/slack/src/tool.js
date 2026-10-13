@@ -3,6 +3,8 @@
  * Allows AI agents to send Slack messages
  */
 
+import { internalAuthHeaders } from '../../shared/internal-auth.js';
+
 export const slackSendTool = {
   name: 'slack_send',
   description: 'Send a message to a Slack channel or thread. Requires Slack bot to be configured.',
@@ -25,14 +27,15 @@ export const slackSendTool = {
     required: ['channel', 'text'],
   },
 
-  async execute(params) {
+  async execute(params, context) {
     const { channel, text, thread_ts } = params;
     const backendUrl = process.env.BACKEND_URL || `http://${process.env.HOST || 'localhost'}:${process.env.PORT || '41522'}`;
 
     try {
       const response = await fetch(`${backendUrl}/api/ext/slack/send`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // Extension routes are owner/admin only (S0-Q.18): act as the turn's user.
+        headers: { 'Content-Type': 'application/json', ...internalAuthHeaders(context?.userId) },
         body: JSON.stringify({ channel, text, thread_ts }),
       });
 

@@ -8,17 +8,12 @@ import { randomBytes } from 'crypto';
 import { ScraperService } from './services/scraper-service.js';
 
 /**
- * Get user ID from JWT token in request
+ * User of this request, as verified by the extension route guard (S0-Q.18).
+ * (Used to decode the JWT without checking its signature, with a '1' fallback.)
  */
 function getUserIdFromRequest(request) {
-  const token = request.headers.authorization?.replace('Bearer ', '');
-  if (!token) {
-    throw new Error('No authorization token');
-  }
-
-  // Decode JWT (simplified - production should verify signature)
-  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
-  return payload.userId || payload.sub || '1';
+  if (!request.authUserId) throw new Error('No authorization token');
+  return request.authUserId;
 }
 
 /**

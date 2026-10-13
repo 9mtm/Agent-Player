@@ -3,7 +3,12 @@
  * Mounted at /api/ext/whatsapp/
  */
 
+import { registerRawBodyParsers, verifyTwilioRequest, publicRequestUrl } from '../../shared/webhook-verify.js';
+
 export async function registerWhatsAppRoutes(fastify) {
+  // Twilio posts form-encoded bodies; keep the raw body for signature checks.
+  registerRawBodyParsers(fastify);
+
   /**
    * POST /api/ext/whatsapp/send - Send WhatsApp message
    */
@@ -82,8 +87,22 @@ export async function registerWhatsAppRoutes(fastify) {
       description: 'Receive incoming WhatsApp messages from Twilio',
     },
   }, async (request, reply) => {
-    const message = request.body;
+    const message = request.body || {};
     const db = fastify.db || request.server.db;
+
+    // SECURITY (S0-Q.18): public route — only requests carrying a valid
+    // X-Twilio-Signature (configured auth token, configured webhook URL or
+    // PUBLIC_URL) are accepted. Anything not configured → refused.
+    let config = null;
+    try {
+      config = db.prepare('SELECT auth_token, webhook_url FROM whatsapp_config WHERE id = 1').get() || null;
+    } catch {
+      config = null;
+    }
+    const url = config?.webhook_url || publicRequestUrl(request);
+    if (!verifyTwilioRequest(request, config?.auth_token, url)) {
+      return reply.status(401).send({ error: 'Invalid Twilio signature' });
+    }
 
     try {
       db.prepare(`

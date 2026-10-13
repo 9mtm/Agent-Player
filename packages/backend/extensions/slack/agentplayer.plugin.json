@@ -6,7 +6,7 @@
   "type": "channel",
   "author": "Agent Player Team",
   "main": "index.js",
-  "routeAccess": "public",
+  "publicRoutes": ["/webhook"],
   "permissions": ["network", "database", "tools"],
   "settingsUI": {
     "type": "form",

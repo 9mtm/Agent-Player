@@ -6,6 +6,7 @@
 
 import { getDatabase } from '../../../src/db/index.js';
 import { getCredentialManager } from '../../../src/credentials/index.js';
+import { registerRawBodyParsers, verifyTwilioRequest, publicRequestUrl } from '../../shared/webhook-verify.js';
 
 /**
  * Register phone numbers routes under /api/ext/call-center/numbers/
@@ -13,6 +14,27 @@ import { getCredentialManager } from '../../../src/credentials/index.js';
 export async function registerNumberRoutes(fastify) {
   const db = getDatabase();
   const credManager = getCredentialManager();
+
+  // Twilio webhooks post form-encoded bodies; keep the raw body for checks.
+  registerRawBodyParsers(fastify);
+
+  /**
+   * SECURITY (S0-Q.18): the /webhooks/* routes are public (Twilio calls them),
+   * so each request must carry a valid X-Twilio-Signature for the configured
+   * auth token and PUBLIC_URL. Missing token/URL/signature → 403, nothing is
+   * written.
+   */
+  async function verifyTwilioWebhook(request, reply) {
+    let authToken = null;
+    try {
+      authToken = await credManager.getValueByName('telephony.twilio.auth_token');
+    } catch {
+      authToken = null;
+    }
+    if (verifyTwilioRequest(request, authToken, publicRequestUrl(request))) return true;
+    reply.status(403).send({ error: 'Invalid Twilio signature' });
+    return false;
+  }
 
   /**
    * GET /api/ext/call-center/numbers/available
@@ -876,6 +898,7 @@ export async function registerNumberRoutes(fastify) {
    * Updates call_sessions with duration and final status
    */
   fastify.post('/webhooks/call-status', async (request, reply) => {
+    if (!(await verifyTwilioWebhook(request, reply))) return reply;
     try {
       const { CallSid, CallStatus, CallDuration, From, To } = request.body;
 
@@ -920,6 +943,7 @@ export async function registerNumberRoutes(fastify) {
    * Downloads recording and triggers transcription
    */
   fastify.post('/webhooks/recording-status', async (request, reply) => {
+    if (!(await verifyTwilioWebhook(request, reply))) return reply;
     try {
       const { CallSid, RecordingUrl, RecordingSid, RecordingDuration } = request.body;
 
