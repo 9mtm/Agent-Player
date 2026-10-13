@@ -40,6 +40,31 @@ function inScope(caller: Caller, ownerId: string | null | undefined): boolean {
   return !!ownerId && ownerId === caller.id;
 }
 
+/**
+ * Fields a backup (export/import) may carry. Built from this allowlist only,
+ * never by spreading a stored record.
+ */
+const BACKUP_FIELDS = [
+  'id', 'name', 'type', 'encryptedValue', 'iv', 'authTag', 'description', 'skillId',
+  'userId', 'refreshToken', 'expiresAt', 'scopes', 'createdAt', 'updatedAt', 'lastUsed',
+] as const;
+
+function pickBackupFields(source: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const key of BACKUP_FIELDS) if (source[key] !== undefined) out[key] = source[key];
+  return out;
+}
+
+/**
+ * Credentials whose ciphertext the caller may export or overwrite: their own,
+ * plus unowned system credentials for the owner. Other users' credentials are
+ * visible to the owner as masked metadata only (S0-Q.16).
+ */
+function isBackupScope(caller: Caller, ownerId: string | null | undefined): boolean {
+  if (ownerId) return ownerId === caller.id;
+  return caller.role === 'owner';
+}
+
 /** True when the credential belongs to a user other than the caller. */
 function isOtherUsers(caller: Caller, ownerId: string | null | undefined): boolean {
   return !!ownerId && ownerId !== caller.id;
@@ -373,9 +398,13 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
    * Returns { success, data } where data is a base64 JSON string
    */
   fastify.post('/api/credentials/export', async (request, reply) => {
-    // A body `userId` is ignored (S0-Q.14): only the caller's scope is exported.
-    const credentials = await listScoped(callerOf(request));
-    auditCrossUser(request, 'data.export', 'export', credentials);
+    // A body `userId` is ignored (S0-Q.14). Only the caller's own credentials
+    // (plus system ones for the owner) are exported, from an explicit field
+    // allowlist; other users' ciphertext / refresh tokens never leave the server.
+    const caller = callerOf(request);
+    const credentials = (await listScoped(caller))
+      .filter(c => isBackupScope(caller, c.userId))
+      .map(c => pickBackupFields(c as any));
 
     // Encode as base64 JSON (frontend expects { data: string })
     const data = Buffer.from(JSON.stringify(credentials)).toString('base64');
@@ -413,20 +442,20 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ error: 'credentials must be an array' });
     }
 
-    // S0-Q.14: imported credentials land in the caller's scope. Storage uses
-    // INSERT OR REPLACE by id, so an id that belongs to someone else gets a new
-    // id instead of overwriting their credential.
+    // S0-Q.14/16: imported credentials land in the caller's backup scope: the
+    // caller's own, or (owner only) unowned system ones. A supplied userId of
+    // another user is never accepted. Storage uses INSERT OR REPLACE by id, so
+    // an id outside that scope gets a new id instead of overwriting someone
+    // else's credential.
     const caller = callerOf(request);
     const prepared: any[] = [];
-    const touchedOthers: Array<{ id: string; userId?: string | null }> = [];
     for (const raw of credentials) {
       if (!raw || typeof raw !== 'object') continue;
-      const c: any = { ...raw };
-      if (!inScope(caller, c.userId)) c.userId = caller.id;
+      const c: any = pickBackupFields(raw);
+      c.userId = caller.role === 'owner' && !c.userId ? undefined : caller.id;
       const existing = typeof c.id === 'string' && c.id ? await manager.get(c.id) : null;
-      if (!c.id || typeof c.id !== 'string' || (existing && !inScope(caller, existing.userId))) c.id = randomUUID();
-      if (existing && c.id === existing.id && isOtherUsers(caller, existing.userId)) touchedOthers.push(existing);
-      else if (isOtherUsers(caller, c.userId)) touchedOthers.push({ id: c.id, userId: c.userId });
+      if (!c.id || typeof c.id !== 'string' || (existing && !isBackupScope(caller, existing.userId))
+        || (existing && (existing.userId || undefined) !== c.userId)) c.id = randomUUID();
       for (const key of ['createdAt', 'updatedAt', 'expiresAt', 'lastUsed']) {
         if (typeof c[key] === 'string') c[key] = new Date(c[key]);
       }
@@ -436,7 +465,6 @@ export async function credentialsRoutes(fastify: FastifyInstance) {
     }
 
     const imported = await manager.import(prepared);
-    auditCrossUser(request, 'data.import', 'import', touchedOthers);
 
     return {
       success: true,

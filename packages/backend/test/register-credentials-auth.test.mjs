@@ -236,6 +236,40 @@ test('S0-Q.16: owner lists/reads/updates/deletes another user\'s credential mask
   assert.equal(auditRows('credentials.get.other_user').length, n);
 });
 
+test('S0-Q.16: owner export carries no other user\'s ciphertext; owner import cannot write into another user', async () => {
+  const created = await req('POST', '/api/credentials', bearer('u-admin'), { name: 'admin-export-q16', type: 'api_key', value: `v-${randomBytes(6).toString('hex')}` });
+  assert.equal(created.statusCode, 200, created.body);
+  const adminId = created.json().credential.id;
+  const adminStored = await getCredentialManager().get(adminId);
+
+  const exp = await req('POST', '/api/credentials/export', bearer('u-owner'), {});
+  assert.equal(exp.statusCode, 200, exp.body);
+  const decoded = Buffer.from(exp.json().data, 'base64').toString('utf8');
+  const rows = JSON.parse(decoded);
+  assert.ok(rows.length > 0);
+  assert.ok(rows.every(r => !r.userId || r.userId === 'u-owner'), 'only own/system credentials exported');
+  assert.ok(!rows.some(r => r.id === adminId));
+  assert.ok(!decoded.includes(adminStored.encryptedValue), 'no other user ciphertext');
+  const allowed = new Set(['id', 'name', 'type', 'encryptedValue', 'iv', 'authTag', 'description', 'skillId',
+    'userId', 'refreshToken', 'expiresAt', 'scopes', 'createdAt', 'updatedAt', 'lastUsed']);
+  for (const r of rows) for (const k of Object.keys(r)) assert.ok(allowed.has(k), `unexpected export field ${k}`);
+
+  // Owner import naming the admin's id and userId: the admin's credential is untouched,
+  // the imported record lands in the owner's own scope under a new id.
+  const forged = [{ ...rows[0], id: adminId, userId: 'u-admin', name: 'owner-forged', extraField: 'x' }];
+  const imp = await req('POST', '/api/credentials/import', bearer('u-owner'), { credentials: forged });
+  assert.equal(imp.statusCode, 200, imp.body);
+  const after = await getCredentialManager().get(adminId);
+  assert.equal(after.name, 'admin-export-q16');
+  assert.equal(after.userId, 'u-admin');
+  assert.equal(after.encryptedValue, adminStored.encryptedValue);
+  const landed = (await getCredentialManager().list('u-owner')).find(c => c.name === 'owner-forged');
+  assert.ok(landed, 'imported into the owner scope');
+  assert.notEqual(landed.id, adminId);
+  assert.equal(landed.extraField, undefined);
+  assert.equal((await getCredentialManager().list('u-admin')).some(c => c.name === 'owner-forged'), false);
+});
+
 // ---- S0-Q.14: onboarding (terminal wizard) -------------------------------
 test('S0-Q.14: onboarding routes are not registered by the server and are owner-only', async () => {
   const serverSrc = readFileSync(fileURLToPath(new URL('../src/api/server.ts', import.meta.url)), 'utf8');
