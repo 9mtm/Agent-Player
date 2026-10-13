@@ -6,6 +6,7 @@
 import Database from 'better-sqlite3';
 import { readFileSync, readdirSync, chmodSync } from 'fs';
 import { join, dirname } from 'path';
+import { randomBytes } from 'crypto';
 import { fileURLToPath } from 'url';
 import { existsSync, mkdirSync } from 'fs';
 
@@ -94,7 +95,7 @@ export class DatabaseManager {
       console.log('[Database] Creating default system user...');
 
       // SECURITY: Use 12 bcrypt rounds for stronger password hashing (M-07)
-      const passwordHash = await bcrypt.default.hash('system-user-not-for-login', 12);
+      const passwordHash = await bcrypt.default.hash(randomBytes(32).toString('hex'), 12);
 
       this.db.prepare(`
         INSERT INTO users (id, email, username, password_hash, full_name, role, status, email_verified)
@@ -121,7 +122,7 @@ export class DatabaseManager {
       console.log('[Database] Creating demo user (ID: 1)...');
 
       // SECURITY: Use 12 bcrypt rounds for stronger password hashing (M-07)
-      const demoPasswordHash = await bcrypt.default.hash('demo-user-password', 12);
+      const demoPasswordHash = await bcrypt.default.hash(randomBytes(32).toString('hex'), 12);
 
       this.db.prepare(`
         INSERT INTO users (id, email, username, password_hash, full_name, role, status, email_verified)
@@ -140,32 +141,8 @@ export class DatabaseManager {
       console.log('[Database] ✅ Demo user created (ID: 1)');
     }
 
-    // Create default admin user for easy login
-    const existingAdmin = this.db.prepare('SELECT id FROM users WHERE email = ?').get('owner@localhost');
-
-    if (!existingAdmin) {
-      console.log('[Database] Creating default admin user...');
-
-      const adminPasswordHash = await bcrypt.default.hash('admin123', 12);
-      const adminUserId = Date.now().toString();
-
-      this.db.prepare(`
-        INSERT INTO users (id, email, username, password_hash, full_name, role, status, email_verified, token_version, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-      `).run(
-        adminUserId,
-        'owner@localhost',
-        'owner',
-        adminPasswordHash,
-        'Admin Owner',
-        'admin',
-        'active',
-        1,
-        1
-      );
-
-      console.log('[Database] ✅ Default admin user created (owner@localhost / admin123)');
-    }
+    // SECURITY (S0-Q.2): no default owner/admin account. The first owner is created
+    // through the setup wizard (POST /api/setup/admin) while no owner exists.
   }
 
   /**

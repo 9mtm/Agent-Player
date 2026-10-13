@@ -7,14 +7,14 @@ const DEMO_USERS = [
     {
         id: 'demo-user-1',
         email: 'admin@example.com',
-        password: '$2a$10$rPQ.ZxQYx9L7gL0QRjZ5xO5qQQ5W5x5x5x5x5x5x5x5x5x5x5x', // "admin123"
+        password: '$2a$10$rPQ.ZxQYx9L7gL0QRjZ5xO5qQQ5W5x5x5x5x5x5x5x5x5x5x5x', // placeholder hash, never matches
         name: 'Admin User',
         role: 'admin',
     },
     {
         id: 'demo-user-2',
         email: 'demo@example.com',
-        password: '$2a$10$rPQ.ZxQYx9L7gL0QRjZ5xO5qQQ5W5x5x5x5x5x5x5x5x5x5x5x', // "demo123"
+        password: '$2a$10$rPQ.ZxQYx9L7gL0QRjZ5xO5qQQ5W5x5x5x5x5x5x5x5x5x5x5x', // placeholder hash, never matches
         name: 'Demo User',
         role: 'user',
     },
@@ -39,10 +39,11 @@ export async function POST(request: NextRequest) {
         }
 
         // Check environment-based auth first
+        // SECURITY (S0-Q.2): no built-in password; env login only when ADMIN_PASSWORD is set (12+ chars)
         const envEmail = process.env.ADMIN_EMAIL || 'admin@agentplayer.local';
-        const envPassword = process.env.ADMIN_PASSWORD || 'admin123';
+        const envPassword = process.env.ADMIN_PASSWORD;
 
-        if (email === envEmail && password === envPassword) {
+        if (envPassword && envPassword.length >= 12 && email === envEmail && password === envPassword) {
             const cookieStore = await cookies();
             cookieStore.set('session', JSON.stringify({
                 userId: 'env-admin',
@@ -81,10 +82,7 @@ export async function POST(request: NextRequest) {
         // For demo, accept any password or check hashed
         const isPasswordValid = await bcrypt.compare(password, user.password).catch(() => false);
 
-        // Also accept plain password match for easy demo
-        const isPlainMatch = password === 'admin123' || password === 'demo123' || password === 'admin';
-
-        if (!isPasswordValid && !isPlainMatch) {
+        if (!isPasswordValid) {
             return NextResponse.json(
                 { error: 'Invalid credentials' },
                 { status: 401 }

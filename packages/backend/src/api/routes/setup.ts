@@ -5,12 +5,28 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { getDatabase } from '../../db/index.js';
 import bcrypt from 'bcryptjs';
+import { OWNER_EXISTS_SQL, isPublishedDefaultPassword } from '../../auth/default-accounts.js';
 
 const execAsync = promisify(exec);
 
 const SETUP_FLAG_FILE = join(process.cwd(), '.data', '.setup_complete');
 
+/** True once a real owner/admin account exists (system accounts excluded). */
+function ownerExists(): boolean {
+  return Boolean(getDatabase().prepare(OWNER_EXISTS_SQL).get());
+}
+
+// SECURITY (S0-Q.2): setup steps that change the system only run before setup is complete.
+const SETUP_ONLY_ROUTES = new Set(['/api/setup/check', '/api/setup/database', '/api/setup/python', '/api/setup/complete']);
+
 export default async function setupRoutes(fastify: FastifyInstance) {
+  fastify.addHook('onRequest', async (request, reply) => {
+    const route = request.routeOptions?.url;
+    if (route && SETUP_ONLY_ROUTES.has(route) && existsSync(SETUP_FLAG_FILE)) {
+      return reply.status(403).send({ error: 'Setup already completed' });
+    }
+  });
+
   // Check if setup is already complete
   fastify.get('/api/setup/status', async (request: FastifyRequest, reply: FastifyReply) => {
     const isSetupComplete = existsSync(SETUP_FLAG_FILE);
@@ -156,7 +172,15 @@ export default async function setupRoutes(fastify: FastifyInstance) {
         });
       }
 
-      if (password.length < 12) {
+      // SECURITY (S0-Q.2): only the very first owner can be created here
+      if (ownerExists()) {
+        return reply.status(403).send({
+          error: 'Setup already completed',
+          message: 'An owner account already exists'
+        });
+      }
+
+      if (password.length < 12 || isPublishedDefaultPassword(password)) {
         return reply.status(400).send({
           error: 'Invalid password',
           message: 'Password must be at least 12 characters long (include uppercase, lowercase, number, special character)'
@@ -192,17 +216,27 @@ export default async function setupRoutes(fastify: FastifyInstance) {
       // Create username from email
       const username = email.split('@')[0];
 
-      // Create admin user with active status and verified email
-      const stmt = db.prepare(`
-        INSERT INTO users (id, email, username, password_hash, full_name, role, status, email_verified, created_at, updated_at, token_version)
-        VALUES (?, ?, ?, ?, ?, 'admin', 'active', 1, datetime('now'), datetime('now'), 1)
-      `);
+      // Create the owner with active status and verified email.
+      // Re-check inside one transaction so two parallel requests cannot both create an owner.
+      const created = db.transaction(() => {
+        if (db.prepare(OWNER_EXISTS_SQL).get()) return false;
+        db.prepare(`
+          INSERT INTO users (id, email, username, password_hash, full_name, role, status, email_verified, created_at, updated_at, token_version)
+          VALUES (?, ?, ?, ?, ?, 'owner', 'active', 1, datetime('now'), datetime('now'), 1)
+        `).run(userId, email, username, passwordHash, name);
+        return true;
+      });
 
-      stmt.run(userId, email, username, passwordHash, name);
+      if (!created) {
+        return reply.status(403).send({
+          error: 'Setup already completed',
+          message: 'An owner account already exists'
+        });
+      }
 
       return reply.send({
         success: true,
-        message: 'Admin account created successfully',
+        message: 'Owner account created successfully',
         user: {
           id: userId,
           name,
@@ -226,6 +260,13 @@ export default async function setupRoutes(fastify: FastifyInstance) {
       // Ensure .data directory exists
       if (!existsSync(dataDir)) {
         mkdirSync(dataDir, { recursive: true });
+      }
+
+      if (!ownerExists()) {
+        return reply.status(400).send({
+          error: 'Owner account required',
+          message: 'Create the owner account before completing setup'
+        });
       }
 
       // Create setup complete flag file

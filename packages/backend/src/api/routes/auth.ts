@@ -13,6 +13,7 @@ import {
   handleSuccessfulLogin,
 } from '../../auth/account-lockout.js';
 import { logAuthEvent } from '../../services/audit-logger.js';
+import { isSystemAccount, isPublishedDefaultPassword } from '../../auth/default-accounts.js';
 
 /**
  * SECURITY: Validate password strength
@@ -195,6 +196,15 @@ export async function authRoutes(fastify: FastifyInstance) {
         });
       }
 
+      // SECURITY (S0-Q.2): internal system accounts can never log in
+      if (isSystemAccount(user.id)) {
+        logAuthEvent('auth.login.failed', request, user.id, user.username, false, 'System account login refused');
+        return reply.code(403).send({
+          error: 'Forbidden',
+          message: 'Account access denied'
+        });
+      }
+
       // Check if user is active
       if (user.status !== 'active') {
         // SECURITY: Use generic "Forbidden" for account status (M-12)
@@ -227,6 +237,15 @@ export async function authRoutes(fastify: FastifyInstance) {
         return reply.code(401).send({
           error: 'Unauthorized',
           message: 'Invalid email or password'
+        });
+      }
+
+      // SECURITY (S0-Q.2): passwords published in the source (old seed/demo accounts) are refused
+      if (isPublishedDefaultPassword(password)) {
+        logAuthEvent('auth.login.failed', request, user.id, user.username, false, 'Published default password refused');
+        return reply.code(403).send({
+          error: 'Forbidden',
+          message: 'This account uses a default password and is disabled. Reset the password from the CLI.'
         });
       }
 

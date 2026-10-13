@@ -75,8 +75,8 @@ const SOCIAL_PROVIDERS = [
 export default function LoginPage() {
     const router = useRouter();
     const { login } = useAuth();
-    const [email, setEmail] = useState('owner@localhost');
-    const [password, setPassword] = useState('admin123');
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
 
@@ -174,14 +174,6 @@ export default function LoginPage() {
                         ))}
                     </div>
 
-                    <div className="mt-5 p-3 bg-muted/50 rounded-lg">
-                        <p className="text-xs text-muted-foreground text-center">
-                            <strong>Default Accounts:</strong><br />
-                            Owner: owner@localhost / admin123<br />
-                            Admin: admin@localhost / admin123<br />
-                            User: user@localhost / user123
-                        </p>
-                    </div>
                 </div>
 
                 <p className="text-center text-xs text-muted-foreground mt-6">
