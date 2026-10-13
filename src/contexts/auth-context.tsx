@@ -15,7 +15,8 @@ export interface User {
 interface AuthContextType {
     user: User | null;
     isLoading: boolean;
-    login: (email: string, password: string) => Promise<void>;
+    /** Resolves with the signed-in user (F-05: the login page routes by role). */
+    login: (email: string, password: string) => Promise<User>;
     logout: () => Promise<void>;
     updateUser: (updates: Partial<User>) => void;
 }
@@ -119,7 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
     };
 
-    const login = async (email: string, password: string) => {
+    const login = async (email: string, password: string): Promise<User> => {
         try {
             const response = await fetch(`${BACKEND_URL}/api/auth/login`, {
                 method: 'POST',
@@ -138,13 +139,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setToken(data.token);
 
             // Set user from response
-            setUser({
+            const signedIn: User = {
                 id: data.user.id,
                 name: data.user.full_name || data.user.username,
                 email: data.user.email,
                 role: data.user.role as Role,
                 avatar: data.user.avatar_url,
-            });
+            };
+            setUser(signedIn);
+            return signedIn;
         } catch (error) {
             console.error('Login error:', error);
             throw error;

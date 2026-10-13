@@ -34,6 +34,7 @@ import { schedulerRoutes } from './routes/scheduler.js';
 import { memoryRoutes } from './routes/memory.js';
 import { credentialsRoutes } from './routes/credentials.js';
 // import { onboardingRoutes } from './routes/onboarding.js'; // S0-Q.14: disabled, see below
+import { onboardingWebRoutes } from './routes/onboarding-web.js'; // F-05: web wizard after first owner login
 import { gatewayRoutes } from './routes/gateway.js';
 import { authRoutes } from './routes/auth.js';
 import { databaseRoutes } from './routes/database.js';
@@ -258,6 +259,9 @@ await fastify.register(credentialsRoutes); // 🔐 Credentials System
 // here (the routes themselves are owner-only as a second line); the web
 // first-run flow is /setup. Re-enable only with a reviewed design.
 // await fastify.register(onboardingRoutes); // 🎯 Onboarding Wizard
+// F-05: the web wizard (/onboarding page) has its own owner-only API with
+// per-user state in the DB; it never runs the terminal wizard.
+await fastify.register(onboardingWebRoutes);
 await fastify.register(gatewayRoutes); // 🌐 Multi-Interface Gateway
 await fastify.register(sandboxRoutes); // 🐳 Docker Sandbox System
 await fastify.register(auditRoutes); // 🛡️ Security Audit System

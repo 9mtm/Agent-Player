@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { onboardingAPI, type OnboardingState } from '@/lib/backend';
+import { onboardingAPI, type OnboardingState, type OnboardingStepId } from '@/lib/backend';
+import { DEFAULT_AFTER_LOGIN_PATH, HOME_CHAT_PATH } from '@/lib/auth/post-login';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -31,12 +32,35 @@ const STEPS = [
   { id: 6, title: 'Complete', icon: PartyPopper }
 ];
 
+// Providers the backend settings can apply (F-05). Local Ollama is the default (M-03).
 const AI_PROVIDERS = [
-  { id: 'anthropic', name: 'Anthropic Claude', recommended: true },
-  { id: 'openai', name: 'OpenAI GPT', recommended: false },
-  { id: 'google', name: 'Google Gemini', recommended: false },
-  { id: 'ollama', name: 'Ollama (Local)', recommended: false }
+  { id: 'ollama', name: 'Ollama (Local)', recommended: true, defaultModel: 'qwen3.8:27b' },
+  { id: 'anthropic', name: 'Anthropic Claude', recommended: false, defaultModel: 'claude-sonnet-4-5-20250929' },
+  { id: 'openai', name: 'OpenAI GPT', recommended: false, defaultModel: 'gpt-4' }
+] as const;
+
+type ProviderId = (typeof AI_PROVIDERS)[number]['id'];
+
+// D-LANG: the 12 UI languages.
+const LANGUAGES = [
+  { id: 'en', name: 'English' },
+  { id: 'ar', name: 'العربية (Arabic)' },
+  { id: 'de', name: 'Deutsch (German)' },
+  { id: 'fr', name: 'Français (French)' },
+  { id: 'es', name: 'Español (Spanish)' },
+  { id: 'zh', name: '中文 (Chinese, Simplified)' },
+  { id: 'ja', name: '日本語 (Japanese)' },
+  { id: 'ko', name: '한국어 (Korean)' },
+  { id: 'pt-BR', name: 'Português (Brazil)' },
+  { id: 'ru', name: 'Русский (Russian)' },
+  { id: 'tr', name: 'Türkçe (Turkish)' },
+  { id: 'hi', name: 'हिन्दी (Hindi)' }
 ];
+
+// Which backend step each wizard page saves (1 = Welcome, 6 = Complete save nothing).
+const STEP_SAVES: Record<number, OnboardingStepId | null> = {
+  1: null, 2: 'profile', 3: 'provider', 4: 'channels', 5: 'skills', 6: null
+};
 
 const CHANNELS = [
   { id: 'web', name: 'Web Chat', description: 'Built-in web interface', icon: '🌐' },
@@ -61,14 +85,23 @@ export default function OnboardingWizard() {
   const [saving, setSaving] = useState(false);
 
   // Form data
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    userName: string;
+    language: string;
+    aiProvider: ProviderId;
+    aiModel: string;
+    selectedChannels: string[];
+    selectedSkills: string[];
+  }>({
     userName: '',
     language: 'en',
-    aiProvider: 'anthropic',
+    aiProvider: 'ollama',
     aiModel: '',
     selectedChannels: ['web'],
     selectedSkills: ['weather', 'web-search']
   });
+  // A new API key typed on the provider step. Sent once, never kept after saving.
+  const [apiKey, setApiKey] = useState('');
 
   useEffect(() => {
     loadState();
@@ -80,9 +113,9 @@ export default function OnboardingWizard() {
       const data = await onboardingAPI.getState();
       setState(data);
 
-      // If already completed, redirect to dashboard
+      // If already completed, go home (main-agent chat)
       if (data.completed) {
-        router.push('/dashboard');
+        router.push(HOME_CHAT_PATH);
         return;
       }
 
@@ -91,7 +124,7 @@ export default function OnboardingWizard() {
         setFormData({
           userName: data.data.userName || '',
           language: data.data.language || 'en',
-          aiProvider: data.data.aiProvider || 'anthropic',
+          aiProvider: data.data.aiProvider || 'ollama',
           aiModel: data.data.aiModel || '',
           selectedChannels: data.data.selectedChannels || ['web'],
           selectedSkills: data.data.selectedSkills || ['weather', 'web-search']
@@ -99,28 +132,65 @@ export default function OnboardingWizard() {
         setCurrentStep(data.currentStep || 1);
       }
     } catch (err: any) {
-      console.error('Failed to load state:', err);
+      // Owner only: anyone else (or a signed-out user) leaves the wizard.
+      console.error('Failed to load onboarding state');
+      router.push(DEFAULT_AFTER_LOGIN_PATH);
+      return;
     } finally {
       setLoading(false);
     }
   };
 
-  const saveProgress = async () => {
+  const stepData = (step: OnboardingStepId): Record<string, unknown> => {
+    switch (step) {
+      case 'profile':
+        return { userName: formData.userName, language: formData.language };
+      case 'provider':
+        return {
+          aiProvider: formData.aiProvider,
+          aiModel: formData.aiModel,
+          ...(formData.aiProvider !== 'ollama' && apiKey ? { apiKey } : {})
+        };
+      case 'channels':
+        return { selectedChannels: formData.selectedChannels };
+      case 'skills':
+        return { selectedSkills: formData.selectedSkills };
+    }
+  };
+
+  /** Save the current page's answers (validated by the backend); false on error. */
+  const saveProgress = async (nextStep?: number): Promise<boolean> => {
     setSaving(true);
     try {
-      await onboardingAPI.updateState(formData);
+      const step = STEP_SAVES[currentStep] ?? null;
+      const saved = await onboardingAPI.saveStep(step, step ? stepData(step) : null, nextStep);
+      setState(saved);
+      if (step === 'provider') setApiKey('');
+      return true;
     } catch (err: any) {
-      console.error('Failed to save:', err);
+      toast.error(`Failed to save: ${err.message}`);
+      return false;
     } finally {
       setSaving(false);
     }
   };
 
   const handleNext = async () => {
-    await saveProgress();
-
-    if (currentStep < STEPS.length) {
+    if (currentStep >= STEPS.length) return;
+    if (await saveProgress(currentStep + 1)) {
       setCurrentStep(currentStep + 1);
+    }
+  };
+
+  const handleSkip = async () => {
+    setSaving(true);
+    try {
+      await onboardingAPI.complete(true);
+      router.push(HOME_CHAT_PATH);
+    } catch (err: any) {
+      toast.error(`Failed to skip: ${err.message}`);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -133,9 +203,8 @@ export default function OnboardingWizard() {
   const handleComplete = async () => {
     setSaving(true);
     try {
-      await saveProgress();
-      await onboardingAPI.complete();
-      router.push('/dashboard');
+      await onboardingAPI.complete(false);
+      router.push(HOME_CHAT_PATH);
     } catch (err: any) {
       toast.error(`Failed to complete: ${err.message}`);
     } finally {
@@ -271,8 +340,9 @@ export default function OnboardingWizard() {
                     onChange={(e) => setFormData({ ...formData, language: e.target.value })}
                     className="w-full p-2 border rounded-md mt-2"
                   >
-                    <option value="en">English</option>
-                    <option value="ar">العربية (Arabic)</option>
+                    {LANGUAGES.map((lang) => (
+                      <option key={lang.id} value={lang.id}>{lang.name}</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -289,7 +359,7 @@ export default function OnboardingWizard() {
                   {AI_PROVIDERS.map((provider) => (
                     <div
                       key={provider.id}
-                      onClick={() => setFormData({ ...formData, aiProvider: provider.id })}
+                      onClick={() => setFormData({ ...formData, aiProvider: provider.id, aiModel: '' })}
                       className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
                         formData.aiProvider === provider.id
                           ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/20'
@@ -311,12 +381,42 @@ export default function OnboardingWizard() {
                   ))}
                 </div>
 
-                <Alert>
-                  <AlertDescription className="text-sm">
-                    💡 You'll need an API key for {AI_PROVIDERS.find(p => p.id === formData.aiProvider)?.name}.
-                    You can add it later in Settings → Credentials.
-                  </AlertDescription>
-                </Alert>
+                <div>
+                  <Label>Model</Label>
+                  <Input
+                    value={formData.aiModel}
+                    onChange={(e) => setFormData({ ...formData, aiModel: e.target.value })}
+                    placeholder={AI_PROVIDERS.find(p => p.id === formData.aiProvider)?.defaultModel}
+                    className="mt-2"
+                  />
+                </div>
+
+                {formData.aiProvider === 'ollama' ? (
+                  <Alert>
+                    <AlertDescription className="text-sm">
+                      💡 Runs on this computer through Ollama at http://127.0.0.1:11434. No API key needed.
+                    </AlertDescription>
+                  </Alert>
+                ) : (
+                  <div>
+                    <Label>API key (optional)</Label>
+                    <Input
+                      type="password"
+                      autoComplete="off"
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder={
+                        state?.data.aiProvider === formData.aiProvider && state?.data.apiKeyMasked
+                          ? `Saved: ${state.data.apiKeyMasked}`
+                          : 'Paste your API key'
+                      }
+                      className="mt-2"
+                    />
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Stored encrypted. You can also add or change it later in Settings.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
@@ -324,7 +424,7 @@ export default function OnboardingWizard() {
             {currentStep === 4 && (
               <div className="space-y-6 py-4">
                 <p className="text-muted-foreground">
-                  Select channels to connect (you can add more later)
+                  Select the channels you plan to use. Nothing is connected now; set them up later under Channels.
                 </p>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -362,7 +462,7 @@ export default function OnboardingWizard() {
             {currentStep === 5 && (
               <div className="space-y-6 py-4">
                 <p className="text-muted-foreground">
-                  Select skills to install (you can add more from the marketplace later)
+                  Select the skills you are interested in. Nothing is installed now; add them later under Skills.
                 </p>
 
                 <div className="space-y-2">
@@ -413,7 +513,7 @@ export default function OnboardingWizard() {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Language:</span>
-                      <span className="font-semibold">{formData.language === 'ar' ? 'العربية' : 'English'}</span>
+                      <span className="font-semibold">{LANGUAGES.find(l => l.id === formData.language)?.name ?? formData.language}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">AI Provider:</span>
@@ -443,14 +543,21 @@ export default function OnboardingWizard() {
 
             {/* Navigation Buttons */}
             <div className="flex justify-between mt-8 pt-6 border-t">
-              <Button
-                onClick={handleBack}
-                variant="outline"
-                disabled={currentStep === 1 || saving}
-              >
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Back
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleBack}
+                  variant="outline"
+                  disabled={currentStep === 1 || saving}
+                >
+                  <ArrowLeft className="w-4 h-4 mr-2" />
+                  Back
+                </Button>
+                {currentStep < STEPS.length && (
+                  <Button onClick={handleSkip} variant="ghost" disabled={saving}>
+                    Skip setup
+                  </Button>
+                )}
+              </div>
 
               {currentStep < STEPS.length ? (
                 <Button onClick={handleNext} disabled={saving}>

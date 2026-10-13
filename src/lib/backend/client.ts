@@ -889,18 +889,26 @@ export const schedulerAPI = {
 };
 
 // ============================================
-// Onboarding API (Setup Wizard)
+// Onboarding API (wizard after the first owner login, F-05)
 // ============================================
+// Owner only; the user comes from the bearer token. API keys are never
+// returned: `apiKeyMasked` shows only the last 4 characters.
+
+export type OnboardingStepId = 'profile' | 'provider' | 'channels' | 'skills';
 
 export interface OnboardingState {
   completed: boolean;
+  skipped: boolean;
   currentStep: number;
   totalSteps: number;
   data: {
     userName?: string;
     language?: string;
-    aiProvider?: string;
+    aiProvider?: 'ollama' | 'anthropic' | 'openai';
     aiModel?: string;
+    ollamaUrl?: string;
+    apiKeySet?: boolean;
+    apiKeyMasked?: string;
     selectedChannels?: string[];
     selectedSkills?: string[];
   };
@@ -908,25 +916,42 @@ export interface OnboardingState {
 
 export const onboardingAPI = {
   async getState(): Promise<OnboardingState> {
-    const data = await fetchAPI<{ state: OnboardingState }>('/api/onboarding');
+    const data = await fetchAPI<{ state: OnboardingState }>('/api/onboarding', { headers: authHeaders() });
     return data.state;
   },
 
-  async updateState(input: Partial<OnboardingState['data']>): Promise<OnboardingState> {
+  /** Save one step (validated by the backend) and/or the step reached. */
+  async saveStep(
+    step: OnboardingStepId | null,
+    stepData: Record<string, unknown> | null,
+    currentStep?: number
+  ): Promise<OnboardingState> {
+    const body: Record<string, unknown> = {};
+    if (step) {
+      body.step = step;
+      body.data = stepData ?? {};
+    }
+    if (currentStep !== undefined) body.currentStep = currentStep;
     const data = await fetchAPI<{ state: OnboardingState }>('/api/onboarding', {
       method: 'POST',
-      body: JSON.stringify(input),
+      headers: authHeaders(),
+      body: JSON.stringify(body),
     });
     return data.state;
   },
 
-  async complete(): Promise<boolean> {
-    await fetchAPI('/api/onboarding/complete', { method: 'POST' });
+  /** Finish the wizard; `skipped` marks it complete without the remaining steps. */
+  async complete(skipped = false): Promise<boolean> {
+    await fetchAPI('/api/onboarding/complete', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ skipped }),
+    });
     return true;
   },
 
   async reset(): Promise<boolean> {
-    await fetchAPI('/api/onboarding/reset', { method: 'POST' });
+    await fetchAPI('/api/onboarding/reset', { method: 'POST', headers: authHeaders(), body: JSON.stringify({}) });
     return true;
   },
 };

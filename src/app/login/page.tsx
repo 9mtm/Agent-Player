@@ -6,6 +6,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Bot } from 'lucide-react';
 import { useAuth } from '@/contexts/auth-context';
+import { onboardingAPI } from '@/lib/backend';
+import { needsOnboardingCheck, postLoginRedirect } from '@/lib/auth/post-login';
 
 // ─── Brand icon SVGs ──────────────────────────────────────────────────────────
 
@@ -86,8 +88,17 @@ export default function LoginPage() {
         setIsLoading(true);
 
         try {
-            await login(email, password);
-            router.push('/dashboard');
+            const signedIn = await login(email, password);
+            // F-05: an owner who has not finished onboarding goes to the wizard.
+            let onboardingCompleted: boolean | null = null;
+            if (needsOnboardingCheck(signedIn.role)) {
+                try {
+                    onboardingCompleted = (await onboardingAPI.getState()).completed;
+                } catch {
+                    onboardingCompleted = null; // unknown: no wizard redirect
+                }
+            }
+            router.push(postLoginRedirect(signedIn.role, onboardingCompleted));
             router.refresh();
         } catch (error: any) {
             setError(error.message || 'Invalid credentials');
