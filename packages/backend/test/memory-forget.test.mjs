@@ -231,6 +231,20 @@ test('memory_forget tool: needs one-time owner approval; own memory only; never 
   assert.ok((await quietly(() => memoryForgetTool.execute({ id: m.id }, { workspaceDir: dir }))).error);
   assert.ok((await quietly(() => memoryForgetTool.execute({ id: m.id }, { ...ctx, userId: 'mg-user' }))).error);
   assert.ok(getMemoryStorage().getOwned('mg-owner', m.id));
+  // Drawer scope: a task-only run cannot forget owner or project memories,
+  // live or already deleted (history only).
+  const taskOnly = { ...ctx, memoryDrawers: [{ kind: 'task', key: 't-x' }] };
+  const r1 = await quietly(() => memoryForgetTool.execute({ id: m.id }, taskOnly));
+  assert.match(r1.error, /not open/);
+  const proj = await create('mg-owner', 'Kudu-88 project note', { drawer: { kind: 'project', key: 'gamma' } });
+  assert.equal((await call('DELETE', `/api/memory/${proj.id}`)).statusCode, 200);
+  assert.match((await quietly(() => memoryForgetTool.execute({ id: proj.id }, ctx))).error, /not open/, 'deleted project memory, project not open');
+  assert.match((await quietly(() => memoryForgetTool.execute({ id: proj.id }, taskOnly))).error, /not open/);
+  assert.ok(dbText().includes('Kudu-88'), 'history untouched');
+  const gammaCtx = { ...ctx, memoryDrawers: D.selectDrawers({ audience: 'owner', project: 'gamma' }) };
+  assert.ok((await quietly(() => memoryForgetTool.execute({ id: proj.id }, gammaCtx))).data?.success);
+  assert.ok(!dbText().includes('Kudu-88'));
+  assert.ok(getMemoryStorage().getOwned('mg-owner', m.id));
   const ok = await quietly(() => memoryForgetTool.execute({ id: m.id }, ctx));
   assert.ok(ok.data?.success, ok.content?.[0]?.text);
   assert.ok(!ok.content[0].text.includes('Tapir'), 'result does not repeat the text');

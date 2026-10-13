@@ -5,13 +5,16 @@
  *
  * Irreversible, so every call needs one-time owner approval (S1.3,
  * APPROVAL_REQUIRED_TOOLS 'delete'). Never in a turn that answers an
- * outsider. Only the run user's own memories. The result never repeats the
+ * outsider. Only the run user's own memories, and only in drawers open for
+ * the run (an approved call re-runs without a turn scope, so it then reaches
+ * only the owner + experience drawers; fail closed). The result never repeats the
  * memory text (it is kept in the approval record).
  */
 
 import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
-import { toolMemoryUser } from './scope.js';
-import { forgetMemory } from '../../memory/forget.js';
+import { toolMemoryDrawers, toolMemoryUser } from './scope.js';
+import { forgetMemory, forgettableDrawer } from '../../memory/forget.js';
+import { sameDrawer } from '../../memory/drawers.js';
 import { agentActor } from '../../memory/versions.js';
 import { logAudit } from '../../services/audit-logger.js';
 
@@ -35,6 +38,13 @@ each call first. For an ordinary correction use memory_edit / memory_delete.`,
     if (!userId) return fail('no user for this memory');
     if (context?.toolPolicy) return fail('not available when answering someone else');
     if (typeof params.id !== 'string' || !params.id) return fail('id is required');
+    // Only memories in drawers open for this run (same rule as memory_edit /
+    // memory_delete); for an already deleted memory, its last drawer.
+    const drawer = forgettableDrawer(userId, params.id);
+    if (!drawer) return fail('memory not found');
+    if (!toolMemoryDrawers(context).some((d) => sameDrawer(d, drawer))) {
+      return fail('that memory drawer is not open for this conversation');
+    }
     const result = await forgetMemory(userId, params.id, agentActor(context?.agentId));
     if (!result) return fail('memory not found');
     logAudit({

@@ -53,6 +53,20 @@ export function isForgotten(userId: string, memoryId: string): boolean {
   return !!getDatabase().prepare(`SELECT 1 FROM memory_versions WHERE user_id = ? AND memory_id = ? AND change = 'forget'`).get(userId, memoryId);
 }
 
+/**
+ * Drawer of a memory of this user: the live row's drawer, else the drawer of
+ * its last version (a memory deleted earlier). Null when unknown or already
+ * forgotten.
+ */
+export function forgettableDrawer(userId: string, memoryId: string): DrawerRef | null {
+  if (typeof memoryId !== 'string' || !ID.test(memoryId)) return null;
+  const live = getMemoryStorage().getOwned(userId, memoryId);
+  if (live) return live.drawer ?? null;
+  const last = getDatabase().prepare(`SELECT drawer_kind, drawer_key, change FROM memory_versions WHERE user_id = ? AND memory_id = ? ORDER BY version DESC LIMIT 1`).get(userId, memoryId) as { drawer_kind: string; drawer_key: string; change: string } | undefined;
+  if (!last || last.change === 'forget') return null;
+  try { return normalizeDrawer(last.drawer_key ? { kind: last.drawer_kind, key: last.drawer_key } : { kind: last.drawer_kind }); } catch { return null; }
+}
+
 /** Tombstones of a user (id, drawer, time, actor only). */
 export function listTombstones(userId: string, limit = 200): Array<{ memoryId: string; drawerId: string; forgottenAt: string; actor: string }> {
   const rows = getDatabase().prepare(`
