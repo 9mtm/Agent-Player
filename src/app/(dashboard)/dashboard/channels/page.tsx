@@ -13,6 +13,7 @@ interface ChannelExtension {
   description: string;
   enabled: boolean;
   configured: boolean;
+  connected: boolean;
   stats?: {
     totalMessages?: number;
     connected?: boolean;
@@ -33,25 +34,30 @@ export default function ChannelsPage() {
       const response = await fetch(`${BACKEND_URL}/api/extensions`);
       const data = await response.json();
 
-      // Filter channel type extensions that are enabled
+      // Agent Connect has its own catalog, including disabled/unconfigured adapters.
       const channelExts = data.extensions
-        .filter((ext: any) => ext.type === 'channel' && ext.enabled)
+        .filter((ext: any) => ext.type === 'channel' && (ext.enabled || ['agent-connect', 'telegram', 'discord'].includes(ext.id)))
         .map((ext: any) => ({
           id: ext.id,
           name: ext.name,
           description: ext.description,
           enabled: ext.enabled,
           configured: false, // Will check status
+          connected: false,
           stats: {},
         }));
 
       // Check each channel's status
       for (const channel of channelExts) {
         try {
-          const statusResponse = await fetch(`${BACKEND_URL}/api/ext/${channel.id}/status`);
+          const token = localStorage.getItem('auth_token');
+          const statusResponse = await fetch(`${BACKEND_URL}/api/ext/${channel.id}/status`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          });
           if (statusResponse.ok) {
             const statusData = await statusResponse.json();
             channel.configured = statusData.configured || false;
+            channel.connected = statusData.connected === true;
             channel.stats = statusData.stats || {};
           }
         } catch (err) {
@@ -129,7 +135,7 @@ export default function ChannelsPage() {
 
             <div className="mt-4 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                {channel.configured ? (
+                {channel.connected ? (
                   <>
                     <CheckCircle2 className="h-4 w-4 text-green-500" />
                     <span className="text-sm font-medium text-green-600 dark:text-green-400">
@@ -140,7 +146,7 @@ export default function ChannelsPage() {
                   <>
                     <XCircle className="h-4 w-4 text-amber-500" />
                     <span className="text-sm font-medium text-amber-600 dark:text-amber-400">
-                      Not Configured
+                      {!channel.enabled ? 'Disabled' : channel.configured ? 'Disconnected' : 'Not Configured'}
                     </span>
                   </>
                 )}

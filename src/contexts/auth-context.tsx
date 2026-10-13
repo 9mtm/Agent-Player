@@ -55,7 +55,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Redirect to login if not authenticated (except on public pages)
     useEffect(() => {
         if (!isLoading && !user && typeof window !== 'undefined') {
-            const publicPaths = ['/login', '/register'];
+            // /avatar-lab is a static dev test page for our own avatar pipeline (no user data).
+            const publicPaths = ['/login', '/register', '/avatar-lab'];
             const isPublicPath = publicPaths.some(path =>
                 window.location.pathname.startsWith(path)
             );

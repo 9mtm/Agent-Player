@@ -9,7 +9,7 @@ import { createExtensionApi } from './sdk.js';
 import { getDatabase } from '../db/index.js';
 import { readdirSync, existsSync, readFileSync, watch } from 'fs';
 import { resolve, join } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -127,11 +127,11 @@ export class ExtensionRunner {
     }
 
     // Dynamic import (ESM)
-    const extensionModule = await import(`file://${entryPath}`);
+    const extensionModule = await import(pathToFileURL(entryPath).href);
     const extension: Extension = extensionModule.default || extensionModule;
 
     // Create Extension API (SECURITY: pass extensionPath for path validation - H-04)
-    const api = createExtensionApi(id, fastify, db, cronEngine, extensionPath) as any;
+    const api = createExtensionApi(id, fastify, db.getDb(), cronEngine, extensionPath) as any;
 
     // Call register() hook
     if (extension.register) {
@@ -190,7 +190,7 @@ export class ExtensionRunner {
     // Call onDisable() hook if extension is loaded
     const extension = this.loadedExtensions.get(extensionId);
     if (extension?.onDisable) {
-      const api = createExtensionApi(extensionId, {} as any, db, {} as any);
+      const api = createExtensionApi(extensionId, {} as any, db.getDb(), {} as any, join(this.extensionsDir, extensionId));
       await extension.onDisable(api);
     }
 

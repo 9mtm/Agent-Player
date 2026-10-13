@@ -1,4 +1,5 @@
 'use client';
+import { ChannelSetupGuide } from '@/components/channels/ChannelSetupGuide';
 
 import { useState, useEffect } from 'react';
 import { ArrowLeft, CheckCircle2, XCircle, Loader2, MessageSquare, Send, Settings as SettingsIcon, BookOpen, ExternalLink, AlertTriangle } from 'lucide-react';
@@ -113,6 +114,7 @@ export default function WhatsAppChannelPage() {
 
   return (
     <div className="p-8">
+      <ChannelSetupGuide channel="whatsapp" legacy />
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Link href="/dashboard/channels" className="rounded-lg p-2 hover:bg-accent">

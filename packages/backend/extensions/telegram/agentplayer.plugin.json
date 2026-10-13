@@ -2,15 +2,19 @@
   "id": "telegram",
   "name": "Telegram",
   "description": "Telegram bot integration - send and receive messages via Telegram Bot API",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "type": "channel",
   "author": "Agent Player Team",
   "main": "index.js",
-  "permissions": ["network", "database", "tools"],
+  "permissions": [
+    "network",
+    "database",
+    "tools"
+  ],
   "settingsUI": {
     "type": "form",
     "title": "Telegram Bot Configuration",
-    "description": "Configure your Telegram bot connection",
+    "description": "Manage this channel at /dashboard/channels/telegram. Enable the extension and restart the backend before configuration.",
     "fields": [
       {
         "type": "input",
@@ -23,17 +27,15 @@
       },
       {
         "type": "input",
-        "name": "webhook_url",
-        "label": "Webhook URL",
-        "placeholder": "https://yourdomain.com/api/ext/telegram/webhook",
-        "helpText": "Public URL where Telegram will send updates"
+        "name": "allowed_users",
+        "label": "Allowed Sender IDs",
+        "helpText": "Comma-separated IDs. An empty list blocks incoming messages."
       },
       {
-        "type": "input",
-        "name": "allowed_users",
-        "label": "Allowed Users (Optional)",
-        "placeholder": "123456789,987654321",
-        "helpText": "Comma-separated list of Telegram user IDs allowed to interact with bot"
+        "type": "checkbox",
+        "name": "auto_reply",
+        "label": "Enable automatic agent replies",
+        "defaultValue": false
       }
     ],
     "submitButton": {

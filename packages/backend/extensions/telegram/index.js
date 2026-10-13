@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { registerTelegramRoutes } from './src/routes.js';
 import { telegramSendTool } from './src/tool.js';
+import { stopChannel } from '../shared/channel-host.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -14,7 +15,7 @@ const __dirname = dirname(__filename);
 export default {
   id: 'telegram',
   name: 'Telegram',
-  version: '2.0.0',
+  version: '2.1.0',
 
   async register(api) {
     // 1. Run database migrations
@@ -23,15 +24,16 @@ export default {
     ]);
 
     // 2. Register API routes (/api/ext/telegram/*)
-    api.registerRoutes(registerTelegramRoutes);
+    api.registerRoutes(scope => registerTelegramRoutes(scope, api));
 
     // 3. Register AI tool
-    api.registerTool(telegramSendTool);
+    api.registerTool(telegramSendTool(api));
 
     api.log('info', 'Telegram bot ready');
   },
 
   async onDisable(api) {
+    await stopChannel('telegram');
     api.unregisterTool('telegram_send');
     api.log('info', 'Telegram bot disabled');
   },

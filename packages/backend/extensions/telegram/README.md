@@ -1,54 +1,9 @@
-# Telegram Extension
+# Telegram Channel
 
-Connect Agent Player to Telegram for messaging.
+Telegram text messaging uses the standalone channels package and Agent Player's shared extension host.
 
-## Setup
+Open `/dashboard/channels/telegram`, enable the extension, and restart the backend if its routes are not loaded. Save the bot token and allowed sender IDs. Empty access lists block incoming messages. Automatic replies are optional and use the configured primary agent under the administrator account that saves settings.
 
-1. Create a bot with [@BotFather](https://t.me/BotFather)
-2. Get your bot token
-3. Configure in Agent Player settings
+This release uses long polling. Remove an existing webhook before migrating; the module will not remove it automatically. Attachments, rich keyboards, and custom slash command handlers are not part of this release.
 
-## Configuration
-
-| Setting | Required | Description |
-|---------|----------|-------------|
-| `bot_token` | Yes | Token from BotFather |
-| `webhook_url` | No | Webhook URL (optional) |
-| `allowed_users` | No | Whitelist user IDs |
-
-## Features
-
-- Send and receive messages
-- Support for media (photos, documents)
-- Inline keyboards
-- Commands support
-- User authentication
-
-## Usage
-
-Once configured, users can chat with your bot on Telegram and Agent Player will respond.
-
-### Commands
-
-| Command | Description |
-|---------|-------------|
-| `/start` | Start conversation |
-| `/help` | Show help |
-| `/status` | Check agent status |
-
-## API
-
-```typescript
-// Send message
-await telegram.sendMessage(chatId, 'Hello!');
-
-// Send with keyboard
-await telegram.sendMessage(chatId, 'Choose:', {
-  reply_markup: {
-    inline_keyboard: [[
-      { text: 'Option 1', callback_data: 'opt1' },
-      { text: 'Option 2', callback_data: 'opt2' }
-    ]]
-  }
-});
-```
+See [channels setup and API documentation](../shared/README.md) for build, authentication, lifecycle, extraction and validation details. Legacy message/config tables are retained, but the new host uses `extension_configs` and `channel_events`.

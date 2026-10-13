@@ -2,15 +2,19 @@
   "id": "discord",
   "name": "Discord",
   "description": "Discord messaging integration - send and receive messages via Discord bot",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "type": "channel",
   "author": "Agent Player Team",
   "main": "index.js",
-  "permissions": ["network", "database", "tools"],
+  "permissions": [
+    "network",
+    "database",
+    "tools"
+  ],
   "settingsUI": {
     "type": "form",
     "title": "Discord Bot Configuration",
-    "description": "Configure your Discord bot connection",
+    "description": "Manage this channel at /dashboard/channels/discord. Enable the extension and restart the backend before configuration.",
     "fields": [
       {
         "type": "input",
@@ -34,6 +38,24 @@
         "label": "Guild ID (Optional)",
         "placeholder": "Enter Server ID",
         "helpText": "Right-click your server → Copy ID (enable Developer Mode first)"
+      },
+      {
+        "type": "input",
+        "name": "allowed_users",
+        "label": "Allowed Sender IDs",
+        "helpText": "Comma-separated IDs. An empty list blocks incoming messages."
+      },
+      {
+        "type": "input",
+        "name": "allowed_channels",
+        "label": "Allowed Channel IDs",
+        "helpText": "Comma-separated channel IDs. An empty list blocks incoming messages."
+      },
+      {
+        "type": "checkbox",
+        "name": "auto_reply",
+        "label": "Enable automatic agent replies",
+        "defaultValue": false
       }
     ],
     "submitButton": {

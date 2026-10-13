@@ -14,12 +14,19 @@ import { dirname, resolve, sep, join } from 'path';
 import { getTranslator, registerExtensionBackendTranslations } from '../i18n/index.js';
 import { checkPermissions } from '../middleware/extension-permissions.js';
 import { logSecurityEvent } from '../services/audit-logger.js';
+import { getUserIdFromRequest } from '../auth/jwt.js';
+import type { FastifyRequest } from 'fastify';
+import type { Message } from '../agent/types.js';
+import { extractAgentReply } from '../../extensions/shared/agent-reply.js';
 
 /**
  * Extension SDK API Interface
  * Extensions receive this interface when their register() hook is called
  */
 export interface ExtensionApi {
+  authorizeChannelRequest(request: FastifyRequest): string;
+  authorizeChannelUser(userId: string): void;
+  processChannelMessage(userId: string, sessionId: string, message: string, history: Message[]): Promise<string>;
   // Route registration — routes registered at startup, mounted under /api/ext/:extensionId/
   registerRoutes(routesFn: (fastify: FastifyInstance) => Promise<void>, prefix?: string): void;
 
@@ -150,6 +157,31 @@ export function createExtensionApi(
 
   return {
     extensionId,
+    authorizeChannelRequest(request) {
+      const userId = getUserIdFromRequest(request);
+      this.authorizeChannelUser(userId);
+      return userId;
+    },
+    authorizeChannelUser(userId) {
+      const user = db.prepare('SELECT role, status FROM users WHERE id = ?').get(userId) as any;
+      if (!user || user.status !== 'active' || !['owner', 'admin'].includes(user.role)) {
+        throw new Error('Channel administration requires an active owner or admin');
+      }
+    },
+    async processChannelMessage(userId, sessionId, message, history) {
+      this.authorizeChannelUser(userId);
+      // Reuse the configured primary agent, provider and tool loop from the real chat route.
+      const response = await fastify.inject({
+        method: 'POST', url: '/api/chat',
+        headers: { origin: (process.env.ALLOWED_ORIGINS || 'http://localhost:41521').split(',')[0].trim() },
+        payload: { userId, sessionId, stream: false,
+          messages: [...history, { role: 'user', content: message }],
+          systemPromptAppend: 'Reply in plain text suitable for a messaging channel. Do not output UI specifications.',
+          chatContext: { sessionType: 'minimal', hasAvatarViewer: false, hasDesktopControl: false } },
+      });
+      this.authorizeChannelUser(userId);
+      return extractAgentReply(response);
+    },
 
     // Database access with permission check
     get db(): Database {

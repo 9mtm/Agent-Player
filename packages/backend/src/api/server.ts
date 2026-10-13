@@ -579,6 +579,23 @@ async function start() {
   }
 }
 
+let shuttingDown = false;
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const deadline = setTimeout(() => process.exit(1), 20000);
+    deadline.unref();
+    try {
+      // Closing Fastify runs channel transport shutdown hooks before process exit.
+      await fastify.close();
+      process.exit(0);
+    } catch {
+      process.exit(1);
+    }
+  });
+}
+
 start();
 
 export default fastify;

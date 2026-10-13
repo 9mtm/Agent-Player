@@ -1,70 +1,22 @@
-/**
- * Discord Send Message Tool - Pure JavaScript
- * Allows AI agents to send Discord messages
- */
+import { sendChannel } from '../../shared/channel-host.js';
 
-export const discordSendTool = {
-  name: 'discord_send',
-  description: 'Send a message to a Discord channel. Requires Discord bot to be configured.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      channelId: {
-        type: 'string',
-        description: 'Discord channel ID (18-digit number)',
-      },
-      content: {
-        type: 'string',
-        description: 'Message content to send',
-      },
-      guildId: {
-        type: 'string',
-        description: 'Optional Discord server (guild) ID',
-      },
+export function discordSendTool(api) {
+  return {
+    name: 'discord_send',
+    description: 'Send a plain text message through the configured Discord bot.',
+    input_schema: {
+      type: 'object',
+      properties: { channelId: { type: 'string', description: 'Discord channel ID' }, content: { type: 'string', description: 'Message text' } },
+      required: ['channelId', 'content'],
     },
-    required: ['channelId', 'content'],
-  },
-
-  async execute(params) {
-    const { channelId, content, guildId } = params;
-    const backendUrl = process.env.BACKEND_URL || `http://${process.env.HOST || 'localhost'}:${process.env.PORT || '41522'}`;
-
-    try {
-      const response = await fetch(`${backendUrl}/api/ext/discord/send`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channelId, content, guildId }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || response.statusText);
+    async execute(params, context) {
+      try {
+        api.authorizeChannelUser(context?.userId);
+        const result = await sendChannel('discord', params.channelId, params.content);
+        return { content: [{ type: 'text', text: `Message delivered. ID: ${result.id}` }] };
+      } catch {
+        return { error: 'Discord delivery failed or access denied', content: [{ type: 'text', text: 'Message was not delivered. Check channel access and connection.' }] };
       }
-
-      const result = await response.json();
-
-      if (result.note) {
-        return {
-          content: [{
-            type: 'text',
-            text: `⚠️ ${result.note}\n\nMessage logged with ID: ${result.messageId}\n\nTo enable Discord integration:\n1. Create a Discord bot at https://discord.com/developers/applications\n2. Configure bot token at /dashboard/extensions\n3. Add bot to your server\n4. Retry sending message`,
-          }],
-        };
-      }
-
-      return {
-        content: [{
-          type: 'text',
-          text: `✅ Message sent to Discord channel ${channelId}\nMessage ID: ${result.messageId}`,
-        }],
-      };
-    } catch (error) {
-      return {
-        content: [{
-          type: 'text',
-          text: `❌ Failed to send Discord message: ${error.message}`,
-        }],
-      };
-    }
-  },
-};
+    },
+  };
+}

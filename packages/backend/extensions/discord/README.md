@@ -1,47 +1,9 @@
-# Discord Extension
+# Discord Channel
 
-Connect Agent Player to Discord servers.
+Discord guild text messaging uses the standalone channels package and Agent Player's shared extension host.
 
-## Setup
+Open `/dashboard/channels/discord`, enable the extension, and restart the backend if its routes are not loaded. Enable Message Content Intent in Discord Developer Portal and invite the bot with View Channel and Send Messages permissions. Save the token, allowed sender IDs and allowed channel IDs. Empty access lists block incoming messages. Automatic replies are optional and use the configured primary agent under the administrator account that saves settings.
 
-1. Create application at Discord Developer Portal
-2. Create a bot and get token
-3. Invite bot to your server
-4. Configure in Agent Player settings
+Direct messages, attachments, rich embeds, reactions and custom slash commands are not part of this release. Outbound automatic mentions are disabled.
 
-## Configuration
-
-| Setting | Required | Description |
-|---------|----------|-------------|
-| `bot_token` | Yes | Discord Bot Token |
-| `client_id` | No | Application Client ID |
-| `guild_id` | No | Server ID for commands |
-| `allowed_channels` | No | Whitelist channel IDs |
-
-## Features
-
-- Send and receive messages
-- Slash commands
-- Embed messages
-- Reactions
-- Thread support
-- Voice channel info
-
-## Permissions
-
-Bot needs these permissions:
-- Read Messages
-- Send Messages
-- Embed Links
-- Attach Files
-- Read Message History
-- Add Reactions
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `/chat` | Start conversation |
-| `/help` | Show help |
-| `/status` | Check agent status |
-| `/clear` | Clear conversation |
+See [channels setup and API documentation](../shared/README.md) for build, authentication, lifecycle, extraction and validation details. Legacy message/config tables are retained, but the new host uses `extension_configs` and `channel_events`.

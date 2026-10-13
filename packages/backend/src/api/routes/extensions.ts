@@ -11,9 +11,20 @@ import { getExtensionTools } from '../../tools/index.js';
 import { readdirSync, existsSync, readFileSync } from 'fs';
 import { resolve, join } from 'path';
 import { validateTableName } from '../../db/sql-utils.js';
+import { getUserIdFromRequest } from '../../auth/jwt.js';
 
 export async function extensionsRoutes(fastify: FastifyInstance) {
   const extensionsDir = resolve('./extensions');
+  fastify.addHook('preHandler', async (request, reply) => {
+    if (!/^\/api\/extensions\/(telegram|discord|agent-connect)(?:\/|\?|$)/.test(request.url)) return;
+    try {
+      const userId = getUserIdFromRequest(request);
+      const user = getDatabase().prepare('SELECT role, status FROM users WHERE id = ?').get(userId) as any;
+      if (!user || user.status !== 'active' || !['owner', 'admin'].includes(user.role)) throw new Error('Forbidden');
+    } catch {
+      return reply.code(403).send({ error: 'Channel administration requires an active owner or admin' });
+    }
+  });
 
   /**
    * GET /api/extensions - List all extensions (installed + available)
@@ -163,6 +174,8 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
         .prepare('SELECT config_json FROM extension_configs WHERE extension_id = ?')
         .get(id) as { config_json: string } | undefined;
       const config = configRow ? JSON.parse(configRow.config_json) : null;
+      if (config && ['telegram', 'discord'].includes(id)) delete config.bot_token;
+      if (config && id === 'agent-connect') delete config.channels;
 
       // 3. Get database tables (query SQLite schema for tables created by this extension)
       const allTables = db.prepare(`
@@ -328,6 +341,12 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
       }
 
       const config = extension.config_json ? JSON.parse(extension.config_json) : {};
+      if (id === 'agent-connect') return { success: true, config: {}, channels: Object.keys(config.channels || {}) };
+      if (['telegram', 'discord'].includes(id)) {
+        const hasToken = Boolean(config.bot_token);
+        delete config.bot_token;
+        return { success: true, config, hasToken };
+      }
 
       return {
         success: true,
@@ -393,6 +412,9 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
     try {
       const { id } = request.params;
       const { config } = request.body;
+      if (['telegram', 'discord', 'agent-connect'].includes(id)) {
+        return reply.code(409).send({ error: 'Save channel settings through /api/ext/' + id + '/config. Enable the extension and restart the backend first.' });
+      }
       const db = getDatabase();
 
       // Check if extension exists
