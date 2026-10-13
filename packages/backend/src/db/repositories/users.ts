@@ -204,6 +204,16 @@ export class UsersRepository {
   }
 
   /**
+   * Mark the e-mail address as verified (accounts created by an owner/admin).
+   */
+  markEmailVerified(id: string): void {
+    this.db.execute(
+      `UPDATE users SET email_verified = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      id
+    );
+  }
+
+  /**
    * Invalidate every JWT issued to this user (logout, F-02).
    * Tokens carry the token_version they were issued with; bumping it makes
    * getUserIdFromRequest() refuse all of them.

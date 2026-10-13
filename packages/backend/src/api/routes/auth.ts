@@ -14,6 +14,7 @@ import {
 } from '../../auth/account-lockout.js';
 import { logAuthEvent } from '../../services/audit-logger.js';
 import { isSystemAccount, isPublishedDefaultPassword } from '../../auth/default-accounts.js';
+import { authorizeActiveRole, OWNER_OR_ADMIN } from '../../auth/route-guards.js';
 
 /**
  * SECURITY: Validate password strength
@@ -79,12 +80,30 @@ export async function authRoutes(fastify: FastifyInstance) {
 
   /**
    * POST /api/auth/register
-   * Register a new user
+   * Create a user account. SECURITY (S0-Q.13): there is no open
+   * self-registration. Only an active owner/admin can create accounts (the
+   * first owner comes from the setup wizard). The new user gets no token here;
+   * they sign in with /api/auth/login. Owners may create admin/user/guest
+   * accounts, admins only user/guest; nobody creates another owner here.
+   * Team invitations still work: the invitee signs in to the account created
+   * here and accepts with /api/team/invitations/:token/accept.
    */
   fastify.post('/api/auth/register', {
     config: { rateLimit: authRateLimit }
   }, async (request, reply) => {
-    const { email, username, password, full_name } = request.body as any;
+    const creatorId = authorizeActiveRole(request, reply, OWNER_OR_ADMIN);
+    if (creatorId === null) return reply;
+    const creator = repos.users.findById(creatorId);
+
+    const { email, username, password, full_name } = (request.body ?? {}) as any;
+    const role = (request.body as any)?.role ?? 'user';
+    const allowedRoles = creator?.role === 'owner' ? ['admin', 'user', 'guest'] : ['user', 'guest'];
+    if (typeof role !== 'string' || !allowedRoles.includes(role)) {
+      return reply.code(403).send({
+        error: 'Forbidden',
+        message: `You can create these roles: ${allowedRoles.join(', ')}`
+      });
+    }
 
     // Validation
     if (!email || !username || !password) {
@@ -123,25 +142,26 @@ export async function authRoutes(fastify: FastifyInstance) {
 
     try {
       // Create user
-      const user = await repos.users.create({
+      const created = await repos.users.create({
         email,
         username,
         password,
         full_name,
-        role: 'user' // Default role
+        role: role as 'admin' | 'user' | 'guest'
       });
-
-      // SECURITY: Generate JWT token with token_version for invalidation support (H-01)
-      const token = generateToken(user.id, user.token_version || 1);
+      // The account is created by an owner/admin, who vouches for the address
+      // (there is no e-mail verification flow); login requires email_verified.
+      repos.users.markEmailVerified(created.id);
+      const user = repos.users.findById(created.id) ?? created;
 
       // SECURITY: Log successful registration (L-02)
-      logAuthEvent('auth.register', request, user.id, username, true);
+      logAuthEvent('auth.register', request, creatorId, username, true);
 
-      // Return user (without password) and token
-      return {
-        user: repos.users.getSafeUser(user),
-        token
-      };
+      // Return the new user (without password). No token: the caller is the
+      // owner/admin, not the new user.
+      return reply.code(201).send({
+        user: repos.users.getSafeUser(user)
+      });
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Auth] Registration failed');
