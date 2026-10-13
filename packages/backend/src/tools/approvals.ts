@@ -13,10 +13,10 @@
  * is the reply itself and runs without a separate approval.
  */
 
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { getDatabase } from '../db/index.js';
 import { getEncryptionService } from '../credentials/encryption.js';
-import { isSecretKey, maskSecret } from '../credentials/secret-mask.js';
+import { isSecretKey } from '../credentials/secret-mask.js';
 import type { Tool, ToolResult, ToolExecutionContext } from './types.js';
 import { CHANNEL_SEND_TOOLS, createChannelToolPolicy, type ChannelToolPolicy } from './channel-policy.js';
 
@@ -82,34 +82,82 @@ export function consumeApprovalTicket(ticket: unknown, toolName: string): boolea
 
 const PREVIEW_MAX = 300;
 
-function isSecretParam(key: string): boolean {
-  return isSecretKey(key) || key === 'value';
+/**
+ * Top-level parameters that hold a real secret for one specific tool even
+ * though their name is generic (e.g. `value`). Elsewhere `value` is shown.
+ */
+export const TOOL_SECRET_PARAMS: Readonly<Record<string, readonly string[]>> = {
+  credentials_save: ['value'],
+};
+
+/** A masked leaf: never the value, only a non-reversible fingerprint. */
+export interface MaskedLeaf { masked: true; fingerprint: string }
+
+/** First 8 hex characters of SHA-256: lets the owner compare, never reveals. */
+export function secretFingerprint(value: string | number): string {
+  return createHash('sha256').update(String(value)).digest('hex').slice(0, 8);
+}
+
+function isSecretParam(toolName: string, key: string, depth: number): boolean {
+  if (isSecretKey(key)) return true;
+  return depth === 0 && (TOOL_SECRET_PARAMS[toolName] ?? []).includes(key);
+}
+
+const MAX_MASK_DEPTH = 20;
+
+/**
+ * Exact parameters for the owner's view. Only string/number leaves at or
+ * below a real secret key are replaced by `{ masked: true, fingerprint }`;
+ * objects/arrays are always walked so every other field stays visible.
+ * Each masked leaf's path is pushed to `maskedFields`.
+ */
+export function maskApprovalParams(
+  toolName: string,
+  value: unknown,
+  maskedFields: string[] = [],
+  path = '',
+  secret = false,
+  depth = 0,
+): unknown {
+  if (value === null || value === undefined || typeof value === 'boolean') return value;
+  if (typeof value === 'string' || typeof value === 'number') {
+    if (!secret || value === '') return value;
+    maskedFields.push(path || '$');
+    return { masked: true, fingerprint: secretFingerprint(value) } satisfies MaskedLeaf;
+  }
+  if (typeof value !== 'object') return value;
+  if (depth > MAX_MASK_DEPTH) {
+    // Too deep to inspect: hide it rather than risk showing a secret.
+    maskedFields.push(path || '$');
+    return { masked: true, fingerprint: secretFingerprint(JSON.stringify(value)) } satisfies MaskedLeaf;
+  }
+  if (Array.isArray(value)) {
+    return value.map((v, i) => maskApprovalParams(toolName, v, maskedFields, `${path}[${i}]`, secret, depth + 1));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    const childPath = path ? `${path}.${k}` : k;
+    out[k] = maskApprovalParams(toolName, v, maskedFields, childPath, secret || isSecretParam(toolName, k, depth), depth + 1);
+  }
+  return out;
 }
 
 /** Short list preview. `truncated` = lossy: the owner must open the full view. */
-function previewParams(params: Record<string, any>): { preview: string; truncated: boolean } {
+function previewParams(toolName: string, params: Record<string, any>): { preview: string; truncated: boolean } {
   const out: Record<string, unknown> = {};
   let truncated = false;
   for (const [key, value] of Object.entries(params || {})) {
-    if (isSecretParam(key)) { out[key] = maskSecret(value); continue; }
+    const secret = isSecretParam(toolName, key, 0);
     if (typeof value === 'string') {
-      if (value.length > PREVIEW_MAX) { truncated = true; out[key] = `${value.slice(0, PREVIEW_MAX)}…`; }
+      if (secret) out[key] = maskApprovalParams(toolName, value, [], key, true);
+      else if (value.length > PREVIEW_MAX) { truncated = true; out[key] = `${value.slice(0, PREVIEW_MAX)}…`; }
       else out[key] = value;
-    } else if (typeof value === 'number' || typeof value === 'boolean' || value === null) out[key] = value;
+    } else if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
+      out[key] = secret ? maskApprovalParams(toolName, value, [], key, true) : value;
+    }
     else { truncated = true; out[key] = '[object]'; }
   }
   return { preview: JSON.stringify(out), truncated };
-}
-
-/** Exact parameters for the owner's full view; only real secret fields masked (recursively). */
-function maskSecretsDeep(value: unknown, depth = 0): unknown {
-  if (depth > 20 || value === null || typeof value !== 'object') return value;
-  if (Array.isArray(value)) return value.map((v) => maskSecretsDeep(v, depth + 1));
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    out[k] = isSecretParam(k) && v !== null && v !== undefined && v !== '' ? maskSecret(v) : maskSecretsDeep(v, depth + 1);
-  }
-  return out;
 }
 
 /** Deterministic JSON (sorted keys) so the hash does not depend on key order. */
@@ -206,7 +254,7 @@ export async function requestApproval(
   const id = randomUUID();
   const salt = randomBytes(16).toString('hex');
   const hash = paramsHash(salt, params ?? {});
-  const { preview, truncated } = previewParams(params);
+  const { preview, truncated } = previewParams(tool.name, params);
   const policy = context.toolPolicy;
   const origin = policy
     ? JSON.stringify({ channel: policy.channel, conversationId: policy.conversationId, allowedDestinations: policy.allowedDestinations })
@@ -251,8 +299,10 @@ export function getApproval(id: string): ApprovalRecord | null {
 }
 
 export interface ApprovalDetail extends ApprovalRecord {
-  /** Exact parameters that will run; only real secret fields are masked. */
+  /** Exact parameters that will run; only real secret string/number leaves are masked. */
   params: unknown;
+  /** Paths (e.g. `apiKey`, `auth.token`, `keys[0]`) of every masked leaf in `params`. */
+  maskedFields: string[];
   /** Send this back with the approve call; binds the approval to these parameters. */
   paramsHash: string | null;
 }
@@ -263,12 +313,15 @@ export async function getApprovalDetail(id: string): Promise<ApprovalDetail | nu
   const row = getDatabase().prepare('SELECT * FROM tool_approvals WHERE id = ?').get(id) as any;
   if (!row) return null;
   let params: unknown = null;
+  let maskedFields: string[] = [];
   try {
-    params = maskSecretsDeep(JSON.parse(await getEncryptionService().decrypt(row.params_encrypted, row.params_iv, row.params_tag)));
+    const raw = JSON.parse(await getEncryptionService().decrypt(row.params_encrypted, row.params_iv, row.params_tag));
+    params = maskApprovalParams(row.tool_name, raw, maskedFields);
   } catch {
     params = null;
+    maskedFields = [];
   }
-  return { ...toRecord(row), params, paramsHash: row.params_hash ?? null };
+  return { ...toRecord(row), params, maskedFields, paramsHash: row.params_hash ?? null };
 }
 
 export class ApprovalStateError extends Error {

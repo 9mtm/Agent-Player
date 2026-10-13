@@ -242,7 +242,9 @@ test('full view shows the exact parameters; lossy list previews are marked trunc
   const full = await detail(id);
   assert.equal(full.params.text, long, 'exact long text');
   assert.deepEqual(full.params.extra, { nested: ['a', { deep: 1 }] }, 'exact nested object');
-  assert.match(full.params.apiKey, /^••••/, 'real secret field masked');
+  assert.deepEqual(Object.keys(full.params.apiKey).sort(), ['fingerprint', 'masked'], 'real secret field masked');
+  assert.equal(full.params.apiKey.masked, true);
+  assert.deepEqual(full.maskedFields, ['apiKey']);
   assert.match(full.paramsHash, /^[0-9a-f]{64}$/);
   const short = await requestSend('chat-short', 'hi');
   assert.equal(approvals.listApprovals({ status: 'pending' }).find((a) => a.id === short).truncated, false);
@@ -267,4 +269,45 @@ test('approve must carry the hash of the shown parameters; changed parameters ne
   assert.equal(res.statusCode, 200);
   assert.equal(res.json().approval.status, 'failed');
   assert.equal(sent.length, 0);
+});
+
+test('CL-01: only secret string leaves are masked; objects are walked; generic `value` is shown', async () => {
+  const secret = 'tok-' + randomBytes(16).toString('hex');
+  const res = await quietly(() => registry().execute('demo_send', {
+    to: 'chat-cl01', text: 'hi', value: 'visible-value',
+    settings: { value: 42, enabled: true, label: 'shown', nested: [{ value: 'also-visible' }] },
+    auth: { token: secret, type: 'bearer' },
+    credentials: { username: 'bob', password: secret, keys: [secret, 7], enabled: false },
+  }));
+  const full = await detail(res.details.approvalId);
+  assert.equal(full.params.value, 'visible-value', 'generic `value` is not a secret');
+  assert.deepEqual(full.params.settings, { value: 42, enabled: true, label: 'shown', nested: [{ value: 'also-visible' }] });
+  assert.equal(full.params.auth.type, 'bearer', 'sibling of a secret stays visible');
+  assert.equal(full.params.auth.token.masked, true);
+  assert.match(full.params.auth.token.fingerprint, /^[0-9a-f]{8}$/);
+  // Object under a secret-looking key: structure visible, string/number leaves masked, booleans shown.
+  assert.equal(full.params.credentials.enabled, false);
+  assert.equal(full.params.credentials.username.masked, true);
+  assert.equal(full.params.credentials.keys.length, 2);
+  assert.equal(full.params.credentials.keys[1].masked, true);
+  assert.deepEqual(full.maskedFields.sort(), ['auth.token', 'credentials.keys[0]', 'credentials.keys[1]', 'credentials.password', 'credentials.username'].sort());
+  assert.ok(!JSON.stringify(full).includes(secret), 'secret never in the response');
+  const listed = approvals.listApprovals({ status: 'pending' }).find((a) => a.id === res.details.approvalId);
+  assert.equal(listed.paramsPreview.value, 'visible-value');
+  assert.ok(!JSON.stringify(listed).includes(secret));
+});
+
+test('CL-01: credentials_save `value` is shown only as a SHA-256 fingerprint', async () => {
+  const { createHash } = await import('node:crypto');
+  const secret = 'sk-test-' + randomBytes(16).toString('hex');
+  const masked = [];
+  const out = approvals.maskApprovalParams('credentials_save', { service: 'custom', name: 'n', value: secret, meta: { value: 'x' } }, masked);
+  assert.deepEqual(out.value, { masked: true, fingerprint: createHash('sha256').update(secret).digest('hex').slice(0, 8) });
+  assert.equal(out.service, 'custom');
+  assert.deepEqual(out.meta, { value: 'x' }, 'only the top-level `value` of that tool');
+  assert.deepEqual(masked, ['value']);
+  // Other tools: `value` visible.
+  assert.equal(approvals.maskApprovalParams('demo_send', { value: secret }).value, secret);
+  // Hash binding still covers the real parameters (approve flow unchanged).
+  assert.deepEqual(approvals.maskApprovalParams('x', { password: '' }, []), { password: '' }, 'empty stays empty');
 });
