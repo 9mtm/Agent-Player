@@ -35,6 +35,19 @@ function getJwtSecret(): string {
  * @returns User ID if valid token, throws error if invalid/missing
  */
 export function getUserIdFromRequest(request: FastifyRequest): string {
+    return verifyRequestToken(request, { requireActive: true });
+}
+
+/**
+ * Verify the bearer token (signature, expiry, token_version). With
+ * `requireActive` (the default for getUserIdFromRequest) the user must also
+ * have status 'active'. route-guards.ts passes false because it checks status
+ * and role itself (and answers 403 for an inactive account).
+ */
+export function verifyRequestToken(
+    request: FastifyRequest,
+    opts: { requireActive?: boolean } = {}
+): string {
     const authHeader = request.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -54,6 +67,12 @@ export function getUserIdFromRequest(request: FastifyRequest): string {
 
         if (!user) {
             throw new Error('Unauthorized: User not found');
+        }
+
+        // SECURITY (S0-A.3): a disabled/suspended account loses access at once,
+        // not when its token expires.
+        if (opts.requireActive !== false && user.status !== undefined && user.status !== null && user.status !== 'active') {
+            throw new Error('Unauthorized: Account is not active');
         }
 
         // Check token version if present in token and user

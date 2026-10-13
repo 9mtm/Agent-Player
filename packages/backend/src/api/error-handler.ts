@@ -76,6 +76,12 @@ export function handleError(
   context: string = '[API]',
   userMessage?: string
 ): void {
+  // Token errors thrown by getUserIdFromRequest() ("Unauthorized: ...") are
+  // authentication failures, not server errors (S0-A.3).
+  if (category === 'internal' && error instanceof Error && error.message.startsWith('Unauthorized:')) {
+    category = 'authentication';
+  }
+
   // Generate unique error ID for tracking
   const errorId = randomUUID();
 

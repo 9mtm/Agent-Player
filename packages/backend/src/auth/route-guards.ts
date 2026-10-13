@@ -8,7 +8,7 @@
  */
 
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { getUserIdFromRequest } from './jwt.js';
+import { verifyRequestToken } from './jwt.js';
 import { getDatabase } from '../db/index.js';
 
 export type UserRole = 'owner' | 'admin' | 'user' | 'guest';
@@ -25,7 +25,7 @@ export function authenticateActiveUser(
 ): { id: string; role: UserRole } | null {
   let userId: string;
   try {
-    userId = getUserIdFromRequest(request);
+    userId = verifyRequestToken(request, { requireActive: false });
   } catch {
     return null;
   }
@@ -47,7 +47,7 @@ export function authorizeActiveRole(
 ): string | null {
   let userId: string;
   try {
-    userId = getUserIdFromRequest(request);
+    userId = verifyRequestToken(request, { requireActive: false });
   } catch {
     reply.code(401).send({ error: 'Authentication required' });
     return null;
