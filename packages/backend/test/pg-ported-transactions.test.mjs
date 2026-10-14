@@ -405,3 +405,29 @@ test('B2.2c part 2: camelCase column aliases are quoted in the ported routes (Po
     assert.doesNotMatch(code, /\b[a-z_]+\.?[a-z_]* as [a-z]+[A-Z]\w*\b(?!['"])/, rel);
   }
 });
+
+test('B2.2c part 2: on PostgreSQL the SQLite admin surfaces answer 501 not_supported_on_postgres; stats take PostgreSQL', async () => {
+  const saved = { db: process.env.AGENT_PLAYER_DB, url: process.env.AGENT_PLAYER_PG_URL };
+  const { default: Fastify } = await import('fastify');
+  const { databaseRoutes, SQLITE_ONLY_DATABASE_ROUTES } = await import('../src/api/routes/database.ts');
+  const { closePgPool } = await import('../src/db/pg/pool.ts');
+  const app = Fastify();
+  await app.register(databaseRoutes);
+  await app.ready();
+  try {
+    process.env.AGENT_PLAYER_DB = 'postgres';
+    delete process.env.AGENT_PLAYER_PG_URL;
+    for (const url of ['/api/database/backup', '/api/database/vacuum', '/api/database/restore']) {
+      const res = await app.inject({ method: 'POST', url, payload: url.endsWith('restore') ? { filename: 'x.db' } : {} });
+      assert.equal(res.statusCode, 501, url);
+      assert.equal(res.json().code, 'not_supported_on_postgres');
+      assert.match(res.json().error, /pg_dump/);
+    }
+    assert.ok(SQLITE_ONLY_DATABASE_ROUTES.has('/api/database/query'), 'raw SQLite SQL is refused too');
+  } finally {
+    if (saved.db === undefined) delete process.env.AGENT_PLAYER_DB; else process.env.AGENT_PLAYER_DB = saved.db;
+    if (saved.url !== undefined) process.env.AGENT_PLAYER_PG_URL = saved.url;
+    await app.close();
+    await closePgPool();
+  }
+});

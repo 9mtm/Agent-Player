@@ -1,11 +1,20 @@
 /**
  * Database Statistics API
  * Provides real-time statistics about the database
+ *
+ * B2.2c: the stats and the health check run on the process driver (the
+ * table check is tableExists from sql-steps; on PostgreSQL the size is
+ * pg_database_size). Vacuum and the file backup are SQLite only: refused on
+ * PostgreSQL with 501 { code: 'not_supported_on_postgres' } (pg_dump outside
+ * the app).
  */
 
 import { dataPath, mainDatabasePath } from '../../config/data-root.js';
 import { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
+import { dbDriver } from '../../db/pg/config.js';
+import { num, q, sql, tableExists } from '../../repositories/sql-steps.js';
+import { NOT_SUPPORTED_ON_POSTGRES } from './database.js';
 import { existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { handleError } from '../error-handler.js';
@@ -31,14 +40,16 @@ export async function databaseStatsRoutes(fastify: FastifyInstance) {
     // Get database statistics
     fastify.get('/api/database/stats', async (request, reply) => {
         try {
-            const db = getDatabase();
+            const onPg = dbDriver() === 'postgres';
 
             // Get database file size
             const dbPath = DATABASE_PATH;
             let totalSize = 0;
             let lastModified = new Date().toISOString();
 
-            if (existsSync(dbPath)) {
+            if (onPg) {
+                totalSize = num<number>((await q.one('SELECT pg_database_size(current_database()) AS size'))?.size) ?? 0;
+            } else if (existsSync(dbPath)) {
                 const stats = statSync(dbPath);
                 totalSize = stats.size;
                 lastModified = stats.mtime.toISOString();
@@ -68,16 +79,14 @@ export async function databaseStatsRoutes(fastify: FastifyInstance) {
             for (const tableDef of tableDefinitions) {
                 try {
                     // Check if table exists
-                    const tableCheck = db.getDb().prepare(
-                        `SELECT name FROM sqlite_master WHERE type='table' AND name=?`
-                    ).get(tableDef.name);
+                    const tableCheck = await sql().read(tableExists(tableDef.name));
 
                     if (!tableCheck) continue;
 
                     // Get record count
-                    const countResult = db.getDb().prepare(
+                    const countResult = await q.one(
                         `SELECT COUNT(*) as count FROM ${tableDef.name}`
-                    ).get() as { count: number };
+                    ) as { count: number };
 
                     const count = countResult?.count || 0;
                     totalRecords += count;
@@ -119,10 +128,8 @@ export async function databaseStatsRoutes(fastify: FastifyInstance) {
     // Get database health check
     fastify.get('/api/database/health', async (request, reply) => {
         try {
-            const db = getDatabase();
-
-            // Run a simple query to check database connection
-            const result = db.getDb().prepare('SELECT 1 as test').get();
+            // Run a simple query to check database connection (process driver)
+            const result = await q.one('SELECT 1 as test');
 
             return reply.send({
                 status: 'healthy',
@@ -138,6 +145,7 @@ export async function databaseStatsRoutes(fastify: FastifyInstance) {
     // Vacuum database (optimize)
     fastify.post('/api/database/vacuum', async (request, reply) => {
         try {
+            if (dbDriver() === 'postgres') return reply.status(501).send(NOT_SUPPORTED_ON_POSTGRES);
             const db = getDatabase();
             db.getDb().exec('VACUUM');
 
@@ -154,6 +162,7 @@ export async function databaseStatsRoutes(fastify: FastifyInstance) {
     // Create backup
     fastify.post('/api/database/backup', async (request, reply) => {
         try {
+            if (dbDriver() === 'postgres') return reply.status(501).send(NOT_SUPPORTED_ON_POSTGRES);
             const { copyFileSync, mkdirSync } = await import('fs');
             const { join } = await import('path');
 

@@ -1,10 +1,21 @@
 /**
  * Database Management API Routes
  * Stats, backups, vacuum, optimization
+ *
+ * B2.2c, PostgreSQL (AGENT_PLAYER_DB=postgres): these are SQLite admin
+ * surfaces. The stats come from the PostgreSQL catalog (pg_database_size,
+ * pg_stat_user_tables, pg_total_relation_size); the health check runs on the
+ * process driver. Backup, vacuum and restore, and the SQLite table browser
+ * (raw SQL, PRAGMA schema, row editing, clean / clear / optimize), are refused
+ * with 501 { code: 'not_supported_on_postgres' }: a PostgreSQL database is
+ * backed up and restored with pg_dump / pg_restore outside the app. Access
+ * stays owner-only (auth gate tier 'owner' for /api/database).
  */
 
 import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
+import { dbDriver } from '../../db/pg/config.js';
+import { all, num, one, sql, type Step } from '../../repositories/sql-steps.js';
 import { existsSync, readdirSync, statSync, unlinkSync, readFileSync, mkdirSync } from 'fs';
 import { resolve, join } from 'path';
 import { dataPath, mainDatabasePath } from '../../config/data-root.js';
@@ -17,7 +28,72 @@ export function isSafeBackupName(filename: unknown): filename is string {
   return typeof filename === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,200}\.db$/.test(filename) && !filename.includes('..');
 }
 
+/** Routes that only exist for the SQLite file (refused with 501 on PostgreSQL). */
+export const SQLITE_ONLY_DATABASE_ROUTES: ReadonlySet<string> = new Set([
+  '/api/database/backup',
+  '/api/database/vacuum',
+  '/api/database/restore',
+  '/api/database/optimize',
+  '/api/database/clean',
+  '/api/database/clear',
+  '/api/database/tables',
+  '/api/database/table/:name/schema',
+  '/api/database/table/:name/data',
+  '/api/database/query',
+  '/api/database/export',
+  '/api/database/table/:name/row',
+  '/api/database/table/:name/rows/delete',
+  '/api/database/table/:name/rows/export',
+]);
+
+export const NOT_SUPPORTED_ON_POSTGRES = {
+  error: 'Not supported on PostgreSQL: back up and restore the database with pg_dump / pg_restore outside the app',
+  code: 'not_supported_on_postgres',
+} as const;
+
+interface TableStat { name: string; description: string; records: number; size: number }
+
+function describeTable(name: string): string {
+  return name
+    .replace(/_/g, ' ')
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+/** The stats on PostgreSQL: database size and the user tables from the catalog. */
+function* pgStatsStep(): Step<{ totalSize: number; totalRecords: number; tables: TableStat[]; lastModified: string }> {
+  const size = yield* one<{ size: unknown }>('SELECT pg_database_size(current_database()) AS size');
+  const rows = yield* all<{ name: string; size: unknown }>(`
+    SELECT relname AS name, pg_total_relation_size(relid) AS size
+    FROM pg_stat_user_tables
+    WHERE schemaname = current_schema()
+    ORDER BY relname`);
+  const tables: TableStat[] = [];
+  let totalRecords = 0;
+  for (const r of rows) {
+    // SECURITY: Validate table name before using in SQL
+    const safeName = validateTableName(r.name);
+    const count = yield* one<{ count: number }>(`SELECT COUNT(*) as count FROM ${safeName}`);
+    const records = count?.count ?? 0;
+    totalRecords += records;
+    tables.push({ name: r.name, description: describeTable(r.name), records, size: num<number>(r.size) ?? 0 });
+  }
+  tables.sort((a, b) => b.records - a.records);
+  return { totalSize: num<number>(size?.size) ?? 0, totalRecords, tables, lastModified: new Date().toISOString() };
+}
+
 export async function databaseRoutes(fastify: FastifyInstance) {
+  // B2.2c: on PostgreSQL the SQLite-only surfaces answer 501 (after the
+  // owner-only auth gate, which runs on onRequest).
+  fastify.addHook('preHandler', async (request, reply) => {
+    if (dbDriver() !== 'postgres') return;
+    const route = request.routeOptions?.url;
+    if (route && SQLITE_ONLY_DATABASE_ROUTES.has(route)) {
+      return reply.code(501).send(NOT_SUPPORTED_ON_POSTGRES);
+    }
+  });
+
   // BUG-01: the same file the main database opens (DATABASE_PATH, else the
   // data root's agent-player.db), and backups next to the other data.
   const dbPath = resolve(mainDatabasePath());
@@ -35,6 +111,8 @@ export async function databaseRoutes(fastify: FastifyInstance) {
     try {
       // SECURITY: Require authentication
       getUserIdFromRequest(request);
+
+      if (dbDriver() === 'postgres') return await sql().read(pgStatsStep());
 
       const db = getDatabase();
 
