@@ -49,9 +49,19 @@ export function getRepositories(): Repositories {
 /**
  * Initialize database and run migrations
  */
+let initializing: Promise<void> | null = null;
+
 export async function initializeDatabase(): Promise<void> {
-  const db = getDatabase();
-  await db.initialize();
+  // Once per process: buildServer() runs it before the route plugins (their
+  // runtime DDL must not run ahead of the migrations on a fresh database),
+  // and server startup calls it again.
+  if (!initializing) {
+    initializing = getDatabase().initialize().catch((err) => {
+      initializing = null;
+      throw err;
+    });
+  }
+  return initializing;
 }
 
 // Backward compatibility: Legacy API for sessions and messages

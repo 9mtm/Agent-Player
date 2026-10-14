@@ -8,6 +8,7 @@
  */
 
 import Fastify from 'fastify';
+import { dbDriver } from '../db/pg/config.js';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
@@ -124,6 +125,15 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   // every encapsulated route context inherits it. Unknown / 5xx errors get
   // the fixed internal-error body; 4xx errors keep Fastify's default reply.
   registerGlobalErrorHandler(fastify);
+
+  // RUN-ISO: on a fresh SQLite database the schema and migrations must run
+  // before the route plugins below, because the memory and credential routes
+  // create their tables at registration; otherwise a later migration fails
+  // with "duplicate column" and the server cannot start on an empty data dir.
+  if (dbDriver() === 'sqlite') {
+    const { initializeDatabase } = await import('../db/index.js');
+    await initializeDatabase();
+  }
 
   // Register CORS — SECURITY: Restrict to allowed origins only
   const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:41521').split(',').map(o => o.trim());
