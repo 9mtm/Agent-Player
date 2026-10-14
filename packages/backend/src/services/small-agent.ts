@@ -56,6 +56,7 @@ import {
 } from '../memory/drawers.js';
 import { redactSecrets } from './secret-redact.js';
 import { denyReason, isInside } from '../tools/core/file-sandbox.js';
+import { cliConfigDir } from './instance-identity.js';
 import { createRun, getRun, getSteps, elapsedMs, type TaskRunRow, type TaskRunStatus } from './task-runs.js';
 
 export const SMALL_AGENT_ID = 'small-local-agent';
@@ -235,14 +236,28 @@ function realOrResolved(p: string): string {
   try { return fs.realpathSync(p); } catch { return path.resolve(p); }
 }
 
-/** Places a small-agent read directory may never overlap (backend tree, data dirs). */
-function protectedTrees(): string[] {
-  const list = [process.cwd(), path.join(process.cwd(), '.data')];
+/** Credential / config folders under the home directory that a read_dir may never overlap. */
+const HOME_CREDENTIAL_DIRS = ['.config', '.aws', '.kube', '.docker', '.gnupg', '.ssh', 'Library', '.codex', '.npmrc', '.netrc', '.git-credentials', '.azure', '.gcloud'];
+
+/**
+ * Places a small-agent read directory may never overlap, even inside an
+ * allowed root: the backend tree, data dirs, the CLI config dir (token and
+ * instance secret), credential folders in the home directory (incl. every
+ * `~/.claude*`), and /etc.
+ */
+export function smallAgentProtectedTrees(): string[] {
+  const home = os.homedir();
+  const list = [process.cwd(), path.join(process.cwd(), '.data'), cliConfigDir(), '/etc', '/private/etc'];
   if (process.env.DATABASE_PATH) list.push(path.dirname(process.env.DATABASE_PATH));
-  return [...new Set(list.map(realOrResolved))];
+  for (const d of HOME_CREDENTIAL_DIRS) list.push(path.join(home, d));
+  try {
+    for (const name of fs.readdirSync(home)) if (name.toLowerCase().startsWith('.claude')) list.push(path.join(home, name));
+  } catch { /* unreadable home: the fixed list still applies */ }
+  list.push(path.join(home, '.claude'), path.join(home, '.claude.json'));
+  return [...new Set(list.flatMap((p) => [path.resolve(p), realOrResolved(p)]))];
 }
 
-/** Owner-configured allow-list (SMALL_AGENT_READ_ROOTS, path-delimiter separated); empty -> any safe directory. */
+/** Owner-configured allow-list (SMALL_AGENT_READ_ROOTS, path-delimiter separated). Empty -> read_dir is refused (deny by default). */
 function configuredReadRoots(): string[] {
   return (process.env.SMALL_AGENT_READ_ROOTS ?? '').split(path.delimiter).map((x) => x.trim()).filter(Boolean)
     .filter((x) => path.isAbsolute(x)).map(realOrResolved);
@@ -252,8 +267,9 @@ function configuredReadRoots(): string[] {
  * Validate a directory the owner lets a small-agent run read. Returns its
  * real path. Refused: relative paths, missing/non-directories, the
  * filesystem root, the home directory itself, anything that contains or is
- * inside the backend working folder or a data directory, deny-listed places
- * (.git, .ssh, ...), and anything outside SMALL_AGENT_READ_ROOTS when set.
+ * inside a protected tree (smallAgentProtectedTrees), deny-listed places
+ * (.git, .ssh, ...), and anything outside SMALL_AGENT_READ_ROOTS. Deny by
+ * default: with no SMALL_AGENT_READ_ROOTS every read_dir is refused.
  */
 export function validateSmallAgentReadDir(input: unknown): string {
   if (typeof input !== 'string' || !input.trim()) throw new SmallAgentInputError('read_dir must be an absolute directory path');
@@ -269,14 +285,17 @@ export function validateSmallAgentReadDir(input: unknown): string {
   }
   if (real === path.parse(real).root) throw new SmallAgentInputError('read_dir cannot be the filesystem root');
   if (real === realOrResolved(os.homedir())) throw new SmallAgentInputError('read_dir cannot be the whole home directory; name a project folder');
-  for (const t of protectedTrees()) {
-    if (isInside(t, real) || isInside(real, t)) throw new SmallAgentInputError('read_dir cannot be or contain the Agent Player backend or data folder');
-  }
-  if (denyReason('', real)) throw new SmallAgentInputError('read_dir points to a protected location');
   const allowed = configuredReadRoots();
-  if (allowed.length && !allowed.some((r) => isInside(r, real))) {
+  if (!allowed.length) {
+    throw new SmallAgentInputError('read_dir is off: the owner has not set SMALL_AGENT_READ_ROOTS (allowed folders) in the backend environment');
+  }
+  if (!allowed.some((r) => isInside(r, real))) {
     throw new SmallAgentInputError('read_dir is outside the directories allowed by SMALL_AGENT_READ_ROOTS');
   }
+  for (const t of smallAgentProtectedTrees()) {
+    if (isInside(t, real) || isInside(real, t)) throw new SmallAgentInputError('read_dir cannot be or contain the Agent Player backend, data, config or credential folders');
+  }
+  if (denyReason('', real)) throw new SmallAgentInputError('read_dir points to a protected location');
   return real;
 }
 

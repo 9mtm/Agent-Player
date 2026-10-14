@@ -25,7 +25,12 @@ process.env.JWT_SECRET = randomBytes(64).toString('hex'); // throwaway, test onl
 process.env.ENCRYPTION_KEY = randomBytes(32).toString('hex'); // throwaway, test only
 process.env.NODE_ENV = 'test';
 process.env.OLLAMA_URL = 'http://127.0.0.1:11434';
+const cfgDir = realpathSync(mkdtempSync(join(tmpdir(), 'ap-small-cfg-')));
+process.env.AGENT_PLAYER_CONFIG_DIR = cfgDir; // CLI config dir (token + instance secret)
 for (const k of ['AGENT_EXEC_TOOLS', 'SMALL_AGENT_MAX_STEPS', 'SMALL_AGENT_MAX_DURATION_MS', 'SMALL_AGENT_MAX_CONCURRENT', 'SMALL_AGENT_MODEL', 'SMALL_AGENT_READ_ROOTS', 'DEFAULT_MODEL', 'LOCAL_MODEL_NAME', 'OLLAMA_THINK']) delete process.env[k];
+// The owner's allow-list for read_dir (deny by default without it).
+const READ_ROOTS = [realpathSync(tmpdir()), '/etc'].join(':');
+process.env.SMALL_AGENT_READ_ROOTS = READ_ROOTS;
 
 // Files the run may or may not read.
 writeFileSync(join(dir, 'backend-secret.txt'), 'backend file');
@@ -95,6 +100,7 @@ test.after(async () => {
   closeDatabase();
   rmSync(dir, { recursive: true, force: true });
   rmSync(outsideDir, { recursive: true, force: true });
+  rmSync(cfgDir, { recursive: true, force: true });
 });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -125,7 +131,39 @@ test('SMALL_AGENT_READ_ROOTS limits read_dir when the owner sets it', async () =
     assert.equal(res.statusCode, 400);
     assert.match(res.json().error, /SMALL_AGENT_READ_ROOTS/);
   } finally {
-    delete process.env.SMALL_AGENT_READ_ROOTS;
+    process.env.SMALL_AGENT_READ_ROOTS = READ_ROOTS;
+  }
+});
+
+test('read_dir is deny-by-default: refused while SMALL_AGENT_READ_ROOTS is not set', async () => {
+  delete process.env.SMALL_AGENT_READ_ROOTS;
+  try {
+    const res = await spawn({ task: 'SCENARIO:plain', tools: ['read'], read_dir: outsideDir });
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json().error, /SMALL_AGENT_READ_ROOTS/);
+  } finally {
+    process.env.SMALL_AGENT_READ_ROOTS = READ_ROOTS;
+  }
+});
+
+test('protected trees are refused even inside an allowed root (CLI config dir, credential folders, /etc)', async () => {
+  // The CLI config dir (auth.json + instance.json) lives in the allowed tmp root here.
+  for (const read_dir of [cfgDir, '/etc']) {
+    const res = await spawn({ task: 'SCENARIO:plain', tools: ['read'], read_dir });
+    assert.equal(res.statusCode, 400, `${read_dir}: ${res.body}`);
+  }
+  const trees = small.smallAgentProtectedTrees();
+  for (const d of ['.config', '.aws', '.kube', '.docker', '.gnupg', '.ssh', 'Library', '.codex', '.claude']) {
+    assert.ok(trees.includes(join(dir, d)), `~/${d} protected`);
+  }
+  assert.ok(trees.includes(cfgDir));
+  // auth.json / instance.json are deny-listed for the file tools as well.
+  writeFileSync(join(outsideDir, 'auth.json'), '{"token":"not-real"}');
+  writeFileSync(join(outsideDir, 'instance.json'), '{"secret":"not-real"}');
+  for (const p of ['auth.json', 'instance.json']) {
+    const c = await finalCard((await spawn({ task: `SCENARIO:readfile PATH:${p}`, tools: ['read'], read_dir: outsideDir })).json().run_id);
+    assert.doesNotMatch(c.outputs[0]?.text ?? '', /not-real/, p);
+    assert.match(c.outputs[0]?.text ?? '', /denied/i, p);
   }
 });
 

@@ -107,10 +107,14 @@ the memory drawers it needs.
   missing, start the backend once. Both files must not be readable by others.
 - **File reading is sandboxed.** `read` only works inside the small agent's own
   workspace (`.data/workspaces/small-local-agent/`) or inside one absolute
-  directory you pass as `read_dir` (never the Agent Player backend or data
-  folder, the home folder itself or `/`; `.env*`, keys, databases, `.git` and
-  credential files stay blocked). The owner can restrict `read_dir` further
-  with `SMALL_AGENT_READ_ROOTS` (path-list) in the backend environment.
+  directory you pass as `read_dir`. `read_dir` is off by default: the owner
+  must list the allowed folders in `SMALL_AGENT_READ_ROOTS` (path-list, e.g.
+  `/Users/me/Projects`) in the backend environment. Even inside an allowed
+  folder, `read_dir` may never be or contain the Agent Player backend, data
+  folder, CLI config folder (token + instance secret), `~/.config`, `~/.aws`,
+  `~/.kube`, `~/.docker`, `~/.gnupg`, `~/.ssh`, `~/Library`, `~/.claude*`,
+  `~/.codex`, `/etc`, the home folder itself or `/`; `.env*`, keys, databases,
+  `.git`, `auth.json`, `instance.json` and credential files stay blocked.
 - **Secrets are redacted** from result cards (API keys, tokens, passwords,
   private keys); a card with redactions is marked `needs_review`.
 - **Fixed small-agent settings.** The backend always runs the small agent with

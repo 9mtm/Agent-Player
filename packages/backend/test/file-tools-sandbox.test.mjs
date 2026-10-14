@@ -115,7 +115,8 @@ test('NUL and control characters in the path are refused', async () => {
 
 test('the always-deny list holds inside the workspace and with a wider read root', async () => {
   const denied = ['.env', '.env.local', 'sub/.env.production', 'agent.db', 'agent.db-wal', 'x.sqlite', '.git/config',
-    'id_rsa', 'id_ed25519.pub', '.ssh/config', 'credentials.json', 'conf/credentials', 'server.pem', 'tls.key'];
+    'id_rsa', 'id_ed25519.pub', '.ssh/config', 'credentials.json', 'conf/credentials', 'server.pem', 'tls.key',
+    'auth.json', 'cfg/instance.json', '.netrc'];
   for (const p of denied) {
     const w = await write('d1', p, 'x');
     assert.ok(w.error, `write ${p} must be denied`);

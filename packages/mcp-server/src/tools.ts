@@ -43,7 +43,7 @@ export const TOOL_DEFINITIONS = [
         max_steps: { type: 'integer', minimum: 1, maximum: 100, description: 'Step budget (model + tool calls). Default and upper limit 15.' },
         read_dir: {
           type: 'string', maxLength: 1024,
-          description: 'Absolute directory the "read" tool may read (only with tools including "read"; the owner\'s project folder, never the Agent Player backend or data folder; .env, keys and databases stay blocked). Default: the small agent\'s own workspace.',
+          description: 'Absolute directory the "read" tool may read (only with tools including "read"; must be inside a folder the owner allowed with SMALL_AGENT_READ_ROOTS on the backend, otherwise refused; never the Agent Player backend, data, config or credential folders; .env, keys, tokens and databases stay blocked). Default: the small agent\'s own workspace.',
         },
       },
       required: ['task'],

@@ -17,7 +17,7 @@
  *     `..` and must not be absolute (separator-aware, so `/work-evil` is not
  *     inside `/work`);
  *  3. the always-deny list (`.env*`, `.data/encryption/**`, `*.db*`,
- *     `.git/**`, SSH keys, `credentials*`), on the path relative to the root
+ *     `.git/**`, SSH keys, `credentials*`, `auth.json`, `instance.json`), on the path relative to the root
  *     and again on the resolved real path, so a wider root never exposes them;
  *  4. realpath containment: the real path of the file (read) or of its
  *     parent directory (write) must still be inside the real root, so a
@@ -87,6 +87,8 @@ export function isInside(root: string, target: string): boolean {
 const SSH_KEY_NAME = /^id_(rsa|dsa|ecdsa|ed25519)(_sk)?(\.pub)?$/i;
 const DB_NAME = /\.(db|sqlite3?)($|[-.])/i;
 const KEY_FILE = /\.(pem|key|p12|pfx|ppk)$/i;
+/** CLI token (auth.json), backend instance secret (instance.json) and similar. */
+const SECRET_FILE_NAMES: ReadonlySet<string> = new Set(['auth.json', 'instance.json', '.netrc', '.npmrc', '.git-credentials', '.pgpass']);
 
 /** Reason a path (as components) is on the always-deny list, or null. */
 function denyReasonForComponents(parts: string[]): string | null {
@@ -103,6 +105,7 @@ function denyReasonForComponents(parts: string[]): string | null {
   if (DB_NAME.test(base)) return 'database files are off limits';
   if (SSH_KEY_NAME.test(base) || base.toLowerCase() === 'authorized_keys') return 'SSH keys are off limits';
   if (KEY_FILE.test(base)) return 'key files are off limits';
+  if (SECRET_FILE_NAMES.has(base.toLowerCase())) return 'token and instance-secret files are off limits';
   return null;
 }
 
@@ -121,7 +124,7 @@ export function denyReason(relFromRoot: string, absolute?: string): string | nul
       if (lc === '.data' && parts[i + 1]?.toLowerCase() === 'encryption') return 'encryption keys are off limits';
     }
     const base = parts[parts.length - 1] ?? '';
-    if (base.toLowerCase().startsWith('.env') || DB_NAME.test(base) || SSH_KEY_NAME.test(base) || KEY_FILE.test(base)) return 'this file is off limits';
+    if (base.toLowerCase().startsWith('.env') || DB_NAME.test(base) || SSH_KEY_NAME.test(base) || KEY_FILE.test(base) || SECRET_FILE_NAMES.has(base.toLowerCase())) return 'this file is off limits';
   }
   return null;
 }
