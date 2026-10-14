@@ -61,8 +61,8 @@ export interface MemoryProposal {
   baseRevision: number;
   changes: MemoryChange[];
   status: 'pending' | 'approved' | 'rejected' | 'stale' | 'cancelled';
-  /** upload/file: edited export (CORE-04); learning/agent: important learned item or agent change (CORE-05). */
-  source: 'upload' | 'file' | 'learning' | 'agent';
+  /** upload/file: edited export (CORE-04); learning/agent: important learned item or agent change (CORE-05); import: imported text (CLI-02). */
+  source: 'upload' | 'file' | 'learning' | 'agent' | 'import';
   note: string | null;
   createdBy: string;
   createdAt: string;
@@ -71,6 +71,8 @@ export interface MemoryProposal {
   appliedRevision: number | null;
   /** Why it needs review (learning/agent proposals), e.g. ["people", "money"]. */
   reasons: string[];
+  /** Import batch that created it (CLI-02), else null. */
+  importBatchId: string | null;
 }
 
 /** Proposals reviewed against the whole drawer (hash) vs. against each changed memory. */
@@ -378,6 +380,7 @@ function rowToProposal(row: any): MemoryProposal {
     createdBy: row.created_by, createdAt: isoUtc(row.created_at) as string,
     decidedBy: row.decided_by ?? null, decidedAt: isoUtc(row.decided_at), appliedRevision: row.applied_revision ?? null,
     reasons: parseReasons(row.reasons),
+    importBatchId: row.import_batch_id ?? null,
   };
 }
 
@@ -404,23 +407,25 @@ export function pendingProposalCount(userId: string): number {
  * be exactly as `before`, otherwise the proposal goes stale.
  */
 export function createChangeProposal(input: {
-  userId: string; agentId: string; drawer: DrawerRef; changes: MemoryChange[]; source: 'learning' | 'agent';
-  reasons: string[]; note?: string | null; createdBy: string;
+  userId: string; agentId: string; drawer: DrawerRef; changes: MemoryChange[]; source: 'learning' | 'agent' | 'import';
+  reasons: string[]; note?: string | null; createdBy: string; importBatchId?: string | null;
+  /** Import (CLI-02) checks capacity for the whole batch up front. */
+  skipPendingLimit?: boolean;
 }): MemoryProposal {
   const d = normalizeDrawer(input.drawer);
   if (!Array.isArray(input.changes) || input.changes.length === 0) throw new MemoryFileError('The proposal has no changes');
   if (input.changes.length > MAX_CHANGES) throw new MemoryFileError('Too many changes in one proposal');
-  if (pendingProposalCount(input.userId) >= MAX_PENDING_PROPOSALS) {
+  if (!input.skipPendingLimit && pendingProposalCount(input.userId) >= MAX_PENDING_PROPOSALS) {
     throw new MemoryFileError('Too many proposals are waiting for review', 409);
   }
   const current = currentMemories(input.userId, d);
   const id = uuidv4();
   getDatabase().prepare(`
-    INSERT INTO memory_file_proposals (id, user_id, agent_id, drawer_kind, drawer_key, base_hash, base_revision, changes, status, source, note, created_by, reasons)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+    INSERT INTO memory_file_proposals (id, user_id, agent_id, drawer_kind, drawer_key, base_hash, base_revision, changes, status, source, note, created_by, reasons, import_batch_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
   `).run(id, input.userId, input.agentId, d.kind, d.key || '', drawerHash(current), drawerRevision(input.userId, d),
     JSON.stringify(input.changes), input.source, typeof input.note === 'string' ? input.note.slice(0, 500) : null,
-    input.createdBy, JSON.stringify(input.reasons.slice(0, 20)));
+    input.createdBy, JSON.stringify(input.reasons.slice(0, 20)), input.importBatchId ?? null);
   return getProposal(input.userId, id)!;
 }
 

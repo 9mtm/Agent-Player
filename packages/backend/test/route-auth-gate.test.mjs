@@ -234,6 +234,10 @@ const OWNER_ONLY = [
   ['POST', '/api/memory/forget-all'], ['GET', '/api/memory/retention'], ['PUT', '/api/memory/retention'], ['POST', '/api/memory/retention/run'],
   // CORE-06: embedding model status + re-embed job
   ['GET', '/api/memory/embeddings'], ['POST', '/api/memory/embeddings/reembed'],
+  // CLI-02: safe import pipeline
+  ['GET', '/api/memory/import/settings'], ['PUT', '/api/memory/import/settings'], ['POST', '/api/memory/import/preview'],
+  ['GET', '/api/memory/import'], ['GET', '/api/memory/import/:id'], ['POST', '/api/memory/import/:id/revise'],
+  ['POST', '/api/memory/import/:id/commit'], ['POST', '/api/memory/import/:id/cancel'],
   // M1: MCP client server registry (starts processes / reaches URLs for agents)
   ['GET', '/api/mcp/servers'], ['POST', '/api/mcp/servers'], ['GET', '/api/mcp/servers/:id'], ['PUT', '/api/mcp/servers/:id'],
   ['DELETE', '/api/mcp/servers/:id'], ['POST', '/api/mcp/servers/:id/enable'], ['POST', '/api/mcp/servers/:id/disable'],
