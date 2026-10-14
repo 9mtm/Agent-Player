@@ -109,6 +109,8 @@ export const PORTED = [
   'src/api/routes/worlds.ts',
   'src/api/routes/world-bots.ts',
   'src/api/routes/multiverse.ts',
+  'src/api/routes/extensions.ts',
+  'src/api/routes/public-chat.ts',
 ];
 
 /** Ported modules without SQL of their own (they compose ported services). */

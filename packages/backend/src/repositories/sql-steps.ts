@@ -115,6 +115,34 @@ export function* columnExists(table: string, column: string): Step<boolean> {
     : `SELECT 1 AS ok FROM pragma_table_info(?) WHERE name = ?`, table, column));
 }
 
+/**
+ * B2.2c: user table names of the current database, sorted by name
+ * (sqlite_master without the sqlite_* tables / information_schema base
+ * tables of the current schema). With `likePrefix`: only names matching
+ * LIKE likePrefix || '_%' (SQLite LIKE ignores ASCII case; ILIKE on
+ * PostgreSQL gives the same match).
+ */
+export function* tableNames(likePrefix?: string): Step<string[]> {
+  const d = yield* dialect();
+  const rows = d === 'postgres'
+    ? (likePrefix === undefined
+      ? yield* all<{ name: string }>(`SELECT table_name AS name FROM information_schema.tables WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' ORDER BY table_name`)
+      : yield* all<{ name: string }>(`SELECT table_name AS name FROM information_schema.tables WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' AND table_name ILIKE ? || '_%' ORDER BY table_name`, likePrefix))
+    : (likePrefix === undefined
+      ? yield* all<{ name: string }>(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+      : yield* all<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ? || '_%'`, likePrefix));
+  return rows.map((r) => r.name);
+}
+
+/** B2.2c: the column names of a table, in table order (pragma_table_info / information_schema). */
+export function* tableColumns(table: string): Step<string[]> {
+  const d = yield* dialect();
+  const rows = d === 'postgres'
+    ? yield* all<{ name: string }>(`SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ? ORDER BY ordinal_position`, table)
+    : yield* all<{ name: string }>(`SELECT name FROM pragma_table_info(?)`, table);
+  return rows.map((r) => r.name);
+}
+
 export interface StepRunner {
   readonly dialect: Dialect;
   /** Run one step without a transaction of its own. */

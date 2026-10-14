@@ -5,7 +5,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { handleError } from '../error-handler.js';
-import { getDatabase } from '../../db/index.js';
+import { q, run, sql, tableColumns, tableNames } from '../../repositories/sql-steps.js';
 import { getExtensionRunner } from '../../plugins/extension-runner.js';
 import { getExtensionTools } from '../../tools/index.js';
 import { readdirSync, existsSync, readFileSync } from 'fs';
@@ -60,7 +60,6 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
     },
   }, async (request, reply) => {
     try {
-      const db = getDatabase();
       const extensions = [];
 
       // Scan extensions directory
@@ -81,9 +80,7 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
           const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
 
           // Get enabled state from DB
-          const config = db
-            .prepare('SELECT enabled, config_json, installed_at FROM extension_configs WHERE extension_id = ?')
-            .get(manifest.id) as { enabled: number; config_json: string; installed_at: string } | undefined;
+          const config = await q.one('SELECT enabled, config_json, installed_at FROM extension_configs WHERE extension_id = ?', manifest.id) as { enabled: number; config_json: string; installed_at: string } | undefined;
 
           extensions.push({
             id: manifest.id,
@@ -186,29 +183,20 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const { id } = request.params;
-      const db = getDatabase();
 
       // 1. Get migrations history
-      const migrations = db
-        .prepare('SELECT filename, ran_at FROM extension_migrations WHERE extension_id = ? ORDER BY ran_at DESC')
-        .all(id);
+      const migrations = await q.all('SELECT filename, ran_at FROM extension_migrations WHERE extension_id = ? ORDER BY ran_at DESC', id);
 
       // 2. Get config
-      const configRow = db
-        .prepare('SELECT config_json FROM extension_configs WHERE extension_id = ?')
-        .get(id) as { config_json: string } | undefined;
+      const configRow = await q.one('SELECT config_json FROM extension_configs WHERE extension_id = ?', id) as { config_json: string } | undefined;
       let config = configRow ? JSON.parse(configRow.config_json) : null;
       if (config && ['telegram', 'discord'].includes(id)) delete config.bot_token;
       if (config && id === 'agent-connect') delete config.channels;
       // SECURITY (S0-Q.4): never return secret config values in plaintext
       config = maskSecretFields(config);
 
-      // 3. Get database tables (query SQLite schema for tables created by this extension)
-      const allTables = db.prepare(`
-        SELECT name, sql FROM sqlite_master
-        WHERE type='table' AND name NOT LIKE 'sqlite_%'
-        ORDER BY name
-      `).all() as Array<{ name: string; sql: string }>;
+      // 3. Get database tables (the database catalog: tables created by this extension)
+      const allTables = (await sql().read(tableNames())).map((name) => ({ name }));
 
       // Filter tables that might belong to this extension (heuristic: contain extension id in name)
       const extensionTables = allTables.filter((t) =>
@@ -217,18 +205,19 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
       );
 
       // Get row count and column count for each table
-      const tables = extensionTables.map((table) => {
+      const tables: Array<{ name: string; rows: number; columns: number }> = [];
+      for (const table of extensionTables) {
         // SECURITY: Validate table name before using in SQL
         const safeName = validateTableName(table.name);
-        const rowCount = db.prepare(`SELECT COUNT(*) as count FROM ${safeName}`).get() as { count: number };
-        const columns = db.prepare(`PRAGMA table_info(${safeName})`).all();
+        const rowCount = await q.one(`SELECT COUNT(*) as count FROM ${safeName}`) as { count: number };
+        const columns = await sql().read(tableColumns(safeName));
 
-        return {
+        tables.push({
           name: table.name,
           rows: rowCount.count,
           columns: columns.length,
-        };
-      });
+        });
+      }
 
       // 4. Get registered tools (from extension tools global array)
       const extensionToolsList = getExtensionTools(id);
@@ -268,35 +257,30 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const { id } = request.params;
-      const db = getDatabase();
 
       // 1. Disable extension first (unregister tools, call onDisable)
       const extensionRunner = getExtensionRunner();
       await extensionRunner.disableExtension(id);
 
       // 2. Find and drop all extension tables
-      const tables = db.prepare(`
-        SELECT name FROM sqlite_master
-        WHERE type = 'table'
-        AND name LIKE ? || '_%'
-      `).all(id) as Array<{ name: string }>;
+      const tables = (await sql().read(tableNames(id))).map((name) => ({ name }));
 
       for (const { name } of tables) {
         try {
           // SECURITY: Validate table name to prevent SQL injection
           const safeName = validateTableName(name);
-          db.prepare(`DROP TABLE IF EXISTS ${safeName}`).run();
+          await q.run(`DROP TABLE IF EXISTS ${safeName}`);
           console.log(`[Extensions API] 🗑️  Dropped table: ${name}`);
         } catch (err) {
           console.warn(`[Extensions API] ⚠️  Failed to drop table ${name}:`, err);
         }
       }
 
-      // 3. Delete extension config
-      db.prepare('DELETE FROM extension_configs WHERE extension_id = ?').run(id);
-
-      // 4. Delete extension migrations history
-      db.prepare('DELETE FROM extension_migrations WHERE extension_id = ?').run(id);
+      // 3. + 4. Delete extension config and migrations history (one transaction)
+      await sql().tx(function* () {
+        yield* run('DELETE FROM extension_configs WHERE extension_id = ?', id);
+        yield* run('DELETE FROM extension_migrations WHERE extension_id = ?', id);
+      });
 
       // 5. Delete extension storage files
       const { getStorageManager } = await import('../../services/storage-manager.js');
@@ -355,9 +339,8 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const { id } = request.params;
-      const db = getDatabase();
 
-      const extension = db.prepare('SELECT * FROM extension_configs WHERE extension_id = ?').get(id) as any;
+      const extension = await q.one('SELECT * FROM extension_configs WHERE extension_id = ?', id) as any;
 
       if (!extension) {
         return reply.status(404).send({
@@ -443,10 +426,9 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
       if (['telegram', 'discord', 'agent-connect'].includes(id)) {
         return reply.code(409).send({ error: 'Save channel settings through /api/ext/' + id + '/config. Enable the extension and restart the backend first.' });
       }
-      const db = getDatabase();
 
       // Check if extension exists
-      const extension = db.prepare('SELECT * FROM extension_configs WHERE extension_id = ?').get(id) as any;
+      const extension = await q.one('SELECT * FROM extension_configs WHERE extension_id = ?', id) as any;
 
       if (!extension) {
         return reply.status(404).send({
@@ -476,8 +458,7 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
       }
 
       // Update config
-      db.prepare('UPDATE extension_configs SET config_json = ? WHERE extension_id = ?')
-        .run(JSON.stringify(config), id);
+      await q.run('UPDATE extension_configs SET config_json = ? WHERE extension_id = ?', JSON.stringify(config), id);
 
       console.log(`[Extensions API] ✅ Config updated for ${id}`);
 
@@ -503,13 +484,10 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
     },
   }, async (request, reply) => {
     try {
-      const db = getDatabase();
       const routes = [];
 
       // Get all enabled extensions
-      const enabledExtensions = db
-        .prepare('SELECT extension_id FROM extension_configs WHERE enabled = 1')
-        .all() as Array<{ extension_id: string }>;
+      const enabledExtensions = await q.all('SELECT extension_id FROM extension_configs WHERE enabled = 1') as Array<{ extension_id: string }>;
 
       if (!enabledExtensions.length) {
         return {
@@ -571,11 +549,8 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
-      const db = getDatabase();
 
-      const config = db
-        .prepare('SELECT enabled FROM extension_configs WHERE extension_id = ?')
-        .get(id) as { enabled: number } | undefined;
+      const config = await q.one('SELECT enabled FROM extension_configs WHERE extension_id = ?', id) as { enabled: number } | undefined;
 
       return {
         success: true,
@@ -603,10 +578,9 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const { id } = request.params;
-      const db = getDatabase();
 
       // Query audit_logs table for extension events
-      const logs = db.prepare(`
+      const logs = await q.all(`
         SELECT
           id,
           event_type,
@@ -626,7 +600,7 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
           AND resource_id = ?
         ORDER BY created_at DESC
         LIMIT 100
-      `).all(id) as any[];
+      `, id) as any[];
 
       // Parse metadata JSON
       const parsedLogs = logs.map((log) => ({

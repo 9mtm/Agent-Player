@@ -1,10 +1,20 @@
 /**
  * Public Chat Rooms API Routes
  * Multi-user chat rooms with AI agents, customizable avatars, and embeddable widgets
+ *
+ * B2.2c: every query runs on the process driver (sql-steps); SQLite SQL and
+ * row shapes unchanged. A message and its room counter are one transaction;
+ * owner checks and their writes run in one transaction with the room row
+ * locked on PostgreSQL; joining a room is one transaction under a per-room
+ * lock (no duplicate participant, no double count). Messages with the same
+ * created_at second keep insertion order on SQLite (rowid); PostgreSQL
+ * breaks the tie by id. The S0-A.14 outsider-memory rule and the Q-14
+ * anonymous-room rule are unchanged.
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { getDatabase } from '../../db/index.js';
+import { dialect, lockName, one, q, run, sql, type Step } from '../../repositories/sql-steps.js';
+import { forUpdate, greatest } from '../../db/pg/dialect.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { randomUUID } from 'crypto';
 import { readPersonality, readMemory } from '../../services/agent-files.js';
@@ -97,8 +107,6 @@ async function streamPublicChatResponse(
   userId: string | null,
   displayName: string
 ) {
-  const db = getDatabase();
-
   // Set up SSE headers
   reply.raw.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -189,14 +197,14 @@ async function streamPublicChatResponse(
       }
     }
 
-    // Store AI response in database
-    db.prepare(`
+    // Store AI response and update the message count (one transaction)
+    await sql().tx(function* () {
+      yield* run(`
       INSERT INTO public_chat_messages (id, room_id, user_id, username, role, content)
       VALUES (?, ?, ?, ?, 'assistant', ?)
-    `).run(assistantMessageId, roomId, null, 'AI', fullResponse);
-
-    // Update message count
-    db.prepare('UPDATE public_chat_rooms SET message_count = message_count + 1 WHERE id = ?').run(roomId);
+    `, assistantMessageId, roomId, null, 'AI', fullResponse);
+      yield* run('UPDATE public_chat_rooms SET message_count = message_count + 1 WHERE id = ?', roomId);
+    });
 
     // Send completion event
     reply.raw.write(`data: ${JSON.stringify({ type: 'done', messageId: assistantMessageId })}\n\n`);
@@ -209,9 +217,20 @@ async function streamPublicChatResponse(
   }
 }
 
-export async function registerPublicChatRoutes(fastify: FastifyInstance) {
-  const db = getDatabase();
+/** ORDER BY created_at for messages; PostgreSQL adds the id as the tie-break (SQLite: rowid order). */
+function msgOrder(dir: 'ASC' | 'DESC'): string {
+  return q.dialect === 'postgres' ? `created_at ${dir}, id ${dir}` : `created_at ${dir}`;
+}
 
+type Refusal = { status: 403 | 404; error: string };
+
+/** The room row, locked for the rest of the transaction (PostgreSQL). */
+function* lockedRoom(id: string): Step<PublicChatRoom | undefined> {
+  const d = yield* dialect();
+  return yield* one<PublicChatRoom>(`SELECT * FROM public_chat_rooms WHERE id = ?${forUpdate(d)}`, id);
+}
+
+export async function registerPublicChatRoutes(fastify: FastifyInstance) {
   // ══════════════════════════════════════════════════════════════════════════════
   // Room Management
   // ══════════════════════════════════════════════════════════════════════════════
@@ -245,7 +264,8 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
       const roomId = randomUUID();
       const now = new Date().toISOString();
 
-      db.prepare(`
+      const room = await sql().tx(function* () {
+      yield* run(`
         INSERT INTO public_chat_rooms (
           id, name, description, owner_user_id,
           model, system_prompt, agent_id, workflow_id, skills,
@@ -267,8 +287,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
           ?, ?, ?,
           ?, ?
         )
-      `).run(
-        roomId,
+      `, roomId,
         body.name,
         body.description || null,
         userId,
@@ -299,10 +318,9 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
         body.embed_size || 'medium',
         body.embed_theme || 'auto',
         now,
-        now
-      );
-
-      const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(roomId);
+        now);
+      return yield* one('SELECT * FROM public_chat_rooms WHERE id = ?', roomId);
+      });
 
       return { success: true, room };
     } catch (error: any) {
@@ -326,18 +344,18 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
 
     if (filter === 'my' && userId && request.authUser?.role !== 'guest') {
       // User's rooms
-      rooms = db.prepare(`
+      rooms = await q.all(`
         SELECT * FROM public_chat_rooms
         WHERE owner_user_id = ?
         ORDER BY created_at DESC
-      `).all(userId) as PublicChatRoom[];
+      `, userId) as PublicChatRoom[];
     } else {
       // All public rooms
-      rooms = db.prepare(`
+      rooms = await q.all(`
         SELECT * FROM public_chat_rooms
         WHERE is_public = 1
         ORDER BY created_at DESC
-      `).all() as PublicChatRoom[];
+      `) as PublicChatRoom[];
     }
 
     return { rooms };
@@ -354,7 +372,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
     // Q-14 (CL-07): anonymous visitors only when the owner turned it on.
     if (!userId && !(await anonymousPublicRoomsEnabled())) return reply.code(404).send({ error: 'Room not found' });
 
-    const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(id) as PublicChatRoom | undefined;
+    const room = await q.one('SELECT * FROM public_chat_rooms WHERE id = ?', id) as PublicChatRoom | undefined;
 
     if (!room) {
       return reply.code(404).send({ error: 'Room not found' });
@@ -377,16 +395,6 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
       const userId = getUserIdFromRequest(request);
       const { id } = request.params as { id: string };
       const body = request.body as any;
-
-      const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(id) as PublicChatRoom | undefined;
-
-      if (!room) {
-        return reply.code(404).send({ error: 'Room not found' });
-      }
-
-      if (room.owner_user_id !== userId) {
-        return reply.code(403).send({ error: 'Only room owner can update settings' });
-      }
 
       const updates: string[] = [];
       const values: any[] = [];
@@ -425,17 +433,25 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
         updates.push('updated_at = ?');
         values.push(new Date().toISOString());
         values.push(id);
+      }
 
-        db.prepare(`
+      // One transaction: the owner check on the locked row, the update, the read-back.
+      const out = await sql().tx(function* (): Step<Refusal | { status: 200; room: unknown }> {
+        const room = yield* lockedRoom(id);
+        if (!room) return { status: 404, error: 'Room not found' };
+        if (room.owner_user_id !== userId) return { status: 403, error: 'Only room owner can update settings' };
+        if (updates.length > 0) {
+          yield* run(`
           UPDATE public_chat_rooms
           SET ${updates.join(', ')}
           WHERE id = ?
-        `).run(...values);
-      }
+        `, ...values);
+        }
+        return { status: 200, room: yield* one('SELECT * FROM public_chat_rooms WHERE id = ?', id) };
+      });
+      if (out.status !== 200) return reply.code(out.status).send({ error: out.error });
 
-      const updatedRoom = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(id);
-
-      return { success: true, room: updatedRoom };
+      return { success: true, room: out.room };
     } catch (error: any) {
       if (error.message?.includes('Unauthorized')) {
         return reply.code(401).send({ error: 'Unauthorized' });
@@ -454,18 +470,15 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
       const userId = getUserIdFromRequest(request);
       const { id } = request.params as { id: string };
 
-      const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(id) as PublicChatRoom | undefined;
-
-      if (!room) {
-        return reply.code(404).send({ error: 'Room not found' });
-      }
-
-      if (room.owner_user_id !== userId) {
-        return reply.code(403).send({ error: 'Only room owner can delete room' });
-      }
-
-      // Delete room (CASCADE will delete messages and participants)
-      db.prepare('DELETE FROM public_chat_rooms WHERE id = ?').run(id);
+      const out = await sql().tx(function* (): Step<Refusal | { status: 200 }> {
+        const room = yield* lockedRoom(id);
+        if (!room) return { status: 404, error: 'Room not found' };
+        if (room.owner_user_id !== userId) return { status: 403, error: 'Only room owner can delete room' };
+        // Delete room (CASCADE will delete messages and participants)
+        yield* run('DELETE FROM public_chat_rooms WHERE id = ?', id);
+        return { status: 200 };
+      });
+      if (out.status !== 200) return reply.code(out.status).send({ error: out.error });
 
       return { success: true };
     } catch (error: any) {
@@ -493,7 +506,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
     // Q-14 (CL-07): anonymous visitors only when the owner turned it on.
     if (!userId && !(await anonymousPublicRoomsEnabled())) return reply.code(404).send({ error: 'Room not found' });
 
-    const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(id) as PublicChatRoom | undefined;
+    const room = await q.one('SELECT * FROM public_chat_rooms WHERE id = ?', id) as PublicChatRoom | undefined;
 
     if (!room) {
       return reply.code(404).send({ error: 'Room not found' });
@@ -503,12 +516,12 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
       return reply.code(403).send({ error: 'Access denied' });
     }
 
-    const messages = db.prepare(`
+    const messages = await q.all(`
       SELECT * FROM public_chat_messages
       WHERE room_id = ?
-      ORDER BY created_at ASC
+      ORDER BY ${msgOrder('ASC')}
       LIMIT ? OFFSET ?
-    `).all(id, limit, offset);
+    `, id, limit, offset);
 
     return { messages };
   });
@@ -525,7 +538,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
     // Q-14 (CL-07): anonymous visitors only when the owner turned it on.
     if (!userId && !(await anonymousPublicRoomsEnabled())) return reply.code(404).send({ error: 'Room not found' });
 
-    const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(roomId) as PublicChatRoom | undefined;
+    const room = await q.one('SELECT * FROM public_chat_rooms WHERE id = ?', roomId) as PublicChatRoom | undefined;
 
     if (!room) {
       return reply.code(404).send({ error: 'Room not found' });
@@ -560,26 +573,27 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
 
     // Get username
     const displayName = userId
-      ? (db.prepare('SELECT COALESCE(full_name, username) AS name FROM users WHERE id = ?').get(userId) as any)?.name || 'User'
+      ? (await q.one('SELECT COALESCE(full_name, username) AS name FROM users WHERE id = ?', userId) as any)?.name || 'User'
       : (username || 'Anonymous');
 
     // Store user message
     const userMessageId = randomUUID();
-    db.prepare(`
+    // The message and the room's message count: one transaction.
+    await sql().tx(function* () {
+      yield* run(`
       INSERT INTO public_chat_messages (id, room_id, user_id, username, role, content)
       VALUES (?, ?, ?, ?, 'user', ?)
-    `).run(userMessageId, roomId, userId || null, displayName, content);
-
-    // Update message count
-    db.prepare('UPDATE public_chat_rooms SET message_count = message_count + 1 WHERE id = ?').run(roomId);
+    `, userMessageId, roomId, userId || null, displayName, content);
+      yield* run('UPDATE public_chat_rooms SET message_count = message_count + 1 WHERE id = ?', roomId);
+    });
 
     // Get recent message history (last 20 messages)
-    const recentMessages = db.prepare(`
+    const recentMessages = await q.all(`
       SELECT * FROM public_chat_messages
       WHERE room_id = ?
-      ORDER BY created_at DESC
+      ORDER BY ${msgOrder('DESC')}
       LIMIT 20
-    `).all(roomId) as any[];
+    `, roomId) as any[];
 
     // Build conversation history (reverse to chronological order)
     const history = recentMessages.reverse().map(msg => ({
@@ -592,7 +606,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
     // admin role), gets it in the prompt; anonymous and other visitors do not,
     // unless the server opts in (OUTSIDER_AGENT_MEMORY=true).
     const senderRole = userId
-      ? (db.prepare('SELECT role FROM users WHERE id = ?').get(userId) as { role?: string } | undefined)?.role
+      ? (await q.one('SELECT role FROM users WHERE id = ?', userId) as { role?: string } | undefined)?.role
       : undefined;
     const senderIsOwner = !!userId && userId === room.owner_user_id && (senderRole === 'owner' || senderRole === 'admin');
     const includeAgentMemory = senderIsOwner || outsiderAgentMemoryEnabled();
@@ -642,20 +656,20 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
       const userId = getUserIdFromRequest(request);
       const { id } = request.params as { id: string };
 
-      const message = db.prepare('SELECT * FROM public_chat_messages WHERE id = ?').get(id) as any;
+      const out = await sql().tx(function* (): Step<Refusal | { status: 200 }> {
+        const d = yield* dialect();
+        const message = yield* one<any>(`SELECT * FROM public_chat_messages WHERE id = ?${forUpdate(d)}`, id);
+        if (!message) return { status: 404, error: 'Message not found' };
 
-      if (!message) {
-        return reply.code(404).send({ error: 'Message not found' });
-      }
+        const room = yield* one<PublicChatRoom>('SELECT * FROM public_chat_rooms WHERE id = ?', message.room_id);
 
-      const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(message.room_id) as PublicChatRoom;
+        // Only room owner or message sender can delete
+        if (room!.owner_user_id !== userId && message.user_id !== userId) return { status: 403, error: 'Access denied' };
 
-      // Only room owner or message sender can delete
-      if (room.owner_user_id !== userId && message.user_id !== userId) {
-        return reply.code(403).send({ error: 'Access denied' });
-      }
-
-      db.prepare('DELETE FROM public_chat_messages WHERE id = ?').run(id);
+        yield* run('DELETE FROM public_chat_messages WHERE id = ?', id);
+        return { status: 200 };
+      });
+      if (out.status !== 200) return reply.code(out.status).send({ error: out.error });
 
       return { success: true };
     } catch (error: any) {
@@ -683,7 +697,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
     // Q-14 (CL-07): anonymous visitors only when the owner turned it on.
     if (!userId && !(await anonymousPublicRoomsEnabled())) return reply.code(404).send({ error: 'Room not found' });
 
-    const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(roomId) as PublicChatRoom | undefined;
+    const room = await q.one('SELECT * FROM public_chat_rooms WHERE id = ?', roomId) as PublicChatRoom | undefined;
 
     if (!room) {
       return reply.code(404).send({ error: 'Room not found' });
@@ -696,38 +710,43 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
     // Get display name
     let displayName = username || 'Anonymous';
     if (userId) {
-      const user = db.prepare('SELECT full_name, username FROM users WHERE id = ?').get(userId) as any;
+      const user = await q.one('SELECT full_name, username FROM users WHERE id = ?', userId) as any;
       displayName = user?.full_name || user?.username || 'User';
     }
 
-    // Check if already joined
-    const existing = db.prepare(`
+    // One transaction under a per-room lock: the "already joined" check and
+    // the insert + count never interleave with another join of this room.
+    const participantId = randomUUID();
+    const joined = await sql().tx(function* (): Step<{ existing: boolean; participant: unknown }> {
+      yield* lockName(`public_chat_participants:${roomId}`);
+      // Check if already joined
+      const existing = yield* one<any>(`
       SELECT * FROM public_chat_participants
       WHERE room_id = ? AND (user_id = ? OR username = ?)
-    `).get(roomId, userId || null, displayName);
+    `, roomId, userId || null, displayName);
 
-    if (existing) {
-      // Update last_seen_at
-      db.prepare(`
+      if (existing) {
+        // Update last_seen_at
+        yield* run(`
         UPDATE public_chat_participants
         SET last_seen_at = ?
         WHERE id = ?
-      `).run(new Date().toISOString(), (existing as any).id);
+      `, new Date().toISOString(), existing.id);
+        return { existing: true, participant: existing };
+      }
 
-      return { success: true, participant: existing };
-    }
-
-    // Create participant
-    const participantId = randomUUID();
-    db.prepare(`
+      // Create participant
+      yield* run(`
       INSERT INTO public_chat_participants (id, room_id, user_id, username)
       VALUES (?, ?, ?, ?)
-    `).run(participantId, roomId, userId || null, displayName);
+    `, participantId, roomId, userId || null, displayName);
 
-    // Update participant count
-    db.prepare('UPDATE public_chat_rooms SET participant_count = participant_count + 1 WHERE id = ?').run(roomId);
+      // Update participant count
+      yield* run('UPDATE public_chat_rooms SET participant_count = participant_count + 1 WHERE id = ?', roomId);
 
-    const participant = db.prepare('SELECT * FROM public_chat_participants WHERE id = ?').get(participantId);
+      return { existing: false, participant: yield* one('SELECT * FROM public_chat_participants WHERE id = ?', participantId) };
+    });
+    const participant = joined.participant;
 
     return { success: true, participant };
   });
@@ -744,17 +763,21 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ error: 'Cannot leave as anonymous user' });
     }
 
-    db.prepare(`
+    await sql().tx(function* () {
+      const d = yield* dialect();
+      yield* lockName(`public_chat_participants:${roomId}`);
+      yield* run(`
       DELETE FROM public_chat_participants
       WHERE room_id = ? AND user_id = ?
-    `).run(roomId, userId);
+    `, roomId, userId);
 
-    // Update participant count (ensure it doesn't go negative)
-    db.prepare(`
+      // Update participant count (ensure it doesn't go negative)
+      yield* run(`
       UPDATE public_chat_rooms
-      SET participant_count = MAX(0, participant_count - 1)
+      SET participant_count = ${greatest(d)}(0, participant_count - 1)
       WHERE id = ?
-    `).run(roomId);
+    `, roomId);
+    });
 
     return { success: true };
   });
@@ -770,7 +793,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
     // Q-14 (CL-07): anonymous visitors only when the owner turned it on.
     if (!userId && !(await anonymousPublicRoomsEnabled())) return reply.code(404).send({ error: 'Room not found' });
 
-    const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(roomId) as PublicChatRoom | undefined;
+    const room = await q.one('SELECT * FROM public_chat_rooms WHERE id = ?', roomId) as PublicChatRoom | undefined;
 
     if (!room) {
       return reply.code(404).send({ error: 'Room not found' });
@@ -780,11 +803,11 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
       return reply.code(403).send({ error: 'Access denied' });
     }
 
-    const participants = db.prepare(`
+    const participants = await q.all(`
       SELECT * FROM public_chat_participants
       WHERE room_id = ?
       ORDER BY joined_at ASC
-    `).all(roomId);
+    `, roomId);
 
     return { participants };
   });
@@ -801,7 +824,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
     const { id: roomId } = request.params as { id: string };
     const userId = getOptionalUserId(request);
 
-    const room = db.prepare('SELECT * FROM public_chat_rooms WHERE id = ?').get(roomId) as PublicChatRoom | undefined;
+    const room = await q.one('SELECT * FROM public_chat_rooms WHERE id = ?', roomId) as PublicChatRoom | undefined;
 
     if (!room) {
       return reply.code(404).send({ error: 'Room not found' });
