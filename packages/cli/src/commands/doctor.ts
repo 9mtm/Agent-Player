@@ -1,112 +1,43 @@
 /**
- * Doctor Command
+ * Doctor Command (INST-09)
  *
- * System diagnostics
+ * `agent-player doctor [--fix] [--json]`: local checks of the install. See
+ * utils/doctor-checks.ts. Exit code 1 when any check fails.
  */
 
-import ora from 'ora';
 import chalk from 'chalk';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import { getApiClient } from '../utils/api-client.js';
-import { success, error, warning, header, createTable } from '../utils/formatting.js';
+import { findInstall, NOT_FOUND_MESSAGE, type InstallPaths } from '../utils/install-root.js';
+import { realContext, runDoctor, type CheckResult, type DoctorContext } from '../utils/doctor-checks.js';
 
-const execAsync = promisify(exec);
+const ICON: Record<CheckResult['status'], string> = { ok: chalk.green('ok  '), warn: chalk.yellow('warn'), fail: chalk.red('FAIL'), skip: chalk.gray('skip') };
 
-export async function doctorCommand(): Promise<void> {
-  console.log(chalk.bold.cyan('\n🩺 Agent Player System Diagnostics\n'));
-
-  const checks = [
-    { name: 'Node.js', check: checkNode },
-    { name: 'npm', check: checkNpm },
-    { name: 'Backend', check: checkBackend },
-    { name: 'Database', check: checkDatabase },
-    { name: 'Skills', check: checkSkills },
-    { name: 'Channels', check: checkChannels }
-  ];
-
-  const results: Array<{ name: string; status: string; details: string }> = [];
-
-  for (const { name, check } of checks) {
-    const spinner = ora(`Checking ${name}...`).start();
-
-    try {
-      const result = await check();
-      spinner.succeed(`${name}: ${result.status}`);
-      results.push({ name, status: '✓', details: result.details });
-    } catch (err: any) {
-      spinner.fail(`${name}: ${err.message}`);
-      results.push({ name, status: '✗', details: err.message });
-    }
-  }
-
-  header('Diagnostic Results');
-
-  const table = createTable(['Component', 'Status', 'Details']);
-
-  results.forEach(({ name, status, details }) => {
-    table.push([
-      name,
-      status === '✓' ? chalk.green(status) : chalk.red(status),
-      details
-    ]);
+export function formatResults(results: CheckResult[], fix: boolean): string {
+  const lines = results.map((r) => {
+    const fixed = r.fixed ? chalk.cyan(`  [fixed: ${r.fixed}]`) : (!fix && r.fixable && r.status !== 'ok' ? chalk.gray('  [--fix can repair]') : '');
+    return `${ICON[r.status]}  ${r.title}: ${chalk.gray(r.detail)}${fixed}`;
   });
+  const count = (s: CheckResult['status']) => results.filter((r) => r.status === s).length;
+  lines.push('');
+  lines.push(`${count('ok')} ok, ${count('warn')} warning(s), ${count('fail')} failed, ${count('skip')} skipped`);
+  return lines.join('\n');
+}
 
-  console.log(table.toString());
-
-  const failed = results.filter(r => r.status === '✗').length;
-
-  if (failed === 0) {
-    console.log(chalk.green('\n✅ All checks passed!\n'));
-  } else {
-    console.log(chalk.red(`\n❌ ${failed} check(s) failed\n`));
+export async function doctorCommand(
+  options: { fix?: boolean; json?: boolean } = {},
+  deps: { paths?: InstallPaths | null; context?: Partial<DoctorContext>; log?: (m: string) => void } = {},
+): Promise<number> {
+  const log = deps.log ?? ((m: string) => console.log(m));
+  const paths = deps.paths === undefined ? findInstall() : deps.paths;
+  if (!paths) {
+    log(options.json ? JSON.stringify({ error: NOT_FOUND_MESSAGE }) : chalk.red(NOT_FOUND_MESSAGE));
+    return 1;
   }
-}
-
-async function checkNode(): Promise<{ status: string; details: string }> {
-  const { stdout } = await execAsync('node --version');
-  const version = stdout.trim();
-  return { status: 'OK', details: version };
-}
-
-async function checkNpm(): Promise<{ status: string; details: string }> {
-  const { stdout } = await execAsync('npm --version');
-  const version = stdout.trim();
-  return { status: 'OK', details: `v${version}` };
-}
-
-async function checkBackend(): Promise<{ status: string; details: string }> {
-  const client = getApiClient();
-  const isRunning = await client.isBackendRunning();
-
-  if (!isRunning) {
-    throw new Error('Not running');
+  const ctx: DoctorContext = { ...realContext(paths, !!options.fix), ...deps.context, paths, fix: !!options.fix };
+  const results = await runDoctor(ctx);
+  if (options.json) log(JSON.stringify({ root: paths.root, fix: !!options.fix, results }, null, 2));
+  else {
+    log(chalk.bold(`Agent Player doctor — ${paths.root}${options.fix ? ' (--fix)' : ''}`));
+    log(formatResults(results, !!options.fix));
   }
-
-  const status = await client.getStatus();
-  return { status: 'Running', details: `v${status.version}` };
-}
-
-async function checkDatabase(): Promise<{ status: string; details: string }> {
-  // Check if database file exists
-  return { status: 'OK', details: 'SQLite ready' };
-}
-
-async function checkSkills(): Promise<{ status: string; details: string }> {
-  const client = getApiClient();
-  const skills = await client.getSkills();
-  return {
-    status: 'OK',
-    details: `${skills.length} installed`
-  };
-}
-
-async function checkChannels(): Promise<{ status: string; details: string }> {
-  const client = getApiClient();
-  const channels = await client.getChannels();
-  const connected = channels.filter((c: any) => c.connected).length;
-  return {
-    status: 'OK',
-    details: `${connected}/${channels.length} connected`
-  };
+  return results.some((r) => r.status === 'fail') ? 1 : 0;
 }

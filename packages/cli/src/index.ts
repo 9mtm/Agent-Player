@@ -108,8 +108,12 @@ program
 
 program
   .command('doctor')
-  .description('Run system diagnostics')
-  .action(async () => (await load_doctorCommand())());
+  .description('Check the install (local only); --fix repairs permissions, folders and missing secrets')
+  .option('--fix', 'Apply safe local fixes (chmod, create folders, generate missing secrets)')
+  .option('--json', 'Machine-readable output')
+  .action(async (options: { fix?: boolean; json?: boolean }) => {
+    process.exitCode = await (await load_doctorCommand())(options);
+  });
 
 // Skills Management
 const skills = program
