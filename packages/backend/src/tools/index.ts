@@ -77,7 +77,7 @@ import {
   skillInstallTool,
 } from './skill-install.js';
 
-import { getMcpTools, isMcpToolName } from '../mcp-client/index.js';
+import { getMcpTools, getMcpToolsSync, isMcpToolName } from '../mcp-client/index.js';
 
 // Global registry of extension-provided tools (registered at extension startup)
 import type { Tool } from './types.js';
@@ -151,7 +151,9 @@ export function getExtensionTools(extensionId?: string): Tool[] {
  * throws when an agentId is given; use createAgentToolsRegistry).
  */
 export function createToolsRegistry(context: ToolExecutionContext): ToolsRegistry {
-  const registry = buildToolsRegistry(context);
+  // MCP tools: the cache or a synchronous SQLite read; on PostgreSQL the
+  // cache only (B2.2c; use createAgentToolsRegistry to get them for sure).
+  const registry = buildToolsRegistry(context, getMcpToolsSync());
   // SECURITY (S1.2): the agent's grants (∩ parents / delegating agents).
   // No agent -> minimal default set (fail closed).
   if (!context.grants) {
@@ -169,7 +171,7 @@ export function createToolsRegistry(context: ToolExecutionContext): ToolsRegistr
  * drivers; B2.2b-3). Use it wherever the caller can await.
  */
 export async function createAgentToolsRegistry(context: ToolExecutionContext): Promise<ToolsRegistry> {
-  const registry = buildToolsRegistry(context);
+  const registry = buildToolsRegistry(context, await getMcpTools());
   if (!context.grants) {
     registry.updateContext({
       grants: context.agentId
@@ -180,7 +182,7 @@ export async function createAgentToolsRegistry(context: ToolExecutionContext): P
   return registry;
 }
 
-function buildToolsRegistry(context: ToolExecutionContext): ToolsRegistry {
+function buildToolsRegistry(context: ToolExecutionContext, mcpTools: Tool[]): ToolsRegistry {
   const registry = new ToolsRegistry(context);
 
   // Register core tools (CLI bridges gemini_cli/claude_cli stay unregistered)
@@ -194,7 +196,7 @@ function buildToolsRegistry(context: ToolExecutionContext): ToolsRegistry {
   }
 
   // M1: tools of active owner-registered MCP servers (never granted by default)
-  for (const tool of getMcpTools()) {
+  for (const tool of mcpTools) {
     registry.register(tool);
   }
 

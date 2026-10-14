@@ -2,9 +2,12 @@
  * MCP server registry storage (M1): rows in mcp_servers / mcp_server_tools,
  * secret env/header values in the credential manager (S1.1). Values never
  * leave this module except to the connection code; views carry masked forms.
+ *
+ * B2.2c: the rows are on the process driver (SQL steps). Each reader has a
+ * step form (joins the caller's transaction) and an async form.
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, one, sql, type Step } from '../repositories/sql-steps.js';
 import { getCredentialManager } from '../credentials/manager.js';
 import { CredentialType } from '../credentials/types.js';
 import { SECRET_PLACEHOLDER, isMaskedSecret } from '../credentials/secret-mask.js';
@@ -76,20 +79,40 @@ export function parseObject(raw: string | null): Record<string, any> | null {
   }
 }
 
-export function getServerRow(id: string): McpServerRow | undefined {
-  return getDatabase().prepare('SELECT * FROM mcp_servers WHERE id = ?').get(id) as McpServerRow | undefined;
+export function* getServerRowStep(id: string): Step<McpServerRow | undefined> {
+  return yield* one<McpServerRow>('SELECT * FROM mcp_servers WHERE id = ?', id);
 }
 
-export function getServerRowByName(name: string): McpServerRow | undefined {
-  return getDatabase().prepare('SELECT * FROM mcp_servers WHERE name = ?').get(name) as McpServerRow | undefined;
+export function getServerRow(id: string): Promise<McpServerRow | undefined> {
+  return sql().read(getServerRowStep(id));
 }
 
-export function listServerRows(): McpServerRow[] {
-  return getDatabase().prepare('SELECT * FROM mcp_servers ORDER BY name').all() as McpServerRow[];
+export function* getServerRowByNameStep(name: string): Step<McpServerRow | undefined> {
+  return yield* one<McpServerRow>('SELECT * FROM mcp_servers WHERE name = ?', name);
 }
 
-export function listToolRows(serverId: string): McpToolRow[] {
-  return getDatabase().prepare('SELECT * FROM mcp_server_tools WHERE server_id = ? ORDER BY tool_name').all(serverId) as McpToolRow[];
+export function getServerRowByName(name: string): Promise<McpServerRow | undefined> {
+  return sql().read(getServerRowByNameStep(name));
+}
+
+export function* listServerRowsStep(): Step<McpServerRow[]> {
+  return yield* all<McpServerRow>('SELECT * FROM mcp_servers ORDER BY name');
+}
+
+export function listServerRows(): Promise<McpServerRow[]> {
+  return sql().read(listServerRowsStep());
+}
+
+export function* listToolRowsStep(serverId: string): Step<McpToolRow[]> {
+  return yield* all<McpToolRow>('SELECT * FROM mcp_server_tools WHERE server_id = ? ORDER BY tool_name', serverId);
+}
+
+export function listToolRows(serverId: string): Promise<McpToolRow[]> {
+  return sql().read(listToolRowsStep(serverId));
+}
+
+export function* getToolRowStep(serverId: string, toolName: string): Step<McpToolRow | undefined> {
+  return yield* one<McpToolRow>('SELECT * FROM mcp_server_tools WHERE server_id = ? AND tool_name = ?', serverId, toolName);
 }
 
 /** True when a stdio server's exact launch spec was approved by the owner. */
@@ -249,7 +272,8 @@ export function toolView(server: Pick<McpServerRow, 'name'>, row: McpToolRow): M
 
 const masked = (names: string[]) => Object.fromEntries(names.map((n) => [n, SECRET_PLACEHOLDER]));
 
-export function serverView(row: McpServerRow): McpServerView {
+/** The owner view of a server and the given tool rows. */
+export function serverViewOf(row: McpServerRow, tools: McpToolRow[]): McpServerView {
   return {
     id: row.id,
     name: row.name,
@@ -274,6 +298,14 @@ export function serverView(row: McpServerRow): McpServerView {
     lastDiscoveredAt: row.last_discovered_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    tools: listToolRows(row.id).map((t) => toolView(row, t)),
+    tools: tools.map((t) => toolView(row, t)),
   };
+}
+
+export function* serverViewStep(row: McpServerRow): Step<McpServerView> {
+  return serverViewOf(row, yield* listToolRowsStep(row.id));
+}
+
+export function serverView(row: McpServerRow): Promise<McpServerView> {
+  return sql().read(serverViewStep(row));
 }

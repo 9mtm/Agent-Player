@@ -166,7 +166,7 @@ test('enabling a stdio server needs the owner approval of the exact launch', asy
   assert.deepEqual(body.launch.envNames, ['MCP_TEST_TOKEN']);
   assert.ok(!first.body.includes(TOKEN));
   assert.equal((await call('POST', `/api/mcp/servers/${stdio.id}/enable`, { launchHash: 'f'.repeat(64) })).statusCode, 409);
-  assert.equal(mcp.getMcpTools().length, 0, 'not enabled: nothing exposed');
+  assert.equal((await mcp.getMcpTools()).length, 0, 'not enabled: nothing exposed');
   const ok = await call('POST', `/api/mcp/servers/${stdio.id}/enable`, { launchHash: body.launchHash });
   assert.equal(ok.statusCode, 200, ok.body);
   assert.equal(ok.json().enabled, true);
@@ -187,9 +187,9 @@ test('discovery: tools/list over stdio, validated, size limited, namespaced', as
   assert.equal(echo.requiresApproval, false, 'read-only hint');
   assert.equal(r.server.tools.find((t) => t.name === 'write_note').requiresApproval, true, 'write-like by default');
   assert.equal(r.server.status, 'ready');
-  const regNames = mcp.getMcpTools().map((t) => t.name);
+  const regNames = (await mcp.getMcpTools()).map((t) => t.name);
   assert.ok(regNames.includes('mcp__fixture__echo'));
-  assert.ok(mcp.getMcpTools().every((t) => t.execClass === true), 'stdio tools are exec-class');
+  assert.ok((await mcp.getMcpTools()).every((t) => t.execClass === true), 'stdio tools are exec-class');
 });
 
 test('MCP tools are never granted by default (new, default and legacy agents)', async () => {
@@ -355,17 +355,17 @@ test('a launch change disables the server and needs a new approval; disabled exp
   assert.ok(upd.json().revokedGrants.some((g) => g.agentId === 'm-agent' && g.tool === 'mcp__fixture__echo'));
   assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM agent_tool_grants WHERE tool_name LIKE 'mcp%'`).get().n, 0);
   assert.deepEqual(upd.json().tools, []);
-  assert.ok(!mcp.getMcpTools().some((t) => t.mcp.serverName === 'fixture'));
+  assert.ok(!(await mcp.getMcpTools()).some((t) => t.mcp.serverName === 'fixture'));
   const again = await call('POST', `/api/mcp/servers/${stdio.id}/enable`, {});
   assert.equal(again.statusCode, 409);
   assert.equal((await call('POST', `/api/mcp/servers/${stdio.id}/enable`, { launchHash: again.json().launchHash })).statusCode, 200);
   assert.equal((await call('POST', `/api/mcp/servers/${stdio.id}/refresh`)).statusCode, 200);
-  assert.ok(mcp.getMcpTools().some((t) => t.mcp.serverName === 'fixture'));
+  assert.ok((await mcp.getMcpTools()).some((t) => t.mcp.serverName === 'fixture'));
   assert.deepEqual(mcpNames(registry({ agentId: 'm-agent' })), [], 'old grants do not come back');
   assert.ok(audits('agent_tool_grants.revoke_mcp').some((r) => JSON.parse(r.metadata).reason === 'target_changed'));
   const off = await call('POST', `/api/mcp/servers/${stdio.id}/disable`);
   assert.equal(off.statusCode, 200);
-  assert.ok(!mcp.getMcpTools().some((t) => t.mcp.serverName === 'fixture'));
+  assert.ok(!(await mcp.getMcpTools()).some((t) => t.mcp.serverName === 'fixture'));
   const res = await registry({ agentId: 'm-agent' }).execute('mcp__fixture__echo', { text: 'x' });
   assert.ok(res.error, 'disabled server tool does not run');
 });
@@ -413,7 +413,7 @@ test('http transport: discovery, grant, call, headers sent, errors mapped, chann
     assert.equal(ref.statusCode, 200, ref.body);
     assert.ok(ref.json().server.tools.some((t) => t.registryName === 'mcp__local__echo'));
     assert.ok(seen.headers.includes(HEADER_SECRET), 'secret header reaches the server');
-    assert.ok(mcp.getMcpTools().filter((t) => t.mcp.serverName === 'local').every((t) => t.execClass === false));
+    assert.ok((await mcp.getMcpTools()).filter((t) => t.mcp.serverName === 'local').every((t) => t.execClass === false));
 
     await grant('m-other', ['mcp__local__echo', 'mcp__local__fail']);
     const reg = registry({ agentId: 'm-other' });
@@ -493,7 +493,7 @@ test('http transport: discovery, grant, call, headers sent, errors mapped, chann
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mcp_server_tools WHERE server_id = ?').get(id).n, 0);
     assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM agent_tool_grants WHERE tool_name LIKE 'mcp%'`).get().n, 0);
     assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM mcp_grant_bindings`).get().n, 0);
-    assert.ok(!mcp.getMcpTools().some((t) => t.mcp.serverName === 'local'));
+    assert.ok(!(await mcp.getMcpTools()).some((t) => t.mcp.serverName === 'local'));
     assert.ok(audits('agent_tool_grants.revoke_mcp').some((r) => JSON.parse(r.metadata).reason === 'server_deleted'));
 
     // A new server with the same name never inherits grants, even a leftover row.

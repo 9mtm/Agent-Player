@@ -34,7 +34,7 @@ import { forUpdate, nowText } from '../db/pg/dialect.js';
 import type { Tool, ToolResult } from './types.js';
 import { isToolExecClass } from './exec-policy.js';
 import { isMcpToolName, NO_MCP_AGENTS, normalizeToolNameInput } from '../mcp-client/config.js';
-import { currentMcpTool, isMcpGrantBoundStep, writeMcpBindingsStep } from '../mcp-client/grant-binding.js';
+import { currentMcpToolStep, isMcpGrantBoundStep, writeMcpBindingsStep } from '../mcp-client/grant-binding.js';
 
 export interface GrantScopes {
   /** Allowed destinations for a send/call tool (chat ids, channels, numbers). */
@@ -345,7 +345,7 @@ function* setAgentGrantsStep(
     const tool = typeof rawTool === 'string' ? normalizeToolNameInput(rawTool) : rawTool;
     if (typeof tool !== 'string' || !TOOL_NAME_PATTERN.test(tool)) throw new GrantValidationError('invalid tool name');
     if (isMcpToolName(tool) && NO_MCP_AGENTS.has(agentId)) throw new GrantValidationError(`"${tool}": this agent may never use MCP tools`);
-    if (isMcpToolName(tool) && !currentMcpTool(tool)) throw new GrantValidationError(`"${tool}" is not a discovered MCP tool; refresh its server first`);
+    if (isMcpToolName(tool) && !(yield* currentMcpToolStep(tool))) throw new GrantValidationError(`"${tool}" is not a discovered MCP tool; refresh its server first`);
     if (seenNames.has(tool)) throw new GrantValidationError(`duplicate tool "${tool}"`);
     seenNames.add(tool);
     let scopes: GrantScopes | null;

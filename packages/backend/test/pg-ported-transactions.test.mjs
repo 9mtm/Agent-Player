@@ -67,10 +67,21 @@ export const PORTED = [
   'src/api/routes/multi-agent.ts',
   'src/tools/tasks/task-create.tool.ts',
   'src/tools/tasks/task-list.tool.ts',
+  // B2.2c part 1: scheduler, MCP discovery, settings, notifications, audit, sign-in throttle
+  'src/scheduler/store.ts',
+  'src/scheduler/engine.ts',
+  'src/api/routes/scheduler.ts',
+  'src/memory/jobs.ts',
+  'src/mcp-client/store.ts',
+  'src/mcp-client/service.ts',
+  'src/mcp-client/tools.ts',
+  'src/mcp-client/grant-binding.ts',
 ];
 
 /** Ported modules without SQL of their own (they compose ported services). */
-const NO_SQL = new Set(['src/repositories/agents.ts', 'src/repositories/task-runs.ts', 'src/repositories/memory-owner.ts', 'src/memory/retrieval.ts']);
+const NO_SQL = new Set(['src/repositories/agents.ts', 'src/repositories/task-runs.ts', 'src/repositories/memory-owner.ts', 'src/memory/retrieval.ts',
+  // B2.2c: compose the cron store
+  'src/scheduler/engine.ts', 'src/api/routes/scheduler.ts']);
 
 const FORBIDDEN = [
   [/\bgetDatabase\s*\(/, 'getDatabase() (a raw SQLite handle)'],
@@ -173,10 +184,10 @@ test('B2.2b-4: MCP grant bindings are written and read with the grants (SQL step
   assert.match(grants, /yield\* isMcpGrantBoundStep\(/, 'bindings read inside the grants step');
   assert.doesNotMatch(grants, /\bwriteMcpBindings\(|\bisMcpGrantBound\(/);
   const gb = stripComments(readFileSync(join(backend, 'src/mcp-client/grant-binding.ts'), 'utf8'));
-  // Only the MCP discovery read (mcp_server_tools, SQLite until B2.2c) uses the raw handle.
-  const raw = gb.match(/getDatabase\(\)\.prepare\('([^']*)'/g) ?? [];
-  assert.equal(raw.length, 1);
-  assert.match(raw[0], /FROM mcp_server_tools/);
+  // B2.2c: the MCP discovery read is a step too; no raw handle is left.
+  assert.doesNotMatch(gb, /getDatabase|\.prepare\(|sqliteSync/);
+  assert.match(gb, /function\* isMcpGrantBoundStep[\s\S]*yield\* currentMcpToolStep\(/, 'the fingerprint is read in the binding step');
+  assert.match(grants, /yield\* currentMcpToolStep\(/, 'grant validation reads discovery in the grants step');
   for (const fn of ['isMcpGrantBoundStep', 'writeMcpBindingsStep', 'revokeMcpGrantsStep']) {
     const body = gb.slice(gb.indexOf(`function* ${fn}`), gb.indexOf('\n}\n', gb.indexOf(`function* ${fn}`)));
     assert.ok(body.length > 0, fn);

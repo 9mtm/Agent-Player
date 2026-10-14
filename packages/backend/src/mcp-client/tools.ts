@@ -21,35 +21,30 @@
  * is audited (argument names only, never values).
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, sql, sqliteSync, type Step } from '../repositories/sql-steps.js';
 import { logAudit } from '../services/audit-logger.js';
 import type { Tool, ToolExecutionContext, ToolParameters, ToolResult } from '../tools/types.js';
 import { MAX_DESCRIPTION_CHARS, NO_MCP_AGENTS, qualifiedToolName } from './config.js';
 import { callServerTool, mapMcpError, serverSecretValues, type RawCallResult } from './connection.js';
 import { validateArguments } from './schema.js';
-import { getServerRow, isLaunchApproved, isServerActive, parseObject, toolRequiresApproval, type McpServerRow, type McpToolRow } from './store.js';
+import { getServerRow, getToolRowStep, isLaunchApproved, isServerActive, parseObject, toolRequiresApproval, type McpServerRow, type McpToolRow } from './store.js';
 
 const OUTPUT_OPEN = '<mcp_tool_output>';
 const OUTPUT_CLOSE = '</mcp_tool_output>';
 
 let cache: Tool[] | null = null;
+/** Bumped on every invalidation, so a build that started before it is not cached. */
+let cacheEpoch = 0;
 
 export function invalidateMcpTools(): void {
   cache = null;
+  cacheEpoch++;
 }
 
-/** Tools of all active MCP servers (cached; rebuilt after any change). */
-export function getMcpTools(): Tool[] {
-  if (cache) return cache;
-  let rows: Array<McpToolRow & { s_id: string }>;
-  let servers: Map<string, McpServerRow>;
-  try {
-    const db = getDatabase();
-    servers = new Map((db.prepare('SELECT * FROM mcp_servers WHERE enabled = 1').all() as McpServerRow[]).map((s) => [s.id, s]));
-    rows = db.prepare('SELECT t.*, t.server_id AS s_id FROM mcp_server_tools t JOIN mcp_servers s ON s.id = t.server_id WHERE s.enabled = 1 ORDER BY t.registry_name').all() as any;
-  } catch {
-    return []; // no database / table yet: no MCP tools (not cached)
-  }
+function* activeToolsStep(): Step<Tool[]> {
+  const servers = new Map((yield* all<McpServerRow>('SELECT * FROM mcp_servers WHERE enabled = 1')).map((s) => [s.id, s]));
+  const rows = yield* all<McpToolRow & { s_id: string }>(
+    'SELECT t.*, t.server_id AS s_id FROM mcp_server_tools t JOIN mcp_servers s ON s.id = t.server_id WHERE s.enabled = 1 ORDER BY t.registry_name');
   const tools: Tool[] = [];
   for (const row of rows) {
     const server = servers.get(row.s_id);
@@ -61,8 +56,42 @@ export function getMcpTools(): Tool[] {
     if (!schema) continue;
     tools.push(buildTool(server, row, schema));
   }
-  cache = tools;
   return tools;
+}
+
+/**
+ * Tools of all active MCP servers (cached; rebuilt after any change). B2.2c:
+ * read on the process driver; no database / table yet: no MCP tools (not
+ * cached).
+ */
+export async function getMcpTools(): Promise<Tool[]> {
+  if (cache) return cache;
+  const epoch = cacheEpoch;
+  let tools: Tool[];
+  try {
+    tools = await sql().read(activeToolsStep());
+  } catch {
+    return [];
+  }
+  if (epoch === cacheEpoch) cache = tools;
+  return tools;
+}
+
+/**
+ * getMcpTools for the synchronous registry (createToolsRegistry): the cache,
+ * else read now on SQLite. On PostgreSQL only the cache can be used
+ * synchronously; without one there are no MCP tools here (callers that
+ * offer MCP tools use the async createAgentToolsRegistry).
+ */
+export function getMcpToolsSync(): Tool[] {
+  if (cache) return cache;
+  if (sql().dialect === 'postgres') return [];
+  try {
+    cache = sqliteSync(activeToolsStep());
+  } catch {
+    return [];
+  }
+  return cache;
 }
 
 function buildTool(server: McpServerRow, row: McpToolRow, schema: Record<string, any>): Tool {
@@ -169,7 +198,7 @@ export async function executeMcpTool(
 ): Promise<ToolResult> {
   const started = Date.now();
   const argumentNames = Object.keys(params || {}).slice(0, 64);
-  const server = getServerRow(serverId);
+  const server = await getServerRow(serverId);
   const qualifiedName = qualifiedToolName(server?.name ?? 'unknown', toolName);
   const done = (result: ToolResult, entry: Omit<Parameters<typeof audit>[3], 'durationMs' | 'argumentNames'>) => {
     audit(context, { id: serverId, name: server?.name ?? 'unknown' }, qualifiedName, { ...entry, durationMs: Date.now() - started, argumentNames });
@@ -182,7 +211,7 @@ export async function executeMcpTool(
   if (!server || !isServerActive(server)) {
     return done(failure(qualifiedName, 'unavailable', 'the MCP server is disabled or not approved'), { success: false, error: 'disabled' });
   }
-  const row = getDatabase().prepare('SELECT * FROM mcp_server_tools WHERE server_id = ? AND tool_name = ?').get(serverId, toolName) as McpToolRow | undefined;
+  const row = await sql().read(getToolRowStep(serverId, toolName));
   const schema = row ? parseObject(row.input_schema) : null;
   if (!row || !schema) {
     return done(failure(qualifiedName, 'unknown_tool', 'the tool is no longer offered by the MCP server; ask the owner to refresh it'), { success: false, error: 'unknown_tool' });

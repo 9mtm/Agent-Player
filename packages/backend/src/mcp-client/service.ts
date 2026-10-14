@@ -2,10 +2,20 @@
  * Owner operations on MCP servers (M1): add, change, enable (with launch
  * approval for stdio), disable, refresh discovery, per-tool approval
  * setting, delete. Used by the owner-only routes in api/routes/mcp-servers.ts.
+ *
+ * B2.2c: mcp_servers / mcp_server_tools are on the process driver (SQL
+ * steps). Each change is one transaction together with the grants and
+ * bindings it revokes (agent_tool_grants / mcp_grant_bindings, same
+ * driver), so on PostgreSQL a target change, a delete or a refresh never
+ * leaves grants for tools that are gone, and a refresh never stores tools
+ * of a server generation that changed meanwhile. Writes that follow a read
+ * lock the server row (FOR UPDATE on PostgreSQL) and check that it is still
+ * the row the change was computed from (409 conflict otherwise). Secret
+ * values (credential manager, async) are written before the transaction;
+ * audit rows are written after it.
  */
 
 import { randomUUID } from 'node:crypto';
-import { getDatabase } from '../db/index.js';
 import { isExecToolsEnabled, EXEC_TOOLS_ENV_FLAG } from '../tools/exec-policy.js';
 import {
   checkCommand, checkSecretMap, checkServerUrl, clampResultBytes, clampTimeout, launchHash, MAX_DESCRIPTION_CHARS,
@@ -14,24 +24,22 @@ import {
 import { closeConnection, listServerTools } from './connection.js';
 import { sanitizeInputSchema, SchemaError } from './schema.js';
 import {
-  deleteSecrets, getServerRow, getServerRowByName, isLaunchApproved, listServerRows, listToolRows, parseList, serverView,
-  writeSecrets, type McpServerRow, type McpServerView,
+  deleteSecrets, getServerRow, getServerRowByNameStep, getServerRowStep, isLaunchApproved, listServerRowsStep, listToolRowsStep,
+  parseList, serverView, serverViewStep, writeSecrets, type McpServerRow, type McpServerView,
 } from './store.js';
 import { invalidateMcpTools } from './tools.js';
-import { grantedNamesWithPrefix, revokeMcpGrants, revokeMcpGrantsSync, toolFingerprint, type RevokedGrant } from './grant-binding.js';
-import { sql } from '../repositories/sql-steps.js';
+import { grantedNamesWithPrefixStep, revokeMcpGrantsStep, toolFingerprint, type RevokedGrant } from './grant-binding.js';
+import { dialect, one, run, sql, type Step } from '../repositories/sql-steps.js';
+import { forUpdate, isParam, nowText } from '../db/pg/dialect.js';
 import { logAudit } from '../services/audit-logger.js';
 import { MCP_TOOL_PREFIX } from './config.js';
 
 /**
  * Remove MCP grants that no longer match a server's tools and audit it
  * (stale-authorization guard: a re-created server, a changed target or a
- * changed/vanished tool never inherits an old grant).
+ * changed/vanished tool never inherits an old grant). The grants are revoked
+ * inside the change's transaction (revokeMcpGrantsStep); this audits them.
  */
-async function revokeAndAudit(server: { id: string; name: string }, toolNames: string[], reason: string, actor: string | null): Promise<RevokedGrant[]> {
-  return auditRevoked(server, await revokeMcpGrants(toolNames), reason, actor);
-}
-
 function auditRevoked(server: { id: string; name: string }, revoked: RevokedGrant[], reason: string, actor: string | null): RevokedGrant[] {
   if (revoked.length) {
     logAudit({
@@ -73,13 +81,48 @@ function str(v: unknown, field: string, max: number): string | null {
   return v;
 }
 
-export function listServers(): McpServerView[] {
-  return listServerRows().map(serverView);
+export function listServers(): Promise<McpServerView[]> {
+  return sql().read((function* () {
+    const views: McpServerView[] = [];
+    for (const row of yield* listServerRowsStep()) views.push(yield* serverViewStep(row));
+    return views;
+  })());
 }
 
-export function getServer(id: string): McpServerView | null {
-  const row = getServerRow(id);
-  return row ? serverView(row) : null;
+export async function getServer(id: string): Promise<McpServerView | null> {
+  return sql().read((function* () {
+    const row = yield* getServerRowStep(id);
+    return row ? yield* serverViewStep(row) : null;
+  })());
+}
+
+/** A unique-constraint violation on either driver (SQLite code / PostgreSQL SQLSTATE 23505). */
+function isUniqueViolation(err: any): boolean {
+  return err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || err?.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || err?.code === '23505';
+}
+
+function notFound(): McpPolicyError {
+  return new McpPolicyError('MCP server not found', 404, 'not_found');
+}
+
+function conflict(): McpPolicyError {
+  return new McpPolicyError('the MCP server was changed meanwhile; reload it and try again', 409, 'conflict');
+}
+
+/**
+ * The server row, locked for the rest of the transaction (PostgreSQL), and
+ * still the row a change was computed from: same target, secrets, generation
+ * and enabled state. Throws 404 / 409 otherwise.
+ */
+function* lockUnchanged(row: McpServerRow): Step<McpServerRow> {
+  const d = yield* dialect();
+  const cur = yield* one<McpServerRow>(`SELECT * FROM mcp_servers WHERE id = ?${forUpdate(d)}`, row.id);
+  if (!cur) throw notFound();
+  const same = (k: keyof McpServerRow) => (cur[k] ?? null) === (row[k] ?? null);
+  if (!(['launch_hash', 'url', 'allow_remote', 'secret_credential_id', 'generation', 'enabled', 'command', 'args', 'env_names', 'header_names'] as const).every(same)) {
+    throw conflict();
+  }
+  return cur;
 }
 
 export interface ServerInput {
@@ -91,7 +134,8 @@ export interface ServerInput {
 export async function createServer(input: ServerInput, ownerId: string): Promise<McpServerView> {
   const name = typeof input.name === 'string' ? input.name.trim() : '';
   if (!SERVER_NAME_PATTERN.test(name)) throw new McpConfigError('name must be 1-24 lowercase letters, digits or "-" (no "_")');
-  if (getServerRowByName(name)) throw new McpPolicyError(`an MCP server named "${name}" already exists`, 409, 'name_taken');
+  const nameTaken = () => new McpPolicyError(`an MCP server named "${name}" already exists`, 409, 'name_taken');
+  if (await sql().read(getServerRowByNameStep(name))) throw nameTaken();
   const transport = input.transport as McpTransport;
   if (!MCP_TRANSPORTS.includes(transport)) throw new McpConfigError('transport must be stdio, http or sse');
   const description = str(input.description, 'description', MAX_DESCRIPTION_CHARS);
@@ -117,15 +161,26 @@ export async function createServer(input: ServerInput, ownerId: string): Promise
   const id = randomUUID();
   const secrets = await writeSecrets(id, null, { env, headers });
   const hash = transport === 'stdio' ? launchHash({ command: command!, args, envNames: secrets.envNames }) : null;
-  getDatabase().prepare(`
-    INSERT INTO mcp_servers (id, name, description, transport, command, args, url, allow_remote, env_names, header_names,
-      secret_credential_id, enabled, launch_hash, timeout_ms, max_result_bytes, status, created_by, generation)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'disabled', ?, ?)
-  `).run(id, name, description, transport, command, transport === 'stdio' ? JSON.stringify(args) : null, url, allowRemote ? 1 : 0,
-    JSON.stringify(secrets.envNames), JSON.stringify(secrets.headerNames), secrets.credentialId, hash, timeoutMs, maxResultBytes, ownerId, randomUUID());
-  // A former server with the same name never passes its grants on.
-  await revokeAndAudit({ id, name }, await grantedNamesWithPrefix(serverPrefix(name)), 'server_added', ownerId);
-  return serverView(getServerRow(id)!);
+  let revoked: RevokedGrant[];
+  try {
+    revoked = await sql().tx(() => (function* () {
+      if (yield* getServerRowByNameStep(name)) throw nameTaken();
+      yield* run(`
+        INSERT INTO mcp_servers (id, name, description, transport, command, args, url, allow_remote, env_names, header_names,
+          secret_credential_id, enabled, launch_hash, timeout_ms, max_result_bytes, status, created_by, generation)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'disabled', ?, ?)
+      `, id, name, description, transport, command, transport === 'stdio' ? JSON.stringify(args) : null, url, allowRemote ? 1 : 0,
+      JSON.stringify(secrets.envNames), JSON.stringify(secrets.headerNames), secrets.credentialId, hash, timeoutMs, maxResultBytes, ownerId, randomUUID());
+      // A former server with the same name never passes its grants on.
+      return yield* revokeMcpGrantsStep(yield* grantedNamesWithPrefixStep(serverPrefix(name)));
+    })());
+  } catch (err) {
+    await deleteSecrets(secrets.credentialId).catch(() => {});
+    if (isUniqueViolation(err)) throw nameTaken();
+    throw err;
+  }
+  auditRevoked({ id, name }, revoked, 'server_added', ownerId);
+  return serverView((await getServerRow(id))!);
 }
 
 /**
@@ -134,8 +189,8 @@ export async function createServer(input: ServerInput, ownerId: string): Promise
  * disables it; it must be enabled (and for stdio approved) again.
  */
 export async function updateServer(id: string, input: ServerInput, ownerId: string): Promise<{ server: McpServerView; disabled: boolean; revokedGrants: RevokedGrant[] }> {
-  const row = getServerRow(id);
-  if (!row) throw new McpPolicyError('MCP server not found', 404, 'not_found');
+  const row = await getServerRow(id);
+  if (!row) throw notFound();
   if (input.name !== undefined && input.name !== row.name) throw new McpConfigError('the name cannot be changed (it is part of the tool names)');
   if (input.transport !== undefined && input.transport !== row.transport) throw new McpConfigError('the transport cannot be changed; add a new server');
   const description = input.description !== undefined ? str(input.description, 'description', MAX_DESCRIPTION_CHARS) : row.description;
@@ -165,64 +220,78 @@ export async function updateServer(id: string, input: ServerInput, ownerId: stri
   const hash = row.transport === 'stdio' ? launchHash({ command: command!, args, envNames: secrets.envNames }) : null;
   const targetChanged = row.transport === 'stdio' ? hash !== row.launch_hash : (url !== row.url || allowRemote !== (row.allow_remote === 1));
   const disable = targetChanged && row.enabled === 1;
-  getDatabase().prepare(`
-    UPDATE mcp_servers SET description = ?, command = ?, args = ?, url = ?, allow_remote = ?, env_names = ?, header_names = ?,
-      secret_credential_id = ?, launch_hash = ?, timeout_ms = ?, max_result_bytes = ?,
-      enabled = CASE WHEN ? THEN 0 ELSE enabled END, status = CASE WHEN ? THEN 'disabled' ELSE status END, updated_at = datetime('now')
-    WHERE id = ?
-  `).run(description, command, row.transport === 'stdio' ? JSON.stringify(args) : null, url, allowRemote ? 1 : 0,
+  const d = sql().dialect;
+  const revokedGrants = await sql().tx(() => (function* () {
+    yield* lockUnchanged(row);
+    yield* run(`
+      UPDATE mcp_servers SET description = ?, command = ?, args = ?, url = ?, allow_remote = ?, env_names = ?, header_names = ?,
+        secret_credential_id = ?, launch_hash = ?, timeout_ms = ?, max_result_bytes = ?,
+        enabled = CASE WHEN ? = 1 THEN 0 ELSE enabled END, status = CASE WHEN ? = 1 THEN 'disabled' ELSE status END, updated_at = ${nowText(d)}
+      WHERE id = ?
+    `, description, command, row.transport === 'stdio' ? JSON.stringify(args) : null, url, allowRemote ? 1 : 0,
     JSON.stringify(secrets.envNames), JSON.stringify(secrets.headerNames), secrets.credentialId, hash, timeoutMs, maxResultBytes,
     disable ? 1 : 0, disable ? 1 : 0, id);
-  let revokedGrants: RevokedGrant[] = [];
-  if (targetChanged) {
+    if (!targetChanged) return [];
     // New target = new server generation: its tools must be discovered again
-    // and granted again.
-    const db = getDatabase();
-    db.prepare(`UPDATE mcp_servers SET generation = ?, status = CASE WHEN enabled = 1 THEN 'enabled' ELSE status END WHERE id = ?`).run(randomUUID(), id);
-    db.prepare('DELETE FROM mcp_server_tools WHERE server_id = ?').run(id);
-    revokedGrants = await revokeAndAudit(row, await grantedNamesWithPrefix(serverPrefix(row.name)), 'target_changed', ownerId);
-  }
+    // and granted again (grants revoked in the same transaction).
+    yield* run(`UPDATE mcp_servers SET generation = ?, status = CASE WHEN enabled = 1 THEN 'enabled' ELSE status END WHERE id = ?`, randomUUID(), id);
+    yield* run('DELETE FROM mcp_server_tools WHERE server_id = ?', id);
+    return yield* revokeMcpGrantsStep(yield* grantedNamesWithPrefixStep(serverPrefix(row.name)));
+  })());
+  if (targetChanged) auditRevoked(row, revokedGrants, 'target_changed', ownerId);
   await closeConnection(id);
   invalidateMcpTools();
-  return { server: serverView(getServerRow(id)!), disabled: disable, revokedGrants };
+  return { server: await serverView((await getServerRow(id))!), disabled: disable, revokedGrants };
 }
 
 /**
  * Enable a server. stdio: needs AGENT_EXEC_TOOLS=true and the owner's
  * approval of exactly this launch (launchHash from the 409 answer).
  */
-export function enableServer(id: string, input: { launchHash?: unknown }, ownerId: string): McpServerView {
-  const row = getServerRow(id);
-  if (!row) throw new McpPolicyError('MCP server not found', 404, 'not_found');
-  const db = getDatabase();
+export async function enableServer(id: string, input: { launchHash?: unknown }, ownerId: string): Promise<McpServerView> {
+  const row = await getServerRow(id);
+  if (!row) throw notFound();
+  const d = sql().dialect;
   if (row.transport === 'stdio') {
     execRequired();
     if (!row.launch_hash || input.launchHash !== row.launch_hash) throw launchApprovalError(row);
-    db.prepare(`UPDATE mcp_servers SET enabled = 1, approved_launch_hash = launch_hash, approved_by = ?, approved_at = datetime('now'),
-                status = 'enabled', last_error = NULL, updated_at = datetime('now') WHERE id = ? AND launch_hash = ?`).run(ownerId, id, row.launch_hash);
+    // Conditional on the approved hash: a launch change meanwhile approves nothing.
+    await sql().read(run(`UPDATE mcp_servers SET enabled = 1, approved_launch_hash = launch_hash, approved_by = ?, approved_at = ${nowText(d)},
+                status = 'enabled', last_error = NULL, updated_at = ${nowText(d)} WHERE id = ? AND launch_hash = ?`, ownerId, id, row.launch_hash));
   } else {
     checkServerUrl(row.url, row.allow_remote === 1);
-    db.prepare(`UPDATE mcp_servers SET enabled = 1, status = 'enabled', last_error = NULL, updated_at = datetime('now') WHERE id = ?`).run(id);
+    // Conditional on the checked URL: a target change meanwhile enables nothing.
+    await sql().read(run(`UPDATE mcp_servers SET enabled = 1, status = 'enabled', last_error = NULL, updated_at = ${nowText(d)}
+                WHERE id = ? AND url ${isParam(d)} AND allow_remote = ?`, id, row.url, row.allow_remote));
   }
   invalidateMcpTools();
-  return serverView(getServerRow(id)!);
+  return serverView((await getServerRow(id))!);
 }
 
 export async function disableServer(id: string): Promise<McpServerView> {
-  const row = getServerRow(id);
-  if (!row) throw new McpPolicyError('MCP server not found', 404, 'not_found');
-  getDatabase().prepare(`UPDATE mcp_servers SET enabled = 0, status = 'disabled', updated_at = datetime('now') WHERE id = ?`).run(id);
+  const row = await getServerRow(id);
+  if (!row) throw notFound();
+  await sql().read(run(`UPDATE mcp_servers SET enabled = 0, status = 'disabled', updated_at = ${nowText(sql().dialect)} WHERE id = ?`, id));
   await closeConnection(id);
   invalidateMcpTools();
-  return serverView(getServerRow(id)!);
+  return serverView((await getServerRow(id))!);
 }
 
 export async function deleteServer(id: string, actor: string | null = null): Promise<McpServerRow & { revokedGrants: RevokedGrant[] }> {
-  const row = getServerRow(id);
-  if (!row) throw new McpPolicyError('MCP server not found', 404, 'not_found');
+  const row = await getServerRow(id);
+  if (!row) throw notFound();
   await closeConnection(id);
-  const revokedGrants = await revokeAndAudit(row, await grantedNamesWithPrefix(serverPrefix(row.name)), 'server_deleted', actor);
-  getDatabase().prepare('DELETE FROM mcp_servers WHERE id = ?').run(id);
+  // Grants, bindings and the server row (its tools cascade) in one transaction.
+  const revokedGrants = await sql().tx(() => (function* () {
+    const d = yield* dialect();
+    const cur = yield* one<McpServerRow>(`SELECT * FROM mcp_servers WHERE id = ?${forUpdate(d)}`, id);
+    if (!cur) throw notFound();
+    const revoked = yield* revokeMcpGrantsStep(yield* grantedNamesWithPrefixStep(serverPrefix(cur.name)));
+    yield* run('DELETE FROM mcp_server_tools WHERE server_id = ?', id);
+    yield* run('DELETE FROM mcp_servers WHERE id = ?', id);
+    return revoked;
+  })());
+  auditRevoked(row, revokedGrants, 'server_deleted', actor);
   await deleteSecrets(row.secret_credential_id);
   invalidateMcpTools();
   return { ...row, revokedGrants };
@@ -239,25 +308,23 @@ export interface DiscoveryResult {
 
 /** Connect, tools/list, store the validated tools (replacing the old list). */
 export async function refreshServer(id: string, actor: string | null = null): Promise<DiscoveryResult> {
-  const row = getServerRow(id);
-  if (!row) throw new McpPolicyError('MCP server not found', 404, 'not_found');
+  const row = await getServerRow(id);
+  if (!row) throw notFound();
   if (row.enabled !== 1) throw new McpPolicyError('enable the MCP server before discovering its tools', 409, 'disabled');
   if (row.transport === 'stdio') {
     execRequired();
     if (!isLaunchApproved(row)) throw launchApprovalError(row);
   }
-  const db = getDatabase();
   let listed;
   try {
     listed = await listServerTools(row);
   } catch (err: any) {
     const code = typeof err?.code === 'string' ? err.code : 'unavailable';
-    db.prepare(`UPDATE mcp_servers SET status = 'error', last_error = ?, updated_at = datetime('now') WHERE id = ?`).run(`${code}: ${String(err?.message || '').slice(0, 300)}`, id);
+    await sql().read(run(`UPDATE mcp_servers SET status = 'error', last_error = ?, updated_at = ${nowText(sql().dialect)} WHERE id = ?`,
+      `${code}: ${String(err?.message || '').slice(0, 300)}`, id));
     throw new McpPolicyError(`discovery failed: ${err?.message || 'the MCP server could not be reached'}`, 502, `mcp_${code}`);
   }
 
-  const oldTools = listToolRows(id);
-  const overrides = new Map(oldTools.map((t) => [t.tool_name, t.requires_approval]));
   const skipped: DiscoveryResult['skipped'] = [];
   const keep: Array<{ tool: string; registry: string; title: string | null; description: string | null; schema: string; annotations: string | null }> = [];
   const seenRegistry = new Set<string>();
@@ -293,36 +360,40 @@ export async function refreshServer(id: string, actor: string | null = null): Pr
     });
   }
   const fingerprints = new Map(keep.map((k) => [k.registry, toolFingerprint({ serverId: id, generation: row.generation, toolName: k.tool, inputSchema: k.schema, annotations: k.annotations, title: k.title, description: k.description })]));
-  // Grants of tools that vanished or changed are removed (a changed tool needs a fresh grant).
-  const stale = new Set(oldTools.filter((t) => !t.fingerprint || fingerprints.get(t.registry_name) !== t.fingerprint).map((t) => t.registry_name));
-  for (const name of await grantedNamesWithPrefix(serverPrefix(row.name))) if (!fingerprints.has(name)) stale.add(name);
-  let revokedGrants: RevokedGrant[] = [];
-  // Grants and bindings are on the process driver; MCP discovery is SQLite
-  // (B2.2c). On PostgreSQL the grants are revoked first (their own
-  // transaction; a later failure leaves them revoked: fail closed); on
-  // SQLite in the same transaction as the tool rows, as before.
-  const grantsOnPg = sql().dialect === 'postgres';
-  if (grantsOnPg) revokedGrants = await revokeAndAudit(row, [...stale], 'tools_changed_on_refresh', actor);
-  db.transaction(() => {
-    if (!grantsOnPg) revokedGrants = auditRevoked(row, revokeMcpGrantsSync([...stale]), 'tools_changed_on_refresh', actor);
-    db.prepare('DELETE FROM mcp_server_tools WHERE server_id = ?').run(id);
-    const ins = db.prepare(`INSERT INTO mcp_server_tools (server_id, tool_name, registry_name, title, description, input_schema, annotations, requires_approval, fingerprint)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    for (const k of keep) ins.run(id, k.tool, k.registry, k.title, k.description, k.schema, k.annotations, overrides.get(k.tool) ?? null, fingerprints.get(k.registry));
-    db.prepare(`UPDATE mcp_servers SET status = 'ready', last_error = NULL, last_discovered_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(id);
-  });
+  // One transaction: the server row is locked and must still be the
+  // generation the fingerprints were computed for; grants of tools that
+  // vanished or changed are removed (a changed tool needs a fresh grant)
+  // together with the old tool rows, and the new rows are stored.
+  const revokedGrants = await sql().tx(() => (function* () {
+    const d = yield* dialect();
+    yield* lockUnchanged(row);
+    const oldTools = yield* listToolRowsStep(id);
+    const overrides = new Map(oldTools.map((t) => [t.tool_name, t.requires_approval]));
+    const stale = new Set(oldTools.filter((t) => !t.fingerprint || fingerprints.get(t.registry_name) !== t.fingerprint).map((t) => t.registry_name));
+    for (const name of yield* grantedNamesWithPrefixStep(serverPrefix(row.name))) if (!fingerprints.has(name)) stale.add(name);
+    const revoked = yield* revokeMcpGrantsStep([...stale]);
+    yield* run('DELETE FROM mcp_server_tools WHERE server_id = ?', id);
+    for (const k of keep) {
+      yield* run(`INSERT INTO mcp_server_tools (server_id, tool_name, registry_name, title, description, input_schema, annotations, requires_approval, fingerprint)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, k.tool, k.registry, k.title, k.description, k.schema, k.annotations, overrides.get(k.tool) ?? null, fingerprints.get(k.registry) ?? null);
+    }
+    yield* run(`UPDATE mcp_servers SET status = 'ready', last_error = NULL, last_discovered_at = ${nowText(d)}, updated_at = ${nowText(d)} WHERE id = ?`, id);
+    return revoked;
+  })());
+  auditRevoked(row, revokedGrants, 'tools_changed_on_refresh', actor);
   invalidateMcpTools();
-  return { server: serverView(getServerRow(id)!), discovered: keep.length, skipped, truncated: listed.truncated, revokedGrants };
+  return { server: await serverView((await getServerRow(id))!), discovered: keep.length, skipped, truncated: listed.truncated, revokedGrants };
 }
 
 /** Owner setting for one tool: requiresApproval true / false / null (= derived from the server's hints). */
-export function setToolApproval(id: string, toolName: string, value: unknown): McpServerView {
-  const row = getServerRow(id);
-  if (!row) throw new McpPolicyError('MCP server not found', 404, 'not_found');
+export async function setToolApproval(id: string, toolName: string, value: unknown): Promise<McpServerView> {
+  const row = await getServerRow(id);
+  if (!row) throw notFound();
   if (value !== true && value !== false && value !== null) throw new McpConfigError('requiresApproval must be true, false or null');
-  const res = getDatabase().prepare('UPDATE mcp_server_tools SET requires_approval = ? WHERE server_id = ? AND tool_name = ?')
-    .run(value === null ? null : value ? 1 : 0, id, toolName);
+  const res = await sql().read(run('UPDATE mcp_server_tools SET requires_approval = ? WHERE server_id = ? AND tool_name = ?',
+    value === null ? null : value ? 1 : 0, id, toolName));
   if (res.changes !== 1) throw new McpPolicyError('tool not found on this MCP server', 404, 'tool_not_found');
   invalidateMcpTools();
-  return serverView(getServerRow(id)!);
+  return serverView((await getServerRow(id))!);
 }

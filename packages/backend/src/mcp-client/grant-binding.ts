@@ -18,15 +18,14 @@
  * B2.2b-4: the bindings live with the grants (agent_tool_grants, ported in
  * B2.2b-3) on the process driver, as SQL steps: on PostgreSQL they are
  * written in the same transaction as the grant rows, and revoking removes
- * grants and bindings together. The MCP discovery tables (mcp_servers,
- * mcp_server_tools) are still SQLite (B2.2c): currentMcpTool reads the
- * tool's current fingerprint there, and a binding counts only while it
- * equals that fingerprint (the comparison is done here instead of a join).
+ * grants and bindings together. B2.2c: the MCP discovery tables
+ * (mcp_servers, mcp_server_tools) are on the process driver too, so the
+ * tool's current fingerprint is read in the same step (and transaction) as
+ * the binding; a binding counts only while it equals that fingerprint.
  */
 
 import { createHash } from 'node:crypto';
-import { getDatabase } from '../db/index.js';
-import { all, dialect, one, run, sql, sqliteSync, type Step } from '../repositories/sql-steps.js';
+import { all, dialect, one, run, sql, type Step } from '../repositories/sql-steps.js';
 
 export function toolFingerprint(parts: {
   serverId: string; generation: string | null; toolName: string; inputSchema: string; annotations: string | null;
@@ -37,11 +36,16 @@ export function toolFingerprint(parts: {
     .digest('hex');
 }
 
-/** Current server + fingerprint of a discovered MCP tool, by registry name (MCP discovery: SQLite until B2.2c). */
-export function currentMcpTool(registryName: string): { serverId: string; fingerprint: string } | undefined {
-  const row = getDatabase().prepare('SELECT server_id, fingerprint FROM mcp_server_tools WHERE registry_name = ? AND fingerprint IS NOT NULL')
-    .get(registryName) as { server_id: string; fingerprint: string } | undefined;
+/** Current server + fingerprint of a discovered MCP tool, by registry name (SQL step). */
+export function* currentMcpToolStep(registryName: string): Step<{ serverId: string; fingerprint: string } | undefined> {
+  const row = yield* one<{ server_id: string; fingerprint: string }>(
+    'SELECT server_id, fingerprint FROM mcp_server_tools WHERE registry_name = ? AND fingerprint IS NOT NULL', registryName);
   return row ? { serverId: row.server_id, fingerprint: row.fingerprint } : undefined;
+}
+
+/** currentMcpToolStep on the process driver. */
+export function currentMcpTool(registryName: string): Promise<{ serverId: string; fingerprint: string } | undefined> {
+  return sql().read(currentMcpToolStep(registryName));
 }
 
 /** True when the agent's grant of this MCP tool was given for the tool as it is now (SQL step). */
@@ -60,7 +64,11 @@ export function* isMcpGrantBoundStep(agentId: string, registryName: string): Ste
   }
   if (!binding) return false;
   let cur: { serverId: string; fingerprint: string } | undefined;
-  try { cur = currentMcpTool(registryName); } catch { return false; }
+  if (d === 'sqlite') {
+    try { cur = yield* currentMcpToolStep(registryName); } catch { return false; }
+  } else {
+    cur = yield* currentMcpToolStep(registryName);
+  }
   return !!cur && cur.serverId === binding.server_id && cur.fingerprint === binding.fingerprint;
 }
 
@@ -68,7 +76,7 @@ export function* isMcpGrantBoundStep(agentId: string, registryName: string): Ste
 export function* writeMcpBindingsStep(agentId: string, names: string[], by: string | null): Step<void> {
   yield* run('DELETE FROM mcp_grant_bindings WHERE agent_id = ?', agentId);
   for (const name of names) {
-    const cur = currentMcpTool(name);
+    const cur = yield* currentMcpToolStep(name);
     if (cur) {
       yield* run('INSERT INTO mcp_grant_bindings (agent_id, tool_name, server_id, fingerprint, granted_by) VALUES (?, ?, ?, ?, ?)',
         agentId, name, cur.serverId, cur.fingerprint, by);
@@ -78,7 +86,8 @@ export function* writeMcpBindingsStep(agentId: string, names: string[], by: stri
 
 export interface RevokedGrant { agentId: string; tool: string }
 
-function* revokeMcpGrantsStep(toolNames: string[]): Step<RevokedGrant[]> {
+/** Remove grants and bindings of these MCP tool names from every agent (SQL step: joins the caller's transaction). */
+export function* revokeMcpGrantsStep(toolNames: string[]): Step<RevokedGrant[]> {
   const revoked: RevokedGrant[] = [];
   for (const tool of new Set(toolNames)) {
     for (const r of yield* all<{ agent_id: string }>('SELECT agent_id FROM agent_tool_grants WHERE tool_name = ? ORDER BY agent_id', tool)) {
@@ -96,18 +105,17 @@ export async function revokeMcpGrants(toolNames: string[]): Promise<RevokedGrant
   return sql().tx(() => revokeMcpGrantsStep(toolNames));
 }
 
-/** SQLite only: revokeMcpGrants inside the caller's synchronous SQLite transaction. */
-export function revokeMcpGrantsSync(toolNames: string[]): RevokedGrant[] {
-  if (toolNames.length === 0) return [];
-  return sqliteSync(revokeMcpGrantsStep(toolNames));
-}
-
-/** All granted tool names that start with this server's prefix (`mcp__<server>__`). */
-export async function grantedNamesWithPrefix(prefix: string): Promise<string[]> {
-  const rows = await sql().read(all<{ tool_name: string }>(`
+/** All granted tool names that start with this server's prefix (`mcp__<server>__`; SQL step). */
+export function* grantedNamesWithPrefixStep(prefix: string): Step<string[]> {
+  const rows = yield* all<{ tool_name: string }>(`
     SELECT tool_name FROM agent_tool_grants WHERE substr(tool_name, 1, ?) = ?
     UNION SELECT tool_name FROM mcp_grant_bindings WHERE substr(tool_name, 1, ?) = ?
     ORDER BY 1
-  `, prefix.length, prefix, prefix.length, prefix));
+  `, prefix.length, prefix, prefix.length, prefix);
   return rows.map((r) => r.tool_name);
+}
+
+/** grantedNamesWithPrefixStep on the process driver. */
+export function grantedNamesWithPrefix(prefix: string): Promise<string[]> {
+  return sql().read(grantedNamesWithPrefixStep(prefix));
 }

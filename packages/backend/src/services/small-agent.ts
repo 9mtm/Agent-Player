@@ -42,7 +42,7 @@ import { all, dialect, one, run as runSql, sql } from '../repositories/sql-steps
 import { insertOrIgnore } from '../db/pg/dialect.js';
 import { getOrchestrator } from '../multi-agent/index.js';
 import { DEFAULT_OLLAMA_MODEL } from '../llm/ollama.js';
-import { createAgentToolsRegistry, createToolsRegistry } from '../tools/index.js';
+import { createAgentToolsRegistry } from '../tools/index.js';
 import { approvalCategory } from '../tools/approvals.js';
 import { isToolExecClass } from '../tools/exec-policy.js';
 import { TOOL_NAME_PATTERN, intersectGrants, setAgentGrants, staticGrants, type AgentToolGrants } from '../tools/grants.js';
@@ -141,7 +141,7 @@ export async function ensureSmallAgent(): Promise<void> {
       SMALL_AGENT_MAX_TOKENS,
     );
     })());
-    const available = createToolsRegistry({ workspaceDir: process.cwd() }).listRegistered();
+    const available = (await createAgentToolsRegistry({ workspaceDir: process.cwd() })).listRegistered();
     await setAgentGrants(SMALL_AGENT_ID, { grants: [...SMALL_AGENT_SAFE_TOOLS] }, 'system:small-agent', available);
   }
   const orchestrator = getOrchestrator();

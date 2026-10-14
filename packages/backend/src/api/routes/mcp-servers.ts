@@ -77,7 +77,7 @@ export async function mcpServersRoutes(fastify: FastifyInstance) {
 
   fastify.get('/api/mcp/servers', { config }, async (request, reply) => {
     if (ownerOf(request, reply) === null) return reply;
-    return { servers: listServers() };
+    return { servers: await listServers() };
   });
 
   fastify.post<{ Body: Record<string, unknown> }>('/api/mcp/servers', { config }, async (request, reply) => {
@@ -95,7 +95,7 @@ export async function mcpServersRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { id: string } }>('/api/mcp/servers/:id', { config }, async (request, reply) => {
     if (ownerOf(request, reply) === null) return reply;
     if (badId(request.params.id, reply)) return reply;
-    const server = getServer(request.params.id);
+    const server = await getServer(request.params.id);
     if (!server) return reply.code(404).send({ error: 'MCP server not found' });
     return server;
   });
@@ -134,7 +134,7 @@ export async function mcpServersRoutes(fastify: FastifyInstance) {
     const { id } = request.params;
     if (badId(id, reply)) return reply;
     try {
-      const server = enableServer(id, request.body || {}, ownerId);
+      const server = await enableServer(id, request.body || {}, ownerId);
       audit(request, ownerId, 'mcp_server.enable', true, id, {
         ...summary(server), launchApproved: server.transport === 'stdio' ? server.launchHash : null,
       });
@@ -181,7 +181,7 @@ export async function mcpServersRoutes(fastify: FastifyInstance) {
     if (badId(id, reply)) return reply;
     try {
       const value = (request.body || {}).requiresApproval;
-      const server = setToolApproval(id, tool, value === undefined ? Symbol('missing') : value);
+      const server = await setToolApproval(id, tool, value === undefined ? Symbol('missing') : value);
       audit(request, ownerId, 'mcp_tool.approval_setting', true, id, { name: server.name, tool, requiresApproval: value });
       return server;
     } catch (err) {
