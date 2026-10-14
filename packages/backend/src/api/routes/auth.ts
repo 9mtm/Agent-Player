@@ -20,6 +20,7 @@ import {
   checkLoginThrottle,
   handleFailedLogin,
   handleSuccessfulLogin,
+  parseDeviceToken,
 } from '../../auth/account-lockout.js';
 import { logAuthEvent } from '../../services/audit-logger.js';
 import { authorizeActiveRole, OWNER_OR_ADMIN } from '../../auth/route-guards.js';
@@ -142,7 +143,11 @@ export async function authRoutes(fastify: FastifyInstance) {
   fastify.post('/api/auth/login', {
     config: { rateLimit: authRateLimit }
   }, async (request, reply) => {
-    const { email, password } = (request.body ?? {}) as any;
+    const body = (request.body ?? {}) as any;
+    const { email, password } = body;
+    // S0-Q.20: optional device token from an earlier sign-in (never logged).
+    // Malformed values are treated as absent.
+    const deviceToken = parseDeviceToken(body.deviceToken);
 
     // Validation
     if (!email || !password) {
@@ -152,14 +157,16 @@ export async function authRoutes(fastify: FastifyInstance) {
       });
     }
 
-    // Client IP and User-Agent for attempt tracking (no trustProxy: socket address)
+    // Client IP and User-Agent for attempt tracking. No trustProxy: this is the
+    // socket address (127.0.0.1 behind a proxy). Remote exposure needs
+    // trustProxy set to the known proxy hop.
     const ipAddress = request.ip || 'unknown';
     const userAgent = request.headers['user-agent'];
 
     // SECURITY (M-02, S0-Q.20): throttle per source, never lock the account.
     // Checked before the password and without looking at the account, so the
     // reply is the same for known and unknown emails.
-    const throttle = checkLoginThrottle(String(email), ipAddress);
+    const throttle = checkLoginThrottle(String(email), ipAddress, deviceToken);
     if (throttle.throttled) {
       const minutes = Math.max(1, Math.ceil(throttle.retryAfterSeconds / 60));
       return reply.code(429).header('Retry-After', String(throttle.retryAfterSeconds)).send({
@@ -177,7 +184,7 @@ export async function authRoutes(fastify: FastifyInstance) {
       switch (result.status) {
         case 'unknown':
           // SECURITY: Track + log the failed attempt (M-02, L-02); generic message (M-12)
-          handleFailedLogin(email, ipAddress, userAgent);
+          handleFailedLogin(email, ipAddress, userAgent, deviceToken);
           logAuthEvent('auth.login.failed', request, undefined, email, false, 'Invalid credentials');
           return reply.code(401).send(invalid);
         case 'system':
@@ -189,7 +196,7 @@ export async function authRoutes(fastify: FastifyInstance) {
           // SECURITY: generic "Forbidden" for account status / unverified e-mail (M-09, M-12)
           return reply.code(403).send(denied);
         case 'bad_password':
-          handleFailedLogin(email, ipAddress, userAgent);
+          handleFailedLogin(email, ipAddress, userAgent, deviceToken);
           logAuthEvent('auth.login.failed', request, result.userId, result.username, false, 'Invalid password');
           return reply.code(401).send(invalid);
         case 'published_password':
@@ -202,10 +209,12 @@ export async function authRoutes(fastify: FastifyInstance) {
           });
         case 'ok':
           // SECURITY: Track successful login and clear failed attempts (M-02); log it (L-02)
-          handleSuccessfulLogin(email, ipAddress, userAgent);
+          const newDeviceToken = handleSuccessfulLogin(email, ipAddress, userAgent, deviceToken);
           logAuthEvent('auth.login', request, result.user.id, result.user.username, true);
-          // The token carries token_version for invalidation support (H-01)
-          return { user: result.user, token: result.token };
+          // The token carries token_version for invalidation support (H-01).
+          // deviceToken (S0-Q.20): rotated on every sign-in; the client keeps
+          // it and sends it back on the next sign-in.
+          return { user: result.user, token: result.token, deviceToken: newDeviceToken };
       }
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)

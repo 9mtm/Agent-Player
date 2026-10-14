@@ -24,6 +24,7 @@ import { getRepositories } from '../db/index.js';
 import { generateToken } from '../auth/jwt.js';
 import { isPublishedDefaultPassword, isSystemAccount } from '../auth/default-accounts.js';
 import type { SafeUser } from './identity.js';
+import type { User } from '../db/repositories/users.js';
 
 /** A refused account change with the route's `{ error, message }` body. */
 export class AccountError extends Error {
@@ -55,6 +56,13 @@ export interface IdentityAuthRepository {
 }
 
 const users = () => getRepositories().users;
+
+/**
+ * S0-Q.20: bcrypt hash (cost 12, like real accounts) of a random value nobody
+ * knows. Unknown emails are compared against it so sign-in takes about the
+ * same time whether or not the account exists.
+ */
+const DUMMY_PASSWORD_HASH = '$2a$12$2oPz4tbkVDb30X0U83ZSR.MlvXmzxfLcNJ9k7rKMFjt8pHJy5IJvW';
 
 function accountId(actor: Actor | null | undefined): string {
   const a = requireAccount(actor);
@@ -92,7 +100,10 @@ export const sqliteIdentityAuth: IdentityAuthRepository = {
 
   async signIn(email, password) {
     const user = users().findByEmail(email);
-    if (!user) return { status: 'unknown' };
+    if (!user) {
+      await users().verifyPassword({ password_hash: DUMMY_PASSWORD_HASH } as User, String(password ?? ''));
+      return { status: 'unknown' };
+    }
     const who = { userId: user.id, username: user.username };
     if (isSystemAccount(user.id)) return { status: 'system', ...who };
     if (user.status !== 'active') return { status: 'inactive', ...who };
