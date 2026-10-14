@@ -19,6 +19,14 @@
  *
  * The API key never lands in the row: it goes to the encrypted credentials
  * store (S1.1).
+ *
+ * CORE-01c: creation takes an optional `role` (main | manager | specialist |
+ * evaluator) and `department`; version 1 of the personality is seeded from
+ * the role's default preset (services/personality.ts defaultPresetForRole).
+ * An explicit `personality` at creation is the owner's choice and wins (owner
+ * only: personality changes are owner actions). Without role and personality
+ * nothing is seeded (the agent reads as defaults, as before). Personality
+ * never grants tools or permissions.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -37,6 +45,8 @@ import {
   type NameSuggestion,
 } from '../services/agent-names.js';
 import { VersionInputError, expectedVersionFrom } from '../api/concurrency.js';
+import { AGENT_ROLES, PersonalityInputError, isAgentRole, normalizeDepartment, type AgentRole } from '../services/personality.js';
+import { checkOwnerPersonalityInput, seedPersonalityForNewAgent, type SaveInput } from '../services/personality-store.js';
 
 export interface AgentConfigRow {
   id: string;
@@ -53,14 +63,23 @@ export interface AgentConfigRow {
   api_key: string;
   api_key_credential_id?: string | null;
   version: number;
+  /** CORE-01c: 'main' | 'manager' | 'specialist' | 'evaluator', or null (migration 075). */
+  role?: string | null;
+  /** CORE-01c: normalized lowercase department, or null. */
+  department?: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export type AgentConfigInput = Partial<Omit<AgentConfigRow, 'capabilities'>> & {
+export type AgentConfigInput = Partial<Omit<AgentConfigRow, 'capabilities' | 'role' | 'department'>> & {
   capabilities?: object | string;
   language?: unknown;
   expectedVersion?: unknown;
+  /** Creation only (CORE-01c): picks the default personality preset. */
+  role?: unknown;
+  department?: unknown;
+  /** Creation only, owner only: explicit { preset?, traits?, dialect?, lockedTraits?, note? } (wins over the role default). */
+  personality?: unknown;
 };
 
 /** Invalid input (400), optionally with a machine code (e.g. `invalid_version`). */
@@ -128,6 +147,33 @@ export const sqliteAgentConfigs: AgentConfigsRepository = {
 
   async createConfig(actor, body) {
     const a = requireAdmin(actor);
+    // CORE-01c: role/department pick the default personality; explicit personality is the owner's.
+    let role: AgentRole | null = null;
+    let department: string | null = null;
+    let explicit: SaveInput | null = null;
+    try {
+      if (body.role !== undefined && body.role !== null && body.role !== '') {
+        if (!isAgentRole(body.role)) throw new PersonalityInputError(`role must be one of: ${AGENT_ROLES.join(', ')}`);
+        role = body.role;
+      }
+      department = normalizeDepartment(body.department);
+    } catch (err) {
+      if (err instanceof PersonalityInputError) throw new AgentConfigInputError(err.message, 'invalid_role');
+      throw err;
+    }
+    try {
+      if (body.personality !== undefined && body.personality !== null) {
+        if (typeof body.personality !== 'object' || Array.isArray(body.personality)) throw new PersonalityInputError('personality must be an object');
+        explicit = body.personality as SaveInput;
+        checkOwnerPersonalityInput(explicit);
+      }
+    } catch (err) {
+      if (err instanceof PersonalityInputError) throw new AgentConfigInputError(err.message, 'invalid_personality');
+      throw err;
+    }
+    if (explicit && !isSystem(a) && !isOwner(a)) {
+      throw new ScopeError(403, 'Only the owner can set a personality; leave it out to use the role default');
+    }
     const id = newAgentId();
     // CORE-02: no name -> random name in the onboarding language.
     let name: string;
@@ -144,8 +190,8 @@ export const sqliteAgentConfigs: AgentConfigsRepository = {
     await withTransaction(a, () => {
       reserveAgentName(name, id, { reason: 'create', language, reservedBy: a.userId });
       getDatabase().prepare(`
-        INSERT INTO agents_config (id, name, description, emoji, system_prompt, model, provider, temperature, max_tokens, capabilities, api_key)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')
+        INSERT INTO agents_config (id, name, description, emoji, system_prompt, model, provider, temperature, max_tokens, capabilities, api_key, role, department)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)
       `).run(
         id,
         name,
@@ -157,7 +203,10 @@ export const sqliteAgentConfigs: AgentConfigsRepository = {
         body.temperature ?? 0.7,
         body.max_tokens ?? 4096,
         typeof body.capabilities === 'object' ? JSON.stringify(body.capabilities) : (body.capabilities || '{}'),
+        role,
+        department,
       );
+      if (role || explicit) seedPersonalityForNewAgent(id, { role, department, explicit }, a.userId ?? 'system');
     });
 
     // SECURITY (S1.1): the key goes to the encrypted credentials store only.

@@ -10,6 +10,21 @@
  *   POST /api/agents/:id/personality/unlock
  *   POST /api/agents/:id/personality/rollback   { version }
  *
+ * Drift proposals (CORE-01c, MEM-03): proposal-only, the owner decides.
+ *   POST /api/agents/:id/personality/proposals              owner or admin
+ *        { traits | delta, reason, evidence? } -> 201 proposal (pending)
+ *   GET  /api/agents/:id/personality/proposals[?status=]    owner
+ *   GET  /api/agents/:id/personality/proposals/:pid         owner
+ *   POST /api/agents/:id/personality/proposals/:pid/approve owner
+ *        { expectedReviewHash } -> { proposal, version }
+ *   POST /api/agents/:id/personality/proposals/:pid/reject  owner
+ *        { expectedReviewHash, note? } -> proposal
+ * Every proposal carries `reviewHash`. Error codes: 400 `review_hash_required`
+ * | `no_change`, 409 `personality_locked` | `already_decided` | `stale` |
+ * `review_changed`, 429 `too_many_pending`. created_by / decided_by come
+ * from the request actor, never from the body. Agents and Evolution file
+ * proposals through repositories.agents.proposePersonalityDrift (no route).
+ *
  * Personality shapes prompting and confirmation behaviour only; it never
  * grants tools or permissions (those are /api/agents/:id/tool-grants).
  */
@@ -17,14 +32,18 @@
 import { actorOf } from '../../auth/auth-gate.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { repositories } from '../../repositories/index.js';
-import { actorOrReply, requireOwner } from '../../repositories/scope.js';
+import { ScopeError, actorOrReply, requireAdmin, requireOwner } from '../../repositories/scope.js';
 import { logAudit } from '../../services/audit-logger.js';
 import { DIALECTS, PRESETS, PersonalityInputError, TRAIT_NAMES, traitsToBehavior } from '../../services/personality.js';
 import {
+  PROPOSAL_STATUSES,
   PersonalityLockedError,
   PersonalityNotFoundError,
+  PersonalityProposalError,
   exportPersonalityFile,
+  type PersonalityProposal,
   type PersonalityVersion,
+  type ProposalStatus,
 } from '../../services/personality-store.js';
 
 const AGENT_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
@@ -35,11 +54,20 @@ function ownerOf(request: FastifyRequest, reply: FastifyReply): string | null {
   return actor ? actor.userId ?? null : null;
 }
 
+/** Owner or admin account id, else 401/403 sent and null. */
+function adminOf(request: FastifyRequest, reply: FastifyReply): string | null {
+  const actor = actorOrReply(reply, actorOf(request), requireAdmin);
+  return actor ? actor.userId ?? null : null;
+}
+
+const PROPOSAL_ID = /^[0-9a-f-]{36}$/;
+
 function view(p: PersonalityVersion) {
   return { ...p, behavior: traitsToBehavior(p.traits, p.dialect) };
 }
 
 type Params = { Params: { id: string } };
+type ProposalParams = { Params: { id: string; pid: string } };
 
 export async function agentPersonalityRoutes(fastify: FastifyInstance) {
   const config = { access: 'owner' as const };
@@ -115,4 +143,118 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
 
   fastify.post<Params & { Body: { version?: unknown } }>('/api/agents/:id/personality/rollback', { config }, async (request, reply) =>
     change(request, reply, 'agent_personality.rollback', (agentId) => repositories.agents.rollbackPersonality(actorOf(request), agentId, request.body?.version)));
+  // --- drift proposals (CORE-01c) -------------------------------------------
+
+  const ownerConfig = { access: 'owner' as const };
+  const adminConfig = { access: 'admin' as const };
+
+  function proposalError(err: unknown, reply: FastifyReply): FastifyReply | null {
+    if (err instanceof PersonalityProposalError) return reply.code(err.status).send({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+    if (err instanceof PersonalityInputError) return reply.code(400).send({ error: err.message });
+    if (err instanceof PersonalityNotFoundError) return reply.code(404).send({ error: err.message });
+    if (err instanceof ScopeError) return reply.code(err.status).send({ error: err.message, code: err.code });
+    return null;
+  }
+
+  function proposalAudit(
+    request: FastifyRequest, userId: string, action: string, success: boolean, agentId: string,
+    metadata: Record<string, unknown>, error_message?: string,
+  ) {
+    logAudit({
+      event_type: 'data.update', event_category: 'data_modification', severity: 'info',
+      user_id: userId, ip_address: request.ip, user_agent: request.headers['user-agent'],
+      request_method: request.method, request_path: request.routeOptions?.url ?? undefined,
+      resource_type: 'agent', resource_id: agentId, action, success, metadata,
+      ...(error_message ? { error_message } : {}),
+    });
+  }
+
+  const summary = (p: PersonalityProposal) => ({ proposalId: p.id, baseVersion: p.baseVersion, delta: p.delta, source: p.source, status: p.status });
+
+  fastify.post<Params & { Body: unknown }>('/api/agents/:id/personality/proposals', { config: adminConfig }, async (request, reply) => {
+    const userId = adminOf(request, reply);
+    if (userId === null) return reply;
+    const agentId = request.params.id;
+    if (!AGENT_ID.test(agentId)) return reply.code(400).send({ error: 'Invalid agent id' });
+    try {
+      const proposal = await repositories.agents.createPersonalityProposal(actorOf(request), agentId, request.body);
+      proposalAudit(request, userId, 'agent_personality.proposal.create', true, agentId, summary(proposal));
+      return reply.code(201).send(proposal);
+    } catch (err) {
+      const handled = proposalError(err, reply);
+      if (handled) {
+        if (err instanceof PersonalityProposalError) proposalAudit(request, userId, 'agent_personality.proposal.create', false, agentId, { code: err.code }, err.message);
+        return handled;
+      }
+      throw err;
+    }
+  });
+
+  fastify.get<Params & { Querystring: { status?: string } }>('/api/agents/:id/personality/proposals', { config: ownerConfig }, async (request, reply) => {
+    if (ownerOf(request, reply) === null) return reply;
+    if (!AGENT_ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid agent id' });
+    const status = request.query?.status;
+    if (status !== undefined && !(PROPOSAL_STATUSES as readonly string[]).includes(status)) return reply.code(400).send({ error: 'Invalid status' });
+    const proposals = await repositories.agents.personalityProposals(actorOf(request), request.params.id, status as ProposalStatus | undefined);
+    if (!proposals) return reply.code(404).send({ error: 'Agent not found' });
+    return { agentId: request.params.id, proposals };
+  });
+
+  fastify.get<ProposalParams>('/api/agents/:id/personality/proposals/:pid', { config: ownerConfig }, async (request, reply) => {
+    if (ownerOf(request, reply) === null) return reply;
+    if (!AGENT_ID.test(request.params.id) || !PROPOSAL_ID.test(request.params.pid)) return reply.code(404).send({ error: 'Proposal not found' });
+    const proposal = await repositories.agents.personalityProposal(actorOf(request), request.params.id, request.params.pid);
+    if (!proposal) return reply.code(404).send({ error: 'Proposal not found' });
+    return proposal;
+  });
+
+  const bodyOf = (request: FastifyRequest): Record<string, unknown> =>
+    request.body && typeof request.body === 'object' && !Array.isArray(request.body) ? request.body as Record<string, unknown> : {};
+
+  fastify.post<ProposalParams>('/api/agents/:id/personality/proposals/:pid/approve', { config: ownerConfig }, async (request, reply) => {
+    const ownerId = ownerOf(request, reply);
+    if (ownerId === null) return reply;
+    const { id: agentId, pid } = request.params;
+    if (!AGENT_ID.test(agentId) || !PROPOSAL_ID.test(pid)) return reply.code(404).send({ error: 'Proposal not found' });
+    try {
+      const result = await repositories.agents.approvePersonalityProposal(actorOf(request), agentId, pid, bodyOf(request).expectedReviewHash);
+      proposalAudit(request, ownerId, 'agent_personality.proposal.approve', true, agentId, {
+        ...summary(result.proposal), version: result.version.version, traits: result.version.traits,
+      });
+      try {
+        await exportPersonalityFile(result.version);
+      } catch (err) {
+        // The database is canonical; a failed readable export does not undo the approval.
+        request.log.warn({ err }, '[Personality] PERSONALITY.md export failed');
+      }
+      return { proposal: result.proposal, version: view(result.version) };
+    } catch (err) {
+      const handled = proposalError(err, reply);
+      if (handled) {
+        if (err instanceof PersonalityProposalError) proposalAudit(request, ownerId, 'agent_personality.proposal.approve', false, agentId, { proposalId: pid, code: err.code }, err.message);
+        return handled;
+      }
+      throw err;
+    }
+  });
+
+  fastify.post<ProposalParams>('/api/agents/:id/personality/proposals/:pid/reject', { config: ownerConfig }, async (request, reply) => {
+    const ownerId = ownerOf(request, reply);
+    if (ownerId === null) return reply;
+    const { id: agentId, pid } = request.params;
+    if (!AGENT_ID.test(agentId) || !PROPOSAL_ID.test(pid)) return reply.code(404).send({ error: 'Proposal not found' });
+    try {
+      const b = bodyOf(request);
+      const proposal = await repositories.agents.rejectPersonalityProposal(actorOf(request), agentId, pid, b.expectedReviewHash, b.note);
+      proposalAudit(request, ownerId, 'agent_personality.proposal.reject', true, agentId, summary(proposal));
+      return proposal;
+    } catch (err) {
+      const handled = proposalError(err, reply);
+      if (handled) {
+        if (err instanceof PersonalityProposalError) proposalAudit(request, ownerId, 'agent_personality.proposal.reject', false, agentId, { proposalId: pid, code: err.code }, err.message);
+        return handled;
+      }
+      throw err;
+    }
+  });
 }

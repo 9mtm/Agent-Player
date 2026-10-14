@@ -169,6 +169,8 @@ export const TIER_RULES: readonly Rule[] = [
   { methods: '*', prefix: '/api/approvals', access: 'owner' },      // runs held agent tool calls (S1.3)
   { methods: '*', exact: '/api/agents/:id/tool-grants', access: 'owner' }, // agent permissions (S1.4)
   { methods: '*', pattern: /^\/api\/agents\/:id\/personality\/(current|versions|lock|unlock|rollback)$/, access: 'owner' }, // versioned personality (CORE-01)
+  { methods: ['GET'], pattern: /^\/api\/agents\/:id\/personality\/proposals(\/:pid)?$/, access: 'owner' }, // review drift proposals (CORE-01c)
+  { methods: ['POST'], pattern: /^\/api\/agents\/:id\/personality\/proposals\/:pid\/(approve|reject)$/, access: 'owner' }, // decide drift (CORE-01c)
   { methods: '*', prefix: '/api/memory/files', access: 'owner' },     // memory export files + edit proposals (CORE-04)
   { methods: '*', prefix: '/api/memory/proposals', access: 'owner' }, // review / apply memory edits (CORE-04)
   { methods: '*', prefix: '/api/memory/weekly-summary', access: 'owner' }, // what the agent learned this week (CORE-05)
@@ -200,6 +202,7 @@ export const TIER_RULES: readonly Rule[] = [
   { methods: ['POST'], exact: '/api/marketplace/auto-queue-updates', access: 'admin' },
   // Agent configuration and the agent's PERSONALITY/MEMORY/knowledge files
   // (prompt of every chat, incl. channel turns).
+  { methods: ['POST'], exact: '/api/agents/:id/personality/proposals', access: 'admin' }, // propose drift; only the owner decides (CORE-01c)
   { methods: 'write', prefix: '/api/agents', access: 'admin' },
   { methods: ['GET'], pattern: /^\/api\/agents\/:id\/(memory|knowledge|knowledge\/\*|files)$/, access: 'admin' },
   { methods: 'write', prefix: '/api/multi-agent', access: 'admin' },

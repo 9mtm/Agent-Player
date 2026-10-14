@@ -81,7 +81,81 @@ export const PRESETS: Readonly<Record<string, { label: string; traits: Traits }>
     label: 'Precise developer',
     traits: { doubt: 70, caution: 60, creativity: 40, thoroughness: 85, independence: 60, verbosity: 30, warmth: 45, curiosity: 55, persistence: 80 },
   },
+  // MEM-03: the independent evaluator questions everything and checks thoroughly.
+  'strict-evaluator': {
+    label: 'Strict evaluator',
+    traits: { doubt: 90, caution: 75, creativity: 15, thoroughness: 90, independence: 40, verbosity: 40, warmth: 45, curiosity: 50, persistence: 60 },
+  },
 });
+
+export type PresetId = keyof typeof PRESETS & string;
+
+export function isPresetId(v: unknown): v is string {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(PRESETS, v);
+}
+
+// ---------------------------------------------------------------------------
+// Role defaults (MEM-03)
+// ---------------------------------------------------------------------------
+
+/** Organisational role of an agent (stored on agents_config.role). */
+export const AGENT_ROLES = ['main', 'manager', 'specialist', 'evaluator'] as const;
+export type AgentRole = (typeof AGENT_ROLES)[number];
+
+export function isAgentRole(v: unknown): v is AgentRole {
+  return typeof v === 'string' && (AGENT_ROLES as readonly string[]).includes(v);
+}
+
+/** Lowercase, trimmed, inner whitespace collapsed; '' -> null. Max 64 characters. */
+export function normalizeDepartment(v: unknown): string | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'string') throw new PersonalityInputError('department must be a string');
+  const out = v.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (out.length > 64) throw new PersonalityInputError('department must be at most 64 characters');
+  return out || null;
+}
+
+/** Specialist departments with their own preset; anything else is balanced-assistant. */
+const DEPARTMENT_PRESET: Readonly<Record<string, PresetId>> = Object.freeze({
+  development: 'precise-developer',
+  dev: 'precise-developer',
+  engineering: 'precise-developer',
+  software: 'precise-developer',
+  marketing: 'bold-creative',
+  accounting: 'careful-auditor',
+  finance: 'careful-auditor',
+  security: 'careful-auditor',
+});
+
+/**
+ * Default preset for an agent's role (MEM-03, pure):
+ *  - manager (any department)  -> balanced-assistant
+ *  - specialist                -> by department: development precise-developer,
+ *                                 marketing bold-creative, accounting/finance and
+ *                                 security careful-auditor, other balanced-assistant
+ *  - evaluator                 -> strict-evaluator
+ *  - main                      -> null (the main agent uses MAIN_AGENT_V1, not a preset)
+ *  - no or unknown role        -> balanced-assistant
+ */
+export function defaultPresetForRole(input: { role?: unknown; department?: unknown }): PresetId | null {
+  const role = input.role;
+  if (role === 'main') return null;
+  if (role === 'evaluator') return 'strict-evaluator';
+  if (role === 'specialist') {
+    let dept: string | null = null;
+    try { dept = normalizeDepartment(input.department); } catch { dept = null; }
+    if (dept && Object.prototype.hasOwnProperty.call(DEPARTMENT_PRESET, dept)) return DEPARTMENT_PRESET[dept];
+    return 'balanced-assistant';
+  }
+  return 'balanced-assistant';
+}
+
+/** Version 1 for a new agent of this role: the preset's traits (main: MAIN_AGENT_V1). */
+export function defaultPersonalityForRole(input: { role?: unknown; department?: unknown }): { preset: PresetId | null; traits: Traits; dialect: Dialect } {
+  const preset = defaultPresetForRole(input);
+  if (preset === null) return { preset: null, traits: { ...MAIN_AGENT_V1.traits }, dialect: MAIN_AGENT_V1.dialect };
+  return { preset, traits: { ...PRESETS[preset].traits }, dialect: DEFAULT_DIALECT };
+}
 
 /** Thrown for invalid input; the message is safe to return to the client. */
 export class PersonalityInputError extends Error {}

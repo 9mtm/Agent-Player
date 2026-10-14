@@ -219,6 +219,18 @@ test('agents (grants, personality): scope matrix', async () => {
   await row('agents.savePersonality', (a) => A.savePersonality(a, 'rs-agent', { traits: 'invalid' }), OWNER_ONLY);
   await row('agents.setPersonalityLocked', (a) => A.setPersonalityLocked(a, 'missing-agent', true), OWNER_ONLY);
   await row('agents.rollbackPersonality', (a) => A.rollbackPersonality(a, 'rs-agent', 999), OWNER_ONLY);
+  // CORE-01c: drift proposals (invalid input / missing proposal: the scope check passed)
+  await row('agents.personalityProposals', (a) => A.personalityProposals(a, 'rs-agent'), OWNER_ONLY);
+  await row('agents.personalityProposal', (a) => A.personalityProposal(a, 'rs-agent', 'missing'), OWNER_ONLY);
+  await row('agents.createPersonalityProposal', (a) => A.createPersonalityProposal(a, 'rs-agent', { reason: '' }), ADMIN_UP);
+  await row('agents.approvePersonalityProposal', (a) => A.approvePersonalityProposal(a, 'rs-agent', 'missing', 'f'.repeat(64)), OWNER_ONLY);
+  await row('agents.rejectPersonalityProposal', (a) => A.rejectPersonalityProposal(a, 'rs-agent', 'missing', 'f'.repeat(64)), OWNER_ONLY);
+  //                                                                   owner admin user guest other agent outsdr service none
+  await row('agents.proposePersonalityDrift(own agent)', (a) => A.proposePersonalityDrift(a, 'rs-agent', { reason: '' }),
+                                                                      [403, 403, 403, 403, 403, 'ok', 403, 403, 401]);
+  await row('agents.proposePersonalityDrift(another agent)', (a) => A.proposePersonalityDrift(a, 'rs-agent-2', { reason: '' }),
+                                                                      [403, 403, 403, 403, 403, 403, 403, 403, 401]);
+  await assert.rejects(() => A.approvePersonalityProposal(SYSTEM_ACTOR, 'rs-agent', 'missing', 'f'.repeat(64)), (e) => e instanceof ScopeError && e.status === 403);
 });
 
 test('agents (configs, naming): scope matrix', async () => {
