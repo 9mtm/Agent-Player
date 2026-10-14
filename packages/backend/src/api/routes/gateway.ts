@@ -1,14 +1,32 @@
 /**
  * Gateway API Routes
  *
- * Manage multi-interface gateway
+ * Manage multi-interface gateway. Owner only (auth gate owner tier for
+ * /api/gateway*, plus the central owner rule on the request's actor here).
+ *
+ * B1.6: POST /api/gateway/message runs the web turn as the signed-in owner;
+ * a `userId` in the body is ignored (it used to choose the account the turn
+ * ran as). The session routes keep the user in the path: an owner-wide view
+ * of one account's gateway session.
  */
 
-import { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { actorOf } from '../../auth/auth-gate.js';
+import type { Actor } from '../../repositories/actor.js';
+import { actorOrReply, requireOwner } from '../../repositories/scope.js';
 import { getGateway } from '../../gateway/index.js';
 import { WebChannelAdapter } from '../../gateway/adapters/web-adapter.js';
 
+/** The owner account's actor (central rule), else 401/403 sent and null. */
+function ownerOf(request: FastifyRequest, reply: FastifyReply): Actor | null {
+  return actorOrReply(reply, actorOf(request), requireOwner);
+}
+
 export async function gatewayRoutes(fastify: FastifyInstance) {
+  fastify.addHook('preHandler', async (request, reply) => {
+    if (ownerOf(request, reply) === null) return reply;
+  });
+
   /**
    * Helper to get gateway instance (initialized after routes registration)
    */
@@ -123,7 +141,6 @@ export async function gatewayRoutes(fastify: FastifyInstance) {
    */
   fastify.post<{
     Body: {
-      userId: string;
       sessionId?: string;
       message: string;
       metadata?: Record<string, any>;
@@ -137,11 +154,14 @@ export async function gatewayRoutes(fastify: FastifyInstance) {
       });
     }
 
-    const { userId, sessionId, message, metadata } = request.body;
+    // The turn runs as the signed-in owner (never a user id from the body).
+    const userId = actorOf(request)?.userId;
+    if (!userId) return reply.status(401).send({ error: 'Authentication required' });
+    const { sessionId, message, metadata } = (request.body ?? {}) as { sessionId?: string; message?: string; metadata?: Record<string, any> };
 
-    if (!userId || !message) {
+    if (!message) {
       return reply.status(400).send({
-        error: 'userId and message are required'
+        error: 'message is required'
       });
     }
 

@@ -522,10 +522,12 @@ test('routes: no user id from body/query in the moved routes; SYSTEM_ACTOR never
   const routesDir = join(backendDir, 'src/api/routes');
   const moved = ['task-runs.ts', 'agent-grants.ts', 'agent-personality.ts', 'credentials.ts', 'audit.ts', 'memory-files.ts', 'profile.ts',
     'agents-config.ts', 'memory.ts', 'memory-learning.ts', 'memory-import.ts',
-    'auth.ts', 'team.ts'];
+    'auth.ts', 'team.ts', 'gateway.ts'];
   for (const f of moved) {
     const src = readFileSync(join(routesDir, f), 'utf8');
     assert.doesNotMatch(src, /(body|query)\)?(\s+as\s+[^;]*?)?\??\.userId\b/, `${f} reads a user id from the request`);
+    // B1.6: nor destructures one out of the body/query
+    assert.doesNotMatch(src, /\{[^}\n]*\buserId\b[^}\n]*\}\s*=\s*\(?\s*(request|req)\.(body|query)\b/, `${f} destructures a user id from the request`);
   }
   for (const f of readdirSync(routesDir)) {
     assert.doesNotMatch(readFileSync(join(routesDir, f), 'utf8'), /SYSTEM_ACTOR/, `${f} must not use SYSTEM_ACTOR`);
@@ -540,7 +542,7 @@ test('routes: no user id from body/query in the moved routes; SYSTEM_ACTOR never
     assert.doesNotMatch(src, /params\??\.userId\b/, `${f} reads a user id from the model`);
     assert.match(src, /repositories\.memory\./, `${f} uses the memory repository`);
   }
-  checks += moved.length + 1 + memoryTools.length * 3;
+  checks += moved.length * 2 + 1 + memoryTools.length * 3;
 });
 
 test('matrix size', () => {
