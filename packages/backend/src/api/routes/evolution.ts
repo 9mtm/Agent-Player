@@ -3,9 +3,14 @@
  *
  * REST endpoints for managing agent self-evolution
  * Exposes performance analysis, evolution cycles, insights, and configuration
+ *
+ * SECURITY (S0-Q.23): every route that changes state is owner-only (gate
+ * tier + the owner rule in the handler); reads are admin. An evolve cycle
+ * never changes an agent: it files evolution proposals that the owner
+ * approves, rejects or cancels under /api/evolution/:agentId/proposals.
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { analyzeAgentPerformance, getAgentPerformanceSummary } from '../../services/agent-performance-analyzer.js';
 import { extractLearningInsights, getAgentInsights } from '../../services/agent-learning-engine.js';
@@ -19,8 +24,38 @@ import { updateEvolutionSchedule } from '../../services/agent-evolution-schedule
 import { actorOf } from '../../auth/auth-gate.js';
 import { actorOrReply, requireOwner } from '../../repositories/scope.js';
 import { proposeDriftFromOutcomes } from '../../services/personality-evolution.js';
+import {
+  EVOLUTION_PROPOSAL_STATUSES,
+  EvolutionProposalError,
+  approveEvolutionProposal,
+  cancelEvolutionProposal,
+  getEvolutionProposal,
+  listEvolutionProposals,
+  rejectEvolutionProposal,
+  rollbackEvolutionHistory,
+  type EvolutionProposalStatus,
+} from '../../services/evolution-proposals.js';
 
 const AGENT_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+const PROPOSAL_ID = /^[0-9a-f-]{36}$/;
+const OWNER = { config: { access: 'owner' } } as const;
+
+/** Owner actor's user id, or null after the reply was sent (403/401). */
+function ownerOrReply(request: FastifyRequest, reply: FastifyReply): string | null {
+  const actor = actorOrReply(reply, actorOf(request), requireOwner);
+  if (!actor) return null;
+  return actor.userId ?? 'owner';
+}
+
+function bodyOf(request: FastifyRequest): Record<string, unknown> {
+  const b = request.body;
+  return b && typeof b === 'object' && !Array.isArray(b) ? b as Record<string, unknown> : {};
+}
+
+function sendProposalError(reply: FastifyReply, err: unknown) {
+  if (err instanceof EvolutionProposalError) return reply.status(err.status).send({ error: err.message, code: err.code });
+  throw err;
+}
 
 export default async function evolutionRoutes(fastify: FastifyInstance) {
   /**
@@ -61,7 +96,8 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
   /**
    * POST /api/evolution/:agentId/analyze
    */
-  fastify.post('/api/evolution/:agentId/analyze', async (request, reply) => {
+  fastify.post('/api/evolution/:agentId/analyze', OWNER, async (request, reply) => {
+    if (ownerOrReply(request, reply) === null) return reply;
     try {
       const { agentId } = request.params as { agentId: string };
       const { periodDays = 7 } = request.body as { periodDays?: number };
@@ -84,9 +120,12 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
   });
 
   /**
-   * POST /api/evolution/:agentId/evolve
+   * POST /api/evolution/:agentId/evolve   owner (S0-Q.23)
+   * Runs one cycle. Changes nothing: files pending proposals (`proposals`),
+   * returns capability ideas as `suggestedCapabilities` (informational).
    */
-  fastify.post('/api/evolution/:agentId/evolve', async (request, reply) => {
+  fastify.post('/api/evolution/:agentId/evolve', OWNER, async (request, reply) => {
+    if (ownerOrReply(request, reply) === null) return reply;
     try {
       const { agentId } = request.params as { agentId: string };
       const result = await evolveAgent(agentId);
@@ -129,13 +168,15 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
   /**
    * POST /api/evolution/evolve-all
    */
-  fastify.post('/api/evolution/evolve-all', async (request, reply) => {
+  fastify.post('/api/evolution/evolve-all', OWNER, async (request, reply) => {
+    if (ownerOrReply(request, reply) === null) return reply;
     try {
       const results = await evolveAllAgents();
 
       const summary = {
         total: results.length,
         evolved: results.filter((r: any) => r.evolved).length,
+        proposed: results.reduce((n: number, r: any) => n + (r.proposed || 0), 0),
         skipped: results.filter((r: any) => r.skipped).length,
         errors: results.filter((r: any) => r.error).length,
       };
@@ -170,39 +211,85 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
   });
 
   /**
-   * POST /api/evolution/:agentId/rollback/:evolutionId
+   * POST /api/evolution/:agentId/rollback/:evolutionId   owner (S0-Q.23)
+   * Restores a prompt / PERSONALITY.md change only while the content is still
+   * exactly what that evolution wrote (else 409 `stale`). Old capability rows:
+   * 409 `rollback_unsupported`. Already rolled back: 409 `already_rolled_back`.
    */
-  fastify.post('/api/evolution/:agentId/rollback/:evolutionId', async (request, reply) => {
+  fastify.post('/api/evolution/:agentId/rollback/:evolutionId', OWNER, async (request, reply) => {
+    if (ownerOrReply(request, reply) === null) return reply;
+    const { agentId, evolutionId } = request.params as { agentId: string; evolutionId: string };
     try {
-      const { agentId, evolutionId } = request.params as { agentId: string; evolutionId: string };
-      const db = getDatabase();
-
-      const evolution = db.prepare('SELECT * FROM agent_evolution_history WHERE id = ? AND agent_id = ?')
-        .get(evolutionId, agentId) as any;
-
-      if (!evolution) {
-        return reply.status(404).send({ error: 'Evolution not found for this agent' });
-      }
-      if (evolution.status === 'rolled_back') {
-        return reply.status(400).send({ error: 'Evolution already rolled back' });
-      }
-
-      if (evolution.evolution_type === 'prompt_update') {
-        db.prepare('UPDATE agents_config SET system_prompt = ?, updated_at = ? WHERE id = ?')
-          .run(evolution.before_value, new Date().toISOString(), agentId);
-      } else if (evolution.evolution_type === 'capability_added' || evolution.evolution_type === 'capability_removed') {
-        db.prepare('UPDATE agents_config SET capabilities = ?, updated_at = ? WHERE id = ?')
-          .run(evolution.before_value, new Date().toISOString(), agentId);
-      }
-
-      db.prepare('UPDATE agent_evolution_history SET status = ?, rolled_back_at = ? WHERE id = ?')
-        .run('rolled_back', new Date().toISOString(), evolutionId);
-
+      rollbackEvolutionHistory(agentId, evolutionId);
       return reply.send({ success: true, evolutionId, rolledBack: true, message: 'Evolution rolled back successfully' });
     } catch (error: any) {
+      if (error instanceof EvolutionProposalError) return sendProposalError(reply, error);
       console.error('[Evolution API] Error rolling back evolution:', error);
-      return reply.status(500).send({ error: error.message });
+      return reply.status(500).send({ error: 'Rollback failed' });
     }
+  });
+
+  /**
+   * GET /api/evolution/:agentId/proposals?status=   admin (read)
+   * -> 200 { agentId, proposals: EvolutionProposal[], total }; 404 unknown agent
+   */
+  fastify.get('/api/evolution/:agentId/proposals', async (request, reply) => {
+    const { agentId } = request.params as { agentId: string };
+    if (!AGENT_ID.test(agentId)) return reply.status(400).send({ error: 'Invalid agent id' });
+    const { status } = (request.query ?? {}) as { status?: string };
+    if (status !== undefined && !(EVOLUTION_PROPOSAL_STATUSES as readonly string[]).includes(status)) {
+      return reply.status(400).send({ error: 'Unknown status' });
+    }
+    const proposals = listEvolutionProposals(agentId, status as EvolutionProposalStatus | undefined);
+    if (!proposals) return reply.status(404).send({ error: 'Agent not found' });
+    return reply.send({ agentId, proposals, total: proposals.length });
+  });
+
+  /** GET /api/evolution/:agentId/proposals/:proposalId   admin (read) */
+  fastify.get('/api/evolution/:agentId/proposals/:proposalId', async (request, reply) => {
+    const { agentId, proposalId } = request.params as { agentId: string; proposalId: string };
+    if (!AGENT_ID.test(agentId) || !PROPOSAL_ID.test(proposalId)) return reply.status(404).send({ error: 'Proposal not found', code: 'not_found' });
+    const proposal = getEvolutionProposal(agentId, proposalId);
+    if (!proposal) return reply.status(404).send({ error: 'Proposal not found', code: 'not_found' });
+    return reply.send({ proposal });
+  });
+
+  /**
+   * POST /api/evolution/:agentId/proposals/:proposalId/approve   owner
+   * body { expectedReviewHash }
+   * -> 200 { proposal, historyId }
+   * -> 400 review_hash_required | 404 not_found
+   * -> 409 already_decided | review_changed | stale (target changed; row marked stale)
+   */
+  fastify.post('/api/evolution/:agentId/proposals/:proposalId/approve', OWNER, async (request, reply) => {
+    const owner = ownerOrReply(request, reply);
+    if (owner === null) return reply;
+    const { agentId, proposalId } = request.params as { agentId: string; proposalId: string };
+    try {
+      const out = approveEvolutionProposal(agentId, proposalId, owner, bodyOf(request).expectedReviewHash);
+      return reply.send(out);
+    } catch (err) { return sendProposalError(reply, err); }
+  });
+
+  /** POST .../proposals/:proposalId/reject   owner   body { expectedReviewHash, note? ≤500 } -> 200 { proposal } */
+  fastify.post('/api/evolution/:agentId/proposals/:proposalId/reject', OWNER, async (request, reply) => {
+    const owner = ownerOrReply(request, reply);
+    if (owner === null) return reply;
+    const { agentId, proposalId } = request.params as { agentId: string; proposalId: string };
+    const body = bodyOf(request);
+    try {
+      return reply.send({ proposal: rejectEvolutionProposal(agentId, proposalId, owner, body.expectedReviewHash, body.note) });
+    } catch (err) { return sendProposalError(reply, err); }
+  });
+
+  /** POST .../proposals/:proposalId/cancel   owner   body { expectedReviewHash } -> 200 { proposal } */
+  fastify.post('/api/evolution/:agentId/proposals/:proposalId/cancel', OWNER, async (request, reply) => {
+    const owner = ownerOrReply(request, reply);
+    if (owner === null) return reply;
+    const { agentId, proposalId } = request.params as { agentId: string; proposalId: string };
+    try {
+      return reply.send({ proposal: cancelEvolutionProposal(agentId, proposalId, owner, bodyOf(request).expectedReviewHash) });
+    } catch (err) { return sendProposalError(reply, err); }
   });
 
   /**
@@ -233,7 +320,8 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
   /**
    * PUT /api/evolution/:agentId/config
    */
-  fastify.put('/api/evolution/:agentId/config', async (request, reply) => {
+  fastify.put('/api/evolution/:agentId/config', OWNER, async (request, reply) => {
+    if (ownerOrReply(request, reply) === null) return reply;
     try {
       const { agentId } = request.params as { agentId: string };
       const {
@@ -288,7 +376,8 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
   /**
    * POST /api/evolution/:agentId/measure/:evolutionId
    */
-  fastify.post('/api/evolution/:agentId/measure/:evolutionId', async (request, reply) => {
+  fastify.post('/api/evolution/:agentId/measure/:evolutionId', OWNER, async (request, reply) => {
+    if (ownerOrReply(request, reply) === null) return reply;
     try {
       const { agentId, evolutionId } = request.params as { agentId: string; evolutionId: string };
       const db = getDatabase();

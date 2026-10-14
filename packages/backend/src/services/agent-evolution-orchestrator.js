@@ -1,18 +1,28 @@
 /**
  * Agent Evolution Orchestrator
  *
- * Applies learning insights to evolve agents autonomously
- * Manages the complete evolution lifecycle: analyze → learn → evolve → measure
+ * Turns learning insights into owner-approved proposals:
+ * analyze → learn → propose → (owner approves) → measure.
+ *
+ * SECURITY (S0-Q.23, D-PERSONALITY): nothing here changes an agent directly.
+ * System-prompt and PERSONALITY.md changes are filed as pending
+ * evolution_proposals (services/evolution-proposals.ts); only the owner's
+ * approval applies them. Evolution never enables or changes capabilities,
+ * tool grants or permissions: capability ideas are returned as
+ * `suggestedCapabilities` (informational, nothing is written).
  */
 
 import { getDatabase } from '../db/index.js';
-import { v4 as uuidv4 } from 'uuid';
 import { analyzeAgentPerformance } from './agent-performance-analyzer.js';
-import { extractLearningInsights, getAgentInsights, markInsightAsApplied } from './agent-learning-engine.js';
-import { writePersonality, readPersonality } from './agent-files.js';
+import { extractLearningInsights } from './agent-learning-engine.js';
 import { proposeDriftFromOutcomes } from './personality-evolution.js';
-import fs from 'fs/promises';
-import path from 'path';
+import {
+  createEvolutionProposal,
+  rollbackEvolutionHistory,
+  MAX_PROPOSED_TEXT_CHARS,
+  MAX_TITLE_CHARS,
+  MAX_REASON_CHARS,
+} from './evolution-proposals.js';
 
 /**
  * Run evolution cycle for an agent
@@ -89,44 +99,33 @@ async function runConfigEvolution(agentId, config) {
       };
     }
 
-    // Step 4: Apply evolutions (up to max_evolutions_per_cycle)
-    const allowedEvolutions = JSON.parse(config.allowed_evolutions);
+    // Step 4: capability ideas are informational only (never written).
+    const suggestedCapabilities = actionableInsights
+      .filter(i => i.type === 'new_capability')
+      .map(capabilitySuggestion);
+
+    // Step 5: file proposals (up to max_evolutions_per_cycle insights)
+    const allowedEvolutions = parseAllowed(config.allowed_evolutions);
     const maxEvolutions = config.max_evolutions_per_cycle;
 
-    const applicableInsights = actionableInsights
-      .filter(i => canApplyInsight(i, allowedEvolutions))
+    const proposable = actionableInsights
+      .filter(i => i.type !== 'new_capability' && canProposeInsight(i, allowedEvolutions))
       .slice(0, maxEvolutions);
 
-    if (applicableInsights.length === 0) {
-      return {
-        agentId,
-        analyzed: true,
-        insightsFound: insights.length,
-        actionableInsights: actionableInsights.length,
-        evolved: false,
-        reason: 'No insights matched allowed evolution types',
-      };
-    }
-
-    // Capture baseline performance before evolution
     const baselinePerformance = captureBaselineMetric(performanceData);
 
-    // Apply each insight
-    const appliedEvolutions = [];
-    for (const insight of applicableInsights) {
-      try {
-        const evolution = await applyInsight(agentId, insight, config);
-        appliedEvolutions.push(evolution);
-
-        // Mark insight as applied
-        await markInsightAsApplied(insight.id || uuidv4());
-      } catch (error) {
-        console.error(`[Evolution] Failed to apply insight:`, error);
-        appliedEvolutions.push({
-          insight: insight.title,
-          success: false,
-          error: error.message,
-        });
+    const proposals = [];
+    for (const insight of proposable) {
+      for (const draft of proposalDrafts(insight)) {
+        try {
+          const outcome = createEvolutionProposal(agentId, draft);
+          proposals.push(outcome.status === 'proposed'
+            ? { status: 'proposed', proposalId: outcome.proposal.id, kind: draft.kind, title: draft.title }
+            : { status: 'skipped', reason: outcome.reason, kind: draft.kind, title: draft.title, ...(outcome.proposalId ? { proposalId: outcome.proposalId } : {}) });
+        } catch (error) {
+          console.error(`[Evolution] Failed to file proposal:`, error);
+          proposals.push({ status: 'error', kind: draft.kind, title: draft.title, error: String(error?.message ?? error).slice(0, 200) });
+        }
       }
     }
 
@@ -135,8 +134,11 @@ async function runConfigEvolution(agentId, config) {
       analyzed: true,
       insightsFound: insights.length,
       actionableInsights: actionableInsights.length,
-      evolved: true,
-      evolutions: appliedEvolutions,
+      // Nothing is applied by a cycle; the owner decides each proposal.
+      evolved: false,
+      proposed: proposals.filter(p => p.status === 'proposed').length,
+      proposals,
+      suggestedCapabilities,
       baselinePerformance,
       sampleSize: performanceData.sampleSize,
       period: {
@@ -149,24 +151,71 @@ async function runConfigEvolution(agentId, config) {
     return {
       agentId,
       error: error.message,
-      stack: error.stack,
     };
   }
 }
 
-/**
- * Check if an insight can be applied given allowed evolution types
- */
-function canApplyInsight(insight, allowedEvolutions) {
-  const typeMapping = {
-    success_pattern: 'prompt_update',
-    failure_pattern: 'prompt_update',
-    optimization: 'prompt_update',
-    new_capability: 'capability_added',
-  };
+/** Prompt-type insights may be proposed when 'prompt_update' is allowed. */
+function canProposeInsight(insight, allowedEvolutions) {
+  const proposable = ['success_pattern', 'failure_pattern', 'optimization'];
+  return proposable.includes(insight.type) && allowedEvolutions.includes('prompt_update');
+}
 
-  const evolutionType = typeMapping[insight.type];
-  return allowedEvolutions.includes(evolutionType);
+function parseAllowed(json) {
+  try {
+    const list = JSON.parse(json);
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function clip(text, max) {
+  const s = String(text ?? '');
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/**
+ * The two proposals for one insight: the system-prompt addition and the
+ * PERSONALITY.md note (same wording as the old direct writes). Text is data:
+ * it is stored and, on approval, appended; never executed.
+ */
+function proposalDrafts(insight) {
+  const title = clip(insight.title || 'Evolution insight', MAX_TITLE_CHARS);
+  const description = clip(insight.description || '', 3000);
+  const reason = clip(`${insight.type}: ${insight.title || ''}`.trim(), MAX_REASON_CHARS);
+  const confidence = typeof insight.confidence === 'number' ? insight.confidence : null;
+  const pct = confidence === null ? '' : `\n\nConfidence: ${(confidence * 100).toFixed(0)}%\n`;
+  const day = new Date().toISOString().slice(0, 10);
+
+  let prompt;
+  let personality;
+  if (insight.type === 'success_pattern') {
+    prompt = `\n\n## Learned Success Pattern\n${description}\n\nWhen applicable, prioritize approaches similar to this successful pattern.`;
+    personality = `\n## Success Pattern (Learned ${day})\n\n**${title}**\n\n${description}${pct}`;
+  } else if (insight.type === 'failure_pattern') {
+    prompt = `\n\n## Known Failure Pattern (Avoid)\n${description}\n\nBe cautious and implement robust error handling when encountering similar situations.`;
+    personality = `\n## Failure Pattern (Learned ${day})\n\n**${title}**\n\n${description}${pct}`;
+  } else {
+    prompt = `\n\n## Performance Optimization\n${description}`;
+    personality = `\n## Optimization (Proposed ${day})\n\n**${title}**\n\n${description}${pct}`;
+  }
+  const common = { title, reason, insightType: insight.type, confidence };
+  return [
+    { ...common, kind: 'prompt_append', proposedText: clip(prompt, MAX_PROPOSED_TEXT_CHARS) },
+    { ...common, kind: 'personality_text', proposedText: clip(personality, MAX_PROPOSED_TEXT_CHARS) },
+  ];
+}
+
+/** Informational capability idea from a new_capability insight (never applied). */
+function capabilitySuggestion(insight) {
+  return {
+    capability: suggestedCapabilityName(insight),
+    title: clip(insight.title || '', MAX_TITLE_CHARS),
+    description: clip(insight.description || '', 1000),
+    confidence: typeof insight.confidence === 'number' ? insight.confidence : null,
+    applied: false,
+  };
 }
 
 /**
@@ -190,121 +239,9 @@ function captureBaselineMetric(performanceData) {
   };
 }
 
-/**
- * Apply an insight (evolve the agent)
- */
-async function applyInsight(agentId, insight, config) {
-  const db = getDatabase();
-
-  // Get current agent configuration
-  const agent = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(agentId);
-
-  if (!agent) {
-    throw new Error(`Agent ${agentId} not found`);
-  }
-
-  let evolutionType;
-  let beforeValue;
-  let afterValue;
-  let changeDescription;
-
-  // Apply based on insight type
-  if (insight.type === 'success_pattern') {
-    // Reinforce successful patterns in system prompt
-    evolutionType = 'prompt_update';
-    beforeValue = agent.system_prompt;
-
-    const enhancement = `\n\n## Learned Success Pattern\n${insight.description}\n\nWhen applicable, prioritize approaches similar to this successful pattern.`;
-    afterValue = agent.system_prompt + enhancement;
-
-    db.prepare('UPDATE agents_config SET system_prompt = ?, updated_at = ? WHERE id = ?')
-      .run(afterValue, new Date().toISOString(), agentId);
-
-    changeDescription = `Reinforced success pattern: ${insight.title}`;
-
-    // Also update PERSONALITY.md
-    await updatePersonalityFile(agentId, 'add_success_pattern', insight);
-  } else if (insight.type === 'failure_pattern') {
-    // Add warning about failure patterns
-    evolutionType = 'prompt_update';
-    beforeValue = agent.system_prompt;
-
-    const warning = `\n\n## Known Failure Pattern (Avoid)\n${insight.description}\n\nBe cautious and implement robust error handling when encountering similar situations.`;
-    afterValue = agent.system_prompt + warning;
-
-    db.prepare('UPDATE agents_config SET system_prompt = ?, updated_at = ? WHERE id = ?')
-      .run(afterValue, new Date().toISOString(), agentId);
-
-    changeDescription = `Added failure pattern warning: ${insight.title}`;
-
-    await updatePersonalityFile(agentId, 'add_failure_warning', insight);
-  } else if (insight.type === 'optimization') {
-    // Apply optimization recommendation
-    evolutionType = 'prompt_update';
-    beforeValue = agent.system_prompt;
-
-    const optimization = `\n\n## Performance Optimization\n${insight.description}`;
-    afterValue = agent.system_prompt + optimization;
-
-    db.prepare('UPDATE agents_config SET system_prompt = ?, updated_at = ? WHERE id = ?')
-      .run(afterValue, new Date().toISOString(), agentId);
-
-    changeDescription = `Applied optimization: ${insight.title}`;
-
-    await updatePersonalityFile(agentId, 'add_optimization', insight);
-  } else if (insight.type === 'new_capability') {
-    // Enable a new capability
-    evolutionType = 'capability_added';
-
-    const capabilities = JSON.parse(agent.capabilities);
-    beforeValue = JSON.stringify(capabilities);
-
-    // Extract capability name from insight description
-    const capabilityName = extractCapabilityName(insight);
-
-    if (capabilityName && !capabilities[capabilityName]) {
-      capabilities[capabilityName] = true;
-      afterValue = JSON.stringify(capabilities);
-
-      db.prepare('UPDATE agents_config SET capabilities = ?, updated_at = ? WHERE id = ?')
-        .run(afterValue, new Date().toISOString(), agentId);
-
-      changeDescription = `Enabled capability: ${capabilityName}`;
-    } else {
-      throw new Error(`Could not extract capability name from insight: ${insight.title}`);
-    }
-  }
-
-  // Record evolution in history
-  const evolutionId = uuidv4();
-  db.prepare(`
-    INSERT INTO agent_evolution_history (id, agent_id, evolution_type, change_description, before_value, after_value, trigger_reason, insight_ids, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
-  `).run(
-    evolutionId,
-    agentId,
-    evolutionType,
-    changeDescription,
-    beforeValue,
-    afterValue,
-    insight.description,
-    JSON.stringify([insight.id || uuidv4()])
-  );
-
-  return {
-    evolutionId,
-    type: evolutionType,
-    description: changeDescription,
-    insight: insight.title,
-    success: true,
-  };
-}
-
-/**
- * Extract capability name from insight
- */
-function extractCapabilityName(insight) {
-  const title = insight.title.toLowerCase();
+/** Capability name an insight talks about (for the informational note only). */
+function suggestedCapabilityName(insight) {
+  const title = String(insight.title || '').toLowerCase();
 
   if (title.includes('file')) return 'fileOperations';
   if (title.includes('search')) return 'webSearch';
@@ -312,42 +249,6 @@ function extractCapabilityName(insight) {
   if (title.includes('command')) return 'executeCommands';
 
   return null;
-}
-
-/**
- * Update PERSONALITY.md file with learning
- */
-async function updatePersonalityFile(agentId, updateType, insight) {
-  try {
-    const agentDir = path.join(process.cwd(), '.data', 'agents', agentId);
-    const personalityPath = path.join(agentDir, 'PERSONALITY.md');
-
-    let content;
-    try {
-      content = await fs.readFile(personalityPath, 'utf-8');
-    } catch {
-      // File doesn't exist, create it
-      content = `# Agent Personality\n\nThis agent learns and evolves autonomously.\n\n`;
-    }
-
-    // Add section based on update type
-    let section;
-    if (updateType === 'add_success_pattern') {
-      section = `\n## ✅ Success Pattern (Learned ${new Date().toLocaleDateString()})\n\n**${insight.title}**\n\n${insight.description}\n\nConfidence: ${(insight.confidence * 100).toFixed(0)}%\n`;
-    } else if (updateType === 'add_failure_warning') {
-      section = `\n## ⚠️ Failure Pattern (Learned ${new Date().toLocaleDateString()})\n\n**${insight.title}**\n\n${insight.description}\n\nConfidence: ${(insight.confidence * 100).toFixed(0)}%\n`;
-    } else if (updateType === 'add_optimization') {
-      section = `\n## 🚀 Optimization (Applied ${new Date().toLocaleDateString()})\n\n**${insight.title}**\n\n${insight.description}\n\nConfidence: ${(insight.confidence * 100).toFixed(0)}%\n`;
-    }
-
-    if (section) {
-      content += section;
-      await fs.writeFile(personalityPath, content, 'utf-8');
-    }
-  } catch (error) {
-    console.error(`[Evolution] Failed to update PERSONALITY.md for ${agentId}:`, error);
-    // Don't throw - personality file update is optional
-  }
 }
 
 /**
@@ -386,16 +287,25 @@ export async function measureEvolutionImpact(evolutionId) {
   const performanceDelta = currentPerformance.composite - (evolution.performance_before || 0);
 
   // Check if performance degraded
-  if (config.rollback_on_degradation && performanceDelta < -config.degradation_threshold) {
-    // Rollback evolution
-    await rollbackEvolution(evolutionId);
+  if (config?.rollback_on_degradation && performanceDelta < -config.degradation_threshold) {
+    // Rollback (prompt / PERSONALITY.md rows only, and only while the content
+    // is still exactly what that evolution wrote; see rollbackEvolutionHistory).
+    let rolledBack = false;
+    let rollbackError;
+    try {
+      rollbackEvolutionHistory(evolution.agent_id, evolutionId);
+      rolledBack = true;
+    } catch (error) {
+      rollbackError = error?.code || 'rollback_failed';
+    }
 
     return {
       evolutionId,
       measured: true,
       performanceDelta,
       degraded: true,
-      rolledBack: true,
+      rolledBack,
+      ...(rollbackError ? { rollbackError } : {}),
       before: evolution.performance_before,
       after: currentPerformance.composite,
     };
@@ -417,35 +327,6 @@ export async function measureEvolutionImpact(evolutionId) {
     after: currentPerformance.composite,
     improvement: performanceDelta > 0,
   };
-}
-
-/**
- * Rollback an evolution
- * @param {string} evolutionId
- */
-async function rollbackEvolution(evolutionId) {
-  const db = getDatabase();
-
-  const evolution = db.prepare('SELECT * FROM agent_evolution_history WHERE id = ?').get(evolutionId);
-
-  if (!evolution) {
-    throw new Error(`Evolution ${evolutionId} not found`);
-  }
-
-  // Restore previous value
-  if (evolution.evolution_type === 'prompt_update') {
-    db.prepare('UPDATE agents_config SET system_prompt = ?, updated_at = ? WHERE id = ?')
-      .run(evolution.before_value, new Date().toISOString(), evolution.agent_id);
-  } else if (evolution.evolution_type === 'capability_added' || evolution.evolution_type === 'capability_removed') {
-    db.prepare('UPDATE agents_config SET capabilities = ?, updated_at = ? WHERE id = ?')
-      .run(evolution.before_value, new Date().toISOString(), evolution.agent_id);
-  }
-
-  // Mark as rolled back
-  db.prepare('UPDATE agent_evolution_history SET status = ?, rolled_back_at = ? WHERE id = ?')
-    .run('rolled_back', new Date().toISOString(), evolutionId);
-
-  console.log(`[Evolution] Rolled back evolution ${evolutionId} due to performance degradation`);
 }
 
 /**

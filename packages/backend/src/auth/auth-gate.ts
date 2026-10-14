@@ -172,6 +172,7 @@ export const TIER_RULES: readonly Rule[] = [
   { methods: ['GET'], pattern: /^\/api\/agents\/:id\/personality\/proposals(\/:pid)?$/, access: 'owner' }, // review drift proposals (CORE-01c)
   { methods: ['POST'], pattern: /^\/api\/agents\/:id\/personality\/proposals\/:pid\/(approve|reject)$/, access: 'owner' }, // decide drift (CORE-01c)
   { methods: ['POST'], exact: '/api/evolution/:agentId/personality-proposal', access: 'owner' }, // Evolution files a drift proposal now (CORE-01d)
+  { methods: 'write', prefix: '/api/evolution', access: 'owner' },   // evolve, rollback, config, decide proposals (S0-Q.23)
   { methods: '*', prefix: '/api/memory/files', access: 'owner' },     // memory export files + edit proposals (CORE-04)
   { methods: '*', prefix: '/api/memory/proposals', access: 'owner' }, // review / apply memory edits (CORE-04)
   { methods: '*', prefix: '/api/memory/weekly-summary', access: 'owner' }, // what the agent learned this week (CORE-05)
@@ -208,7 +209,7 @@ export const TIER_RULES: readonly Rule[] = [
   { methods: 'write', prefix: '/api/agents', access: 'admin' },
   { methods: ['GET'], pattern: /^\/api\/agents\/:id\/(memory|knowledge|knowledge\/\*|files)$/, access: 'admin' },
   { methods: 'write', prefix: '/api/multi-agent', access: 'admin' },
-  { methods: 'write', prefix: '/api/evolution', access: 'admin' },    // LLM cost, rewrites agent config
+  { methods: ['GET'], prefix: '/api/evolution', access: 'admin' },   // performance, insights, history, proposals (S0-Q.23)
   { methods: 'write', prefix: '/api/heartbeat', access: 'admin' },
   { methods: ['POST'], exact: '/api/cost-analytics/cleanup', access: 'admin' }, // deletes every user's rows
   { methods: ['POST'], exact: '/api/inbox/cleanup', access: 'admin' },

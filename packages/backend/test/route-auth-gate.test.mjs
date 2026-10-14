@@ -227,6 +227,12 @@ const OWNER_ONLY = [
   ['GET', '/api/agents/:id/personality/proposals'], ['GET', '/api/agents/:id/personality/proposals/:pid'],
   ['POST', '/api/agents/:id/personality/proposals/:pid/approve'], ['POST', '/api/agents/:id/personality/proposals/:pid/reject'],
   ['POST', '/api/evolution/:agentId/personality-proposal'], // CORE-01d: run the Evolution drift rule on demand
+  // S0-Q.23: every Evolution route that changes state is owner-only
+  ['POST', '/api/evolution/:agentId/evolve'], ['POST', '/api/evolution/evolve-all'], ['POST', '/api/evolution/:agentId/analyze'],
+  ['POST', '/api/evolution/:agentId/rollback/:evolutionId'], ['PUT', '/api/evolution/:agentId/config'],
+  ['POST', '/api/evolution/:agentId/measure/:evolutionId'],
+  ['POST', '/api/evolution/:agentId/proposals/:proposalId/approve'], ['POST', '/api/evolution/:agentId/proposals/:proposalId/reject'],
+  ['POST', '/api/evolution/:agentId/proposals/:proposalId/cancel'],
   // CORE-04: memory files + reviewed proposals
   ['GET', '/api/memory/files'], ['GET', '/api/memory/files/:drawer'], ['GET', '/api/memory/files/:drawer/versions'],
   ['POST', '/api/memory/files/:drawer/export'], ['POST', '/api/memory/files/:drawer/proposal'],
@@ -272,7 +278,9 @@ const OWNER_OR_ADMIN = [
   ['POST', '/api/agents/:id/personality/proposals'], // CORE-01c: propose drift (owner decides)
   ['POST', '/api/agents/:id/personality/proposals/:pid/cancel'], // CORE-01d: owner, or the owner/admin who proposed it
   ['PUT', '/api/agents/:id/personality'], ['PUT', '/api/agents/:id/memory'], ['GET', '/api/agents/:id/memory'],
-  ['POST', '/api/evolution/:agentId/evolve'], ['POST', '/api/multi-agent/agents'],
+  ['GET', '/api/evolution/:agentId/status'], ['GET', '/api/evolution/:agentId/history'], // S0-Q.23: reads stay admin
+  ['GET', '/api/evolution/:agentId/proposals'], ['GET', '/api/evolution/:agentId/proposals/:proposalId'],
+  ['POST', '/api/multi-agent/agents'],
   ['PUT', '/api/heartbeat/config'], ['POST', '/api/cost-analytics/cleanup'], ['POST', '/api/inbox/cleanup'],
   ['GET', '/api/dashboard/widgets/team-members'], ['GET', '/api/ai-tools'],
 ];
