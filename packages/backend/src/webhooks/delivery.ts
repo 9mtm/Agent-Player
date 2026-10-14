@@ -1,11 +1,17 @@
 /**
  * Webhook Delivery System
  * Handles sending webhooks with retry logic
+ *
+ * B2.2c: delivery rows are written through the webhook manager's runner
+ * (its SQLite file, or the main PostgreSQL database). The writes are
+ * outside any open transaction of the caller (a rolled-back caller never
+ * removes the record of a request that was sent).
  */
 
 import { v4 as uuidv4 } from 'uuid';
 import { createHmac } from 'crypto';
-import Database from 'better-sqlite3';
+import { outsidePgTransaction } from '../db/pg/pool.js';
+import { all, one, run, type SqlParam, type StepRunner } from '../repositories/sql-steps.js';
 import {
   type WebhookConfig,
   type WebhookPayload,
@@ -15,15 +21,22 @@ import {
 import { getWebhookManager } from './manager.js';
 
 export class WebhookDeliveryService {
-  private db: Database.Database | null = null;
+  private runner: StepRunner | null = null;
   private retryQueue: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private processing: boolean = false;
 
   /**
-   * Set database reference
+   * Set the store's runner (the webhook manager's)
    */
-  setDatabase(db: Database.Database): void {
-    this.db = db;
+  setRunner(runner: StepRunner | null): void {
+    this.runner = runner;
+  }
+
+  /** Write outside the caller's transaction (PostgreSQL); SQLite runs it as before. */
+  private write(sql: string, ...params: SqlParam[]): Promise<unknown> {
+    const runner = this.runner;
+    if (!runner) return Promise.resolve();
+    return outsidePgTransaction(() => runner.read(run(sql, ...params)));
   }
 
   /**
@@ -35,7 +48,7 @@ export class WebhookDeliveryService {
     source: { type: string; id: string; name?: string }
   ): Promise<{ triggered: number; webhookIds: string[] }> {
     const manager = getWebhookManager();
-    const webhooks = manager.getWebhooksForEvent(eventType);
+    const webhooks = await manager.getWebhooksForEvent(eventType);
 
     const triggered: string[] = [];
 
@@ -101,10 +114,10 @@ export class WebhookDeliveryService {
     };
 
     // Store delivery
-    this.storeDelivery(delivery);
+    await this.storeDelivery(delivery);
 
     // Execute delivery
-    this.executeDelivery(delivery, webhook);
+    void this.executeDelivery(delivery, webhook);
 
     return delivery;
   }
@@ -202,7 +215,7 @@ export class WebhookDeliveryService {
       const responseBody = await response.text().catch(() => '');
 
       // Update delivery record
-      this.updateDelivery(delivery.id, {
+      await this.updateDelivery(delivery.id, {
         responseStatus: response.status,
         responseHeaders: Object.fromEntries(response.headers.entries()),
         responseBody: responseBody.slice(0, 10000), // Truncate
@@ -215,7 +228,7 @@ export class WebhookDeliveryService {
       if (!response.ok && webhook.retry.enabled) {
         const shouldRetry = this.shouldRetry(response.status, webhook, delivery.attempt);
         if (shouldRetry) {
-          this.scheduleRetry(delivery, webhook);
+          await this.scheduleRetry(delivery, webhook);
         }
       }
 
@@ -226,15 +239,19 @@ export class WebhookDeliveryService {
       const duration = Date.now() - startTime;
       const errorMessage = error.name === 'AbortError' ? 'Timeout' : error.message;
 
-      this.updateDelivery(delivery.id, {
-        duration,
-        status: 'failed',
-        error: errorMessage,
-      });
+      try {
+        await this.updateDelivery(delivery.id, {
+          duration,
+          status: 'failed',
+          error: errorMessage,
+        });
 
-      // Schedule retry
-      if (webhook.retry.enabled && delivery.attempt < webhook.retry.maxAttempts) {
-        this.scheduleRetry(delivery, webhook);
+        // Schedule retry
+        if (webhook.retry.enabled && delivery.attempt < webhook.retry.maxAttempts) {
+          await this.scheduleRetry(delivery, webhook);
+        }
+      } catch (storeError: any) {
+        console.error(`[Webhook] Delivery ${delivery.id}: could not record the failure:`, storeError?.code ?? 'error');
       }
 
       console.error(`[Webhook] Delivery ${delivery.id} failed:`, errorMessage);
@@ -258,7 +275,7 @@ export class WebhookDeliveryService {
   /**
    * Schedule retry
    */
-  private scheduleRetry(delivery: WebhookDelivery, webhook: WebhookConfig): void {
+  private async scheduleRetry(delivery: WebhookDelivery, webhook: WebhookConfig): Promise<void> {
     const nextAttempt = delivery.attempt + 1;
     const delay = Math.min(
       webhook.retry.initialDelay * Math.pow(webhook.retry.backoffMultiplier, delivery.attempt - 1),
@@ -267,7 +284,7 @@ export class WebhookDeliveryService {
 
     const nextRetry = new Date(Date.now() + delay);
 
-    this.updateDelivery(delivery.id, {
+    await this.updateDelivery(delivery.id, {
       status: 'retrying',
       nextRetry,
     });
@@ -277,7 +294,7 @@ export class WebhookDeliveryService {
 
       // Get fresh webhook config
       const manager = getWebhookManager();
-      const freshWebhook = manager.getById(webhook.id);
+      const freshWebhook = await manager.getById(webhook.id).catch(() => null);
       if (!freshWebhook || freshWebhook.status !== 'active') return;
 
       // Create new delivery for retry
@@ -301,8 +318,13 @@ export class WebhookDeliveryService {
       retryDelivery.requestBody = JSON.stringify(payload);
       retryDelivery.requestHeaders = this.buildHeaders(freshWebhook, payload);
 
-      this.storeDelivery(retryDelivery);
-      this.executeDelivery(retryDelivery, freshWebhook);
+      try {
+        await this.storeDelivery(retryDelivery);
+      } catch (storeError: any) {
+        console.error(`[Webhook] Retry ${retryDelivery.id}: could not store the delivery:`, storeError?.code ?? 'error');
+        return;
+      }
+      void this.executeDelivery(retryDelivery, freshWebhook);
     }, delay);
 
     this.retryQueue.set(delivery.id, timeoutId);
@@ -313,15 +335,13 @@ export class WebhookDeliveryService {
   /**
    * Store delivery record
    */
-  private storeDelivery(delivery: WebhookDelivery): void {
-    if (!this.db) return;
-
-    this.db.prepare(`
+  private async storeDelivery(delivery: WebhookDelivery): Promise<void> {
+    await this.write(`
       INSERT INTO webhook_deliveries (
         id, webhook_id, event_type, event_id, url, method,
         request_headers, request_body, status, attempt, timestamp
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `,
       delivery.id,
       delivery.webhookId,
       delivery.eventType,
@@ -339,14 +359,12 @@ export class WebhookDeliveryService {
   /**
    * Update delivery record
    */
-  private updateDelivery(
+  private async updateDelivery(
     id: string,
     updates: Partial<WebhookDelivery>
-  ): void {
-    if (!this.db) return;
-
+  ): Promise<void> {
     const sets: string[] = [];
-    const params: unknown[] = [];
+    const params: SqlParam[] = [];
 
     if (updates.responseStatus !== undefined) {
       sets.push('response_status = ?');
@@ -380,21 +398,21 @@ export class WebhookDeliveryService {
     if (sets.length === 0) return;
 
     params.push(id);
-    this.db.prepare(`UPDATE webhook_deliveries SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+    await this.write(`UPDATE webhook_deliveries SET ${sets.join(', ')} WHERE id = ?`, ...params);
   }
 
   /**
    * Get deliveries for a webhook
    */
-  getDeliveries(webhookId: string, limit: number = 50): WebhookDelivery[] {
-    if (!this.db) return [];
+  async getDeliveries(webhookId: string, limit: number = 50): Promise<WebhookDelivery[]> {
+    if (!this.runner) return [];
 
-    const rows = this.db.prepare(`
+    const rows = await this.runner.read(all<any>(`
       SELECT * FROM webhook_deliveries
       WHERE webhook_id = ?
       ORDER BY timestamp DESC
       LIMIT ?
-    `).all(webhookId, limit) as any[];
+    `, webhookId, limit));
 
     return rows.map(this.rowToDelivery);
   }
@@ -402,10 +420,10 @@ export class WebhookDeliveryService {
   /**
    * Get delivery by ID
    */
-  getDeliveryById(id: string): WebhookDelivery | null {
-    if (!this.db) return null;
+  async getDeliveryById(id: string): Promise<WebhookDelivery | null> {
+    if (!this.runner) return null;
 
-    const row = this.db.prepare('SELECT * FROM webhook_deliveries WHERE id = ?').get(id) as any;
+    const row = await this.runner.read(one<any>('SELECT * FROM webhook_deliveries WHERE id = ?', id));
     return row ? this.rowToDelivery(row) : null;
   }
 
@@ -437,7 +455,7 @@ export class WebhookDeliveryService {
   /**
    * Cancel pending retries
    */
-  cancelRetries(webhookId?: string): number {
+  async cancelRetries(webhookId?: string): Promise<number> {
     let cancelled = 0;
 
     for (const [deliveryId, timeoutId] of this.retryQueue.entries()) {
@@ -446,7 +464,7 @@ export class WebhookDeliveryService {
         this.retryQueue.delete(deliveryId);
         cancelled++;
       } else {
-        const delivery = this.getDeliveryById(deliveryId);
+        const delivery = await this.getDeliveryById(deliveryId);
         if (delivery && delivery.webhookId === webhookId) {
           clearTimeout(timeoutId);
           this.retryQueue.delete(deliveryId);
@@ -461,11 +479,11 @@ export class WebhookDeliveryService {
   /**
    * Cleanup old deliveries
    */
-  cleanup(retentionDays: number = 30): number {
-    if (!this.db) return 0;
+  async cleanup(retentionDays: number = 30): Promise<number> {
+    if (!this.runner) return 0;
 
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
-    const result = this.db.prepare('DELETE FROM webhook_deliveries WHERE timestamp < ?').run(cutoff);
+    const result = await this.runner.read(run('DELETE FROM webhook_deliveries WHERE timestamp < ?', cutoff));
     return result.changes;
   }
 }

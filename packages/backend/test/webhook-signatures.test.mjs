@@ -85,7 +85,7 @@ test('Twilio webhooks: unsigned and wrongly signed requests get 403, signed ones
 });
 
 test('inbound /webhook/*: HMAC-SHA256 over the raw body is required', async () => {
-  const hook = manager.createInbound({ name: 'ci', handler: { type: 'log' } });
+  const hook = await manager.createInbound({ name: 'ci', handler: { type: 'log' } });
   const body = JSON.stringify({ event: 'push', n: 1 });
   const JSONH = { 'content-type': 'application/json' };
   const missing = await app.inject({ method: 'POST', url: hook.path, headers: JSONH, payload: body });

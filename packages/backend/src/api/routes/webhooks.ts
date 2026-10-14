@@ -28,7 +28,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
    */
   fastify.get('/api/webhooks/status', async (request, reply) => {
     try {
-      const status = getWebhooksStatus();
+      const status = await getWebhooksStatus();
       return status;
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
@@ -51,7 +51,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
       };
 
       const manager = getWebhookManager();
-      const webhooks = manager.list({
+      const webhooks = await manager.list({
         status: query.status as any,
         event: query.event as WebhookEventType,
         ownerId: query.ownerId,
@@ -105,7 +105,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
       }
 
       const manager = getWebhookManager();
-      const webhook = manager.create(body);
+      const webhook = await manager.create(body);
 
       // Audit log
       const audit = getAuditLogger();
@@ -144,7 +144,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: string };
       const manager = getWebhookManager();
 
-      const webhook = manager.getById(id);
+      const webhook = await manager.getById(id);
       if (!webhook) {
         return reply.status(404).send({ error: 'Webhook not found' });
       }
@@ -170,7 +170,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
       const body = request.body as Partial<WebhookConfig>;
       const manager = getWebhookManager();
 
-      const webhook = manager.update(id, body);
+      const webhook = await manager.update(id, body);
       if (!webhook) {
         return reply.status(404).send({ error: 'Webhook not found' });
       }
@@ -209,8 +209,8 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: string };
       const manager = getWebhookManager();
 
-      const webhook = manager.getById(id);
-      const deleted = manager.delete(id);
+      const webhook = await manager.getById(id);
+      const deleted = await manager.delete(id);
 
       if (!deleted) {
         return reply.status(404).send({ error: 'Webhook not found' });
@@ -218,7 +218,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
 
       // Cancel pending retries
       const delivery = getDeliveryService();
-      delivery.cancelRetries(id);
+      await delivery.cancelRetries(id);
 
       // Audit log
       const audit = getAuditLogger();
@@ -246,7 +246,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
       const body = request.body as { data?: Record<string, unknown> };
       const manager = getWebhookManager();
 
-      const webhook = manager.getById(id);
+      const webhook = await manager.getById(id);
       if (!webhook) {
         return reply.status(404).send({ error: 'Webhook not found' });
       }
@@ -284,7 +284,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
       const delivery = getDeliveryService();
 
       const limit = query.limit ? parseInt(query.limit) : 50;
-      const deliveries = delivery.getDeliveries(id, limit);
+      const deliveries = await delivery.getDeliveries(id, limit);
 
       return {
         webhookId: id,
@@ -306,7 +306,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: string };
       const service = getDeliveryService();
 
-      const delivery = service.getDeliveryById(id);
+      const delivery = await service.getDeliveryById(id);
       if (!delivery) {
         return reply.status(404).send({ error: 'Delivery not found' });
       }
@@ -327,7 +327,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
   fastify.get('/api/webhooks/inbound', async (request, reply) => {
     try {
       const manager = getWebhookManager();
-      const webhooks = manager.listInbound();
+      const webhooks = await manager.listInbound();
 
       // Hide secrets
       const safeWebhooks = webhooks.map((w) => ({
@@ -366,7 +366,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
       }
 
       const manager = getWebhookManager();
-      const webhook = manager.createInbound(body);
+      const webhook = await manager.createInbound(body);
 
       return {
         success: true,
@@ -393,7 +393,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: string };
       const manager = getWebhookManager();
 
-      const deleted = manager.deleteInbound(id);
+      const deleted = await manager.deleteInbound(id);
       if (!deleted) {
         return reply.status(404).send({ error: 'Inbound webhook not found' });
       }
@@ -419,7 +419,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
         const path = `/webhook/${(request.params as any)['*']}`;
         const manager = getWebhookManager();
 
-        const webhook = manager.getInboundByPath(path);
+        const webhook = await manager.getInboundByPath(path);
         if (!webhook || webhook.status !== 'active') {
           return reply.status(404).send({ error: 'Webhook not found' });
         }
@@ -437,7 +437,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
         }
 
         // Record trigger
-        manager.recordInboundTrigger(webhook.id);
+        await manager.recordInboundTrigger(webhook.id);
 
         // For now, just acknowledge receipt
         // In full implementation, this would trigger workflows/agents/skills
@@ -462,7 +462,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
   fastify.get('/api/webhooks/stats', async (request, reply) => {
     try {
       const manager = getWebhookManager();
-      return manager.getStats();
+      return await manager.getStats();
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Webhooks] Get stats failed');
@@ -478,7 +478,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
       const body = request.body as { retentionDays?: number };
       const delivery = getDeliveryService();
 
-      const deleted = delivery.cleanup(body.retentionDays);
+      const deleted = await delivery.cleanup(body.retentionDays);
 
       return {
         success: true,

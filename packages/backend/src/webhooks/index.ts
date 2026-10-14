@@ -24,8 +24,8 @@ export async function initializeWebhooks(): Promise<{
   await manager.initialize();
 
   const delivery = getDeliveryService();
-  // Share database reference
-  delivery.setDatabase((manager as any).db);
+  // Share the store's runner
+  delivery.setRunner(manager.getRunner());
 
   initialized = true;
   console.log('[Webhooks] System initialized');
@@ -48,15 +48,15 @@ export async function triggerWebhooks(
 /**
  * Get webhooks status
  */
-export function getWebhooksStatus(): {
+export async function getWebhooksStatus(): Promise<{
   initialized: boolean;
   stats: WebhookStats;
-} {
+}> {
   const manager = getWebhookManager();
 
   return {
     initialized,
-    stats: manager.getStats(),
+    stats: await manager.getStats(),
   };
 }
 
@@ -65,7 +65,8 @@ export function getWebhooksStatus(): {
  */
 export function shutdownWebhooks(): void {
   const delivery = getDeliveryService();
-  delivery.cancelRetries();
+  void delivery.cancelRetries();
+  delivery.setRunner(null);
 
   const manager = getWebhookManager();
   manager.close();

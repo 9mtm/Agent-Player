@@ -30,6 +30,7 @@ const audit = await import(join(backendDir, 'src/services/audit-logger.ts'));
 const { INDEXER_TABLES_SQL, INDEXER_FTS_SQL } = await import(join(backendDir, 'src/memory/indexer.ts'));
 const { APP_SETTINGS_SQL } = await import(join(backendDir, 'src/settings/settings-manager.ts'));
 const auditStorage = await import(join(backendDir, 'src/audit/audit-storage.ts'));
+const { WEBHOOKS_SCHEMA_SQL } = await import(join(backendDir, 'src/webhooks/manager.ts'));
 
 test.after(() => {
   process.chdir(backendDir);
@@ -179,4 +180,11 @@ test('server shutdown path calls the bounded flush after fastify.close()', () =>
   const flush = src.indexOf('await flushAuditWritesWithin(SHUTDOWN_AUDIT_FLUSH_MS)');
   const exit = src.indexOf('process.exit(0);', close);
   assert.ok(close > 0 && flush > close && exit > flush, 'close -> bounded flush -> exit');
+});
+
+test('B2.2c part 2: r008 equals the webhook store DDL (its own SQLite file; the main database on PostgreSQL)', () => {
+  assert.deepEqual(statements(runtime('r008_webhooks.sql')), statements(WEBHOOKS_SCHEMA_SQL));
+  const pg = readFileSync(join(backendDir, 'src', 'db', 'migrations-pg', 'r008_webhooks.sql'), 'utf8');
+  for (const t of ['webhooks', 'inbound_webhooks', 'webhook_deliveries']) assert.match(pg, new RegExp(`CREATE TABLE IF NOT EXISTS ${t} \\(`));
+  assert.doesNotMatch(pg, /PRAGMA|datetime\(/i);
 });

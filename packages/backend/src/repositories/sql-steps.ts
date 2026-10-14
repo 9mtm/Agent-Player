@@ -40,6 +40,7 @@
  *                              e.g. createToolsRegistry); throws on PostgreSQL
  */
 
+import type Database from 'better-sqlite3';
 import type { Dialect } from '../db/pg/dialect.js';
 import { getDatabase } from '../db/index.js';
 import { dbDriver } from '../db/pg/config.js';
@@ -126,10 +127,21 @@ export interface StepRunner {
   tx<T>(body: () => Step<T>, opts?: { immediate?: boolean }): Promise<T>;
 }
 
-function sqliteOp(op: Op): unknown {
+/**
+ * The SQLite database a runner works on: the main database (getDatabase())
+ * or, for the stores that keep their own SQLite file (webhooks), that file.
+ */
+interface SqliteHandle {
+  prepare(sql: string): Database.Statement;
+  getDb(): Database.Database;
+}
+
+const mainSqlite = (): SqliteHandle => getDatabase();
+
+function sqliteOp(op: Op, h: SqliteHandle): unknown {
   if (op.kind === 'dialect') return 'sqlite';
-  if (op.kind === 'tx') return getDatabase().getDb().transaction(() => driveSync(op.body()))();
-  const stmt = getDatabase().prepare(op.sql);
+  if (op.kind === 'tx') return h.getDb().transaction(() => driveSync(op.body(), h))();
+  const stmt = h.prepare(op.sql);
   if (op.kind === 'one') return stmt.get(...op.params);
   if (op.kind === 'all') return stmt.all(...op.params);
   return { changes: stmt.run(...op.params).changes };
@@ -144,12 +156,12 @@ async function pgOp(op: Op): Promise<unknown> {
 }
 
 /** Drive a step synchronously on SQLite. */
-function driveSync<T>(step: Step<T>): T {
+function driveSync<T>(step: Step<T>, h: SqliteHandle = mainSqlite()): T {
   let r = step.next();
   while (!r.done) {
     let value: unknown;
     try {
-      value = sqliteOp(r.value);
+      value = sqliteOp(r.value, h);
     } catch (err) {
       r = step.throw(err);
       continue;
@@ -174,24 +186,39 @@ async function driveAsync<T>(step: Step<T>): Promise<T> {
   return r.value;
 }
 
-export const sqliteSteps: StepRunner = {
-  dialect: 'sqlite',
-  read<T>(step: Step<T>): Promise<T> {
-    try {
-      return Promise.resolve(driveSync(step));
-    } catch (err) {
-      return Promise.reject(err);
-    }
-  },
-  tx<T>(body: () => Step<T>, opts: { immediate?: boolean } = {}): Promise<T> {
-    try {
-      const t = getDatabase().getDb().transaction(() => driveSync(body()));
-      return Promise.resolve(opts.immediate ? t.immediate() : t());
-    } catch (err) {
-      return Promise.reject(err);
-    }
-  },
-};
+function sqliteRunner(handle: () => SqliteHandle): StepRunner {
+  return {
+    dialect: 'sqlite',
+    read<T>(step: Step<T>): Promise<T> {
+      try {
+        return Promise.resolve(driveSync(step, handle()));
+      } catch (err) {
+        return Promise.reject(err);
+      }
+    },
+    tx<T>(body: () => Step<T>, opts: { immediate?: boolean } = {}): Promise<T> {
+      try {
+        const h = handle();
+        const t = h.getDb().transaction(() => driveSync(body(), h));
+        return Promise.resolve(opts.immediate ? t.immediate() : t());
+      } catch (err) {
+        return Promise.reject(err);
+      }
+    },
+  };
+}
+
+export const sqliteSteps: StepRunner = sqliteRunner(mainSqlite);
+
+/**
+ * B2.2c: a SQLite runner on a database of its own (a store that keeps its
+ * own SQLite file, e.g. webhooks.db); same semantics as sqliteSteps. On
+ * PostgreSQL such stores use pgSteps (their tables are in the main database).
+ */
+export function sqliteStepsOn(db: Database.Database): StepRunner {
+  const h: SqliteHandle = { prepare: (q) => db.prepare(q), getDb: () => db };
+  return sqliteRunner(() => h);
+}
 
 export const pgSteps: StepRunner = {
   dialect: 'postgres',
