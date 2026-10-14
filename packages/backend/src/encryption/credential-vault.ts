@@ -1,6 +1,16 @@
 /**
  * Credential Vault
  * Secure encrypted storage for credentials
+ *
+ * B2.2b-2: rows go through a row store (row-store.ts). SQLite keeps its own
+ * file (.data/encryption/credentials.db, table `credentials`); on PostgreSQL
+ * (AGENT_PLAYER_DB=postgres) the rows live in the main database, table
+ * `vault_credentials` (migrations-pg r002; the main database already has a
+ * different `credentials` table). Encryption is unchanged and shared: the
+ * same crypto-utils encrypt/decrypt with the key manager's data keys; only
+ * the encrypted JSON envelope is stored. Methods that were synchronous
+ * (getById, query, delete, getStats, ...) stay synchronous on SQLite and
+ * return a promise on PostgreSQL (`Maybe<T>`); callers await them.
  */
 
 import { v4 as uuidv4 } from 'uuid';
@@ -14,6 +24,53 @@ import {
 } from './types.js';
 import { getKeyManager, KeyManager } from './key-manager.js';
 import { encrypt, decrypt } from './crypto-utils.js';
+import { dbDriver, type DbDriver } from '../db/pg/config.js';
+import { pgRowStore, requirePgTable, sqliteRowStore, mapMaybe, mapAll, type Maybe, type RowParam, type RowStore } from './row-store.js';
+
+/** Vault table name per driver (SQLite: its own file; PostgreSQL: the main database). */
+export function vaultTableFor(driver: DbDriver): string {
+  return driver === 'postgres' ? 'vault_credentials' : 'credentials';
+}
+
+/**
+ * DDL of the vault table. SQLite runs it at start (table `credentials` in
+ * its own file); scripts/pg/runtime/r002_vault_credentials.sql is the same
+ * DDL for `vault_credentials`, translated into migrations-pg by the
+ * translator (test/pg-runtime-ddl.test.mjs keeps the two equal).
+ */
+export function vaultSchemaSql(table: string = 'credentials'): string {
+  return `
+      CREATE TABLE IF NOT EXISTS ${table} (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        encrypted_data TEXT NOT NULL,
+        service TEXT,
+        owner_id TEXT NOT NULL,
+        owner_type TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_accessed_at TEXT,
+        access_count INTEGER DEFAULT 0,
+        expires_at TEXT,
+        tags TEXT,
+        metadata TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_cred_owner ON ${table}(owner_id, owner_type);
+      CREATE INDEX IF NOT EXISTS idx_cred_type ON ${table}(type);
+      CREATE INDEX IF NOT EXISTS idx_cred_service ON ${table}(service);
+      CREATE INDEX IF NOT EXISTS idx_cred_name ON ${table}(name);
+    `;
+}
+
+export interface VaultStats {
+  totalCredentials: number;
+  byType: Record<string, number>;
+  byOwnerType: Record<string, number>;
+  expiringSoon: number;
+  expired: number;
+}
 
 export interface CredentialInput {
   name: string;
@@ -40,11 +97,39 @@ export interface CredentialQuery {
 }
 
 export class CredentialVault {
-  private db: Database.Database | null = null;
+  /** Row store (null until initialize). */
+  rows: RowStore | null = null;
   private keyManager: KeyManager;
+  private driver: DbDriver;
+  private table: string;
 
-  constructor() {
-    this.keyManager = getKeyManager();
+  constructor(driver: DbDriver = dbDriver(), keyManager: KeyManager = getKeyManager()) {
+    this.keyManager = keyManager;
+    this.driver = driver;
+    this.table = vaultTableFor(driver);
+  }
+
+  private get db(): RowStore {
+    if (!this.rows) throw new Error('Vault not initialized');
+    return this.rows;
+  }
+
+  private get pg(): boolean {
+    return this.db.dialect === 'postgres';
+  }
+
+  /** "now" in a comparison with a text timestamp column (stored as ISO strings). */
+  private get now(): string {
+    return this.pg ? 'now()' : "datetime('now')";
+  }
+
+  private ts(column: string): string {
+    return this.pg ? `(${column})::timestamptz` : column;
+  }
+
+  /** SQLite LIKE ignores ASCII case; PostgreSQL needs ILIKE for the same match. */
+  private get like(): string {
+    return this.pg ? 'ILIKE' : 'LIKE';
   }
 
   /**
@@ -57,6 +142,14 @@ export class CredentialVault {
     // Ensure key manager is initialized
     await this.keyManager.initialize();
 
+    if (this.driver === 'postgres') {
+      // Main PostgreSQL database; the table comes from migrations-pg (no file, no PRAGMA).
+      await requirePgTable(this.table, 'r002_vault_credentials');
+      this.rows = pgRowStore;
+      console.log('[CredentialVault] Initialized on PostgreSQL:', this.table);
+      return;
+    }
+
     // Ensure directory exists
     const dir = dirname(resolvedPath);
     if (!existsSync(dir)) {
@@ -64,49 +157,21 @@ export class CredentialVault {
     }
 
     // Open database
-    this.db = new Database(resolvedPath);
-    this.db.pragma('journal_mode = WAL');
+    const db = new Database(resolvedPath);
+    db.pragma('journal_mode = WAL');
+    this.rows = sqliteRowStore(db);
 
     // Create tables
-    this.createTables();
+    db.exec(vaultSchemaSql(this.table));
 
     console.log('[CredentialVault] Initialized at:', resolvedPath);
-  }
-
-  /**
-   * Create database tables
-   */
-  private createTables(): void {
-    this.db!.exec(`
-      CREATE TABLE IF NOT EXISTS credentials (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        type TEXT NOT NULL,
-        encrypted_data TEXT NOT NULL,
-        service TEXT,
-        owner_id TEXT NOT NULL,
-        owner_type TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        last_accessed_at TEXT,
-        access_count INTEGER DEFAULT 0,
-        expires_at TEXT,
-        tags TEXT,
-        metadata TEXT
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_cred_owner ON credentials(owner_id, owner_type);
-      CREATE INDEX IF NOT EXISTS idx_cred_type ON credentials(type);
-      CREATE INDEX IF NOT EXISTS idx_cred_service ON credentials(service);
-      CREATE INDEX IF NOT EXISTS idx_cred_name ON credentials(name);
-    `);
   }
 
   /**
    * Store a credential
    */
   async store(input: CredentialInput): Promise<EncryptedCredential> {
-    if (!this.db) throw new Error('Vault not initialized');
+    if (!this.rows) throw new Error('Vault not initialized');
 
     const id = `cred_${uuidv4()}`;
     const now = new Date();
@@ -119,13 +184,13 @@ export class CredentialVault {
     const encryptedData = encrypt(plaintext, key, keyId);
 
     // Store in database
-    this.db.prepare(`
-      INSERT INTO credentials (
+    await this.db.run(`
+      INSERT INTO ${this.table} (
         id, name, type, encrypted_data, service,
         owner_id, owner_type, created_at, updated_at,
         expires_at, tags, metadata
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `,
       id,
       input.name,
       input.type,
@@ -141,28 +206,27 @@ export class CredentialVault {
     );
 
     this.keyManager.recordEncryption();
-    this.keyManager.updateKeyUsage(keyId);
+    await this.keyManager.updateKeyUsage(keyId);
 
-    return this.getById(id)!;
+    return (await this.getById(id))!;
   }
 
   /**
    * Get a credential by ID (returns encrypted)
    */
-  getById(id: string): EncryptedCredential | null {
-    if (!this.db) throw new Error('Vault not initialized');
+  getById(id: string): Maybe<EncryptedCredential | null> {
+    if (!this.rows) throw new Error('Vault not initialized');
 
-    const row = this.db.prepare('SELECT * FROM credentials WHERE id = ?').get(id) as any;
-    return row ? this.rowToCredential(row) : null;
+    return mapMaybe(this.db.one(`SELECT * FROM ${this.table} WHERE id = ?`, id), (row: any) => (row ? this.rowToCredential(row) : null));
   }
 
   /**
    * Get and decrypt a credential
    */
   async retrieve(id: string): Promise<{ credential: EncryptedCredential; data: Record<string, unknown> } | null> {
-    if (!this.db) throw new Error('Vault not initialized');
+    if (!this.rows) throw new Error('Vault not initialized');
 
-    const credential = this.getById(id);
+    const credential = await this.getById(id);
     if (!credential) return null;
 
     // Check expiration
@@ -177,18 +241,18 @@ export class CredentialVault {
     const data = JSON.parse(decrypted.toString('utf8'));
 
     // Update access tracking
-    this.db.prepare(`
-      UPDATE credentials
+    await this.db.run(`
+      UPDATE ${this.table}
       SET last_accessed_at = ?, access_count = access_count + 1
       WHERE id = ?
-    `).run(new Date().toISOString(), id);
+    `, new Date().toISOString(), id);
 
     this.keyManager.recordDecryption();
-    this.keyManager.updateKeyUsage(encryptedData.keyId);
+    await this.keyManager.updateKeyUsage(encryptedData.keyId);
 
     // Return updated credential
     return {
-      credential: this.getById(id)!,
+      credential: (await this.getById(id))!,
       data,
     };
   }
@@ -197,16 +261,16 @@ export class CredentialVault {
    * Update a credential
    */
   async update(id: string, input: Partial<CredentialInput>): Promise<EncryptedCredential> {
-    if (!this.db) throw new Error('Vault not initialized');
+    if (!this.rows) throw new Error('Vault not initialized');
 
-    const existing = this.getById(id);
+    const existing = await this.getById(id);
     if (!existing) {
       throw new Error('Credential not found');
     }
 
     const now = new Date();
     const updates: string[] = ['updated_at = ?'];
-    const params: unknown[] = [now.toISOString()];
+    const params: RowParam[] = [now.toISOString()];
 
     if (input.name !== undefined) {
       updates.push('name = ?');
@@ -220,7 +284,7 @@ export class CredentialVault {
 
     if (input.service !== undefined) {
       updates.push('service = ?');
-      params.push(input.service);
+      params.push(input.service ?? null);
     }
 
     if (input.expiresAt !== undefined) {
@@ -252,29 +316,28 @@ export class CredentialVault {
 
     params.push(id);
 
-    this.db.prepare(`UPDATE credentials SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+    await this.db.run(`UPDATE ${this.table} SET ${updates.join(', ')} WHERE id = ?`, ...params);
 
-    return this.getById(id)!;
+    return (await this.getById(id))!;
   }
 
   /**
    * Delete a credential
    */
-  delete(id: string): boolean {
-    if (!this.db) throw new Error('Vault not initialized');
+  delete(id: string): Maybe<boolean> {
+    if (!this.rows) throw new Error('Vault not initialized');
 
-    const result = this.db.prepare('DELETE FROM credentials WHERE id = ?').run(id);
-    return result.changes > 0;
+    return mapMaybe(this.db.run(`DELETE FROM ${this.table} WHERE id = ?`, id), (result) => result.changes > 0);
   }
 
   /**
    * Query credentials
    */
-  query(filters: CredentialQuery = {}): EncryptedCredential[] {
-    if (!this.db) throw new Error('Vault not initialized');
+  query(filters: CredentialQuery = {}): Maybe<EncryptedCredential[]> {
+    if (!this.rows) throw new Error('Vault not initialized');
 
-    let sql = 'SELECT * FROM credentials WHERE 1=1';
-    const params: unknown[] = [];
+    let sql = `SELECT * FROM ${this.table} WHERE 1=1`;
+    const params: RowParam[] = [];
 
     if (filters.ownerId) {
       sql += ' AND owner_id = ?';
@@ -299,19 +362,19 @@ export class CredentialVault {
 
     if (filters.tags && filters.tags.length > 0) {
       for (const tag of filters.tags) {
-        sql += ' AND tags LIKE ?';
+        sql += ` AND tags ${this.like} ?`;
         params.push(`%"${tag}"%`);
       }
     }
 
     if (filters.search) {
-      sql += ' AND (name LIKE ? OR service LIKE ?)';
+      sql += ` AND (name ${this.like} ? OR service ${this.like} ?)`;
       const pattern = `%${filters.search}%`;
       params.push(pattern, pattern);
     }
 
     if (!filters.includeExpired) {
-      sql += " AND (expires_at IS NULL OR expires_at > datetime('now'))";
+      sql += ` AND (expires_at IS NULL OR ${this.ts('expires_at')} > ${this.now})`;
     }
 
     sql += ' ORDER BY updated_at DESC';
@@ -326,21 +389,20 @@ export class CredentialVault {
       params.push(filters.offset);
     }
 
-    const rows = this.db.prepare(sql).all(...params) as any[];
-    return rows.map(this.rowToCredential);
+    return mapMaybe(this.db.all(sql, ...params), (rows: any[]) => rows.map(this.rowToCredential));
   }
 
   /**
    * Get credentials by owner
    */
-  getByOwner(ownerId: string, ownerType: 'user' | 'agent' | 'system'): EncryptedCredential[] {
+  getByOwner(ownerId: string, ownerType: 'user' | 'agent' | 'system'): Maybe<EncryptedCredential[]> {
     return this.query({ ownerId, ownerType });
   }
 
   /**
    * Get credentials by service
    */
-  getByService(service: string): EncryptedCredential[] {
+  getByService(service: string): Maybe<EncryptedCredential[]> {
     return this.query({ service });
   }
 
@@ -348,9 +410,9 @@ export class CredentialVault {
    * Re-encrypt all credentials with new key
    */
   async reEncryptAll(): Promise<number> {
-    if (!this.db) throw new Error('Vault not initialized');
+    if (!this.rows) throw new Error('Vault not initialized');
 
-    const credentials = this.query({ includeExpired: true });
+    const credentials = await this.query({ includeExpired: true });
     let count = 0;
 
     for (const cred of credentials) {
@@ -364,7 +426,7 @@ export class CredentialVault {
         const newEncrypted = encrypt(decrypted, key, keyId);
 
         // Update in database
-        this.db.prepare('UPDATE credentials SET encrypted_data = ?, updated_at = ? WHERE id = ?').run(
+        await this.db.run(`UPDATE ${this.table} SET encrypted_data = ?, updated_at = ? WHERE id = ?`,
           JSON.stringify(newEncrypted),
           new Date().toISOString(),
           cred.id
@@ -382,40 +444,30 @@ export class CredentialVault {
   /**
    * Get vault statistics
    */
-  getStats(): {
-    totalCredentials: number;
-    byType: Record<string, number>;
-    byOwnerType: Record<string, number>;
-    expiringSoon: number;
-    expired: number;
-  } {
-    if (!this.db) throw new Error('Vault not initialized');
+  getStats(): Maybe<VaultStats> {
+    if (!this.rows) throw new Error('Vault not initialized');
 
-    const totalRow = this.db.prepare('SELECT COUNT(*) as count FROM credentials').get() as any;
-
-    const typeRows = this.db.prepare(
-      'SELECT type, COUNT(*) as count FROM credentials GROUP BY type'
-    ).all() as any[];
-
-    const ownerRows = this.db.prepare(
-      'SELECT owner_type, COUNT(*) as count FROM credentials GROUP BY owner_type'
-    ).all() as any[];
-
-    // Expiring in next 7 days
-    const expiringRow = this.db.prepare(`
-      SELECT COUNT(*) as count FROM credentials
+    const t = this.table;
+    const exp = this.ts('expires_at');
+    const inSevenDays = this.pg ? `now() + interval '7 days'` : `datetime('now', '+7 days')`;
+    return mapAll([
+      this.db.one(`SELECT COUNT(*) as count FROM ${t}`),
+      this.db.all(`SELECT type, COUNT(*) as count FROM ${t} GROUP BY type`),
+      this.db.all(`SELECT owner_type, COUNT(*) as count FROM ${t} GROUP BY owner_type`),
+      // Expiring in next 7 days
+      this.db.one(`
+      SELECT COUNT(*) as count FROM ${t}
       WHERE expires_at IS NOT NULL
-      AND expires_at > datetime('now')
-      AND expires_at < datetime('now', '+7 days')
-    `).get() as any;
-
-    // Already expired
-    const expiredRow = this.db.prepare(`
-      SELECT COUNT(*) as count FROM credentials
+      AND ${exp} > ${this.now}
+      AND ${exp} < ${inSevenDays}
+    `),
+      // Already expired
+      this.db.one(`
+      SELECT COUNT(*) as count FROM ${t}
       WHERE expires_at IS NOT NULL
-      AND expires_at < datetime('now')
-    `).get() as any;
-
+      AND ${exp} < ${this.now}
+    `),
+    ] as const, ([totalRow, typeRows, ownerRows, expiringRow, expiredRow]: [any, any[], any[], any, any]) => {
     const byType: Record<string, number> = {};
     for (const row of typeRows) {
       byType[row.type] = row.count;
@@ -433,6 +485,7 @@ export class CredentialVault {
       expiringSoon: expiringRow.count,
       expired: expiredRow.count,
     };
+    });
   }
 
   /**
@@ -461,9 +514,9 @@ export class CredentialVault {
    * Close the vault
    */
   close(): void {
-    if (this.db) {
-      this.db.close();
-      this.db = null;
+    if (this.rows) {
+      this.rows.close();
+      this.rows = null;
     }
     this.keyManager.close();
   }

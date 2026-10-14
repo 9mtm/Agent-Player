@@ -43,6 +43,12 @@ export function buildSqlite(path) {
     db.transaction(() => db.exec(readFileSync(join(dbDir, 'migrations', f), 'utf8')))();
   }
   db.exec(schema); // second start: schema.sql runs again (adds indexes on rebuilt tables)
+  // B2.2b-2: what the app creates at run time (scripts/pg/runtime, the source
+  // of migrations-pg r*): the credentials indexes, and the vault and key
+  // tables under their PostgreSQL names (on SQLite they live in own files).
+  for (const f of readdirSync(join(backendDir, 'scripts', 'pg', 'runtime')).filter((x) => x.endsWith('.sql')).sort()) {
+    db.exec(readFileSync(join(backendDir, 'scripts', 'pg', 'runtime', f), 'utf8'));
+  }
   return db;
 }
 

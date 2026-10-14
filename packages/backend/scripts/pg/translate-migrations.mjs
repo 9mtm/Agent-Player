@@ -5,6 +5,12 @@
  * Input, in the same order the SQLite runner (src/db/database.ts) applies it:
  *   1. src/db/schema.sql (+ the runner's own `migrations` table)
  *   2. src/db/migrations/*.sql, sorted by file name (`.sql.disabled` skipped)
+ *   3. scripts/pg/runtime/r<NNN>_<name>.sql (B2.2b-2): tables and indexes the
+ *      app creates at run time on SQLite (CREATE ... IF NOT EXISTS outside the
+ *      migrations, some in their own SQLite files). Written in SQLite DDL,
+ *      equal to the TypeScript that runs it (test/pg-runtime-ddl.test.mjs),
+ *      translated like a migration. The `r` prefix keeps their ids apart from
+ *      the numeric SQLite migration ids, so no later migration can collide.
  * Output: src/db/migrations-pg/<same base name>.sql (000_schema.sql for 1.)
  *
  * Plain Node, no dependencies. A file in scripts/pg/overrides/<name>.sql
@@ -609,9 +615,25 @@ export function translateSql(sql, state = createState()) {
 // CLI
 // ---------------------------------------------------------------------------
 
+export const RUNTIME_SOURCE_RE = /^r\d{3}_[a-z0-9_]+\.sql$/;
+
+/** scripts/pg/runtime/*.sql (runtime-created tables), in name order; refuses bad names. */
+export function listRuntimeSources(backendDir) {
+  const dir = join(backendDir, 'scripts', 'pg', 'runtime');
+  if (!existsSync(dir)) return [];
+  const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+  for (const f of files) {
+    if (!RUNTIME_SOURCE_RE.test(f)) throw new UnsupportedSqlError(`scripts/pg/runtime/${f}: name must be r<NNN>_<name>.sql`);
+  }
+  return files.map((f) => ({ name: f.replace(/\.sql$/, ''), sql: readFileSync(join(dir, f), 'utf8'), source: `scripts/pg/runtime/${f} (runtime-created on SQLite)` }));
+}
+
 export function listSources(dbDir) {
   const migDir = join(dbDir, 'migrations');
   const files = readdirSync(migDir).filter((f) => f.endsWith('.sql')).sort(); // same order as the runner
+  for (const f of files) {
+    if (/^r/i.test(f)) throw new UnsupportedSqlError(`src/db/migrations/${f}: ids starting with "r" are reserved for scripts/pg/runtime`);
+  }
   return [
     { name: '000_schema', sql: readFileSync(join(dbDir, 'schema.sql'), 'utf8') + '\n' + RUNNER_MIGRATIONS_TABLE + '\n', source: 'src/db/schema.sql + runner migrations table' },
     ...files.map((f) => ({ name: f.replace(/\.sql$/, ''), sql: readFileSync(join(migDir, f), 'utf8'), source: `src/db/migrations/${f}` })),
@@ -623,7 +645,7 @@ export function translateAll(backendDir) {
   const overridesDir = join(backendDir, 'scripts', 'pg', 'overrides');
   const st = createState();
   const results = [];
-  for (const src of listSources(dbDir)) {
+  for (const src of [...listSources(dbDir), ...listRuntimeSources(backendDir)]) {
     const overridePath = join(overridesDir, `${src.name}.sql`);
     let res;
     let error = null;

@@ -1,31 +1,68 @@
 /**
  * Credential Storage
  *
- * Stores credentials in JSON files + SQLite database
- * JSON files for backup, SQLite for fast access
+ * Stores credentials in JSON files + the database
+ * JSON files for backup, the database for fast access
+ *
+ * B2.2b-2: the rows go through a SQL runner (repositories/sql-runner.ts),
+ * so the SQL exists once for both drivers:
+ *   SQLite      the main SQLite database, as before; initialize() still
+ *               creates the table and indexes and upgrades a legacy table.
+ *   PostgreSQL  the `credentials` table of migrations-pg (000_schema) with
+ *               its indexes (r001); initialize() only checks they exist (no
+ *               DDL, no PRAGMA at run time).
+ * Encryption is unchanged (credentials/encryption.ts, AES-256-GCM with
+ * ENCRYPTION_KEY); only ciphertext, IV and auth tag are stored.
  */
 
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { v4 as uuidv4 } from 'uuid';
 import { getDatabase } from '../db/index.js';
 import { getEncryptionService } from './encryption.js';
 import type { Credential, ICredentialStorage } from './types.js';
+import { sqliteRunner, type SqlRunner } from '../repositories/sql-runner.js';
+import { pgRunner } from '../repositories/pg/sql-runner.js';
+import { dbDriver, type DbDriver } from '../db/pg/config.js';
+import { withPgTransaction } from '../db/pg/pool.js';
+
+/**
+ * Indexes of the credentials table (the table itself is in schema.sql).
+ * SQLite creates them in initialize(); scripts/pg/runtime/r001_credentials_indexes.sql
+ * is the same DDL, translated into migrations-pg by the translator
+ * (test/pg-runtime-ddl.test.mjs keeps the two equal).
+ */
+export const CREDENTIALS_INDEXES_SQL = `
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_credentials_name_user
+        ON credentials(name, user_id);
+      CREATE INDEX IF NOT EXISTS idx_credentials_skill
+        ON credentials(skill_id);
+      CREATE INDEX IF NOT EXISTS idx_credentials_user
+        ON credentials(user_id);
+    `;
+
+const COLUMNS = `id, name, type, encrypted_value, iv, auth_tag,
+        description, skill_id, user_id, refresh_token,
+        expires_at, scopes, created_at, updated_at, last_used`;
+
+/** The SQL runner of a driver. */
+export function credentialsRunnerFor(driver: DbDriver): SqlRunner {
+  return driver === 'postgres' ? pgRunner : sqliteRunner;
+}
 
 export class CredentialStorage implements ICredentialStorage {
   private credentialsDir: string;
-  private db: ReturnType<typeof getDatabase>;
+  private sql: SqlRunner;
   private encryption: ReturnType<typeof getEncryptionService>;
 
-  constructor(credentialsDir?: string) {
+  constructor(credentialsDir?: string, runner: SqlRunner = credentialsRunnerFor(dbDriver())) {
     // Default to home directory
     this.credentialsDir = credentialsDir || path.join(
       os.homedir(),
       '.agent-player',
       'credentials'
     );
-    this.db = getDatabase();
+    this.sql = runner;
     this.encryption = getEncryptionService();
   }
 
@@ -36,12 +73,22 @@ export class CredentialStorage implements ICredentialStorage {
     // Create credentials directory
     await fs.mkdir(this.credentialsDir, { recursive: true });
 
+    if (this.sql.dialect === 'postgres') {
+      // Table and indexes come from migrations-pg (000_schema, r001).
+      const row = await this.sql.one<{ present: boolean }>(
+        `SELECT to_regclass('credentials') IS NOT NULL AND to_regclass('idx_credentials_name_user') IS NOT NULL AS present`
+      );
+      if (!row?.present) throw new Error('PostgreSQL credentials table or its indexes are missing; run the PostgreSQL migrations (r001_credentials_indexes)');
+      console.log(`[Credentials] 🔐 Storage initialized on PostgreSQL: ${this.credentialsDir}`);
+      return;
+    }
+
     // Older databases may hold a legacy `credentials` table (from an earlier
     // schema.sql) without skill_id etc. Upgrade it before creating indexes.
     this.upgradeLegacyTable();
 
     // Create database table
-    this.db.getDb().exec(`
+    getDatabase().getDb().exec(`
       CREATE TABLE IF NOT EXISTS credentials (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -59,14 +106,7 @@ export class CredentialStorage implements ICredentialStorage {
         updated_at TEXT NOT NULL,
         last_used TEXT
       );
-
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_credentials_name_user
-        ON credentials(name, user_id);
-      CREATE INDEX IF NOT EXISTS idx_credentials_skill
-        ON credentials(skill_id);
-      CREATE INDEX IF NOT EXISTS idx_credentials_user
-        ON credentials(user_id);
-    `);
+${CREDENTIALS_INDEXES_SQL}`);
 
     console.log(`[Credentials] 🔐 Storage initialized: ${this.credentialsDir}`);
   }
@@ -80,7 +120,7 @@ export class CredentialStorage implements ICredentialStorage {
    *   (old NOT NULL/CHECK constraints stay until an explicit, approved rebuild).
    */
   private upgradeLegacyTable(): void {
-    const db = this.db.getDb();
+    const db = getDatabase().getDb(); // SQLite only (initialize returns earlier on PostgreSQL)
     const columns = db.prepare("SELECT name FROM pragma_table_info('credentials')").all() as Array<{ name: string }>;
     if (columns.length === 0) return;
     const have = new Set(columns.map(c => c.name));
@@ -112,15 +152,7 @@ export class CredentialStorage implements ICredentialStorage {
    */
   async save(credential: Credential): Promise<void> {
     // Save to database
-    const stmt = this.db.getDb().prepare(`
-      INSERT OR REPLACE INTO credentials (
-        id, name, type, encrypted_value, iv, auth_tag,
-        description, skill_id, user_id, refresh_token,
-        expires_at, scopes, created_at, updated_at, last_used
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.run(
+    const values = [
       credential.id,
       credential.name,
       credential.type,
@@ -136,7 +168,22 @@ export class CredentialStorage implements ICredentialStorage {
       credential.createdAt.toISOString(),
       credential.updatedAt.toISOString(),
       credential.lastUsed?.toISOString() || null
-    );
+    ];
+    const insert = `INTO credentials (
+        ${COLUMNS}
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+    if (this.sql.dialect === 'postgres') {
+      // INSERT OR REPLACE as SQLite does it: every row that conflicts on the
+      // primary key or on the unique (name, user_id) index is deleted, then
+      // the row is inserted; in one transaction (a failure keeps the old row).
+      await withPgTransaction(async () => {
+        await this.sql.run('DELETE FROM credentials WHERE id = ? OR (name = ? AND user_id = ?)', credential.id, credential.name, credential.userId || null);
+        await this.sql.run(`INSERT ${insert}`, ...values);
+      });
+    } else {
+      await this.sql.run(`INSERT OR REPLACE ${insert}`, ...values);
+    }
 
     // Save to JSON file (backup)
     await this.saveToFile(credential);
@@ -146,17 +193,16 @@ export class CredentialStorage implements ICredentialStorage {
    * Get credential by ID
    */
   async get(id: string): Promise<Credential | null> {
-    const stmt = this.db.getDb().prepare('SELECT * FROM credentials WHERE id = ?');
-    const row = stmt.get(id) as any;
+    const row = await this.sql.one('SELECT * FROM credentials WHERE id = ?', id);
 
     if (!row) return null;
 
     // Update last used timestamp
-    this.db.getDb().prepare(`
+    await this.sql.run(`
       UPDATE credentials
       SET last_used = ?
       WHERE id = ?
-    `).run(new Date().toISOString(), id);
+    `, new Date().toISOString(), id);
 
     return this.rowToCredential(row);
   }
@@ -165,19 +211,16 @@ export class CredentialStorage implements ICredentialStorage {
    * Get credential by name
    */
   async getByName(name: string, userId?: string): Promise<Credential | null> {
-    let stmt;
     let row;
 
     if (userId) {
-      stmt = this.db.getDb().prepare(
-        'SELECT * FROM credentials WHERE name = ? AND user_id = ?'
+      row = await this.sql.one(
+        'SELECT * FROM credentials WHERE name = ? AND user_id = ?', name, userId
       );
-      row = stmt.get(name, userId) as any;
     } else {
-      stmt = this.db.getDb().prepare(
-        'SELECT * FROM credentials WHERE name = ? AND user_id IS NULL'
+      row = await this.sql.one(
+        'SELECT * FROM credentials WHERE name = ? AND user_id IS NULL', name
       );
-      row = stmt.get(name) as any;
     }
 
     if (!row) return null;
@@ -189,10 +232,9 @@ export class CredentialStorage implements ICredentialStorage {
    * Get all credentials for a skill
    */
   async getBySkill(skillId: string): Promise<Credential[]> {
-    const stmt = this.db.getDb().prepare(
-      'SELECT * FROM credentials WHERE skill_id = ? ORDER BY created_at DESC'
+    const rows = await this.sql.all(
+      'SELECT * FROM credentials WHERE skill_id = ? ORDER BY created_at DESC', skillId
     );
-    const rows = stmt.all(skillId) as any[];
 
     return rows.map(row => this.rowToCredential(row));
   }
@@ -201,10 +243,9 @@ export class CredentialStorage implements ICredentialStorage {
    * Get all credentials for a user
    */
   async getByUser(userId: string): Promise<Credential[]> {
-    const stmt = this.db.getDb().prepare(
-      'SELECT * FROM credentials WHERE user_id = ? ORDER BY created_at DESC'
+    const rows = await this.sql.all(
+      'SELECT * FROM credentials WHERE user_id = ? ORDER BY created_at DESC', userId
     );
-    const rows = stmt.all(userId) as any[];
 
     return rows.map(row => this.rowToCredential(row));
   }
@@ -213,10 +254,9 @@ export class CredentialStorage implements ICredentialStorage {
    * Get all credentials (no filter)
    */
   async getAll(): Promise<Credential[]> {
-    const stmt = this.db.getDb().prepare(
+    const rows = await this.sql.all(
       'SELECT * FROM credentials ORDER BY created_at DESC'
     );
-    const rows = stmt.all() as any[];
 
     return rows.map(row => this.rowToCredential(row));
   }
@@ -229,7 +269,7 @@ export class CredentialStorage implements ICredentialStorage {
     if (!credential) return;
 
     // Delete from database
-    this.db.getDb().prepare('DELETE FROM credentials WHERE id = ?').run(id);
+    await this.sql.run('DELETE FROM credentials WHERE id = ?', id);
 
     // Delete JSON file
     const filePath = this.getFilePath(credential);
@@ -335,12 +375,18 @@ export class CredentialStorage implements ICredentialStorage {
   }
 }
 
-// Singleton instance
-let credentialStorage: CredentialStorage | null = null;
+// One instance per driver (the process uses dbDriver(); tests may ask for either)
+const credentialStorages = new Map<DbDriver, CredentialStorage>();
+
+export function credentialStorageFor(driver: DbDriver): CredentialStorage {
+  let storage = credentialStorages.get(driver);
+  if (!storage) {
+    storage = new CredentialStorage(undefined, credentialsRunnerFor(driver));
+    credentialStorages.set(driver, storage);
+  }
+  return storage;
+}
 
 export function getCredentialStorage(): CredentialStorage {
-  if (!credentialStorage) {
-    credentialStorage = new CredentialStorage();
-  }
-  return credentialStorage;
+  return credentialStorageFor(dbDriver());
 }

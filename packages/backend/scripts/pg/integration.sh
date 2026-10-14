@@ -3,7 +3,8 @@
 # migrations-pg with the PostgreSQL runner (twice: the second run must apply
 # nothing), compares the schema with a fresh SQLite build, runs
 # test/pg-identity.integration.test.mjs and (B2.2b)
-# test/pg-auth-teams.integration.test.mjs against it, then always drops it.
+# test/pg-auth-teams.integration.test.mjs and (B2.2b-2)
+# test/pg-credentials.integration.test.mjs against it, then always drops it.
 #
 # Usage: scripts/pg/integration.sh [report-dir]
 # Touches only the database named below on 127.0.0.1, as the current OS user.
@@ -48,5 +49,7 @@ node scripts/pg/compare-schema.mjs --host "$HOST" --db "$DB" --out "$OUT_DIR/com
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-identity.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-output.txt"
 test "${PIPESTATUS[0]}" -eq 0
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-auth-teams.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-auth-teams-output.txt"
+test "${PIPESTATUS[0]}" -eq 0
+AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-credentials.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-credentials-output.txt"
 test "${PIPESTATUS[0]}" -eq 0
 echo "reports in $OUT_DIR"

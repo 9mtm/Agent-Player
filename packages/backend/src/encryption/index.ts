@@ -36,18 +36,18 @@ export async function initializeEncryption(config?: Partial<EncryptionConfig>): 
 /**
  * Get encryption system status
  */
-export function getEncryptionStatus(): {
+export async function getEncryptionStatus(): Promise<{
   initialized: boolean;
   keyStats: EncryptionStats;
-  vaultStats: ReturnType<CredentialVault['getStats']> | null;
-} {
+  vaultStats: Awaited<ReturnType<CredentialVault['getStats']>> | null;
+}> {
   const keyManager = getKeyManager();
   const vault = getCredentialVault();
 
   return {
     initialized,
     keyStats: keyManager.getStats(),
-    vaultStats: initialized ? vault.getStats() : null,
+    vaultStats: initialized ? await vault.getStats() : null,
   };
 }
 

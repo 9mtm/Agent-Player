@@ -157,6 +157,34 @@ export async function flushAuditWrites(): Promise<void> {
     }
 }
 
+/** Default bound of the shutdown flush (B2.2b-2). */
+export const SHUTDOWN_AUDIT_FLUSH_MS = 2000;
+
+/**
+ * flushAuditWrites(), bounded by `ms` (server shutdown). Resolves true when
+ * every pending insert finished, false when the time ran out or the flush
+ * failed. Never rejects and never waits longer than `ms`, so shutdown cannot
+ * hang on a stuck database. `flush` is replaceable for tests.
+ */
+export async function flushAuditWritesWithin(
+    ms: number = SHUTDOWN_AUDIT_FLUSH_MS,
+    flush: () => Promise<void> = flushAuditWrites,
+): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), ms); });
+    try {
+        let done: Promise<boolean>;
+        try {
+            done = flush().then(() => true, () => false);
+        } catch {
+            return false;
+        }
+        return await Promise.race([done, timeout]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 /**
  * Log authentication event
  * SECURITY: Tracks all auth attempts (L-02)

@@ -20,7 +20,8 @@
  *
  * One implementation over a SQL runner (sql-runner.ts, B2.2b): sqliteTeams
  * and pgTeams (repositories/pg/teams.ts) share the logic and the SQL; only
- * the "now" of the pending-invitation filter differs by dialect. The
+ * the "now" of the pending-invitation filter and the expires_at shape of
+ * returned invitation rows (invitationRow) differ by dialect. The
  * multi-statement writes (create team + owner membership, accept invitation)
  * run as one runner.batch transaction on either driver.
  */
@@ -74,6 +75,21 @@ const newId = (prefix: string) => `${prefix}_${Date.now()}_${randomBytes(8).toSt
 export function parseStoredTime(value: string): Date {
   const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/.exec(value);
   return new Date(m ? `${m[1]}T${m[2]}Z` : value);
+}
+
+/**
+ * An invitation row in the SQLite shape (B2.2b-2). invite() writes
+ * expires_at as an ISO string and SQLite returns that string; PostgreSQL
+ * stores timestamptz and returns 'YYYY-MM-DD HH:MM:SS[.f]' (UTC). On
+ * PostgreSQL the value is turned back into the same ISO string, so callers
+ * see one shape on both drivers. Other columns are unchanged.
+ */
+export function invitationRow<T>(dialect: SqlRunner['dialect'], row: T): T {
+  if (dialect !== 'postgres' || !row || typeof row !== 'object') return row;
+  const r = row as Record<string, unknown>;
+  if (typeof r.expires_at !== 'string') return row;
+  const d = parseStoredTime(r.expires_at);
+  return Number.isNaN(d.getTime()) ? row : { ...r, expires_at: d.toISOString() } as T;
 }
 
 /** The teams repository over a SQL runner (one per driver). */
@@ -211,7 +227,7 @@ export function createTeams(sql: SqlRunner): TeamsRepository {
         INSERT INTO team_invitations (id, team_id, email, role, invited_by, token, expires_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `, invitationId, teamId, email, role, userId, token, expiresAt);
-      const invitation = await sql.one('SELECT * FROM team_invitations WHERE id = ?', invitationId);
+      const invitation = invitationRow(sql.dialect, await sql.one('SELECT * FROM team_invitations WHERE id = ?', invitationId));
       const team = await sql.one<{ name: string }>('SELECT name FROM teams WHERE id = ?', teamId);
       const inviter = await sql.one<{ name: string | null; username: string }>('SELECT full_name AS name, username FROM users WHERE id = ?', userId);
       return {
@@ -222,25 +238,25 @@ export function createTeams(sql: SqlRunner): TeamsRepository {
 
     async myInvitations(actor) {
       const email = await accountEmail(memberId(actor));
-      return sql.all(`
+      return (await sql.all(`
         SELECT ti.*, t.name as team_name, u.full_name as invited_by_name
         FROM team_invitations ti
         INNER JOIN teams t ON ti.team_id = t.id
         INNER JOIN users u ON ti.invited_by = u.id
         WHERE ti.email = ? AND ti.status = 'pending' AND ti.expires_at > ${NOW}
         ORDER BY ti.created_at DESC
-      `, email);
+      `, email)).map((r) => invitationRow(sql.dialect, r));
     },
 
     async teamInvitations(actor, teamId) {
       await teamManager(teamId, memberId(actor), 'Only owners and admins can view invitations');
-      return sql.all(`
+      return (await sql.all(`
         SELECT ti.*, u.full_name as invited_by_name
         FROM team_invitations ti
         INNER JOIN users u ON ti.invited_by = u.id
         WHERE ti.team_id = ? AND ti.status = 'pending'
         ORDER BY ti.created_at DESC
-      `, teamId);
+      `, teamId)).map((r) => invitationRow(sql.dialect, r));
     },
 
     async acceptInvitation(actor, token) {

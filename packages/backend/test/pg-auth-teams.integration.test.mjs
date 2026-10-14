@@ -244,6 +244,14 @@ test('teams on PostgreSQL: create, list, update, invite, accept, roles, remove, 
   const pending = await id.myInvitations(member);
   assert.ok(pending.some((i) => i.id === inv.invitation.id && i.team_name === 'Renamed'));
   assert.equal((await id.teamInvitations(owner, team.id)).length, 1);
+  // B2.2b-2: expires_at has the SQLite row shape (the ISO string invite() wrote), not the timestamptz text.
+  const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  assert.match(inv.invitation.expires_at, ISO);
+  const days = (Date.parse(inv.invitation.expires_at) - Date.now()) / 86_400_000;
+  assert.ok(days > 6.9 && days <= 7, `expires in about 7 days, got ${days}`);
+  assert.equal(pending.find((i) => i.id === inv.invitation.id).expires_at, inv.invitation.expires_at);
+  assert.equal((await id.teamInvitations(owner, team.id))[0].expires_at, inv.invitation.expires_at);
+  assert.notEqual((await one('SELECT expires_at FROM team_invitations WHERE id = ?', inv.invitation.id)).expires_at, inv.invitation.expires_at, 'the raw PostgreSQL value is the timestamptz text');
   await id.acceptInvitation(member, inv.invitation.token);
   assert.equal((await one('SELECT status FROM team_invitations WHERE id = ?', inv.invitation.id)).status, 'accepted');
   const members = await id.members(owner, team.id);

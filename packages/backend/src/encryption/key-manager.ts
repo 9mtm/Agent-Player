@@ -1,6 +1,15 @@
 /**
  * Key Management Service
  * Secure key storage and rotation
+ *
+ * B2.2b-2: the key rows go through a row store (row-store.ts). SQLite keeps
+ * its own file (.data/encryption/keys.db, table `keys`); on PostgreSQL
+ * (AGENT_PLAYER_DB=postgres) they live in the main database, table
+ * `vault_keys` (migrations-pg r003). Only where the rows are stored differs:
+ * the master key source (env / key file), the PBKDF2 derivation, the AES-GCM
+ * wrapping of data keys and the cache are the same code on both drivers.
+ * Methods that were synchronous stay synchronous on SQLite and return a
+ * promise on PostgreSQL (`Maybe<T>`); callers await them.
  */
 
 import { v4 as uuidv4 } from 'uuid';
@@ -23,56 +32,23 @@ import {
   hashSHA256,
   secureWipe,
 } from './crypto-utils.js';
+import { dbDriver, type DbDriver } from '../db/pg/config.js';
+import { pgRowStore, requirePgTable, sqliteRowStore, mapMaybe, mapAll, type Maybe, type RowStore } from './row-store.js';
 
-export class KeyManager {
-  private db: Database.Database | null = null;
-  private config: EncryptionConfig;
-  private masterKey: Buffer | null = null;
-  private keyCache: Map<string, { key: Buffer; expiresAt: number }> = new Map();
-  private stats: EncryptionStats = {
-    totalEncryptions: 0,
-    totalDecryptions: 0,
-    activeKeys: 0,
-    expiredKeys: 0,
-    credentialsCount: 0,
-  };
+/** Key table name per driver (SQLite: its own file; PostgreSQL: the main database). */
+export function keysTableFor(driver: DbDriver): string {
+  return driver === 'postgres' ? 'vault_keys' : 'keys';
+}
 
-  constructor(config: Partial<EncryptionConfig> = {}) {
-    this.config = { ...DEFAULT_ENCRYPTION_CONFIG, ...config };
-  }
-
-  /**
-   * Initialize the key manager
-   */
-  async initialize(dbPath: string = './.data/encryption/keys.db'): Promise<void> {
-    // Ensure directory exists
-    const dir = dirname(dbPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-
-    // Open database
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
-
-    // Create tables
-    this.createTables();
-
-    // Load or generate master key
-    await this.loadMasterKey();
-
-    // Ensure we have a data encryption key
-    await this.ensureDataKey();
-
-    console.log('[KeyManager] Initialized');
-  }
-
-  /**
-   * Create database tables
-   */
-  private createTables(): void {
-    this.db!.exec(`
-      CREATE TABLE IF NOT EXISTS keys (
+/**
+ * DDL of the key table. SQLite runs it at start (table `keys`);
+ * scripts/pg/runtime/r003_vault_keys.sql is the same DDL for `vault_keys`,
+ * translated into migrations-pg by the translator (test/pg-runtime-ddl.test.mjs
+ * keeps the two equal).
+ */
+export function keysSchemaSql(table: string = 'keys'): string {
+  return `
+      CREATE TABLE IF NOT EXISTS ${table} (
         id TEXT PRIMARY KEY,
         type TEXT NOT NULL,
         algorithm TEXT NOT NULL,
@@ -85,9 +61,78 @@ export class KeyManager {
         metadata TEXT
       );
 
-      CREATE INDEX IF NOT EXISTS idx_keys_type ON keys(type);
-      CREATE INDEX IF NOT EXISTS idx_keys_active ON keys(active);
-    `);
+      CREATE INDEX IF NOT EXISTS idx_keys_type ON ${table}(type);
+      CREATE INDEX IF NOT EXISTS idx_keys_active ON ${table}(active);
+    `;
+}
+
+export class KeyManager {
+  /** Row store (null until initialize). */
+  rows: RowStore | null = null;
+  private driver: DbDriver;
+  private table: string;
+  private config: EncryptionConfig;
+  private masterKey: Buffer | null = null;
+  private keyCache: Map<string, { key: Buffer; expiresAt: number }> = new Map();
+  private stats: EncryptionStats = {
+    totalEncryptions: 0,
+    totalDecryptions: 0,
+    activeKeys: 0,
+    expiredKeys: 0,
+    credentialsCount: 0,
+  };
+
+  constructor(config: Partial<EncryptionConfig> = {}, driver: DbDriver = dbDriver()) {
+    this.config = { ...DEFAULT_ENCRYPTION_CONFIG, ...config };
+    this.driver = driver;
+    this.table = keysTableFor(driver);
+  }
+
+  private get db(): RowStore {
+    if (!this.rows) throw new Error('Key manager not initialized');
+    return this.rows;
+  }
+
+  /** Where the dialects differ: "now" and a text timestamp as a time. */
+  private get now(): string {
+    return this.db.dialect === 'postgres' ? 'now()' : "datetime('now')";
+  }
+
+  private ts(column: string): string {
+    return this.db.dialect === 'postgres' ? `(${column})::timestamptz` : column;
+  }
+
+  /**
+   * Initialize the key manager
+   */
+  async initialize(dbPath: string = './.data/encryption/keys.db'): Promise<void> {
+    if (this.driver === 'postgres') {
+      // Main PostgreSQL database; the table comes from migrations-pg (no file, no PRAGMA).
+      await requirePgTable(this.table, 'r003_vault_keys');
+      this.rows = pgRowStore;
+    } else {
+      // Ensure directory exists
+      const dir = dirname(dbPath);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+
+      // Open database
+      const db = new Database(dbPath);
+      db.pragma('journal_mode = WAL');
+      this.rows = sqliteRowStore(db);
+
+      // Create tables
+      db.exec(keysSchemaSql(this.table));
+    }
+
+    // Load or generate master key
+    await this.loadMasterKey();
+
+    // Ensure we have a data encryption key
+    await this.ensureDataKey();
+
+    console.log('[KeyManager] Initialized');
   }
 
   /**
@@ -121,11 +166,11 @@ export class KeyManager {
       console.warn('[KeyManager] Set MASTER_ENCRYPTION_KEY environment variable for production');
 
       // Check if we already have a stored master key config
-      const existingConfig = this.getMasterKeyConfig();
+      const existingConfig = await this.getMasterKeyConfig();
       if (existingConfig) {
         // In development, delete old config and create new one
         console.warn('[KeyManager] Deleting old master key config and generating new one');
-        this.db!.prepare("DELETE FROM keys WHERE type = 'master'").run();
+        await this.db.run(`DELETE FROM ${this.table} WHERE type = 'master'`);
       }
 
       // Generate new master key for development
@@ -136,7 +181,7 @@ export class KeyManager {
     }
 
     // Derive the actual master key
-    const existingConfig = this.getMasterKeyConfig();
+    const existingConfig = await this.getMasterKeyConfig();
     if (existingConfig) {
       // Use existing salt and config
       const salt = Buffer.from(existingConfig.salt, 'base64');
@@ -164,29 +209,28 @@ export class KeyManager {
       );
 
       // Store master key config
-      this.storeMasterKeyConfig(config);
+      await this.storeMasterKeyConfig(config);
     }
   }
 
   /**
    * Get master key configuration
    */
-  private getMasterKeyConfig(): MasterKeyConfig | null {
-    const row = this.db!.prepare(
-      "SELECT kdf_config FROM keys WHERE type = 'master' AND active = 1"
-    ).get() as any;
-
-    return row ? JSON.parse(row.kdf_config) : null;
+  private getMasterKeyConfig(): Maybe<MasterKeyConfig | null> {
+    return mapMaybe(
+      this.db.one(`SELECT kdf_config FROM ${this.table} WHERE type = 'master' AND active = 1`),
+      (row: any) => (row ? JSON.parse(row.kdf_config) : null),
+    );
   }
 
   /**
    * Store master key configuration
    */
-  private storeMasterKeyConfig(config: MasterKeyConfig): void {
-    this.db!.prepare(`
-      INSERT INTO keys (id, type, algorithm, kdf_config, created_at, active)
+  private storeMasterKeyConfig(config: MasterKeyConfig): Maybe<unknown> {
+    return this.db.run(`
+      INSERT INTO ${this.table} (id, type, algorithm, kdf_config, created_at, active)
       VALUES (?, 'master', 'aes-256-gcm', ?, ?, 1)
-    `).run(
+    `,
       uuidv4(),
       JSON.stringify(config),
       new Date().toISOString()
@@ -197,26 +241,24 @@ export class KeyManager {
    * Ensure we have an active data encryption key
    */
   private async ensureDataKey(): Promise<void> {
-    const existing = this.getActiveDataKey();
+    const existing = await this.getActiveDataKey();
     if (!existing) {
       await this.generateDataKey();
     }
-    this.updateStats();
+    await this.updateStats();
   }
 
   /**
    * Get active data encryption key
    */
-  private getActiveDataKey(): KeyEntry | null {
-    const row = this.db!.prepare(`
-      SELECT * FROM keys
+  private getActiveDataKey(): Maybe<KeyEntry | null> {
+    return mapMaybe(this.db.one(`
+      SELECT * FROM ${this.table}
       WHERE type = 'data' AND active = 1
-      AND (expires_at IS NULL OR expires_at > datetime('now'))
+      AND (expires_at IS NULL OR ${this.ts('expires_at')} > ${this.now})
       ORDER BY created_at DESC
       LIMIT 1
-    `).get() as any;
-
-    return row ? this.rowToKeyEntry(row) : null;
+    `), (row: any) => (row ? this.rowToKeyEntry(row) : null));
   }
 
   /**
@@ -239,10 +281,10 @@ export class KeyManager {
       : undefined;
 
     // Store in database
-    this.db!.prepare(`
-      INSERT INTO keys (id, type, algorithm, encrypted_key, created_at, expires_at, active)
+    await this.db.run(`
+      INSERT INTO ${this.table} (id, type, algorithm, encrypted_key, created_at, expires_at, active)
       VALUES (?, 'data', ?, ?, ?, ?, 1)
-    `).run(
+    `,
       keyId,
       this.config.algorithm,
       JSON.stringify(encryptedKey),
@@ -256,16 +298,15 @@ export class KeyManager {
     // Securely wipe raw key from memory
     secureWipe(rawKey);
 
-    this.updateStats();
-    return this.getKeyById(keyId)!;
+    await this.updateStats();
+    return (await this.getKeyById(keyId))!;
   }
 
   /**
    * Get a key by ID
    */
-  getKeyById(id: string): KeyEntry | null {
-    const row = this.db!.prepare('SELECT * FROM keys WHERE id = ?').get(id) as any;
-    return row ? this.rowToKeyEntry(row) : null;
+  getKeyById(id: string): Maybe<KeyEntry | null> {
+    return mapMaybe(this.db.one(`SELECT * FROM ${this.table} WHERE id = ?`, id), (row: any) => (row ? this.rowToKeyEntry(row) : null));
   }
 
   /**
@@ -280,7 +321,7 @@ export class KeyManager {
     }
 
     // Get active data key
-    let keyEntry = this.getActiveDataKey();
+    let keyEntry = await this.getActiveDataKey();
     if (!keyEntry) {
       keyEntry = await this.generateDataKey();
     }
@@ -305,7 +346,7 @@ export class KeyManager {
     }
 
     // Get from database
-    const keyEntry = this.getKeyById(keyId);
+    const keyEntry = await this.getKeyById(keyId);
     if (!keyEntry) {
       throw new Error(`Key not found: ${keyId}`);
     }
@@ -350,14 +391,25 @@ export class KeyManager {
    * Rotate data encryption keys
    */
   async rotateKeys(): Promise<KeyEntry> {
-    // Deactivate old keys
-    this.db!.prepare("UPDATE keys SET active = 0 WHERE type = 'data'").run();
+    // One transaction on PostgreSQL: the old keys stay active unless the new
+    // key is stored (SQLite: unchanged, no transaction).
+    let newKey: KeyEntry;
+    try {
+      newKey = await this.db.transaction(async () => {
+        // Deactivate old keys
+        await this.db.run(`UPDATE ${this.table} SET active = 0 WHERE type = 'data'`);
 
-    // Generate new key
-    const newKey = await this.generateDataKey();
+        // Generate new key
+        return this.generateDataKey();
+      });
+    } catch (err) {
+      // A key cached by a rolled-back attempt must not be used.
+      this.clearCache();
+      throw err;
+    }
 
     this.stats.lastKeyRotation = new Date();
-    this.updateStats();
+    await this.updateStats();
 
     console.log('[KeyManager] Keys rotated, new key:', newKey.id);
     return newKey;
@@ -366,8 +418,8 @@ export class KeyManager {
   /**
    * List all keys
    */
-  listKeys(type?: string): KeyEntry[] {
-    let sql = 'SELECT * FROM keys';
+  listKeys(type?: string): Maybe<KeyEntry[]> {
+    let sql = `SELECT * FROM ${this.table}`;
     const params: unknown[] = [];
 
     if (type) {
@@ -377,27 +429,27 @@ export class KeyManager {
 
     sql += ' ORDER BY created_at DESC';
 
-    const rows = this.db!.prepare(sql).all(...params) as any[];
-    return rows.map(this.rowToKeyEntry);
+    return mapMaybe(this.db.all(sql, ...(params as Array<string>)), (rows: any[]) => rows.map(this.rowToKeyEntry));
   }
 
   /**
    * Deactivate a key
    */
-  deactivateKey(keyId: string): void {
-    this.db!.prepare('UPDATE keys SET active = 0 WHERE id = ?').run(keyId);
-    this.keyCache.delete(keyId);
-    this.updateStats();
+  deactivateKey(keyId: string): Maybe<void> {
+    return mapMaybe(this.db.run(`UPDATE ${this.table} SET active = 0 WHERE id = ?`, keyId), () => {
+      this.keyCache.delete(keyId);
+      return this.updateStats();
+    }) as Maybe<void>; // a promise returned inside mapMaybe() is flattened
   }
 
   /**
    * Update key last used timestamp
    */
-  updateKeyUsage(keyId: string): void {
-    this.db!.prepare('UPDATE keys SET last_used_at = ? WHERE id = ?').run(
+  updateKeyUsage(keyId: string): Maybe<void> {
+    return mapMaybe(this.db.run(`UPDATE ${this.table} SET last_used_at = ? WHERE id = ?`,
       new Date().toISOString(),
       keyId
-    );
+    ), () => undefined);
   }
 
   /**
@@ -421,16 +473,14 @@ export class KeyManager {
   /**
    * Update statistics
    */
-  private updateStats(): void {
-    const activeRow = this.db!.prepare(
-      'SELECT COUNT(*) as count FROM keys WHERE active = 1'
-    ).get() as any;
-    const expiredRow = this.db!.prepare(
-      "SELECT COUNT(*) as count FROM keys WHERE active = 0 OR (expires_at IS NOT NULL AND expires_at < datetime('now'))"
-    ).get() as any;
-
-    this.stats.activeKeys = activeRow.count;
-    this.stats.expiredKeys = expiredRow.count;
+  private updateStats(): Maybe<void> {
+    return mapAll([
+      this.db.one(`SELECT COUNT(*) as count FROM ${this.table} WHERE active = 1`),
+      this.db.one(`SELECT COUNT(*) as count FROM ${this.table} WHERE active = 0 OR (expires_at IS NOT NULL AND ${this.ts('expires_at')} < ${this.now})`),
+    ] as const, ([activeRow, expiredRow]: [any, any]) => {
+      this.stats.activeKeys = activeRow.count;
+      this.stats.expiredKeys = expiredRow.count;
+    });
   }
 
   /**
@@ -473,9 +523,9 @@ export class KeyManager {
       secureWipe(this.masterKey);
       this.masterKey = null;
     }
-    if (this.db) {
-      this.db.close();
-      this.db = null;
+    if (this.rows) {
+      this.rows.close();
+      this.rows = null;
     }
   }
 }

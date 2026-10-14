@@ -5,11 +5,14 @@
  * The driver is chosen once, at load, by db/pg/config.ts dbDriver():
  * SQLite unless AGENT_PLAYER_DB=postgres (with AGENT_PLAYER_PG_URL).
  *
- * B2.2a/B2.2b-1 (partial PostgreSQL): on 'postgres' identity (accounts,
- * sign-in, profile, teams and invitations), audit.record, the sign-in
- * throttle and its background prune, the auth gate's token check and the
- * route guards' hooks use PostgreSQL; credentials, agents, memory, task runs
- * and every non-repository module still use SQLite. So 'postgres' is for the
+ * B2.2a/B2.2b-1/B2.2b-2 (partial PostgreSQL): on 'postgres' identity
+ * (accounts, sign-in, profile, teams and invitations), audit.record, the
+ * sign-in throttle and its background prune, the auth gate's token check,
+ * the route guards' hooks, credentials (repository, manager, storage) and the
+ * encryption vault and key manager use PostgreSQL; agents, memory, task runs
+ * and every other non-repository module still use SQLite (so do the
+ * agents_config reads of credentials/authority.ts, until agents-config moves
+ * in B2.2b-3). So 'postgres' is for the
  * B2 integration tests, not for running the app yet (B2.2b ports the rest).
  *
  * Transactions: `withTransaction` (SQLite) stays the export for the SQLite
@@ -26,6 +29,7 @@ import { sqliteMemory, type MemoryRepository } from './memory.js';
 import { sqliteTaskRuns, type TaskRunsRepository } from './task-runs.js';
 import { pgIdentity } from './pg/identity.js';
 import { pgAudit } from './pg/audit.js';
+import { pgCredentials } from './pg/credentials.js';
 import { sqliteLoginThrottle, pgLoginThrottle, startLoginRecordPruning as startPruning, type LoginThrottle } from './login-throttle.js';
 import { dbDriver, type DbDriver } from '../db/pg/config.js';
 
@@ -41,12 +45,12 @@ export interface ScopedRepositories {
 /** The driver the repositories below were built for. */
 export const repositoryDriver: DbDriver = dbDriver();
 
-/** The repositories for a driver (B2.2b-1: PostgreSQL for identity incl. teams, and audit.record). */
+/** The repositories for a driver (B2.2b-2: PostgreSQL for identity incl. teams, credentials and audit.record). */
 export function repositoriesFor(driver: DbDriver): ScopedRepositories {
   const pg = driver === 'postgres';
   return {
     identity: pg ? pgIdentity : sqliteIdentity,
-    credentials: sqliteCredentials,
+    credentials: pg ? pgCredentials : sqliteCredentials,
     agents: sqliteAgents,
     memory: sqliteMemory,
     taskRuns: sqliteTaskRuns,

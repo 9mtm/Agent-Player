@@ -17,6 +17,7 @@ import { buildServer } from './app.js';
 import { processScheduledNotifications } from '../services/notification-service.js';
 import { startCalendarSyncScheduler } from '../services/calendar-sync.js';
 import { config } from '../config/index.js';
+import { flushAuditWritesWithin, SHUTDOWN_AUDIT_FLUSH_MS } from '../services/audit-logger.js';
 
 const PORT = config.port;
 const HOST = config.host;
@@ -355,6 +356,11 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     try {
       // Closing Fastify runs channel transport shutdown hooks before process exit.
       await fastify.close();
+      // B2.2b-2: audit rows still being written (PostgreSQL inserts are not
+      // awaited by the request) get a short, bounded chance to land.
+      if (!(await flushAuditWritesWithin(SHUTDOWN_AUDIT_FLUSH_MS))) {
+        console.warn(`[Server] Some audit writes did not finish within ${SHUTDOWN_AUDIT_FLUSH_MS} ms of shutdown`);
+      }
       process.exit(0);
     } catch {
       process.exit(1);

@@ -45,7 +45,7 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
    */
   fastify.get('/api/encryption/status', async (request, reply) => {
     try {
-      const status = getEncryptionStatus();
+      const status = await getEncryptionStatus();
       return status;
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
@@ -61,7 +61,7 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
     try {
       const query = request.query as { type?: string };
       const keyManager = getKeyManager();
-      const keys = keyManager.listKeys(query.type);
+      const keys = await keyManager.listKeys(query.type);
 
       // Don't return encrypted key material
       const safeKeys = keys.map((k) => ({
@@ -154,7 +154,7 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
       if (query.tags) filters.tags = query.tags.split(',');
       if (query.search) filters.search = query.search;
 
-      const credentials = vault.query(filters);
+      const credentials = await vault.query(filters);
 
       // Return metadata only (no encrypted data)
       const safeCredentials = credentials.map((c) => ({
@@ -243,7 +243,7 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: string };
       const vault = getCredentialVault();
 
-      const credential = vault.getById(id);
+      const credential = await vault.getById(id);
       if (!credential) {
         return reply.status(404).send({ error: 'Credential not found' });
       }
@@ -284,7 +284,7 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
       const vault = getCredentialVault();
 
       // An entry outside the actor's scope looks like a missing one.
-      const entry = vault.getById(id);
+      const entry = await vault.getById(id);
       if (!entry || !canUseVaultEntry(actor, entry)) {
         return reply.status(404).send({ error: 'Credential not found' });
       }
@@ -393,9 +393,9 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
       const vault = getCredentialVault();
 
       // Get credential info before deletion for audit
-      const credential = vault.getById(id);
+      const credential = await vault.getById(id);
 
-      const deleted = vault.delete(id);
+      const deleted = await vault.delete(id);
       if (!deleted) {
         return reply.status(404).send({ error: 'Credential not found' });
       }
@@ -450,7 +450,7 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
   fastify.get('/api/vault/stats', async (request, reply) => {
     try {
       const vault = getCredentialVault();
-      return vault.getStats();
+      return await vault.getStats();
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Encryption] Get vault stats failed');

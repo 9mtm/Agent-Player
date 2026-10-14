@@ -5,7 +5,8 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { getCredentialStorage } from './storage.js';
+import { credentialStorageFor, type CredentialStorage } from './storage.js';
+import { dbDriver, type DbDriver } from '../db/pg/config.js';
 import { getEncryptionService } from './encryption.js';
 import { isMaskedSecret } from './secret-mask.js';
 import { CredentialType } from './types.js';
@@ -18,11 +19,12 @@ import type {
 } from './types.js';
 
 export class CredentialManager implements ICredentialManager {
-  private storage: ReturnType<typeof getCredentialStorage>;
+  private storage: CredentialStorage;
   private encryption: ReturnType<typeof getEncryptionService>;
 
-  constructor() {
-    this.storage = getCredentialStorage();
+  /** B2.2b-2: the storage of the configured driver unless one is given. */
+  constructor(storage: CredentialStorage = credentialStorageFor(dbDriver())) {
+    this.storage = storage;
     this.encryption = getEncryptionService();
   }
 
@@ -244,12 +246,18 @@ export class CredentialManager implements ICredentialManager {
   }
 }
 
-// Singleton instance
-let credentialManager: CredentialManager | null = null;
+// One instance per driver (the process uses dbDriver(); tests may ask for either)
+const credentialManagers = new Map<DbDriver, CredentialManager>();
+
+export function credentialManagerFor(driver: DbDriver): CredentialManager {
+  let manager = credentialManagers.get(driver);
+  if (!manager) {
+    manager = new CredentialManager(credentialStorageFor(driver));
+    credentialManagers.set(driver, manager);
+  }
+  return manager;
+}
 
 export function getCredentialManager(): CredentialManager {
-  if (!credentialManager) {
-    credentialManager = new CredentialManager();
-  }
-  return credentialManager;
+  return credentialManagerFor(dbDriver());
 }

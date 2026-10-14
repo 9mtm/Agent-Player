@@ -188,7 +188,9 @@ test('type mapping', () => {
 test('the committed migrations-pg files match the translator output for every migration', () => {
   const results = translateAll(backendDir);
   const sources = readdirSyncSorted(join(backendDir, 'src', 'db', 'migrations'));
-  assert.equal(results.length, sources.length + 1, 'one output per migration plus 000_schema');
+  const runtime = readdirSyncSorted(join(backendDir, 'scripts', 'pg', 'runtime'));
+  assert.ok(runtime.length >= 3, 'runtime-created tables (B2.2b-2) are translated too');
+  assert.equal(results.length, sources.length + 1 + runtime.length, 'one output per migration plus 000_schema plus one per runtime source');
   for (const r of results) {
     const p = join(backendDir, 'src', 'db', 'migrations-pg', r.file);
     assert.ok(existsSync(p), `${r.file} missing; run node scripts/pg/translate-migrations.mjs`);
