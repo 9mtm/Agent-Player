@@ -11,7 +11,7 @@
  * a working directory inside the server's data directory.
  */
 
-import { dataRoot } from '../config/data-root.js';
+import { protectedDataDirs, realish } from '../config/data-root.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -117,20 +117,21 @@ function realOrResolved(p: string): string {
   }
 }
 
-/** Directories that hold server data (DB, encryption keys, backups). */
-function protectedDataDirs(): string[] {
-  // The data root and, when AGENT_PLAYER_DATA_DIR moves it, the legacy <cwd>/.data too.
-  const dirs = [dataRoot(), path.join(process.cwd(), '.data')];
-  if (process.env.DATABASE_PATH) dirs.push(path.dirname(process.env.DATABASE_PATH));
-  return dirs.map(realOrResolved);
-}
-
+/**
+ * True when `p` is inside a folder that holds server data. Uses the shared
+ * protectedDataDirs() list (config/data-root.ts), the same one the file
+ * sandbox uses; symlinks are resolved on both sides (realish), also for a
+ * path that does not exist yet.
+ */
 export function isInsideDataDir(p: string): boolean {
-  const target = realOrResolved(p);
-  if (target.split(path.sep).includes('.data')) return true;
-  return protectedDataDirs().some(
-    (dir) => target === dir || target.startsWith(dir + path.sep)
-  );
+  const targets = [path.resolve(p), realish(p)];
+  if (targets.some((t) => t.split(path.sep).includes('.data'))) return true;
+  const fold = (x: string) => (process.platform === 'darwin' || process.platform === 'win32' ? x.toLowerCase() : x);
+  return protectedDataDirs().some((dir) => targets.some((t) => {
+    const a = fold(t);
+    const d = fold(dir);
+    return a === d || a.startsWith(d + path.sep);
+  }));
 }
 
 /**

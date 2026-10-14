@@ -28,7 +28,7 @@
  *  5. files are opened with O_NOFOLLOW and must be regular files; size limits.
  */
 
-import { dataPath, dataRoot } from '../../config/data-root.js';
+import { dataPath, dataRoot, protectedDataDirs, realish } from '../../config/data-root.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -135,21 +135,25 @@ function isEnvFileName(name: string): boolean {
   return lc.startsWith('.env') || lc.endsWith('.env');
 }
 
-/** Backend data folder (`<cwd>/.data`), on-disk case. */
+/** Backend data folder (the data root, else `<cwd>/.data`), on-disk case. */
 export function backendDataDir(): string {
   return canonicalPath(dataRoot());
 }
 
 /**
- * True when an absolute path is inside the backend data folder but not in
- * its `workspaces/` subtree (secrets.env, instance.json, databases, logs,
- * uploads ...). Case-insensitive on darwin/win32.
+ * True when an absolute path is inside a private data folder
+ * (protectedDataDirs(): the data root, `<cwd>/.data`, the DB folder,
+ * uploads, ...) but not in the agent `workspaces/` subtree.
+ * Case-insensitive on darwin/win32.
  */
 export function isProtectedDataPath(absolute: string): boolean {
-  const dataDir = backendDataDir();
-  const target = canonicalPath(absolute);
-  if (!isInsideIgnoringCase(dataDir, target)) return false;
-  return !isInsideIgnoringCase(canonicalPath(workspacesBaseDir()), target);
+  // Every private data folder (shared list, same as exec-policy), compared
+  // after resolving symlinks on both sides, also for a path not created yet.
+  const targets = [...new Set([path.resolve(absolute), realish(absolute)])];
+  const workspaces = [...new Set([path.resolve(workspacesBaseDir()), realish(workspacesBaseDir())])];
+  const dirs = protectedDataDirs();
+  return targets.some((t) => dirs.some((d) => isInsideIgnoringCase(d, t))
+    && !workspaces.some((w) => isInsideIgnoringCase(w, t)));
 }
 
 /** Reason a path (as components) is on the always-deny list, or null. */

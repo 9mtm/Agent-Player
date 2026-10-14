@@ -199,3 +199,67 @@ test('secrets.env, any *.env file and the data folder outside workspaces are den
   assert.equal(sb.isProtectedDataPath(join(dir, '.data', 'workspaces', 'e1', 'keep.txt')), false);
   assert.equal(sb.isProtectedDataPath(join(dir, 'outside.txt')), false);
 });
+
+test('with AGENT_PLAYER_DATA_DIR set, every protected data folder is refused (read, write, symlink); exec-policy agrees', async () => {
+  // RUN-ISO: the data root, the legacy <cwd>/.data and dirname(DATABASE_PATH)
+  // all stay off limits; the shared protectedDataDirs() list drives both
+  // the file sandbox and exec-policy. Workspaces (now under the root) stay usable.
+  const root = join(dir, 'isoroot');
+  const dbDir = join(dir, 'dbdir');
+  const dirs = { legacy: join(dir, '.data'), root, db: dbDir };
+  for (const d of Object.values(dirs)) {
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'note.txt'), 'not-a-real-secret');
+  }
+  const saved = { root: process.env.AGENT_PLAYER_DATA_DIR, db: process.env.DATABASE_PATH };
+  process.env.AGENT_PLAYER_DATA_DIR = root;
+  process.env.DATABASE_PATH = join(dbDir, 'main.sqlite');
+  try {
+    const { protectedDataDirs } = await import(join(backendDir, 'src/config/data-root.ts'));
+    const { isInsideDataDir } = await import(join(backendDir, 'src/tools/exec-policy.ts'));
+    const isoWs = join(root, 'workspaces', 'iso1');
+
+    // The workspaces subtree stays usable (directly and from a wider read root).
+    const w = await write('iso1', 'ok.txt', 'fine');
+    assert.equal(w.error, undefined, w.content[0].text);
+    assert.equal(readFileSync(join(isoWs, 'ok.txt'), 'utf8'), 'fine');
+    assert.equal((await read('iso1', 'ok.txt')).content[0].text, 'fine');
+    assert.equal((await read('iso1', 'isoroot/workspaces/iso1/ok.txt', { fileReadRoot: dir })).content[0].text, 'fine');
+    assert.equal(sb.isProtectedDataPath(join(isoWs, 'ok.txt')), false);
+
+    for (const [name, d] of Object.entries(dirs)) {
+      const rel = join(d, 'note.txt').slice(dir.length + 1);
+      const r = await read('iso1', rel, { fileReadRoot: dir });
+      assert.ok(r.error, `read ${rel} must be refused`);
+      assert.doesNotMatch(r.content[0].text, /not-a-real-secret/);
+      const wOut = await write('iso1', `../../../${rel}`, 'x');
+      assert.ok(wOut.error, `write into ${name} must be refused`);
+      assert.equal(readFileSync(join(d, 'note.txt'), 'utf8'), 'not-a-real-secret');
+
+      // A symlink inside the workspace that points into the protected folder.
+      symlinkSync(d, join(isoWs, `link-${name}`));
+      const rl = await read('iso1', `link-${name}/note.txt`, { fileReadRoot: dir });
+      assert.ok(rl.error, `read through link-${name} must be refused`);
+      assert.doesNotMatch(rl.content[0].text, /not-a-real-secret/);
+      const wl = await write('iso1', `link-${name}/planted.txt`, 'x');
+      assert.ok(wl.error, `write through link-${name} must be refused`);
+      assert.equal(existsSync(join(d, 'planted.txt')), false);
+      // The predicate itself, for an existing file, a file not created yet and the symlinked alias.
+      for (const p of [join(d, 'note.txt'), join(d, 'new', 'file.txt'), join(isoWs, `link-${name}`, 'note.txt'), join(isoWs, `link-${name}`, 'new.txt')]) {
+        assert.equal(sb.isProtectedDataPath(p), true, `sandbox: ${p}`);
+        assert.equal(isInsideDataDir(p), true, `exec-policy: ${p}`);
+      }
+    }
+
+    // Parity: both gates refuse every folder of the one shared list.
+    const list = protectedDataDirs();
+    for (const d of Object.values(dirs)) assert.ok(list.includes(realpathSync(d)), `${d} is in the shared list`);
+    for (const d of list) {
+      assert.equal(sb.isProtectedDataPath(join(d, 'probe.txt')), true, `sandbox refuses ${d}`);
+      assert.equal(isInsideDataDir(join(d, 'probe.txt')), true, `exec-policy refuses ${d}`);
+    }
+  } finally {
+    if (saved.root === undefined) delete process.env.AGENT_PLAYER_DATA_DIR; else process.env.AGENT_PLAYER_DATA_DIR = saved.root;
+    if (saved.db === undefined) delete process.env.DATABASE_PATH; else process.env.DATABASE_PATH = saved.db;
+  }
+});

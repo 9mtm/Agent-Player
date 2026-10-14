@@ -12,8 +12,10 @@
  * real home directories. Messages name variables, never their values.
  */
 
-import fs from 'node:fs';
 import path from 'node:path';
+import { realish } from './data-root.js';
+
+export { realish };
 
 export const ISOLATED_ENV = 'AGENT_PLAYER_ISOLATED';
 export const ISOLATED_HOST = '127.0.0.1';
@@ -48,23 +50,6 @@ export const FORCED_VARS: Readonly<Record<string, string>> = {
 };
 
 const LOOPBACK_ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})$/;
-
-/** realpath of the nearest existing ancestor, plus the rest (symlinks such as /tmp -> /private/tmp). */
-export function realish(p: string): string {
-  const abs = path.resolve(p);
-  let cur = abs;
-  const rest: string[] = [];
-  for (;;) {
-    try {
-      return path.join(fs.realpathSync.native(cur), ...rest.reverse());
-    } catch {
-      const parent = path.dirname(cur);
-      if (parent === cur) return abs;
-      rest.push(path.basename(cur));
-      cur = parent;
-    }
-  }
-}
 
 function caseFold(p: string): string {
   return process.platform === 'darwin' || process.platform === 'win32' ? p.toLowerCase() : p;

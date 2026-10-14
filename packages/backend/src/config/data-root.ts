@@ -16,6 +16,8 @@
  * isolated launcher clears them (see config/isolation.ts).
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 export const DATA_DIR_ENV = 'AGENT_PLAYER_DATA_DIR';
@@ -48,4 +50,77 @@ export function dataPathOr(legacy: string, ...parts: string[]): string {
 /** The main SQLite database: `DATABASE_PATH`, else `<data root>/agent-player.db`. */
 export function mainDatabasePath(): string {
   return process.env.DATABASE_PATH || dataPath('agent-player.db');
+}
+
+/** Encrypted credential backups: `<data root>/credentials`, else `~/.agent-player/credentials`. */
+export function credentialsBackupDir(): string {
+  return dataPathOr(path.join(os.homedir(), '.agent-player', 'credentials'), 'credentials');
+}
+
+/**
+ * realpath of the nearest existing ancestor plus the rest, so a path that
+ * does not exist yet (a file about to be written) still resolves every
+ * symlinked parent (e.g. /var -> /private/var, or a link into a data dir).
+ */
+export function realish(p: string): string {
+  const abs = path.resolve(p);
+  let cur = abs;
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync.native(cur), ...rest.reverse());
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return abs;
+      rest.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+function envDir(name: string, file: boolean): string | null {
+  const v = (process.env[name] ?? '').trim();
+  if (!v) return null;
+  return file ? path.dirname(path.resolve(v)) : path.resolve(v);
+}
+
+/**
+ * Every folder that holds private server data, canonical (realpath'd) and
+ * deduplicated. The one list used by the agent file sandbox
+ * (tools/core/file-sandbox.ts) and the exec / MCP working-dir policy
+ * (tools/exec-policy.ts), so the two gates always agree.
+ *
+ *  - the data root, and the legacy `<cwd>/.data` (still there when
+ *    AGENT_PLAYER_DATA_DIR moves the root);
+ *  - folders of stores that can sit outside the root: the main DB
+ *    (`DATABASE_PATH`), audit DB, encryption vault, credential backups;
+ *  - uploads (`UPLOADS_DIR` / `STORAGE_BASE_DIR`, or the legacy
+ *    `<cwd>/../../.data/uploads`) and the legacy memory folder: uploads hold
+ *    per-user private files (avatars, attachments, profile pictures) that
+ *    are served only through the owner check, so agent tools never touch
+ *    them directly.
+ *
+ * MCP_SERVERS_DIR is not listed: it holds no private data and must stay
+ * usable as a server working folder.
+ */
+export function protectedDataDirs(): string[] {
+  const cwd = process.cwd();
+  const dirs: Array<string | null> = [
+    dataRoot(),
+    path.join(cwd, '.data'),
+    envDir('DATABASE_PATH', true),
+    envDir('AUDIT_DB_PATH', true),
+    envDir('ENCRYPTION_DB_PATH', true),
+    credentialsBackupDir(),
+    envDir('UPLOADS_DIR', false) ?? dataPathOr(path.join(cwd, '..', '..', '.data', 'uploads'), 'uploads'),
+    envDir('STORAGE_BASE_DIR', false),
+    dataPathOr(path.join(cwd, '..', '..', '.data', 'memory'), 'memory'),
+  ];
+  const out = new Set<string>();
+  for (const d of dirs) {
+    if (!d) continue;
+    out.add(path.resolve(d));
+    out.add(realish(d));
+  }
+  return [...out];
 }
