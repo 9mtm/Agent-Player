@@ -21,6 +21,7 @@ import type { Tool, ToolResult, ToolExecutionContext } from './types.js';
 import { CHANNEL_SEND_TOOLS, createChannelToolPolicy, type ChannelToolPolicy } from './channel-policy.js';
 import { approvalRunDrawers, toolMemoryDrawers } from './memory/scope.js';
 import type { DrawerRef } from '../memory/drawers.js';
+import { onApprovalDecided } from '../services/task-runs.js';
 
 export type ApprovalCategory = 'message' | 'delete' | 'money' | 'install' | 'settings' | 'other';
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'executed' | 'failed' | 'expired';
@@ -183,11 +184,18 @@ function paramsHash(salt: string, params: unknown): string {
 export interface ApprovalRunScope {
   memoryDrawers: DrawerRef[];
   taskId?: string;
+  /** CORE-08: durable task run + step that asked; the run continues once decided. */
+  runId?: string;
+  runStep?: number;
 }
 
 export function runScopeOf(context: ToolExecutionContext): ApprovalRunScope {
   const scope: ApprovalRunScope = { memoryDrawers: toolMemoryDrawers(context).map((d) => (d.key ? { kind: d.kind, key: d.key } : { kind: d.kind })) };
   if (typeof context.taskId === 'string' && context.taskId) scope.taskId = context.taskId;
+  if (context.taskRun && typeof context.taskRun.runId === 'string' && Number.isInteger(context.taskRun.stepIndex)) {
+    scope.runId = context.taskRun.runId;
+    scope.runStep = context.taskRun.stepIndex;
+  }
   return scope;
 }
 
@@ -205,6 +213,8 @@ function parseRunScope(raw: unknown): ApprovalRunScope | null | 'invalid' {
     const v = JSON.parse(String(raw));
     if (!v || typeof v !== 'object' || Array.isArray(v) || !Array.isArray(v.memoryDrawers)) return 'invalid';
     if (v.taskId !== undefined && typeof v.taskId !== 'string') return 'invalid';
+    if (v.runId !== undefined && typeof v.runId !== 'string') return 'invalid';
+    if (v.runStep !== undefined && !Number.isInteger(v.runStep)) return 'invalid';
     return v as ApprovalRunScope;
   } catch {
     return 'invalid';
@@ -302,13 +312,14 @@ export async function requestApproval(
   db.prepare(`
     INSERT INTO tool_approvals (id, status, agent_id, user_id, session_id, tool_name, category,
       params_encrypted, params_iv, params_tag, params_preview, origin, delegated_from,
-      params_hash, params_salt, preview_truncated, run_scope)
-    VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      params_hash, params_salt, preview_truncated, run_scope, run_id, run_step)
+    VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, agentId, context.userId ?? null, context.sessionId ?? null, tool.name, category,
     encrypted, iv, authTag, preview, origin,
     context.delegatedFrom?.length ? JSON.stringify(context.delegatedFrom) : null,
     hash, salt, truncated ? 1 : 0, canonicalJson(runScope),
+    runScope.runId ?? null, runScope.runStep ?? null,
   );
   console.log(`[Approvals] ⏸️  Pending approval ${id} for ${tool.name} (agent ${agentId ?? '(none)'})`);
 
@@ -380,6 +391,7 @@ export function denyApproval(id: string, ownerId: string): ApprovalRecord {
   const record = getApproval(id);
   if (!record) throw new ApprovalStateError('Approval not found', 404);
   if (res.changes !== 1) throw new ApprovalStateError(`Approval is ${record.status}, not pending`, 409);
+  onApprovalDecided(id);
   return record;
 }
 
@@ -407,6 +419,8 @@ export async function approveAndRun(id: string, ownerId: string, expectedHash: u
   const finish = (status: 'executed' | 'failed', resultPreview: string | null, error: string | null) => {
     db.prepare(`UPDATE tool_approvals SET status = ?, executed_at = datetime('now'), result_preview = ?, error = ? WHERE id = ?`)
       .run(status, resultPreview, error, id);
+    // CORE-08: a run waiting on this approval continues (result replayed, never re-run).
+    onApprovalDecided(id);
   };
 
   let params: Record<string, any>;
@@ -440,6 +454,13 @@ export async function approveAndRun(id: string, ownerId: string, expectedHash: u
   const scoped = runScope && typeof runScope === 'object'
     ? { memoryDrawers: approvalRunDrawers(runScope.memoryDrawers, { toolPolicy }), ...(runScope.taskId ? { taskId: runScope.taskId } : {}) }
     : {};
+  // CORE-08: the call keeps the idempotency key of the run step that asked.
+  let taskRun: ToolExecutionContext['taskRun'];
+  if (runScope && typeof runScope === 'object' && runScope.runId && Number.isInteger(runScope.runStep)) {
+    const step = db.prepare('SELECT idempotency_key FROM task_run_steps WHERE run_id = ? AND step_index = ?')
+      .get(runScope.runId, runScope.runStep) as { idempotency_key: string } | undefined;
+    if (step) taskRun = { runId: runScope.runId, stepIndex: runScope.runStep!, idempotencyKey: step.idempotency_key };
+  }
 
   const { createToolsRegistry } = await import('./index.js');
   const registry = createToolsRegistry({
@@ -450,6 +471,7 @@ export async function approveAndRun(id: string, ownerId: string, expectedHash: u
     delegatedFrom,
     toolPolicy,
     ...scoped,
+    ...(taskRun ? { taskRun } : {}),
   });
   const ticket: ApprovalTicket = Object.freeze({ approvalId: id, toolName: row.tool_name });
   liveTickets.add(ticket);

@@ -14,10 +14,10 @@ import { existsSync, readFileSync } from 'fs';
 import { getDatabase } from '../db/index.js';
 import { getOrchestrator } from '../multi-agent/index.js';
 import { ClaudeClient } from '../llm/claude-client.js';
-import { createToolsRegistry } from '../tools/index.js';
 import { logActivity } from './activity-logger.js';
 import { resolveProviderApiKey } from '../credentials/authority.js';
-import { UNKNOWN_PRINCIPAL } from '../tools/grants.js';
+import { createRun } from './task-runs.js';
+import { executeTaskRun, type AgentRow } from './task-run-executor.js';
 
 const HEARTBEAT_OK_TOKEN = 'HEARTBEAT_OK';
 const HEARTBEAT_ACK_MAX_CHARS = 300;
@@ -103,48 +103,16 @@ async function runHeartbeat(agent: AgentRow, heartbeatContent: string): Promise<
   });
 }
 
-export interface AgentRow {
-  id: string;
-  name: string;
-  model: string;
-  provider: string;
-  system_prompt: string | null;
-  temperature: number;
-  max_tokens: number;
-  cron_schedule: string;
-  cron_enabled: number;
-}
+export type { AgentRow } from './task-run-executor.js';
+export { delegatingAgents } from './task-run-executor.js';
 
 const activeJobs = new Map<string, cron.ScheduledTask>();
 
 /**
- * Agents a task was delegated from (S1.2), from server-recorded fields only:
- * the spawner of the task and of every parent task, plus the parent tasks'
- * assignees. A task in the chain without a spawner that was not created by
- * the owner through the API (origin 'owner') counts as delegated from an
- * unknown principal: the run gets at most the minimal default set.
- */
-export function delegatingAgents(taskId: string): string[] {
-  const orchestrator = getOrchestrator();
-  const out = new Set<string>();
-  let task: any = orchestrator.getTask(taskId);
-  if (!task) return [UNKNOWN_PRINCIPAL];
-  for (let depth = 0; task; depth++) {
-    if (depth >= 16) { out.add(UNKNOWN_PRINCIPAL); break; }
-    if (typeof task.spawnedBy === 'string' && task.spawnedBy) out.add(task.spawnedBy);
-    else if (task.origin !== 'owner') out.add(UNKNOWN_PRINCIPAL);
-    if (depth > 0 && typeof task.assignedTo === 'string' && task.assignedTo) out.add(task.assignedTo);
-    if (!task.parentId) break;
-    const parent = orchestrator.getTask(task.parentId);
-    if (!parent) { out.add(UNKNOWN_PRINCIPAL); break; }
-    task = parent;
-  }
-  return [...out];
-}
-
-/**
- * Run a single task for a given agent using the agentic tool loop (no streaming).
- * Exported for tests.
+ * Run a single task for a given agent as a durable task run (CORE-08):
+ * every model and tool call is a recorded step, so after a restart the run
+ * resumes (startTaskRunRecovery) without repeating completed actions.
+ * Returns the final output (or the reason it stopped). Exported for tests.
  */
 export async function runAgentTask(agent: AgentRow, taskId: string, taskDescription: string): Promise<string> {
   const orchestrator = getOrchestrator();
@@ -158,148 +126,11 @@ export async function runAgentTask(agent: AgentRow, taskId: string, taskDescript
     summary: `Agent ${agent.name} started task`,
   });
 
-  // SECURITY (S1.1): key from the credential authority (see runHeartbeat).
-  const apiKey = await resolveProviderApiKey('claude', { agentId: agent.id, noGlobal: true, legacySettingsRow: 'claude_api_key' });
-
-  if (!apiKey || agent.provider !== 'claude') {
-    const msg = `Agent "${agent.name}" has no Claude API key configured or provider is not claude.`;
-    console.warn(`[AgentCron] ⚠️  ${msg}`);
-    orchestrator.failTask(taskId, msg);
-    await logActivity({ agentId: agent.id, taskId, actionType: 'task_failed', summary: msg });
-    return msg;
-  }
-
-  const claude = new ClaudeClient(apiKey, agent.model);
-  // SECURITY (S1.2): the agent's own grants, intersected with every agent this
-  // task was delegated from (delegation never expands permissions).
-  const toolsRegistry = createToolsRegistry({
-    userId: agent.id,
-    sessionId: `cron-${taskId}`,
-    workspaceDir: process.cwd(),
-    agentId: agent.id,
-    taskId,
-    delegatedFrom: delegatingAgents(taskId),
-  });
-
-  const tools = toolsRegistry.getToolsForAPI();
-  const systemPrompt = agent.system_prompt ?? `You are ${agent.name}, an AI agent.`;
-
-  const loopMessages: Array<{ role: 'user' | 'assistant'; content: string | any[] }> = [
-    { role: 'user', content: taskDescription },
-  ];
-
-  const MAX_ITERATIONS = 15;
-  let iteration = 0;
-  let finalContent = '';
-
-  while (iteration < MAX_ITERATIONS) {
-    iteration++;
-
-    let response: any;
-    try {
-      response = await claude.sendMessage(loopMessages, {
-        systemPrompt,
-        tools: tools.length > 0 ? tools : undefined,
-        temperature: agent.temperature,
-        maxTokens: agent.max_tokens,
-      });
-    } catch (err: any) {
-      const errMsg = `Claude API error: ${err.message}`;
-      orchestrator.failTask(taskId, errMsg);
-      await logActivity({ agentId: agent.id, taskId, actionType: 'task_failed', summary: errMsg });
-      return errMsg;
-    }
-
-    if (!response.toolCalls || response.toolCalls.length === 0) {
-      finalContent = response.content;
-      break;
-    }
-
-    // Add assistant turn
-    loopMessages.push({
-      role: 'assistant',
-      content: response.rawBlocks || response.content,
-    });
-
-    // Execute tools
-    const toolResults: any[] = [];
-    for (const toolCall of response.toolCalls) {
-      try {
-        const result = await toolsRegistry.execute(toolCall.tool, toolCall.arguments);
-        const resultText = result.content?.[0]?.text ?? JSON.stringify(result);
-
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolCall.id,
-          content: result.content ?? [{ type: 'text', text: resultText }],
-        });
-
-        await logActivity({
-          agentId: agent.id,
-          taskId,
-          sessionId: `cron-${taskId}`,
-          actionType: 'tool_called',
-          toolName: toolCall.tool,
-          summary: resultText.slice(0, 200),
-        });
-      } catch (err: any) {
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolCall.id,
-          content: [{ type: 'text', text: `Error: ${err.message}` }],
-          is_error: true,
-        });
-      }
-    }
-
-    loopMessages.push({ role: 'user', content: toolResults });
-  }
-
-  // Read recurring metadata before completing (it's on the task's input)
-  const completedTask = orchestrator.getTask(taskId);
-  const taskMeta = (completedTask?.input as any)?._meta as
-    | { repeat_schedule?: string }
-    | undefined;
-
-  // Mark task done
-  orchestrator.completeTask(taskId, { output: finalContent });
-  await logActivity({
-    agentId: agent.id,
-    taskId,
-    actionType: 'task_completed',
-    summary: finalContent.slice(0, 200),
-  });
-
-  // Auto-recreate if this is a recurring task
-  if (taskMeta?.repeat_schedule && completedTask) {
-    try {
-      // SECURITY (S1.2): never take the assignee from task input; keep the
-      // original delegation origin on the copy.
-      const assignToId = completedTask.assignedTo ?? agent.id;
-      // Preserve _meta but strip _upstream from input for the fresh run
-      const { _upstream, ...cleanInput } = (completedTask.input as Record<string, unknown> | undefined) ?? {};
-      const newTask = orchestrator.createTask({
-        title: completedTask.title,
-        description: completedTask.description,
-        priority: completedTask.priority as any,
-        inputData: Object.keys(cleanInput).length > 0 ? cleanInput : undefined,
-        parentId: completedTask.parentId,
-        spawnedBy: (completedTask as any).spawnedBy,
-        origin: (completedTask as any).origin,
-      });
-      orchestrator.assignTask(newTask.id, assignToId);
-      console.log(`[AgentCron] 🔄 Recurring task "${completedTask.title}" re-queued (schedule: ${taskMeta.repeat_schedule})`);
-    } catch (err: any) {
-      console.warn(`[AgentCron] ⚠️  Failed to re-queue recurring task: ${err.message}`);
-    }
-  }
-
-  // Clean up desktop indicator if used
-  try {
-    await toolsRegistry.execute('desktop_control', { action: 'hide_indicator' });
-  } catch { /* ignore */ }
-
-  return finalContent;
+  const run = await createRun({ taskId, agentId: agent.id, userId: null, prompt: taskDescription });
+  const res = await executeTaskRun(run.id);
+  if (res.status === 'waiting_approval') return `Task run ${run.id} is waiting for the owner (${res.reason}).`;
+  if (res.status === 'not_claimed' || res.status === 'lease_lost') return `Task run ${run.id} is being executed by another worker.`;
+  return res.output ?? res.reason ?? '';
 }
 
 /**

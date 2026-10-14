@@ -691,14 +691,16 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Fail task
+   * Fail task. `noRetry`: never auto-retry (CORE-08: the durable run already
+   * ran side-effecting steps; a fresh retry could repeat them). `cancelled`:
+   * final status 'cancelled' instead of 'failed' (implies noRetry).
    */
-  failTask(taskId: string, error: string): boolean {
+  failTask(taskId: string, error: string, opts: { noRetry?: boolean; cancelled?: boolean } = {}): boolean {
     const task = this.tasks.get(taskId);
     if (!task) return false;
 
     // Check for retry
-    if (this.strategy.autoRetry && task.retryCount < task.maxRetries) {
+    if (!opts.noRetry && !opts.cancelled && this.strategy.autoRetry && task.retryCount < task.maxRetries) {
       task.retryCount++;
       task.status = 'pending';
       task.assignedTo = undefined;
@@ -722,7 +724,7 @@ export class AgentOrchestrator {
       return true;
     }
 
-    task.status = 'failed';
+    task.status = opts.cancelled ? 'cancelled' : 'failed';
     task.error = error;
     task.completedAt = new Date();
 

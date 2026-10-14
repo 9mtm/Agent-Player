@@ -45,6 +45,12 @@ export interface Tool {
   destinationParam?: string;
   /** Extension tools may ask for one-time owner approval per call (S1.3); built-in risky tools always need it. */
   requiresApproval?: boolean;
+  /**
+   * CORE-08: safe to run again with the same input after an interruption
+   * (no external side effect, or the tool dedupes by context.taskRun.idempotencyKey).
+   * Ignored for tools that need approval or are exec-class. Default: not idempotent.
+   */
+  idempotent?: boolean;
 }
 
 export interface ToolExecutionContext {
@@ -64,4 +70,6 @@ export interface ToolExecutionContext {
   toolPolicy?: import('./channel-policy.js').ChannelToolPolicy;
   /** Memory drawers this run may read (CORE-03, memory/drawers.ts selectDrawers). */
   memoryDrawers?: import('../memory/drawers.js').DrawerRef[];
+  /** CORE-08: the durable task-run step this call belongs to (set by the run executor). */
+  taskRun?: { runId: string; stepIndex: number; idempotencyKey: string };
 }

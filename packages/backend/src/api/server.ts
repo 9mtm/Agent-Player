@@ -184,6 +184,11 @@ async function start() {
     const { startAgentCronService } = await import('../services/agent-cron.js');
     await startAgentCronService();
 
+    // CORE-08: resume durable task runs interrupted by a restart (expired
+    // leases), and continue runs whose approval was decided.
+    const { startTaskRunRecovery } = await import('../services/task-run-executor.js');
+    startTaskRunRecovery();
+
     // Scheduled notifications — check every minute
     setInterval(() => {
       try { processScheduledNotifications(); } catch { /* non-fatal */ }

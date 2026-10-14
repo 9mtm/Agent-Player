@@ -234,6 +234,8 @@ const OWNER_ONLY = [
   ['POST', '/api/memory/forget-all'], ['GET', '/api/memory/retention'], ['PUT', '/api/memory/retention'], ['POST', '/api/memory/retention/run'],
   // CORE-06: embedding model status + re-embed job
   ['GET', '/api/memory/embeddings'], ['POST', '/api/memory/embeddings/reembed'],
+  // CORE-08: owner decides an interrupted step's outcome
+  ['POST', '/api/task-runs/:id/steps/:index/resolve'],
   ['POST', '/api/database/query'], ['POST', '/api/database/restore'], ['GET', '/api/database/stats'],
   ['POST', '/api/sandbox/execute'], ['PUT', '/api/sandbox/config'],
   ['POST', '/api/system/restart'],
