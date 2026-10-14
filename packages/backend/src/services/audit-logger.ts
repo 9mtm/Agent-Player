@@ -76,6 +76,37 @@ export interface AuditLogEntry {
     metadata?: Record<string, any>;
 }
 
+/** The audit_logs insert (shared by the SQLite and PostgreSQL writers, B2.2a). */
+export const AUDIT_INSERT_SQL = `INSERT INTO audit_logs (
+                event_type, event_category, severity,
+                user_id, username,
+                ip_address, user_agent, request_method, request_path,
+                resource_type, resource_id, action,
+                success, error_message, metadata,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`;
+
+/** Parameters of AUDIT_INSERT_SQL for one entry. */
+export function auditLogParams(entry: AuditLogEntry): Array<string | number | null> {
+    return [
+        entry.event_type,
+        entry.event_category,
+        entry.severity || 'info',
+        entry.user_id || null,
+        entry.username || null,
+        entry.ip_address || null,
+        entry.user_agent || null,
+        entry.request_method || null,
+        entry.request_path || null,
+        entry.resource_type || null,
+        entry.resource_id || null,
+        entry.action || null,
+        entry.success ? 1 : 0,
+        entry.error_message || null,
+        entry.metadata ? JSON.stringify(entry.metadata) : null,
+    ];
+}
+
 /**
  * Log an audit event
  * SECURITY: Creates immutable audit trail (L-02, L-08)
@@ -84,31 +115,7 @@ export function logAudit(entry: AuditLogEntry): void {
     try {
         const db = getDatabase();
 
-        db.execute(
-            `INSERT INTO audit_logs (
-                event_type, event_category, severity,
-                user_id, username,
-                ip_address, user_agent, request_method, request_path,
-                resource_type, resource_id, action,
-                success, error_message, metadata,
-                created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-            entry.event_type,
-            entry.event_category,
-            entry.severity || 'info',
-            entry.user_id || null,
-            entry.username || null,
-            entry.ip_address || null,
-            entry.user_agent || null,
-            entry.request_method || null,
-            entry.request_path || null,
-            entry.resource_type || null,
-            entry.resource_id || null,
-            entry.action || null,
-            entry.success ? 1 : 0,
-            entry.error_message || null,
-            entry.metadata ? JSON.stringify(entry.metadata) : null
-        );
+        db.execute(AUDIT_INSERT_SQL, ...auditLogParams(entry));
     } catch (error: any) {
         // SECURITY: Never fail the main operation due to audit logging
         // But log to console for monitoring

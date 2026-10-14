@@ -17,7 +17,8 @@
 
 import type { FastifyRequest } from 'fastify';
 import { actorOf } from '../auth/auth-gate.js';
-import { hasValidDevice, parseDeviceToken } from '../auth/account-lockout.js';
+import { parseDeviceToken } from '../auth/account-lockout.js';
+import { loginThrottle } from '../repositories/index.js';
 
 /** Plugin options used by buildServer (exported so tests use the same). */
 export const RATE_LIMIT_PLUGIN_OPTIONS = {
@@ -74,12 +75,12 @@ export const loginRateLimit = {
   timeWindow: LOGIN_FLOOD_WINDOW,
   hook: 'preHandler' as const,
   keyGenerator: (request: FastifyRequest) => `login-ip:${request.ip || 'unknown'}`,
-  allowList: (request: FastifyRequest) => {
+  allowList: async (request: FastifyRequest) => {
     const email = bodyEmail(request);
     const token = parseDeviceToken(bodyOf(request).deviceToken);
     if (!email || !token) return false;
     try {
-      return hasValidDevice(email, token);
+      return await loginThrottle.hasValidDevice(email, token);
     } catch {
       return false;
     }

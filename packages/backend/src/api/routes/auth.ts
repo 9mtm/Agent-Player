@@ -10,18 +10,13 @@
 
 import { actorOf } from '../../auth/auth-gate.js';
 import type { FastifyInstance } from 'fastify';
-import { repositories } from '../../repositories/index.js';
+import { loginThrottle, repositories } from '../../repositories/index.js';
 import { AccountError } from '../../repositories/identity-auth.js';
 import { ScopeError, actorOrReply, requireAdmin, sendScopeError } from '../../repositories/scope.js';
 import type { Actor } from '../../repositories/actor.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { handleError } from '../error-handler.js';
-import {
-  checkLoginThrottle,
-  handleFailedLogin,
-  handleSuccessfulLogin,
-  parseDeviceToken,
-} from '../../auth/account-lockout.js';
+import { parseDeviceToken } from '../../auth/account-lockout.js';
 import { logAuthEvent } from '../../services/audit-logger.js';
 import { authorizeActiveRole, OWNER_OR_ADMIN } from '../../auth/route-guards.js';
 import { changePasswordRateLimit, loginRateLimit, registerRateLimit } from '../rate-limit-config.js';
@@ -159,7 +154,7 @@ export async function authRoutes(fastify: FastifyInstance) {
     // SECURITY (M-02, S0-Q.20): throttle per source, never lock the account.
     // Checked before the password and without looking at the account, so the
     // reply is the same for known and unknown emails.
-    const throttle = checkLoginThrottle(String(email), ipAddress, deviceToken);
+    const throttle = await loginThrottle.check(String(email), ipAddress, deviceToken);
     if (throttle.throttled) {
       const minutes = Math.max(1, Math.ceil(throttle.retryAfterSeconds / 60));
       return reply.code(429).header('Retry-After', String(throttle.retryAfterSeconds)).send({
@@ -181,11 +176,11 @@ export async function authRoutes(fastify: FastifyInstance) {
         // the password matched.
         case 'unknown':
           // SECURITY: Track + log the failed attempt (M-02, L-02); generic message (M-12)
-          handleFailedLogin(email, ipAddress, userAgent, deviceToken);
+          await loginThrottle.failed(email, ipAddress, userAgent, deviceToken);
           logAuthEvent('auth.login.failed', request, undefined, email, false, 'Invalid credentials');
           return reply.code(401).send(invalid);
         case 'bad_password':
-          handleFailedLogin(email, ipAddress, userAgent, deviceToken);
+          await loginThrottle.failed(email, ipAddress, userAgent, deviceToken);
           logAuthEvent('auth.login.failed', request, result.userId, result.username, false, 'Invalid password');
           return reply.code(401).send(invalid);
         // The refusals below come with the right password, but they still count
@@ -194,18 +189,18 @@ export async function authRoutes(fastify: FastifyInstance) {
         // password is public anyway, so it gets the same treatment.)
         case 'system':
           // SECURITY (S0-Q.2): internal system accounts can never log in
-          handleFailedLogin(email, ipAddress, userAgent, deviceToken);
+          await loginThrottle.failed(email, ipAddress, userAgent, deviceToken);
           logAuthEvent('auth.login.failed', request, result.userId, result.username, false, 'System account login refused');
           return reply.code(403).send(denied);
         case 'inactive':
         case 'unverified':
           // SECURITY: generic "Forbidden" for account status / unverified e-mail (M-09, M-12)
-          handleFailedLogin(email, ipAddress, userAgent, deviceToken);
+          await loginThrottle.failed(email, ipAddress, userAgent, deviceToken);
           logAuthEvent('auth.login.failed', request, result.userId, result.username, false, 'Account not active');
           return reply.code(403).send(denied);
         case 'published_password':
           // SECURITY (S0-Q.2): passwords published in the source (old seed/demo accounts) are refused
-          handleFailedLogin(email, ipAddress, userAgent, deviceToken);
+          await loginThrottle.failed(email, ipAddress, userAgent, deviceToken);
           logAuthEvent('auth.login.failed', request, result.userId, result.username, false, 'Published default password refused');
           return reply.code(403).send({
             error: 'Forbidden',
@@ -214,7 +209,7 @@ export async function authRoutes(fastify: FastifyInstance) {
           });
         case 'ok':
           // SECURITY: Track successful login and clear failed attempts (M-02); log it (L-02)
-          const newDeviceToken = handleSuccessfulLogin(email, ipAddress, userAgent, deviceToken);
+          const newDeviceToken = await loginThrottle.succeeded(email, ipAddress, userAgent, deviceToken);
           logAuthEvent('auth.login', request, result.user.id, result.user.username, true);
           // The token carries token_version for invalidation support (H-01).
           // deviceToken (S0-Q.20): rotated on every sign-in; the client keeps

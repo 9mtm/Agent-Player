@@ -81,13 +81,13 @@ export interface ThrottleStatus {
   retryAfterSeconds: number;
 }
 
-type Bucket = { count: number; last: number | null } | undefined;
+export type Bucket = { count: number; last: number | null } | undefined;
 
-function normEmail(email: string): string {
+export function normEmail(email: string): string {
   return String(email ?? '').trim().toLowerCase();
 }
 
-function normIp(ip?: string | null): string {
+export function normIp(ip?: string | null): string {
   const v = typeof ip === 'string' ? ip.trim() : '';
   return v || UNKNOWN_IP;
 }
@@ -100,7 +100,7 @@ export function delayFor(failures: number, free: number): number {
 }
 
 /** Seconds still to wait for one bucket (`last` = latest failure, epoch seconds). */
-function remaining(row: Bucket, free: number, nowMs: number): number {
+export function remaining(row: Bucket, free: number, nowMs: number): number {
   const delay = delayFor(row?.count ?? 0, free);
   if (!delay || row?.last == null) return 0;
   const until = (Number(row.last) + delay) * 1000;
@@ -134,7 +134,7 @@ export function parseDeviceToken(input: unknown): string | null {
   return DEVICE_TOKEN_PATTERN.test(input) ? input : null;
 }
 
-function hashToken(token: string): string {
+export function hashToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
 }
 

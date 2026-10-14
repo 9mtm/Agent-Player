@@ -13,44 +13,17 @@
  * leave this layer. Accounts and sessions (register/login/logout/password)
  * are in identity-auth.ts, teams and invitations in teams.ts (B1.6).
  *
- * SQLite implementation over db/repositories/users.ts and the users table.
+ * One implementation over a users store (users-store.ts, B2.2a):
+ * sqliteIdentity (db/repositories/users.ts) and pgIdentity (repositories/pg/).
  */
 
 import type { Actor } from './actor.js';
 import { ScopeError, isAdminOrOwner, requireAccount, requireAdmin, requireMember } from './scope.js';
-import { getDatabase, getRepositories } from '../db/index.js';
-import type { User } from '../db/repositories/users.js';
 import { sqliteIdentityAuth, type IdentityAuthRepository } from './identity-auth.js';
 import { sqliteTeams, type TeamsRepository } from './teams.js';
+import { sqliteUsersStore, type ProfileRow, type ProfileUpdate, type SafeUser, type UsersStore } from './users-store.js';
 
-export type SafeUser = Omit<User, 'password_hash'>;
-
-export interface ProfileRow {
-  id: string;
-  email: string;
-  username: string;
-  full_name: string | null;
-  bio: string;
-  company: string;
-  location: string;
-  website: string;
-  timezone: string;
-  profile_picture_url: string | null;
-  avatar_url: string | null;
-  role: string;
-  created_at: string;
-}
-
-export interface ProfileUpdate {
-  fullName: string | null;
-  email: string | null;
-  username: string | null;
-  bio: string | null;
-  company: string | null;
-  location: string | null;
-  website: string | null;
-  timezone: string | null;
-}
+export type { ProfileRow, ProfileUpdate, SafeUser } from './users-store.js';
 
 export interface IdentityRepository extends IdentityAuthRepository, TeamsRepository {
   /** The account itself (safe fields); null when it no longer exists or is not active. */
@@ -62,66 +35,52 @@ export interface IdentityRepository extends IdentityAuthRepository, TeamsReposit
   countByRole(actor: Actor | null | undefined): Promise<Record<string, number>>;
 }
 
-const users = () => getRepositories().users;
-
 function selfId(actor: Actor | null | undefined): string {
   const a = requireAccount(actor);
   if (!a.userId) throw new ScopeError(403, 'An account is required');
   return a.userId;
 }
 
-export const sqliteIdentity: IdentityRepository = {
-  ...sqliteIdentityAuth,
-  ...sqliteTeams,
+/** The identity repository over a users store, with its accounts and teams parts. */
+export function createIdentity(users: UsersStore, auth: IdentityAuthRepository, teams: TeamsRepository): IdentityRepository {
+  return {
+    ...auth,
+    ...teams,
 
-  async self(actor) {
-    const user = users().findById(selfId(actor));
-    if (!user || (user as any).status !== 'active') return null;
-    return users().getSafeUser(user);
-  },
+    async self(actor) {
+      const user = await users.findById(selfId(actor));
+      if (!user || (user as any).status !== 'active') return null;
+      return users.safeUser(user);
+    },
 
-  async profile(actor) {
-    const row = getDatabase().prepare(`
-      SELECT id, email, username, full_name, bio, company, location, website, timezone,
-             profile_picture_url, avatar_url, role, created_at
-      FROM users WHERE id = ?
-    `).get(selfId(actor)) as ProfileRow | undefined;
-    return row ?? null;
-  },
+    async profile(actor) {
+      return (await users.profile(selfId(actor))) ?? null;
+    },
 
-  async updateProfile(actor, u) {
-    const a = requireMember(actor);
-    if (!a.userId) throw new ScopeError(403, 'An account is required');
-    getDatabase().prepare(`
-      UPDATE users SET
-        full_name = COALESCE(?, full_name),
-        email = COALESCE(?, email),
-        username = COALESCE(?, username),
-        bio = COALESCE(?, bio),
-        company = COALESCE(?, company),
-        location = COALESCE(?, location),
-        website = COALESCE(?, website),
-        timezone = COALESCE(?, timezone),
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(u.fullName, u.email, u.username, u.bio, u.company, u.location, u.website, u.timezone, a.userId);
-  },
+    async updateProfile(actor, u) {
+      const a = requireMember(actor);
+      if (!a.userId) throw new ScopeError(403, 'An account is required');
+      await users.updateProfile(a.userId, u);
+    },
 
-  async get(actor, userId) {
-    const a = requireAccount(actor);
-    if (a.kind !== 'system' && a.userId !== userId && !isAdminOrOwner(a)) throw new ScopeError(404, 'User not found');
-    const user = users().findById(userId);
-    if (!user) throw new ScopeError(404, 'User not found');
-    return users().getSafeUser(user);
-  },
+    async get(actor, userId) {
+      const a = requireAccount(actor);
+      if (a.kind !== 'system' && a.userId !== userId && !isAdminOrOwner(a)) throw new ScopeError(404, 'User not found');
+      const user = await users.findById(userId);
+      if (!user) throw new ScopeError(404, 'User not found');
+      return users.safeUser(user);
+    },
 
-  async list(actor, filters) {
-    requireAdmin(actor);
-    return users().findAll(filters).map((u) => users().getSafeUser(u));
-  },
+    async list(actor, filters) {
+      requireAdmin(actor);
+      return (await users.findAll(filters)).map((u) => users.safeUser(u));
+    },
 
-  async countByRole(actor) {
-    requireMember(actor);
-    return users().countByRole();
-  },
-};
+    async countByRole(actor) {
+      requireMember(actor);
+      return users.countByRole();
+    },
+  };
+}
+
+export const sqliteIdentity: IdentityRepository = createIdentity(sqliteUsersStore, sqliteIdentityAuth, sqliteTeams);
