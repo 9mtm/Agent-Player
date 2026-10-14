@@ -42,7 +42,10 @@ export type AuditEventType =
     | 'extension.permission.granted'
     | 'extension.tool.registered'
     | 'extension.cron.registered'
-    | 'extension.storage.accessed';
+    | 'extension.storage.accessed'
+    // MCP client (M1)
+    | 'mcp.server.change'
+    | 'mcp.tool.call';
 
 export type AuditCategory =
     | 'authentication'

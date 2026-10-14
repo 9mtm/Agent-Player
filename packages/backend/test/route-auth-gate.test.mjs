@@ -234,6 +234,10 @@ const OWNER_ONLY = [
   ['POST', '/api/memory/forget-all'], ['GET', '/api/memory/retention'], ['PUT', '/api/memory/retention'], ['POST', '/api/memory/retention/run'],
   // CORE-06: embedding model status + re-embed job
   ['GET', '/api/memory/embeddings'], ['POST', '/api/memory/embeddings/reembed'],
+  // M1: MCP client server registry (starts processes / reaches URLs for agents)
+  ['GET', '/api/mcp/servers'], ['POST', '/api/mcp/servers'], ['GET', '/api/mcp/servers/:id'], ['PUT', '/api/mcp/servers/:id'],
+  ['DELETE', '/api/mcp/servers/:id'], ['POST', '/api/mcp/servers/:id/enable'], ['POST', '/api/mcp/servers/:id/disable'],
+  ['POST', '/api/mcp/servers/:id/refresh'], ['PUT', '/api/mcp/servers/:id/tools/:tool'],
   // CORE-08: owner decides an interrupted step's outcome
   ['POST', '/api/task-runs/:id/steps/:index/resolve'],
   ['POST', '/api/database/query'], ['POST', '/api/database/restore'], ['GET', '/api/database/stats'],

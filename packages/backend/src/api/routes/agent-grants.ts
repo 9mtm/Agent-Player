@@ -54,6 +54,8 @@ export async function agentGrantsRoutes(fastify: FastifyInstance) {
           execClass: isToolExecClass(t),
           allowedByServer: isToolObjectAllowedByExecPolicy(t),
           requiresApproval: approvalCategory(t) !== null,
+          // M1: MCP tools carry their qualified name (mcp:<server>:<tool>)
+          mcp: t.mcp ? { qualifiedName: t.mcp.qualifiedName, server: t.mcp.serverName, tool: t.mcp.toolName } : null,
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     };

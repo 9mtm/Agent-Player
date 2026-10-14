@@ -51,6 +51,8 @@ export interface Tool {
    * Ignored for tools that need approval or are exec-class. Default: not idempotent.
    */
   idempotent?: boolean;
+  /** M1: set for tools discovered on an owner-registered MCP server (name is mcp__<server>__<tool>). */
+  mcp?: { serverId: string; serverName: string; toolName: string; qualifiedName: string };
 }
 
 export interface ToolExecutionContext {

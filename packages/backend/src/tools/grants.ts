@@ -20,6 +20,9 @@
  *    delegation never expands permissions.
  *  - Personality, prompts and model output never change grants. Only the
  *    owner grants API (S1.4) writes them.
+ *  - MCP tools (M1, mcp__<server>__<tool>) are never granted by default:
+ *    not in the default set, not seeded for legacy agents, and never for
+ *    the small agent. The grants API accepts `mcp:<server>:<tool>` too.
  *  - A grant may carry scopes, e.g. {"destinations": ["123"]} for a send tool:
  *    the call's destination must be in the list.
  */
@@ -27,6 +30,7 @@
 import { getDatabase } from '../db/index.js';
 import type { Tool, ToolResult } from './types.js';
 import { isToolExecClass } from './exec-policy.js';
+import { isMcpToolName, NO_MCP_AGENTS, normalizeToolNameInput } from '../mcp-client/config.js';
 
 export interface GrantScopes {
   /** Allowed destinations for a send/call tool (chat ids, channels, numbers). */
@@ -204,7 +208,7 @@ export function ensureGrantProfile(agentId: string, available: ReadonlyArray<Pic
     const profile = readProfile(agentId);
     if (profile && profile.source !== 'legacy-pending') return profile;
     if (profile) {
-      const names = available.filter((t) => !isToolExecClass(t)).map((t) => t.name);
+      const names = available.filter((t) => !isToolExecClass(t) && !isMcpToolName(t.name)).map((t) => t.name);
       writeGrantRows(agentId, names.map((tool) => ({ tool, scopes: null })), 'system:legacy');
       db.prepare(`UPDATE agent_grant_profiles SET source = 'legacy', updated_at = datetime('now') WHERE agent_id = ?`).run(agentId);
     } else {
@@ -244,7 +248,9 @@ export function loadAgentGrants(
 function loadOwn(agentId: string, available: ReadonlyArray<Pick<Tool, 'name' | 'execClass'>>, seen: Set<string>): AgentToolGrants {
   const profile = ensureGrantProfile(agentId, available);
   if (!profile) return { agentId, tools: new Map() }; // unknown agent: nothing
-  let grants: AgentToolGrants = { agentId, tools: readGrantRows(agentId) };
+  const own = readGrantRows(agentId);
+  if (NO_MCP_AGENTS.has(agentId)) for (const name of [...own.keys()]) if (isMcpToolName(name)) own.delete(name);
+  let grants: AgentToolGrants = { agentId, tools: own };
   seen.add(agentId);
   const parent = profile.parent_agent_id;
   if (parent) {
@@ -300,8 +306,10 @@ export function setAgentGrants(
   const entries: Array<{ tool: string; scopes: GrantScopes | null }> = [];
   const seenNames = new Set<string>();
   for (const item of input.grants) {
-    const tool = typeof item === 'string' ? item : (item as any)?.tool;
+    const rawTool = typeof item === 'string' ? item : (item as any)?.tool;
+    const tool = typeof rawTool === 'string' ? normalizeToolNameInput(rawTool) : rawTool;
     if (typeof tool !== 'string' || !TOOL_NAME_PATTERN.test(tool)) throw new GrantValidationError('invalid tool name');
+    if (isMcpToolName(tool) && NO_MCP_AGENTS.has(agentId)) throw new GrantValidationError(`"${tool}": this agent may never use MCP tools`);
     if (seenNames.has(tool)) throw new GrantValidationError(`duplicate tool "${tool}"`);
     seenNames.add(tool);
     let scopes: GrantScopes | null;

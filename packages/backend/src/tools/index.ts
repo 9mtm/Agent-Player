@@ -77,6 +77,8 @@ import {
   skillInstallTool,
 } from './skill-install.js';
 
+import { getMcpTools, isMcpToolName } from '../mcp-client/index.js';
+
 // Global registry of extension-provided tools (registered at extension startup)
 import type { Tool } from './types.js';
 
@@ -108,6 +110,9 @@ export function isReservedToolName(name: string): boolean {
 export function registerExtensionTool(tool: Tool): void {
   if (isReservedToolName(tool.name)) {
     throw new Error(`Extension tool name "${tool.name}" is reserved for a built-in tool`);
+  }
+  if (isMcpToolName(tool.name)) {
+    throw new Error(`Extension tool name "${tool.name}" uses the reserved MCP prefix "mcp__"`);
   }
   // Remove if already exists
   const existingIndex = extensionTools.findIndex((t) => t.name === tool.name);
@@ -150,6 +155,11 @@ export function createToolsRegistry(context: ToolExecutionContext): ToolsRegistr
 
   // Register extension-provided tools
   for (const tool of extensionTools) {
+    registry.register(tool);
+  }
+
+  // M1: tools of active owner-registered MCP servers (never granted by default)
+  for (const tool of getMcpTools()) {
     registry.register(tool);
   }
 
