@@ -5,7 +5,8 @@
 
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
-import { getDatabase } from '../../db/index.js';
+import { q } from '../../repositories/sql-steps.js';
+import { withIsoFields } from '../timestamps.js';
 import { randomUUID } from 'crypto';
 import { WorkflowExecutor } from '../../workflows/executor.js';
 import { handleError } from '../error-handler.js';
@@ -46,8 +47,20 @@ interface WorkflowExecution {
     logs?: any[];
 }
 
+const WORKFLOW_TIMES = ['created_at', 'updated_at'] as const;
+const EXECUTION_TIMES = ['started_at', 'completed_at'] as const;
+
+/** A stored workflow row as the API returns it (JSON fields parsed, ISO UTC times). */
+function parseWorkflow(w: Workflow) {
+    return withIsoFields({
+        ...w,
+        nodes: JSON.parse(w.nodes as any),
+        edges: JSON.parse(w.edges as any),
+        enabled: Boolean(w.enabled)
+    }, WORKFLOW_TIMES);
+}
+
 export async function workflowRoutes(fastify: FastifyInstance) {
-    const db = getDatabase();
 
     // SECURITY (S0-A.6): the user is the verified token user (the auth gate
     // sets request.authUser; getUserIdFromRequest is the second line), never
@@ -64,20 +77,14 @@ export async function workflowRoutes(fastify: FastifyInstance) {
             // For now, we'll use a default user
             const user_id = getUserId(request);
 
-            const workflows = db.getDb().prepare(`
+            const workflows = await q.all<Workflow>(`
                 SELECT id, user_id, name, description, enabled, nodes, edges, created_at, updated_at
                 FROM workflows
                 WHERE user_id = ?
-                ORDER BY updated_at DESC
-            `).all(user_id) as Workflow[];
+                ORDER BY updated_at DESC`,
+                user_id);
 
-            // Parse JSON fields
-            const parsedWorkflows = workflows.map(w => ({
-                ...w,
-                nodes: JSON.parse(w.nodes as any),
-                edges: JSON.parse(w.edges as any),
-                enabled: Boolean(w.enabled)
-            }));
+            const parsedWorkflows = workflows.map(parseWorkflow);
 
             return reply.send({ workflows: parsedWorkflows });
         } catch (error: any) {
@@ -93,25 +100,17 @@ export async function workflowRoutes(fastify: FastifyInstance) {
             const { id } = request.params as { id: string };
             const user_id = getUserId(request);
 
-            const workflow = db.getDb().prepare(`
+            const workflow = await q.one<Workflow>(`
                 SELECT id, user_id, name, description, enabled, nodes, edges, created_at, updated_at
                 FROM workflows
-                WHERE id = ? AND user_id = ?
-            `).get(id, user_id) as Workflow | undefined;
+                WHERE id = ? AND user_id = ?`,
+                id, user_id);
 
             if (!workflow) {
                 return reply.status(404).send({ error: 'Workflow not found' });
             }
 
-            // Parse JSON fields
-            const parsedWorkflow = {
-                ...workflow,
-                nodes: JSON.parse(workflow.nodes as any),
-                edges: JSON.parse(workflow.edges as any),
-                enabled: Boolean(workflow.enabled)
-            };
-
-            return reply.send({ workflow: parsedWorkflow });
+            return reply.send({ workflow: parseWorkflow(workflow) });
         } catch (error: any) {
             console.error('Error fetching workflow:', error);
             // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
@@ -147,10 +146,9 @@ export async function workflowRoutes(fastify: FastifyInstance) {
             const id = randomUUID();
             const now = new Date().toISOString();
 
-            db.getDb().prepare(`
+            await q.run(`
                 INSERT INTO workflows (id, user_id, name, description, enabled, nodes, edges, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 id,
                 user_id,
                 name.trim(),
@@ -201,9 +199,7 @@ export async function workflowRoutes(fastify: FastifyInstance) {
             const user_id = getUserId(request);
 
             // Check if workflow exists
-            const existing = db.getDb().prepare(`
-                SELECT id FROM workflows WHERE id = ? AND user_id = ?
-            `).get(id, user_id);
+            const existing = await q.one('SELECT id FROM workflows WHERE id = ? AND user_id = ?', id, user_id);
 
             if (!existing) {
                 return reply.status(404).send({ error: 'Workflow not found' });
@@ -211,7 +207,7 @@ export async function workflowRoutes(fastify: FastifyInstance) {
 
             // Build update query dynamically
             const updates: string[] = [];
-            const values: any[] = [];
+            const values: Array<string | number | null> = [];
 
             if (name !== undefined) {
                 if (!name.trim()) {
@@ -256,25 +252,23 @@ export async function workflowRoutes(fastify: FastifyInstance) {
 
             values.push(id, user_id);
 
-            db.getDb().prepare(`
+            await q.run(`
                 UPDATE workflows
                 SET ${updates.join(', ')}
-                WHERE id = ? AND user_id = ?
-            `).run(...values);
+                WHERE id = ? AND user_id = ?`,
+                ...values);
 
             // Fetch updated workflow
-            const workflow = db.getDb().prepare(`
+            const workflow = await q.one<Workflow>(`
                 SELECT id, user_id, name, description, enabled, nodes, edges, created_at, updated_at
                 FROM workflows
-                WHERE id = ? AND user_id = ?
-            `).get(id, user_id) as Workflow;
+                WHERE id = ? AND user_id = ?`,
+                id, user_id);
+            if (!workflow) {
+                return reply.status(404).send({ error: 'Workflow not found' });
+            }
 
-            const parsedWorkflow = {
-                ...workflow,
-                nodes: JSON.parse(workflow.nodes as any),
-                edges: JSON.parse(workflow.edges as any),
-                enabled: Boolean(workflow.enabled)
-            };
+            const parsedWorkflow = parseWorkflow(workflow);
 
             return reply.send({
                 success: true,
@@ -295,18 +289,14 @@ export async function workflowRoutes(fastify: FastifyInstance) {
             const user_id = getUserId(request);
 
             // Check if workflow exists
-            const existing = db.getDb().prepare(`
-                SELECT id FROM workflows WHERE id = ? AND user_id = ?
-            `).get(id, user_id);
+            const existing = await q.one('SELECT id FROM workflows WHERE id = ? AND user_id = ?', id, user_id);
 
             if (!existing) {
                 return reply.status(404).send({ error: 'Workflow not found' });
             }
 
             // Delete workflow (cascade will delete executions)
-            db.getDb().prepare(`
-                DELETE FROM workflows WHERE id = ? AND user_id = ?
-            `).run(id, user_id);
+            await q.run('DELETE FROM workflows WHERE id = ? AND user_id = ?', id, user_id);
 
             return reply.send({
                 success: true,
@@ -326,11 +316,11 @@ export async function workflowRoutes(fastify: FastifyInstance) {
             const user_id = getUserId(request);
 
             // Get workflow
-            const workflow = db.getDb().prepare(`
+            const workflow = await q.one<Workflow>(`
                 SELECT id, user_id, name, description, enabled, nodes, edges
                 FROM workflows
-                WHERE id = ? AND user_id = ?
-            `).get(id, user_id) as Workflow | undefined;
+                WHERE id = ? AND user_id = ?`,
+                id, user_id);
 
             if (!workflow) {
                 return reply.status(404).send({ error: 'Workflow not found' });
@@ -348,10 +338,10 @@ export async function workflowRoutes(fastify: FastifyInstance) {
             const execution_id = randomUUID();
             const now = new Date().toISOString();
 
-            db.getDb().prepare(`
+            await q.run(`
                 INSERT INTO workflow_executions (id, workflow_id, status, started_at)
-                VALUES (?, ?, 'running', ?)
-            `).run(execution_id, id, now);
+                VALUES (?, ?, 'running', ?)`,
+                execution_id, id, now);
 
             // Execute workflow asynchronously using WorkflowExecutor
             const executor = new WorkflowExecutor(id, execution_id, nodes, edges);
@@ -382,31 +372,32 @@ export async function workflowRoutes(fastify: FastifyInstance) {
     fastify.get('/api/workflows/:id/executions', async (request, reply) => {
         try {
             const { id } = request.params as { id: string };
-            const { limit = 10 } = request.query as { limit?: number };
+            const { limit: rawLimit } = request.query as { limit?: string | number };
+            // A bound integer on both drivers (a non-numeric limit used to reach the SQL).
+            const parsedLimit = Number.parseInt(String(rawLimit ?? 10), 10);
+            const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 100) : 10;
             const user_id = getUserId(request);
 
             // Verify workflow belongs to user
-            const workflow = db.getDb().prepare(`
-                SELECT id FROM workflows WHERE id = ? AND user_id = ?
-            `).get(id, user_id);
+            const workflow = await q.one('SELECT id FROM workflows WHERE id = ? AND user_id = ?', id, user_id);
 
             if (!workflow) {
                 return reply.status(404).send({ error: 'Workflow not found' });
             }
 
-            const executions = db.getDb().prepare(`
+            const executions = await q.all<WorkflowExecution>(`
                 SELECT id, workflow_id, status, started_at, completed_at, error, logs
                 FROM workflow_executions
                 WHERE workflow_id = ?
                 ORDER BY started_at DESC
-                LIMIT ?
-            `).all(id, limit) as WorkflowExecution[];
+                LIMIT ?`,
+                id, limit);
 
             // Parse logs
-            const parsedExecutions = executions.map(e => ({
+            const parsedExecutions = executions.map(e => withIsoFields({
                 ...e,
                 logs: e.logs ? JSON.parse(e.logs as any) : []
-            }));
+            }, EXECUTION_TIMES));
 
             return reply.send({ executions: parsedExecutions });
         } catch (error: any) {
