@@ -45,7 +45,8 @@ import { getDatabase } from '../db/index.js';
 import { dbDriver } from '../db/pg/config.js';
 import { pgAll, pgOne, pgRun, withPgTransaction } from '../db/pg/pool.js';
 
-export type SqlParam = string | number | null;
+/** A bound value; Buffer = BLOB on SQLite, bytea on PostgreSQL. */
+export type SqlParam = string | number | null | Buffer;
 
 type Op =
   | { kind: 'one' | 'all' | 'run'; sql: string; params: SqlParam[] }
@@ -82,6 +83,35 @@ export function* dialect(): Step<Dialect> {
  */
 export function* atomic<T>(body: () => Step<T>): Step<T> {
   return (yield { kind: 'tx', body }) as T;
+}
+
+/**
+ * A transaction-scoped lock on a name (B2.2b-4): PostgreSQL
+ * pg_advisory_xact_lock on a 64-bit hash of `name`, held until the
+ * transaction ends, so check-then-write sequences on the same name (a
+ * memory's next version, a drawer's next revision) run one after another.
+ * SQLite: nothing to do (one connection; a write transaction already holds
+ * the database lock). Only meaningful inside `tx` / `atomic`.
+ */
+export function* lockName(name: string): Step<void> {
+  const d = yield* dialect();
+  if (d === 'postgres') yield* one('SELECT pg_advisory_xact_lock(hashtextextended(?, 0))', name);
+}
+
+/** True when the table exists (sqlite_master / information_schema of the current schema). */
+export function* tableExists(name: string): Step<boolean> {
+  const d = yield* dialect();
+  return !!(yield* one(d === 'postgres'
+    ? `SELECT 1 AS ok FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ?`
+    : `SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?`, name));
+}
+
+/** True when the table has the column (pragma_table_info / information_schema). */
+export function* columnExists(table: string, column: string): Step<boolean> {
+  const d = yield* dialect();
+  return !!(yield* one(d === 'postgres'
+    ? `SELECT 1 AS ok FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`
+    : `SELECT 1 AS ok FROM pragma_table_info(?) WHERE name = ?`, table, column));
 }
 
 export interface StepRunner {

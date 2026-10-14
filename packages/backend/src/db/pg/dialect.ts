@@ -121,6 +121,14 @@ export function forUpdate(d: Dialect): string {
   return d === 'postgres' ? ' FOR UPDATE' : '';
 }
 
+/**
+ * Case-insensitive LIKE: SQLite's LIKE already ignores ASCII case,
+ * PostgreSQL needs ILIKE for the same match.
+ */
+export function likeCi(d: Dialect): string {
+  return d === 'postgres' ? 'ILIKE' : 'LIKE';
+}
+
 /** Whole seconds since the epoch of `expr`, as an integer (strftime('%s', expr)). */
 export function epochSeconds(d: Dialect, expr: string, kind: TsKind = 'timestamptz'): string {
   if (d === 'sqlite') return `CAST(strftime('%s', ${expr}) AS INTEGER)`;
