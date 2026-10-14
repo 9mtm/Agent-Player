@@ -54,7 +54,7 @@ test.after(async () => {
 const bearer = (id) => ({ authorization: `Bearer ${generateToken(id, 1)}` });
 const req = (method, url, headers = {}, payload) => app.inject({ method, url, headers, payload });
 const STORED_KEY = `sk-test-stored-${randomBytes(8).toString('hex')}`;
-getSettingsManager().updateSettings({ provider: 'local', claude: { apiKey: STORED_KEY, model: 'm1' } });
+await getSettingsManager().updateSettings({ provider: 'local', claude: { apiKey: STORED_KEY, model: 'm1' } });
 const stored = () => getSettingsManager().getSettings();
 
 test('S0-Q.15: anonymous, bad-token, member and inactive callers get 401/403 on every settings route', async () => {
@@ -69,8 +69,8 @@ test('S0-Q.15: anonymous, bad-token, member and inactive callers get 401/403 on 
     assert.equal((await req(method, url, bearer('u-member'), body)).statusCode, 403, `${method} ${url} member`);
     assert.equal((await req(method, url, bearer('u-off'), body)).statusCode, 403, `${method} ${url} inactive owner`);
   }
-  assert.equal(stored().provider, 'local');
-  assert.equal(stored().claude.apiKey, STORED_KEY);
+  assert.equal((await stored()).provider, 'local');
+  assert.equal((await stored()).claude.apiKey, STORED_KEY);
   assert.equal(outbound.length, 0, 'no outbound call with the stored key');
 });
 
@@ -80,7 +80,7 @@ test('S0-Q.15: an admin reads masked settings but cannot change them or run /tes
   assert.doesNotMatch(get.body, new RegExp(STORED_KEY));
   assert.equal((await req('PUT', '/api/settings', bearer('u-admin'), { provider: 'claude', claude: { apiKey: 'sk-admin' } })).statusCode, 403);
   assert.equal((await req('POST', '/api/settings/test', bearer('u-admin'), { provider: 'claude' })).statusCode, 403);
-  assert.equal(stored().claude.apiKey, STORED_KEY);
+  assert.equal((await stored()).claude.apiKey, STORED_KEY);
   assert.equal(outbound.length, 0);
 });
 
@@ -93,9 +93,9 @@ test('S0-Q.15: the owner reads masked settings, updates them, and runs /test', a
   // A masked key sent back keeps the stored key; other fields change.
   const put = await req('PUT', '/api/settings', bearer('u-owner'), { provider: 'claude', claude: { apiKey: get.json().settings.claude.apiKey, model: 'm2' } });
   assert.equal(put.statusCode, 200, put.body);
-  assert.equal(stored().provider, 'claude');
-  assert.equal(stored().claude.model, 'm2');
-  assert.equal(stored().claude.apiKey, STORED_KEY);
+  assert.equal((await stored()).provider, 'claude');
+  assert.equal((await stored()).claude.model, 'm2');
+  assert.equal((await stored()).claude.apiKey, STORED_KEY);
 
   const t = await req('POST', '/api/settings/test', bearer('u-owner'), { provider: 'claude' });
   assert.equal(t.statusCode, 200, t.body);

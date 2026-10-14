@@ -14,7 +14,7 @@ export async function agentsStatusRoutes(fastify: FastifyInstance) {
   // GET /api/agents/status - Get status of all agents
   fastify.get('/api/agents/status', async (request, reply) => {
     const settingsManager = getSettingsManager();
-    const settings = settingsManager.getSettings();
+    const settings = await settingsManager.getSettings();
 
     const agents = [];
 
@@ -32,8 +32,8 @@ export async function agentsStatusRoutes(fastify: FastifyInstance) {
     }
 
     // Check Claude API
-    if (hasGlobalProviderApiKey('claude')) {
-      const claudeStatus = await checkClaude(getGlobalProviderApiKey('claude'));
+    if (await hasGlobalProviderApiKey('claude')) {
+      const claudeStatus = await checkClaude(await getGlobalProviderApiKey('claude'));
       agents.push({
         id: 'claude',
         name: 'Claude API',
@@ -45,8 +45,8 @@ export async function agentsStatusRoutes(fastify: FastifyInstance) {
     }
 
     // Check OpenAI API
-    if (hasGlobalProviderApiKey('openai')) {
-      const openaiStatus = await checkOpenAI(getGlobalProviderApiKey('openai'));
+    if (await hasGlobalProviderApiKey('openai')) {
+      const openaiStatus = await checkOpenAI(await getGlobalProviderApiKey('openai'));
       agents.push({
         id: 'openai',
         name: 'OpenAI API',

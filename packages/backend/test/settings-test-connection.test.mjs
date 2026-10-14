@@ -52,7 +52,7 @@ const { providerStatusCode, providerRejectedBody } = await import('../src/servic
 const app = Fastify();
 await app.register(settingsRoutes);
 await app.ready();
-getSettingsManager().updateSettings({ claude: { apiKey: CLAUDE_KEY, model: 'm1' }, openai: { apiKey: OPENAI_KEY, model: 'm2' } });
+await getSettingsManager().updateSettings({ claude: { apiKey: CLAUDE_KEY, model: 'm1' }, openai: { apiKey: OPENAI_KEY, model: 'm2' } });
 
 test.after(async () => {
   globalThis.fetch = realFetch;

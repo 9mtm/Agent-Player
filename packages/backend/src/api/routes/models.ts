@@ -28,7 +28,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
   fastify.get('/api/models', async (request, reply) => {
     try {
       const settingsManager = getSettingsManager();
-      const settings = settingsManager.getSettings();
+      const settings = await settingsManager.getSettings();
 
       const allModels: any[] = [];
 
@@ -56,7 +56,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
       }
 
       // 2. Add Claude models (if API key configured)
-      if (hasGlobalProviderApiKey('claude')) {
+      if (await hasGlobalProviderApiKey('claude')) {
         const claudeModels = [
           {
             id: 'claude-opus-4-6',
@@ -87,7 +87,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
       }
 
       // 3. Add OpenAI models (if API key configured)
-      if (hasGlobalProviderApiKey('openai')) {
+      if (await hasGlobalProviderApiKey('openai')) {
         const openaiModels = [
           {
             id: 'gpt-4-turbo',

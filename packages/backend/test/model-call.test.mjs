@@ -332,7 +332,7 @@ const withEnv = async (env, fn) => {
 };
 
 test('public room, cap 0: no sender (owner, member, anonymous) triggers a paid call; the local model answers', async () => {
-  getSettingsManager().updateSettings({ publicRooms: { allowAnonymous: true } });
+  await getSettingsManager().updateSettings({ publicRooms: { allowAnonymous: true } });
   await withEnv({ ANTHROPIC_API_KEY: testKey(), BACKGROUND_PAID_PURPOSES: 'public_room' }, async () => {
     assert.equal(budget.dailyCapCents(), 0);
     const before = ledger().length;

@@ -47,7 +47,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   // GET /api/settings - Get current settings
   fastify.get('/api/settings', async (request, reply) => {
     if (authorizeActiveRole(request, reply, OWNER_OR_ADMIN) === null) return reply;
-    const settings = settingsManager.getSettingsMasked();
+    const settings = await settingsManager.getSettingsMasked();
 
     return {
       success: true,
@@ -63,7 +63,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       const updates = request.body;
 
       try {
-        settingsManager.updateSettings(updates);
+        await settingsManager.updateSettings(updates);
 
         return {
           success: true,
@@ -83,11 +83,11 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       if (authorizeActiveRole(request, reply, ['owner']) === null) return reply;
       const { provider } = request.body || ({} as { provider?: string });
-      const settings = settingsManager.getSettings();
+      const settings = await settingsManager.getSettings();
 
       try {
         if (provider === 'claude') {
-          const apiKey = getGlobalProviderApiKey('claude');
+          const apiKey = await getGlobalProviderApiKey('claude');
           if (!apiKey) {
             return reply.status(400).send({
               success: false,
@@ -117,7 +117,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
             message: 'Claude API connection successful',
           };
         } else if (provider === 'openai') {
-          const apiKey = getGlobalProviderApiKey('openai');
+          const apiKey = await getGlobalProviderApiKey('openai');
           if (!apiKey) {
             return reply.status(400).send({
               success: false,

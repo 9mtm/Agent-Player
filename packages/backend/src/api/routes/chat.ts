@@ -312,7 +312,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     }
     // An agent's explicit provider wins; without one, follow the global settings provider.
     const resolvedProvider = agentConfig?.provider
-      || (getSettingsManager().getSettings().provider === 'claude' ? 'claude' : 'ollama');
+      || ((await getSettingsManager().getSettings()).provider === 'claude' ? 'claude' : 'ollama');
     // SECURITY (S1.1): keys come from the credential authority only: the
     // agent's own encrypted key, else the global Settings key.
     const resolvedApiKey = resolvedProvider === 'claude'
@@ -535,7 +535,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
     return streamChatClaude(
       reply,
       apiKey,
-      selectedModel || getSettingsManager().getSettings().claude?.model || 'claude-sonnet-4-5-20250929',
+      selectedModel || (await getSettingsManager().getSettings()).claude?.model || 'claude-sonnet-4-5-20250929',
       ollamaMessages,
       finalSystemPrompt,
       tools,
@@ -816,7 +816,7 @@ async function nonStreamChat(
   const tools = toolsRegistryNS.getToolsForAPI();
   if (provider === 'claude' && apiKey) {
     console.log('[Chat] 🤖 Using Claude API (non-stream)');
-    return streamChatClaude(reply, apiKey, model || getSettingsManager().getSettings().claude?.model || 'claude-sonnet-4-5-20250929', ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext, toolPolicy, agentId, maxTokens, memoryDrawers);
+    return streamChatClaude(reply, apiKey, model || (await getSettingsManager().getSettings()).claude?.model || 'claude-sonnet-4-5-20250929', ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext, toolPolicy, agentId, maxTokens, memoryDrawers);
   }
 
   // Gemini CLI provider (non-stream path)

@@ -8,9 +8,9 @@
  */
 import { getSettingsManager } from '../settings/index.js';
 
-export function anonymousPublicRoomsEnabled(): boolean {
+export async function anonymousPublicRoomsEnabled(): Promise<boolean> {
   try {
-    return getSettingsManager().getSettings().publicRooms?.allowAnonymous === true;
+    return (await getSettingsManager().getSettings()).publicRooms?.allowAnonymous === true;
   } catch {
     return false; // fail closed
   }

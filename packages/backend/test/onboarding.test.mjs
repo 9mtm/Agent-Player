@@ -103,7 +103,7 @@ test('fresh owner: not completed -> save steps -> complete -> completed', async 
   assert.equal(res.statusCode, 200, res.body);
   assert.equal(res.json().state.data.aiModel, 'qwen3.8:27b');
   assert.equal(res.json().state.data.ollamaUrl, 'http://127.0.0.1:11434');
-  const s = getSettingsManager().getSettings();
+  const s = (await getSettingsManager().getSettings());
   assert.equal(s.provider, 'local');
   assert.equal(s.local.model, 'qwen3.8:27b');
   assert.equal(s.local.url, 'http://127.0.0.1:11434');
@@ -175,13 +175,13 @@ test('provider step: API key stored encrypted, returned masked, never logged', a
   assert.ok(!settingsRow.includes(KEY));
   const answers = db.prepare('SELECT answers FROM onboarding_state WHERE user_id = ?').get('u-owner').answers;
   assert.ok(!answers.includes(KEY));
-  assert.equal(getSettingsManager().getSettings().claude.apiKey, KEY); // decryptable by the app
-  assert.equal(getSettingsManager().getSettings().provider, 'claude');
+  assert.equal((await getSettingsManager().getSettings()).claude.apiKey, KEY); // decryptable by the app
+  assert.equal((await getSettingsManager().getSettings()).provider, 'claude');
 
   // Sending the masked value back keeps the stored key.
   res = await post('/api/onboarding', { step: 'provider', data: { aiProvider: 'anthropic', apiKey: data.apiKeyMasked } }, OWNER);
   assert.equal(res.statusCode, 200, res.body);
-  assert.equal(getSettingsManager().getSettings().claude.apiKey, KEY);
+  assert.equal((await getSettingsManager().getSettings()).claude.apiKey, KEY);
 
   res = await get(OWNER);
   assert.ok(!res.body.includes(KEY));

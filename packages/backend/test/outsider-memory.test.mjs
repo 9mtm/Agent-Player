@@ -68,7 +68,7 @@ const policy = await import('../src/tools/channel-policy.ts');
 
 // CL-07: anonymous public-room access is off by default; on for this test.
 const { getSettingsManager } = await import('../src/settings/index.ts');
-getSettingsManager().updateSettings({ publicRooms: { allowAnonymous: true } });
+await getSettingsManager().updateSettings({ publicRooms: { allowAnonymous: true } });
 
 const app = Fastify();
 await app.register(chatRoutes);

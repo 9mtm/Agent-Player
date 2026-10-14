@@ -115,10 +115,10 @@ test('settings: API keys are masked; a masked or omitted key keeps the stored on
   assert.ok(mask.isMaskedSecret(shown));
 
   await call('PUT', '/api/settings', { claude: { apiKey: shown, model: 'm2' } });
-  assert.equal(getSettingsManager().getApiKey('claude'), SECRET);
+  assert.equal(await getSettingsManager().getApiKey('claude'), SECRET);
   await call('PUT', '/api/settings', { claude: { model: 'm3' } }); // UI sends apiKey undefined
-  assert.equal(getSettingsManager().getApiKey('claude'), SECRET);
-  assert.equal(getSettingsManager().getSettings().claude.model, 'm3');
+  assert.equal(await getSettingsManager().getApiKey('claude'), SECRET);
+  assert.equal((await getSettingsManager().getSettings()).claude.model, 'm3');
 });
 
 test('extension config: secret keys masked on read, kept on masked write', async () => {

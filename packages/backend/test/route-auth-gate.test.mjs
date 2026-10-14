@@ -353,7 +353,7 @@ test('anonymous public-chat post over the limit gets 429 (before any model call)
   const { getSettingsManager } = await import(join(backendDir, 'src/settings/index.ts'));
   const off = await app.inject({ method: 'POST', url: '/api/public-chat/rooms/room-pub/messages', payload: { content: 'hi' } });
   assert.equal(off.statusCode, 404, 'anonymous refused while the setting is off');
-  getSettingsManager().updateSettings({ publicRooms: { allowAnonymous: true } });
+  await getSettingsManager().updateSettings({ publicRooms: { allowAnonymous: true } });
   process.env.PUBLIC_CHAT_ANON_PER_IP_PER_MIN = '0';
   try {
     const res = await app.inject({ method: 'POST', url: '/api/public-chat/rooms/room-pub/messages', payload: { content: 'hi' } });
@@ -363,6 +363,6 @@ test('anonymous public-chat post over the limit gets 429 (before any model call)
     assert.equal(empty.statusCode, 400, 'missing content is a 400, not a crash');
   } finally {
     delete process.env.PUBLIC_CHAT_ANON_PER_IP_PER_MIN;
-    getSettingsManager().updateSettings({ publicRooms: { allowAnonymous: false } });
+    await getSettingsManager().updateSettings({ publicRooms: { allowAnonymous: false } });
   }
 });

@@ -147,19 +147,32 @@ export async function getAgentApiKey(agentId: string | undefined): Promise<strin
   }
 }
 
-/** Global provider key from the Settings page (stored encrypted). */
-export function getGlobalProviderApiKey(provider: ProviderName): string {
+/** Global provider key from the Settings page (stored encrypted; B2.2c: process driver). */
+export async function getGlobalProviderApiKey(provider: ProviderName): Promise<string> {
   if (provider === 'gemini') return '';
   try {
-    return getSettingsManager().getApiKey(provider) || '';
+    return (await getSettingsManager().getApiKey(provider)) || '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * SQLite only: getGlobalProviderApiKey, synchronously, for the SQLite-only
+ * onboarding wizard (B2.2c part 2). '' on PostgreSQL (fail closed: no key shown).
+ */
+export function getGlobalProviderApiKeySync(provider: ProviderName): string {
+  if (provider === 'gemini') return '';
+  try {
+    return getSettingsManager().getApiKeySync(provider) || '';
   } catch {
     return '';
   }
 }
 
 /** True when a global Settings key is configured for the provider. */
-export function hasGlobalProviderApiKey(provider: ProviderName): boolean {
-  return getGlobalProviderApiKey(provider).trim().length > 0;
+export async function hasGlobalProviderApiKey(provider: ProviderName): Promise<boolean> {
+  return (await getGlobalProviderApiKey(provider)).trim().length > 0;
 }
 
 /** Server environment key (operator-provided). */
@@ -204,7 +217,7 @@ export async function resolveProviderApiKey(provider: ProviderName, opts: Resolv
     if (legacy) return legacy;
   }
   if (!opts.noGlobal) {
-    const global = getGlobalProviderApiKey(provider);
+    const global = await getGlobalProviderApiKey(provider);
     if (global) return global;
   }
   if (opts.allowEnv) return getEnvProviderApiKey(provider);

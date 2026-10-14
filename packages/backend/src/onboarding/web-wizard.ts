@@ -18,7 +18,7 @@ import { getSettingsManager } from '../settings/index.js';
 import { DEFAULT_SETTINGS } from '../settings/types.js';
 import type { AgentSettings } from '../settings/types.js';
 import { isMaskedSecret, maskSecret } from '../credentials/secret-mask.js';
-import { getGlobalProviderApiKey } from '../credentials/authority.js';
+import { getGlobalProviderApiKeySync } from '../credentials/authority.js';
 
 export const TOTAL_STEPS = 6;
 
@@ -260,7 +260,7 @@ function writeRow(userId: string, row: Row, completedAt: 'now' | 'null' | 'keep'
 /** Masked view of the stored key for the chosen cloud provider (never the key itself). */
 function providerKeyView(provider: WizardProvider | undefined): { apiKeySet?: boolean; apiKeyMasked?: string } {
   if (provider !== 'anthropic' && provider !== 'openai') return {};
-  const key = getGlobalProviderApiKey(provider === 'anthropic' ? 'claude' : 'openai');
+  const key = getGlobalProviderApiKeySync(provider === 'anthropic' ? 'claude' : 'openai');
   return key ? { apiKeySet: true, apiKeyMasked: maskSecret(key) } : { apiKeySet: false };
 }
 
@@ -289,7 +289,7 @@ export async function saveWizardStep(
     if (step.step === 'profile') {
       await getRepositories().users.update(userId, { full_name: step.answers.userName });
     } else if (step.step === 'provider') {
-      applyProviderSettings(step.answers, step.apiKey);
+      await applyProviderSettings(step.answers, step.apiKey);
       // A previously saved ollamaUrl must not linger after switching provider.
       delete answers.ollamaUrl;
     }
@@ -310,7 +310,7 @@ export async function saveWizardStep(
   return getWizardState(userId);
 }
 
-function applyProviderSettings(answers: Omit<ProviderInput, 'apiKey'>, apiKey: string | undefined) {
+async function applyProviderSettings(answers: Omit<ProviderInput, 'apiKey'>, apiKey: string | undefined): Promise<void> {
   const manager = getSettingsManager();
   const updates: Partial<AgentSettings> = {};
   if (answers.aiProvider === 'ollama') {
@@ -324,7 +324,7 @@ function applyProviderSettings(answers: Omit<ProviderInput, 'apiKey'>, apiKey: s
     updates.provider = 'openai';
     updates.openai = { model: answers.aiModel, ...(apiKey ? { apiKey } : {}) } as AgentSettings['openai'];
   }
-  manager.updateSettings(updates);
+  await manager.updateSettings(updates);
 }
 
 export function completeWizard(userId: string, skipped: boolean): WizardState {

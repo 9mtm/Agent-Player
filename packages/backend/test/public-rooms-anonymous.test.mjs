@@ -64,7 +64,7 @@ const setAnon = (value, who = 'u-owner') => app.inject({
 });
 
 test('default: off — anonymous visitors get 404 everywhere; signed-in users unaffected', async () => {
-  assert.equal(anonymousPublicRoomsEnabled(), false);
+  assert.equal((await anonymousPublicRoomsEnabled()), false);
   for (const [method, url, payload] of anonRequests) {
     const res = await app.inject({ method, url, payload });
     assert.equal(res.statusCode, 404, `${method} ${url} -> ${res.statusCode}`);
@@ -75,14 +75,14 @@ test('default: off — anonymous visitors get 404 everywhere; signed-in users un
 test('only the owner can turn it on; non-booleans count as off', async () => {
   for (const who of ['u-admin', 'u-member']) assert.equal((await setAnon(true, who)).statusCode, 403, who);
   assert.equal((await app.inject({ method: 'PUT', url: '/api/settings', payload: { publicRooms: { allowAnonymous: true } } })).statusCode, 401);
-  assert.equal(anonymousPublicRoomsEnabled(), false);
+  assert.equal((await anonymousPublicRoomsEnabled()), false);
   assert.equal((await setAnon('true')).statusCode, 200);
-  assert.equal(anonymousPublicRoomsEnabled(), false, 'a string is not true');
+  assert.equal((await anonymousPublicRoomsEnabled()), false, 'a string is not true');
 });
 
 test('when the owner turns it on, anonymous visitors can read and post; off again closes it', async () => {
   assert.equal((await setAnon(true)).statusCode, 200);
-  assert.equal(anonymousPublicRoomsEnabled(), true);
+  assert.equal((await anonymousPublicRoomsEnabled()), true);
   const shown = await app.inject({ method: 'GET', url: '/api/settings', headers: bearer('u-owner') });
   assert.deepEqual(shown.json().settings.publicRooms, { allowAnonymous: true });
   assert.equal((await app.inject({ method: 'GET', url: '/api/public-chat/rooms/room-pub' })).statusCode, 200);
