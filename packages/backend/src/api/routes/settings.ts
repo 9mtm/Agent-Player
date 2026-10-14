@@ -3,11 +3,38 @@
  */
 
 import type { FastifyInstance } from 'fastify';
-import { handleError } from '../error-handler.js';
+import { handleError, sendInternalError } from '../error-handler.js';
 import { getSettingsManager } from '../../settings/index.js';
 import type { AgentSettings } from '../../settings/types.js';
 import { authorizeActiveRole, OWNER_OR_ADMIN } from '../../auth/route-guards.js';
 import { getGlobalProviderApiKey } from '../../credentials/authority.js';
+import { safeErrorFields } from '../../services/safe-error-log.js';
+import {
+  providerRejectedBody,
+  providerUnreachableBody,
+} from '../../services/provider-test-result.js';
+
+type TestProvider = 'claude' | 'openai';
+
+/**
+ * Send one test request to the provider (FU-04). The upstream body is never
+ * read: it can echo the key or account details. Returns null on success, or
+ * the client-safe failure body.
+ */
+async function runProviderTest(provider: TestProvider, url: string, init: RequestInit) {
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    console.warn('[Settings] connection test unreachable', { provider, ...safeErrorFields(error) });
+    return providerUnreachableBody();
+  }
+  await response.body?.cancel().catch(() => {});
+  if (response.ok) return null;
+  const body = providerRejectedBody(response.status);
+  console.warn('[Settings] connection test failed', { provider, status: body.status, code: body.code });
+  return body;
+}
 
 export async function settingsRoutes(fastify: FastifyInstance) {
   const settingsManager = getSettingsManager();
@@ -42,7 +69,6 @@ export async function settingsRoutes(fastify: FastifyInstance) {
           message: 'Settings updated successfully',
         };
       } catch (error: any) {
-        console.error('[Settings API] ❌ Update failed:', error);
         // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
         return handleError(reply, error, 'internal', '[Settings]');
       }
@@ -64,11 +90,12 @@ export async function settingsRoutes(fastify: FastifyInstance) {
             return reply.status(400).send({
               success: false,
               error: 'Claude API key not configured',
+              code: 'key_not_configured',
             });
           }
 
           // Test Claude API
-          const response = await fetch('https://api.anthropic.com/v1/messages', {
+          const failure = await runProviderTest('claude', 'https://api.anthropic.com/v1/messages', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -81,14 +108,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
               messages: [{ role: 'user', content: 'test' }],
             }),
           });
-
-          if (!response.ok) {
-            const error = await response.text();
-            return reply.status(400).send({
-              success: false,
-              error: `Claude API error: ${error}`,
-            });
-          }
+          if (failure) return reply.status(400).send(failure);
 
           return {
             success: true,
@@ -100,11 +120,12 @@ export async function settingsRoutes(fastify: FastifyInstance) {
             return reply.status(400).send({
               success: false,
               error: 'OpenAI API key not configured',
+              code: 'key_not_configured',
             });
           }
 
           // Test OpenAI API
-          const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          const failure = await runProviderTest('openai', 'https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -116,14 +137,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
               messages: [{ role: 'user', content: 'test' }],
             }),
           });
-
-          if (!response.ok) {
-            const error = await response.text();
-            return reply.status(400).send({
-              success: false,
-              error: `OpenAI API error: ${error}`,
-            });
-          }
+          if (failure) return reply.status(400).send(failure);
 
           return {
             success: true,
@@ -134,11 +148,11 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({
           success: false,
           error: 'Invalid provider',
+          code: 'invalid_provider',
         });
       } catch (error: any) {
-        console.error('[Settings API] ❌ Test failed:', error);
-        // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
-        return handleError(reply, error, 'internal', '[Settings]');
+        // SECURITY (H-ERR-01): fixed body, safe log fields only.
+        return sendInternalError(reply, '[Settings] POST /api/settings/test', error);
       }
     }
   );
