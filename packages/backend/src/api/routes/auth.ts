@@ -5,7 +5,7 @@
  * B1.6: accounts and sessions go through the identity repository
  * (repositories/identity-auth.ts) with the request's actor; the token is
  * still verified here first so the answers (and their order) stay the same.
- * Rate limits and the account lockout stay in front.
+ * Rate limits and the per-source sign-in throttle (S0-Q.20) stay in front.
  */
 
 import { actorOf } from '../../auth/auth-gate.js';
@@ -17,7 +17,7 @@ import type { Actor } from '../../repositories/actor.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { handleError } from '../error-handler.js';
 import {
-  checkAccountLock,
+  checkLoginThrottle,
   handleFailedLogin,
   handleSuccessfulLogin,
 } from '../../auth/account-lockout.js';
@@ -152,20 +152,24 @@ export async function authRoutes(fastify: FastifyInstance) {
       });
     }
 
-    // SECURITY: Check if account is locked (M-02)
-    const lockStatus = checkAccountLock(email);
-    if (lockStatus.isLocked) {
-      return reply.code(429).send({
-        error: 'Account locked',
-        code: 'account_locked',
-        message: `Too many failed login attempts. Please try again in ${lockStatus.remainingMinutes} minutes.`
+    // Client IP and User-Agent for attempt tracking (no trustProxy: socket address)
+    const ipAddress = request.ip || 'unknown';
+    const userAgent = request.headers['user-agent'];
+
+    // SECURITY (M-02, S0-Q.20): throttle per source, never lock the account.
+    // Checked before the password and without looking at the account, so the
+    // reply is the same for known and unknown emails.
+    const throttle = checkLoginThrottle(String(email), ipAddress);
+    if (throttle.throttled) {
+      const minutes = Math.max(1, Math.ceil(throttle.retryAfterSeconds / 60));
+      return reply.code(429).header('Retry-After', String(throttle.retryAfterSeconds)).send({
+        error: 'Too many attempts',
+        code: 'rate_limited',
+        message: `Too many failed sign-in attempts. Please try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`
       });
     }
 
     try {
-      // Get IP and User-Agent for attempt tracking
-      const ipAddress = request.ip;
-      const userAgent = request.headers['user-agent'];
       const denied = { error: 'Forbidden', code: 'account_inactive', message: 'Account access denied' };
       const invalid = { error: 'Unauthorized', message: 'Invalid email or password' };
 

@@ -23,7 +23,6 @@ const { registerHostCheck, getAllowedHosts } = await import('../src/middleware/h
 const { registerCsrfProtection } = await import('../src/middleware/csrf-protection.ts');
 const { isPublishedDefaultPassword } = await import('../src/auth/default-accounts.ts');
 const { generateToken } = await import('../src/auth/jwt.ts');
-const { lockAccount } = await import('../src/auth/account-lockout.ts');
 const bcrypt = (await import('bcryptjs')).default;
 
 const db = getDatabase();
@@ -90,18 +89,17 @@ test('login: published default password -> published_password', async () => {
   assert.equal(res.json().token, undefined);
 });
 
-test('login: locked account -> 429 account_locked', async () => {
-  lockAccount('member@example.test');
-  const res = await login(loginApp, 'member@example.test', strong);
-  assertCode(res, 429, 'account_locked');
-});
-
-test('login: five wrong passwords lock the account, even for the right password', async () => {
+// S0-Q.20: no account-wide lock any more; a throttled source gets the generic
+// rate_limited reply (account_locked is no longer sent), other sources are unaffected.
+test('login: five wrong passwords throttle that source (rate_limited), even for the right password', async () => {
   addUser('lock-1', 'lock@example.test');
+  const from = (remoteAddress, password) =>
+    loginApp.inject({ method: 'POST', url: '/api/auth/login', remoteAddress, payload: { email: 'lock@example.test', password } });
   for (let i = 0; i < 5; i++) {
-    assert.equal((await login(loginApp, 'lock@example.test', 'wrong-password-1')).statusCode, 401);
+    assert.equal((await from('10.0.0.9', 'wrong-password-1')).statusCode, 401);
   }
-  assertCode(await login(loginApp, 'lock@example.test', strong), 429, 'account_locked');
+  assertCode(await from('10.0.0.9', strong), 429, 'rate_limited');
+  assert.equal((await from('10.0.0.10', strong)).statusCode, 200);
 });
 
 test('login: too many attempts -> 429 rate_limited', async () => {
