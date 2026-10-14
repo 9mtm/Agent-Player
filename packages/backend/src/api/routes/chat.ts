@@ -10,7 +10,7 @@ import { chunkText, openSseStream } from '../../services/chat-sse.js';
 import { handleError } from '../error-handler.js';
 import { AgentRuntime, type Message, type Skill } from '../../agent/index.js';
 import { getSettingsManager } from '../../settings/index.js';
-import { getDatabase } from '../../db/index.js';
+import { one, sql } from '../../repositories/sql-steps.js';
 import { streamChatClaude } from './agentic-chat.js';
 import { createAgentToolsRegistry } from '../../tools/index.js';
 import { channelTurnFromHeaders, type ChannelToolPolicy } from '../../tools/channel-policy.js';
@@ -43,16 +43,13 @@ interface AgentConfig {
   api_key: string;
 }
 
-/** Load primary agent from agents_config, or first agent if none is primary */
-function getPrimaryAgent(): AgentConfig | null {
+/** Load primary agent from agents_config, or first agent if none is primary (process driver, B2.2b-4). */
+async function getPrimaryAgent(): Promise<AgentConfig | null> {
   try {
-    const db = getDatabase();
-    const row = db.prepare(
-      'SELECT * FROM agents_config WHERE is_primary = 1 LIMIT 1'
-    ).get() as AgentConfig | undefined;
+    const row = await sql().read(one<AgentConfig>('SELECT * FROM agents_config WHERE is_primary = 1 ORDER BY id LIMIT 1'));
     if (row) return row;
     // Fallback: first agent
-    return db.prepare('SELECT * FROM agents_config LIMIT 1').get() as AgentConfig | null;
+    return (await sql().read(one<AgentConfig>('SELECT * FROM agents_config ORDER BY created_at, id LIMIT 1'))) ?? null;
   } catch {
     return null;
   }
@@ -69,11 +66,10 @@ async function personalityBehavior(agentId: string): Promise<Behavior | null> {
   }
 }
 
-/** Load a specific agent by id */
-function getAgentById(id: string): AgentConfig | null {
+/** Load a specific agent by id (process driver, B2.2b-4) */
+async function getAgentById(id: string): Promise<AgentConfig | null> {
   try {
-    const db = getDatabase();
-    return db.prepare('SELECT * FROM agents_config WHERE id = ?').get(id) as AgentConfig | null;
+    return (await sql().read(one<AgentConfig>('SELECT * FROM agents_config WHERE id = ?', id))) ?? null;
   } catch {
     return null;
   }
@@ -246,7 +242,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const toolPolicy: ChannelToolPolicy | undefined = channelTurn?.policy;
 
     // Resolve agent config: specific agent > primary agent > fallback defaults
-    const agentConfig = agentId ? getAgentById(agentId) : getPrimaryAgent();
+    const agentConfig = agentId ? await getAgentById(agentId) : await getPrimaryAgent();
     const resolvedModel = model || agentConfig?.model || DEFAULT_MODEL;
     // CORE-01: the agent's current personality version sets temperature,
     // output length and the working-style prompt block. An explicit request

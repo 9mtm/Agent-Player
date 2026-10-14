@@ -18,7 +18,8 @@ import {
   writeSecrets, type McpServerRow, type McpServerView,
 } from './store.js';
 import { invalidateMcpTools } from './tools.js';
-import { grantedNamesWithPrefix, revokeMcpGrants, toolFingerprint, type RevokedGrant } from './grant-binding.js';
+import { grantedNamesWithPrefix, revokeMcpGrants, revokeMcpGrantsSync, toolFingerprint, type RevokedGrant } from './grant-binding.js';
+import { sql } from '../repositories/sql-steps.js';
 import { logAudit } from '../services/audit-logger.js';
 import { MCP_TOOL_PREFIX } from './config.js';
 
@@ -27,8 +28,11 @@ import { MCP_TOOL_PREFIX } from './config.js';
  * (stale-authorization guard: a re-created server, a changed target or a
  * changed/vanished tool never inherits an old grant).
  */
-function revokeAndAudit(server: { id: string; name: string }, toolNames: string[], reason: string, actor: string | null): RevokedGrant[] {
-  const revoked = revokeMcpGrants(toolNames);
+async function revokeAndAudit(server: { id: string; name: string }, toolNames: string[], reason: string, actor: string | null): Promise<RevokedGrant[]> {
+  return auditRevoked(server, await revokeMcpGrants(toolNames), reason, actor);
+}
+
+function auditRevoked(server: { id: string; name: string }, revoked: RevokedGrant[], reason: string, actor: string | null): RevokedGrant[] {
   if (revoked.length) {
     logAudit({
       event_type: 'authz.permission.change', event_category: 'authorization', severity: 'warning',
@@ -120,7 +124,7 @@ export async function createServer(input: ServerInput, ownerId: string): Promise
   `).run(id, name, description, transport, command, transport === 'stdio' ? JSON.stringify(args) : null, url, allowRemote ? 1 : 0,
     JSON.stringify(secrets.envNames), JSON.stringify(secrets.headerNames), secrets.credentialId, hash, timeoutMs, maxResultBytes, ownerId, randomUUID());
   // A former server with the same name never passes its grants on.
-  revokeAndAudit({ id, name }, grantedNamesWithPrefix(serverPrefix(name)), 'server_added', ownerId);
+  await revokeAndAudit({ id, name }, await grantedNamesWithPrefix(serverPrefix(name)), 'server_added', ownerId);
   return serverView(getServerRow(id)!);
 }
 
@@ -176,7 +180,7 @@ export async function updateServer(id: string, input: ServerInput, ownerId: stri
     const db = getDatabase();
     db.prepare(`UPDATE mcp_servers SET generation = ?, status = CASE WHEN enabled = 1 THEN 'enabled' ELSE status END WHERE id = ?`).run(randomUUID(), id);
     db.prepare('DELETE FROM mcp_server_tools WHERE server_id = ?').run(id);
-    revokedGrants = revokeAndAudit(row, grantedNamesWithPrefix(serverPrefix(row.name)), 'target_changed', ownerId);
+    revokedGrants = await revokeAndAudit(row, await grantedNamesWithPrefix(serverPrefix(row.name)), 'target_changed', ownerId);
   }
   await closeConnection(id);
   invalidateMcpTools();
@@ -217,7 +221,7 @@ export async function deleteServer(id: string, actor: string | null = null): Pro
   const row = getServerRow(id);
   if (!row) throw new McpPolicyError('MCP server not found', 404, 'not_found');
   await closeConnection(id);
-  const revokedGrants = revokeAndAudit(row, grantedNamesWithPrefix(serverPrefix(row.name)), 'server_deleted', actor);
+  const revokedGrants = await revokeAndAudit(row, await grantedNamesWithPrefix(serverPrefix(row.name)), 'server_deleted', actor);
   getDatabase().prepare('DELETE FROM mcp_servers WHERE id = ?').run(id);
   await deleteSecrets(row.secret_credential_id);
   invalidateMcpTools();
@@ -291,10 +295,16 @@ export async function refreshServer(id: string, actor: string | null = null): Pr
   const fingerprints = new Map(keep.map((k) => [k.registry, toolFingerprint({ serverId: id, generation: row.generation, toolName: k.tool, inputSchema: k.schema, annotations: k.annotations, title: k.title, description: k.description })]));
   // Grants of tools that vanished or changed are removed (a changed tool needs a fresh grant).
   const stale = new Set(oldTools.filter((t) => !t.fingerprint || fingerprints.get(t.registry_name) !== t.fingerprint).map((t) => t.registry_name));
-  for (const name of grantedNamesWithPrefix(serverPrefix(row.name))) if (!fingerprints.has(name)) stale.add(name);
+  for (const name of await grantedNamesWithPrefix(serverPrefix(row.name))) if (!fingerprints.has(name)) stale.add(name);
   let revokedGrants: RevokedGrant[] = [];
+  // Grants and bindings are on the process driver; MCP discovery is SQLite
+  // (B2.2c). On PostgreSQL the grants are revoked first (their own
+  // transaction; a later failure leaves them revoked: fail closed); on
+  // SQLite in the same transaction as the tool rows, as before.
+  const grantsOnPg = sql().dialect === 'postgres';
+  if (grantsOnPg) revokedGrants = await revokeAndAudit(row, [...stale], 'tools_changed_on_refresh', actor);
   db.transaction(() => {
-    revokedGrants = revokeAndAudit(row, [...stale], 'tools_changed_on_refresh', actor);
+    if (!grantsOnPg) revokedGrants = auditRevoked(row, revokeMcpGrantsSync([...stale]), 'tools_changed_on_refresh', actor);
     db.prepare('DELETE FROM mcp_server_tools WHERE server_id = ?').run(id);
     const ins = db.prepare(`INSERT INTO mcp_server_tools (server_id, tool_name, registry_name, title, description, input_schema, annotations, requires_approval, fingerprint)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);

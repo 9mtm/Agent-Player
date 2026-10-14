@@ -12,7 +12,7 @@ import {
   type Task,
   type MessageType,
 } from '../../multi-agent/index.js';
-import { getDatabase } from '../../db/index.js';
+import { one, sql } from '../../repositories/sql-steps.js';
 import { createAgentToolsRegistry } from '../../tools/index.js';
 import { UNKNOWN_PRINCIPAL } from '../../tools/grants.js';
 import { ContractValidationError, storeTaskContract, validateContract, type TaskContract } from '../../services/task-contracts.js';
@@ -276,9 +276,10 @@ export async function multiAgentRoutes(fastify: FastifyInstance): Promise<void> 
     const isOwner = request.authUser?.role === 'owner';
     let assignee: { id: string; auto_approve_tasks: number } | undefined;
     if (body.assignedTo) {
-      assignee = getDatabase().prepare(
-        `SELECT id, auto_approve_tasks FROM agents_config WHERE id = ? OR name = ? LIMIT 1`
-      ).get(body.assignedTo, body.assignedTo) as { id: string; auto_approve_tasks: number } | undefined;
+      // agents_config on the process driver (B2.2b-4); an id match wins over a name match.
+      assignee = await sql().read(one<{ id: string; auto_approve_tasks: number }>(
+        `SELECT id, auto_approve_tasks FROM agents_config WHERE id = ? OR name = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id LIMIT 1`,
+        body.assignedTo, body.assignedTo, body.assignedTo));
     }
 
     // R1: validate the contract before anything is created. Allowed tools

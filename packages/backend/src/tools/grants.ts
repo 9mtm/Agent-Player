@@ -34,7 +34,7 @@ import { forUpdate, nowText } from '../db/pg/dialect.js';
 import type { Tool, ToolResult } from './types.js';
 import { isToolExecClass } from './exec-policy.js';
 import { isMcpToolName, NO_MCP_AGENTS, normalizeToolNameInput } from '../mcp-client/config.js';
-import { currentMcpTool, isMcpGrantBound, writeMcpBindings } from '../mcp-client/grant-binding.js';
+import { currentMcpTool, isMcpGrantBoundStep, writeMcpBindingsStep } from '../mcp-client/grant-binding.js';
 
 export interface GrantScopes {
   /** Allowed destinations for a send/call tool (chat ids, channels, numbers). */
@@ -191,8 +191,8 @@ function* readGrantRows(agentId: string): Step<Map<string, GrantScopes | null>> 
     }
     // M1: an MCP grant only counts while bound to the tool's current server
     // instance + fingerprint (a re-created server or changed tool needs a fresh grant).
-    // (MCP bindings are still SQLite-only: mcp-client/grant-binding.ts.)
-    if (isMcpToolName(row.tool_name) && !isMcpGrantBound(agentId, row.tool_name)) continue;
+    // The binding is read with the grants (process driver; mcp-client/grant-binding.ts).
+    if (isMcpToolName(row.tool_name) && !(yield* isMcpGrantBoundStep(agentId, row.tool_name))) continue;
     tools.set(row.tool_name, scopes);
   }
   return tools;
@@ -397,10 +397,8 @@ function* setAgentGrantsStep(
       parentAgentId, by, agentId, ...(expected !== null ? [expected] : []));
     if (r.changes === 0) throw new GrantConflictError((yield* readProfile(agentId))?.version ?? 1);
     yield* writeGrantRows(agentId, entries, by);
-    // Last: MCP bindings are still SQLite-only (mcp-client/grant-binding.ts).
-    // On SQLite they are part of this transaction; on PostgreSQL a throw here
-    // still rolls the grant rows back.
-    writeMcpBindings(agentId, entries.map((e) => e.tool).filter(isMcpToolName), by);
+    // The MCP bindings in the same transaction as the grant rows (both drivers).
+    yield* writeMcpBindingsStep(agentId, entries.map((e) => e.tool).filter(isMcpToolName), by);
   });
   return { before, after: entries.map((e) => e.tool).sort(), parentAgentId, version: (yield* readProfile(agentId))?.version ?? 1 };
 }

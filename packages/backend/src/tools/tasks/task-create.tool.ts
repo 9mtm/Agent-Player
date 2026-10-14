@@ -11,7 +11,7 @@
 
 import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
 import { getOrchestrator } from '../../multi-agent/index.js';
-import { getDatabase } from '../../db/index.js';
+import { one, sql } from '../../repositories/sql-steps.js';
 
 export const taskCreateTool: Tool = {
   name: 'task_create',
@@ -66,10 +66,10 @@ export const taskCreateTool: Tool = {
 
     try {
       // Resolve agent name → id from agents_config
-      const db = getDatabase();
-      const agent = db.prepare(
-        `SELECT id, name, auto_approve_tasks FROM agents_config WHERE name = ? OR id = ? LIMIT 1`
-      ).get(assigned_to, assigned_to) as { id: string; name: string; auto_approve_tasks: number } | undefined;
+      // agents_config on the process driver (B2.2b-4); an id match wins over a name match.
+      const agent = await sql().read(one<{ id: string; name: string; auto_approve_tasks: number }>(
+        `SELECT id, name, auto_approve_tasks FROM agents_config WHERE name = ? OR id = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id LIMIT 1`,
+        assigned_to, assigned_to, assigned_to));
 
       if (!agent) {
         return {
