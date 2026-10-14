@@ -10,8 +10,8 @@
  *                              list: owner/admin
  *
  * Agent runs and channel turns have no identity access. Password hashes never
- * leave this layer. Not yet here (B1-rest): register/login/logout/password
- * (routes/auth.ts, token based), teams and invitations (routes/team.ts).
+ * leave this layer. Accounts and sessions (register/login/logout/password)
+ * are in identity-auth.ts, teams and invitations in teams.ts (B1.6).
  *
  * SQLite implementation over db/repositories/users.ts and the users table.
  */
@@ -20,6 +20,8 @@ import type { Actor } from './actor.js';
 import { ScopeError, isAdminOrOwner, requireAccount, requireAdmin, requireMember } from './scope.js';
 import { getDatabase, getRepositories } from '../db/index.js';
 import type { User } from '../db/repositories/users.js';
+import { sqliteIdentityAuth, type IdentityAuthRepository } from './identity-auth.js';
+import { sqliteTeams, type TeamsRepository } from './teams.js';
 
 export type SafeUser = Omit<User, 'password_hash'>;
 
@@ -50,7 +52,7 @@ export interface ProfileUpdate {
   timezone: string | null;
 }
 
-export interface IdentityRepository {
+export interface IdentityRepository extends IdentityAuthRepository, TeamsRepository {
   /** The account itself (safe fields); null when it no longer exists or is not active. */
   self(actor: Actor | null | undefined): Promise<SafeUser | null>;
   profile(actor: Actor | null | undefined): Promise<ProfileRow | null>;
@@ -69,6 +71,9 @@ function selfId(actor: Actor | null | undefined): string {
 }
 
 export const sqliteIdentity: IdentityRepository = {
+  ...sqliteIdentityAuth,
+  ...sqliteTeams,
+
   async self(actor) {
     const user = users().findById(selfId(actor));
     if (!user || (user as any).status !== 'active') return null;

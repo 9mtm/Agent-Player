@@ -441,6 +441,66 @@ test('identity: scope matrix', async () => {
   checks += 2;
 });
 
+test('identity (accounts, sessions, teams): scope matrix', async () => {
+  const R = repositories.identity;
+  const strong = () => ({ valid: true });
+  //                                                                   owner admin user guest other agent outsdr service none
+  const SELF                                                        = ['ok', 'ok', 'ok', 'ok', 'ok', 403, 403, 403, 401];
+  await row('identity.creatableRoles', (a) => R.creatableRoles(a), ADMIN_UP);
+  await row('identity.createAccount(missing fields)', (a) => R.createAccount(a, {}, strong), ADMIN_UP);
+  await row('identity.endSessions', (a) => R.endSessions(a), SELF);
+  await row('identity.changePassword(wrong current)', (a) => R.changePassword(a, 'wrong', 'Another-Strong-Pass-1!'), SELF);
+  // teams: rs-user owns team T
+  const T = (await R.createTeam(ACTORS.user, { name: 'Scope team' })).id;
+  const ONLY_TEAM_OWNER                                             = [403, 403, 'ok', 403, 403, 403, 403, 403, 401];
+  await row('identity.teams', (a) => R.teams(a), MEMBERS);
+  await row('identity.createTeam(no name)', (a) => R.createTeam(a, { name: ' ' }), MEMBERS);
+  await row('identity.team(T)', (a) => R.team(a, T), ONLY_TEAM_OWNER);
+  await row('identity.updateTeam(T)', (a) => R.updateTeam(a, T, {}), ONLY_TEAM_OWNER);
+  await row('identity.members(T)', (a) => R.members(a, T), ONLY_TEAM_OWNER);
+  await row('identity.teamInvitations(T)', (a) => R.teamInvitations(a, T), ONLY_TEAM_OWNER);
+  await row('identity.invite(T, invalid role)', (a) => R.invite(a, T, { email: 'x@example.test', role: 'owner' }), MEMBERS);
+  await row('identity.invite(T)', (a, k) => R.invite(a, T, { email: `invitee-${k}@example.test`, role: 'user' }), ONLY_TEAM_OWNER);
+  await row('identity.myInvitations', (a) => R.myInvitations(a), MEMBERS);
+  await row('identity.acceptInvitation(missing)', (a) => R.acceptInvitation(a, 'missing'), [404, 404, 404, 403, 404, 403, 403, 403, 401]);
+  await row('identity.cancelInvitation(missing)', (a) => R.cancelInvitation(a, 'missing'), [404, 404, 404, 403, 404, 403, 403, 403, 401]);
+  await row('identity.removeMember(T, not a member)', (a) => R.removeMember(a, T, 'rs-other'), [403, 403, 404, 403, 403, 403, 403, 403, 401]);
+  await row('identity.setMemberRole(T, not a member)', (a) => R.setMemberRole(a, T, 'rs-other', 'user'), [403, 403, 404, 403, 403, 403, 403, 403, 401]);
+  await row('identity.deleteTeam(missing)', (a) => R.deleteTeam(a, 'missing-team'), [404, 404, 404, 403, 404, 403, 403, 403, 401]);
+});
+
+test('identity: accounts sign in, teams invite/accept/remove with the actor as the acting user', async () => {
+  const R = repositories.identity;
+  const strong = () => ({ valid: true });
+  // admins cannot create admins; owners can; nobody creates an owner
+  await assert.rejects(() => R.createAccount(ACTORS.admin, { email: 'a2@example.test', username: 'a2', password: 'P', role: 'admin' }, strong), (e) => e.status === 403);
+  await assert.rejects(() => R.createAccount(ACTORS.owner, { email: 'o2@example.test', username: 'o2', password: 'P', role: 'owner' }, strong), (e) => e.status === 403);
+  const created = await R.createAccount(ACTORS.owner, { email: 'new-user@example.test', username: 'new-user', password: 'Strong-Test-Pass-1!' }, strong);
+  assert.equal(created.role, 'user');
+  assert.equal(created.password_hash, undefined, 'no password hash leaves the repository');
+  assert.equal((await R.signIn('nobody@example.test', 'x')).status, 'unknown');
+  assert.equal((await R.signIn('new-user@example.test', 'wrong')).status, 'bad_password');
+  const ok = await R.signIn('new-user@example.test', 'Strong-Test-Pass-1!');
+  assert.equal(ok.status, 'ok');
+  assert.ok(ok.token && ok.user.password_hash === undefined);
+  // team flow: rs-user invites rs-other, rs-other accepts with the token
+  const team = await R.createTeam(ACTORS.user, { name: 'Flow team', description: ' d ' });
+  const { invitation, mail } = await R.invite(ACTORS.user, team.id, { email: 'rs-other@example.test', role: 'user' });
+  assert.equal(mail.to, 'rs-other@example.test');
+  assert.ok((await R.myInvitations(ACTORS.other)).some((i) => i.id === invitation.id));
+  await R.acceptInvitation(ACTORS.other, invitation.token);
+  const members = await R.members(ACTORS.other, team.id);
+  assert.deepEqual(members.map((m) => m.user_id).sort(), ['rs-other', 'rs-user']);
+  assert.ok('name' in members[0] && 'avatar' in members[0], 'member rows keep their name/avatar fields');
+  await assert.rejects(() => R.updateTeam(ACTORS.other, team.id, { name: 'x' }), (e) => e instanceof ScopeError && e.status === 403);
+  await assert.rejects(() => R.removeMember(ACTORS.other, team.id, 'rs-user'), (e) => e instanceof ScopeError && e.status === 403);
+  await R.removeMember(ACTORS.user, team.id, 'rs-other');
+  await assert.rejects(() => R.team(ACTORS.other, team.id), (e) => e instanceof ScopeError && e.status === 403);
+  await assert.rejects(() => R.deleteTeam(ACTORS.other, team.id), (e) => e instanceof ScopeError && e.status === 403);
+  await R.deleteTeam(ACTORS.user, team.id);
+  checks += 16;
+});
+
 // --- transactions ----------------------------------------------------------------
 
 test('withTransaction: one actor, commit or roll back, synchronous on SQLite', async () => {
@@ -461,7 +521,8 @@ test('withTransaction: one actor, commit or roll back, synchronous on SQLite', a
 test('routes: no user id from body/query in the moved routes; SYSTEM_ACTOR never in routes', () => {
   const routesDir = join(backendDir, 'src/api/routes');
   const moved = ['task-runs.ts', 'agent-grants.ts', 'agent-personality.ts', 'credentials.ts', 'audit.ts', 'memory-files.ts', 'profile.ts',
-    'agents-config.ts', 'memory.ts', 'memory-learning.ts', 'memory-import.ts'];
+    'agents-config.ts', 'memory.ts', 'memory-learning.ts', 'memory-import.ts',
+    'auth.ts', 'team.ts'];
   for (const f of moved) {
     const src = readFileSync(join(routesDir, f), 'utf8');
     assert.doesNotMatch(src, /(body|query)\)?(\s+as\s+[^;]*?)?\??\.userId\b/, `${f} reads a user id from the request`);

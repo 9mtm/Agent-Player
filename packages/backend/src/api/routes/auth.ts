@@ -1,23 +1,38 @@
 /**
  * Authentication Routes
  * Login, Register, JWT token management
+ *
+ * B1.6: accounts and sessions go through the identity repository
+ * (repositories/identity-auth.ts) with the request's actor; the token is
+ * still verified here first so the answers (and their order) stay the same.
+ * Rate limits and the account lockout stay in front.
  */
 
 import { actorOf } from '../../auth/auth-gate.js';
 import type { FastifyInstance } from 'fastify';
 import { repositories } from '../../repositories/index.js';
-import { sendScopeError } from '../../repositories/scope.js';
-import { getRepositories } from '../../db/index.js';
-import { generateToken, getUserIdFromRequest } from '../../auth/jwt.js';
-import { handleError, handleValidationError } from '../error-handler.js';
+import { AccountError } from '../../repositories/identity-auth.js';
+import { ScopeError, actorOrReply, requireAdmin, sendScopeError } from '../../repositories/scope.js';
+import type { Actor } from '../../repositories/actor.js';
+import { getUserIdFromRequest } from '../../auth/jwt.js';
+import { handleError } from '../error-handler.js';
 import {
   checkAccountLock,
   handleFailedLogin,
   handleSuccessfulLogin,
 } from '../../auth/account-lockout.js';
 import { logAuthEvent } from '../../services/audit-logger.js';
-import { isSystemAccount, isPublishedDefaultPassword } from '../../auth/default-accounts.js';
 import { authorizeActiveRole, OWNER_OR_ADMIN } from '../../auth/route-guards.js';
+
+/** Owner/admin actor (central rule), with this route's existing 403 wording. */
+function ownerOrAdmin(actor: Actor | null | undefined): Actor {
+  try {
+    return requireAdmin(actor);
+  } catch (err) {
+    if (err instanceof ScopeError && err.status === 403) throw new ScopeError(403, 'This action requires an active owner or admin account');
+    throw err;
+  }
+}
 
 /**
  * SECURITY: Validate password strength
@@ -69,7 +84,7 @@ function validatePasswordStrength(password: string): { valid: boolean; error?: s
 }
 
 export async function authRoutes(fastify: FastifyInstance) {
-  const repos = getRepositories();
+  const identity = () => repositories.identity;
 
   // SECURITY: Rate limiting configuration for auth endpoints
   const authRateLimit = {
@@ -94,81 +109,28 @@ export async function authRoutes(fastify: FastifyInstance) {
   fastify.post('/api/auth/register', {
     config: { rateLimit: authRateLimit }
   }, async (request, reply) => {
-    const creatorId = authorizeActiveRole(request, reply, OWNER_OR_ADMIN);
-    if (creatorId === null) return reply;
-    const creator = repos.users.findById(creatorId);
+    // Token check with the existing answers (401 bad token, 403 inactive or
+    // not owner/admin), then the central rule on the request's actor.
+    if (authorizeActiveRole(request, reply, OWNER_OR_ADMIN) === null) return reply;
+    const creator = actorOrReply(reply, actorOf(request), ownerOrAdmin);
+    if (creator === null) return reply;
 
-    const { email, username, password, full_name } = (request.body ?? {}) as any;
-    const role = (request.body as any)?.role ?? 'user';
-    const allowedRoles = creator?.role === 'owner' ? ['admin', 'user', 'guest'] : ['user', 'guest'];
-    if (typeof role !== 'string' || !allowedRoles.includes(role)) {
-      return reply.code(403).send({
-        error: 'Forbidden',
-        message: `You can create these roles: ${allowedRoles.join(', ')}`
-      });
-    }
-
-    // Validation
-    if (!email || !username || !password) {
-      return reply.code(400).send({
-        error: 'Missing required fields',
-        message: 'email, username, and password are required'
-      });
-    }
-
-    // SECURITY: Validate password strength
-    const passwordValidation = validatePasswordStrength(password);
-    if (!passwordValidation.valid) {
-      return reply.code(400).send({
-        error: 'Weak password',
-        message: passwordValidation.error
-      });
-    }
-
-    // Check if email already exists
-    const existingEmail = repos.users.findByEmail(email);
-    if (existingEmail) {
-      return reply.code(409).send({
-        error: 'Email already exists',
-        message: 'A user with this email already exists'
-      });
-    }
-
-    // Check if username already exists
-    const existingUsername = repos.users.findByUsername(username);
-    if (existingUsername) {
-      return reply.code(409).send({
-        error: 'Username already exists',
-        message: 'A user with this username already exists'
-      });
-    }
-
+    let user;
     try {
-      // Create user
-      const created = await repos.users.create({
-        email,
-        username,
-        password,
-        full_name,
-        role: role as 'admin' | 'user' | 'guest'
-      });
-      // The account is created by an owner/admin, who vouches for the address
-      // (there is no e-mail verification flow); login requires email_verified.
-      repos.users.markEmailVerified(created.id);
-      const user = repos.users.findById(created.id) ?? created;
-
-      // SECURITY: Log successful registration (L-02)
-      logAuthEvent('auth.register', request, creatorId, username, true);
-
-      // Return the new user (without password). No token: the caller is the
-      // owner/admin, not the new user.
-      return reply.code(201).send({
-        user: repos.users.getSafeUser(user)
-      });
-    } catch (error: any) {
+      user = await identity().createAccount(creator, (request.body ?? {}) as Record<string, unknown>, validatePasswordStrength);
+    } catch (err) {
+      if (err instanceof AccountError) return reply.code(err.status).send({ error: err.error, message: err.message });
+      if (err instanceof ScopeError) return sendScopeError(reply, err);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
-      return handleError(reply, error, 'internal', '[Auth] Registration failed');
+      return handleError(reply, err, 'internal', '[Auth] Registration failed');
     }
+
+    // SECURITY: Log successful registration (L-02)
+    logAuthEvent('auth.register', request, creator.userId, user.username, true);
+
+    // Return the new user (without password). No token: the caller is the
+    // owner/admin, not the new user.
+    return reply.code(201).send({ user });
   });
 
   /**
@@ -178,7 +140,7 @@ export async function authRoutes(fastify: FastifyInstance) {
   fastify.post('/api/auth/login', {
     config: { rateLimit: authRateLimit }
   }, async (request, reply) => {
-    const { email, password } = request.body as any;
+    const { email, password } = (request.body ?? {}) as any;
 
     // Validation
     if (!email || !password) {
@@ -201,94 +163,42 @@ export async function authRoutes(fastify: FastifyInstance) {
       // Get IP and User-Agent for attempt tracking
       const ipAddress = request.ip;
       const userAgent = request.headers['user-agent'];
+      const denied = { error: 'Forbidden', message: 'Account access denied' };
+      const invalid = { error: 'Unauthorized', message: 'Invalid email or password' };
 
-      // Find user
-      const user = repos.users.findByEmail(email);
-
-      if (!user) {
-        // SECURITY: Track failed attempt (M-02)
-        const result = handleFailedLogin(email, ipAddress, userAgent);
-
-        // SECURITY: Log failed login attempt (L-02)
-        logAuthEvent('auth.login.failed', request, undefined, email, false, 'Invalid credentials');
-
-        // SECURITY: Use generic "Unauthorized" message (M-12)
-        return reply.code(401).send({
-          error: 'Unauthorized',
-          message: 'Invalid email or password'
-        });
+      const result = await identity().signIn(email, password);
+      switch (result.status) {
+        case 'unknown':
+          // SECURITY: Track + log the failed attempt (M-02, L-02); generic message (M-12)
+          handleFailedLogin(email, ipAddress, userAgent);
+          logAuthEvent('auth.login.failed', request, undefined, email, false, 'Invalid credentials');
+          return reply.code(401).send(invalid);
+        case 'system':
+          // SECURITY (S0-Q.2): internal system accounts can never log in
+          logAuthEvent('auth.login.failed', request, result.userId, result.username, false, 'System account login refused');
+          return reply.code(403).send(denied);
+        case 'inactive':
+        case 'unverified':
+          // SECURITY: generic "Forbidden" for account status / unverified e-mail (M-09, M-12)
+          return reply.code(403).send(denied);
+        case 'bad_password':
+          handleFailedLogin(email, ipAddress, userAgent);
+          logAuthEvent('auth.login.failed', request, result.userId, result.username, false, 'Invalid password');
+          return reply.code(401).send(invalid);
+        case 'published_password':
+          // SECURITY (S0-Q.2): passwords published in the source (old seed/demo accounts) are refused
+          logAuthEvent('auth.login.failed', request, result.userId, result.username, false, 'Published default password refused');
+          return reply.code(403).send({
+            error: 'Forbidden',
+            message: 'This account uses a default password and is disabled. Reset the password from the CLI.'
+          });
+        case 'ok':
+          // SECURITY: Track successful login and clear failed attempts (M-02); log it (L-02)
+          handleSuccessfulLogin(email, ipAddress, userAgent);
+          logAuthEvent('auth.login', request, result.user.id, result.user.username, true);
+          // The token carries token_version for invalidation support (H-01)
+          return { user: result.user, token: result.token };
       }
-
-      // SECURITY (S0-Q.2): internal system accounts can never log in
-      if (isSystemAccount(user.id)) {
-        logAuthEvent('auth.login.failed', request, user.id, user.username, false, 'System account login refused');
-        return reply.code(403).send({
-          error: 'Forbidden',
-          message: 'Account access denied'
-        });
-      }
-
-      // Check if user is active
-      if (user.status !== 'active') {
-        // SECURITY: Use generic "Forbidden" for account status (M-12)
-        return reply.code(403).send({
-          error: 'Forbidden',
-          message: 'Account access denied'
-        });
-      }
-
-      // SECURITY: Check if email is verified (M-09)
-      if (!user.email_verified) {
-        // SECURITY: Use generic "Forbidden" message (M-12)
-        return reply.code(403).send({
-          error: 'Forbidden',
-          message: 'Account access denied'
-        });
-      }
-
-      // Verify password
-      const isValid = await repos.users.verifyPassword(user, password);
-
-      if (!isValid) {
-        // SECURITY: Track failed attempt (M-02)
-        const result = handleFailedLogin(email, ipAddress, userAgent);
-
-        // SECURITY: Log failed login attempt (L-02)
-        logAuthEvent('auth.login.failed', request, user.id, user.username, false, 'Invalid password');
-
-        // SECURITY: Use generic "Unauthorized" message (M-12)
-        return reply.code(401).send({
-          error: 'Unauthorized',
-          message: 'Invalid email or password'
-        });
-      }
-
-      // SECURITY (S0-Q.2): passwords published in the source (old seed/demo accounts) are refused
-      if (isPublishedDefaultPassword(password)) {
-        logAuthEvent('auth.login.failed', request, user.id, user.username, false, 'Published default password refused');
-        return reply.code(403).send({
-          error: 'Forbidden',
-          message: 'This account uses a default password and is disabled. Reset the password from the CLI.'
-        });
-      }
-
-      // SECURITY: Track successful login and clear failed attempts (M-02)
-      handleSuccessfulLogin(email, ipAddress, userAgent);
-
-      // SECURITY: Log successful login (L-02)
-      logAuthEvent('auth.login', request, user.id, user.username, true);
-
-      // Update last login
-      repos.users.updateLastLogin(user.id);
-
-      // SECURITY: Generate JWT token with token_version for invalidation support (H-01)
-      const token = generateToken(user.id, user.token_version || 1);
-
-      // Return user (without password) and token
-      return {
-        user: repos.users.getSafeUser(user),
-        token
-      };
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Auth] Login failed');
@@ -314,23 +224,7 @@ export async function authRoutes(fastify: FastifyInstance) {
       // SECURITY: Use centralized JWT verification (M-06). S0-Q.9: also checks
       // token_version, and only active accounts count as signed in (the Next.js
       // server verifies its callers through this endpoint).
-      const userId = getUserIdFromRequest(request);
-
-      // Get user
-      const user = repos.users.findById(userId);
-
-      if (!user || (user as any).status !== 'active') {
-        // SECURITY: Use "Unauthorized" for consistency (M-12)
-        return reply.code(401).send({
-          error: 'Unauthorized',
-          message: 'Invalid or expired session'
-        });
-      }
-
-      // Return user (without password)
-      return {
-        user: repos.users.getSafeUser(user)
-      };
+      getUserIdFromRequest(request);
     } catch (error: any) {
       // SECURITY: Standardize error messages (M-12)
       if (error.name === 'TokenExpiredError') {
@@ -345,6 +239,23 @@ export async function authRoutes(fastify: FastifyInstance) {
         message: 'Invalid session'
       });
     }
+
+    let user = null;
+    try {
+      user = await identity().self(actorOf(request));
+    } catch (err) {
+      if (!(err instanceof ScopeError)) throw err;
+    }
+    if (!user) {
+      // SECURITY: Use "Unauthorized" for consistency (M-12)
+      return reply.code(401).send({
+        error: 'Unauthorized',
+        message: 'Invalid or expired session'
+      });
+    }
+
+    // Return user (without password)
+    return { user };
   });
 
   /**
@@ -354,22 +265,23 @@ export async function authRoutes(fastify: FastifyInstance) {
    * user are refused from now on (all devices are signed out).
    */
   fastify.post('/api/auth/logout', async (request, reply) => {
-    let userId: string;
+    const invalidSession = () => reply.code(401).send({
+      error: 'Unauthorized',
+      message: 'Invalid session'
+    });
     try {
-      userId = getUserIdFromRequest(request);
+      getUserIdFromRequest(request);
     } catch {
-      return reply.code(401).send({
-        error: 'Unauthorized',
-        message: 'Invalid session'
-      });
+      return invalidSession();
     }
 
     try {
-      const user = repos.users.findById(userId);
-      repos.users.incrementTokenVersion(userId);
-      logAuthEvent('auth.logout', request, userId, user?.username, true);
+      const actor = actorOf(request);
+      const { username } = await identity().endSessions(actor);
+      logAuthEvent('auth.logout', request, actor?.userId, username, true);
       return { success: true };
     } catch (error: any) {
+      if (error instanceof ScopeError) return invalidSession();
       return handleError(reply, error, 'internal', '[Auth] Logout failed');
     }
   });
@@ -390,16 +302,17 @@ export async function authRoutes(fastify: FastifyInstance) {
       });
     }
 
-    let userId: string;
+    const invalidSession = () => reply.code(401).send({
+      error: 'Unauthorized',
+      message: 'Invalid session'
+    });
     try {
-      userId = getUserIdFromRequest(request);
+      // F-02: includes token_version, so a logged-out token cannot change the password.
+      getUserIdFromRequest(request);
     } catch {
-      return reply.code(401).send({
-        error: 'Unauthorized',
-        message: 'Invalid session'
-      });
+      return invalidSession();
     }
-    const { currentPassword, newPassword } = request.body as any;
+    const { currentPassword, newPassword } = (request.body ?? {}) as any;
 
     if (!currentPassword || !newPassword) {
       return reply.code(400).send({
@@ -418,41 +331,25 @@ export async function authRoutes(fastify: FastifyInstance) {
     }
 
     try {
-      // SECURITY: userId comes from the full token check above (M-06; F-02:
-      // includes token_version, so a logged-out token cannot change the password).
-      // Get user
-      const user = repos.users.findById(userId);
-
-      if (!user) {
-        // SECURITY: Use "Unauthorized" for consistency (M-12)
-        return reply.code(401).send({
-          error: 'Unauthorized',
-          message: 'Invalid session'
-        });
-      }
-
-      // Verify current password
-      const isValid = await repos.users.verifyPassword(user, currentPassword);
-
-      if (!isValid) {
-        // SECURITY: Use "Unauthorized" for consistency (M-12)
+      const result = await identity().changePassword(actorOf(request), currentPassword, newPassword);
+      // SECURITY: Use "Unauthorized" for consistency (M-12)
+      if (result.status === 'no_user') return invalidSession();
+      if (result.status === 'wrong_password') {
         return reply.code(401).send({
           error: 'Unauthorized',
           message: 'Current password is incorrect'
         });
       }
 
-      // Update password
-      await repos.users.updatePassword(user.id, newPassword);
-
       // SECURITY: Log password change (L-02)
-      logAuthEvent('auth.password.change', request, user.id, user.username, true);
+      logAuthEvent('auth.password.change', request, result.userId, result.username, true);
 
       return {
         success: true,
         message: 'Password updated successfully'
       };
     } catch (error: any) {
+      if (error instanceof ScopeError) return invalidSession();
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Auth] Password change failed');
     }
