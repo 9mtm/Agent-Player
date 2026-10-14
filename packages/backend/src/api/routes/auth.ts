@@ -3,7 +3,10 @@
  * Login, Register, JWT token management
  */
 
+import { actorOf } from '../../auth/auth-gate.js';
 import type { FastifyInstance } from 'fastify';
+import { repositories } from '../../repositories/index.js';
+import { sendScopeError } from '../../repositories/scope.js';
 import { getRepositories } from '../../db/index.js';
 import { generateToken, getUserIdFromRequest } from '../../auth/jwt.js';
 import { handleError, handleValidationError } from '../error-handler.js';
@@ -463,7 +466,11 @@ export async function authRoutes(fastify: FastifyInstance) {
     // SECURITY: Require authentication (M-15)
     getUserIdFromRequest(request);
 
-    const counts = repos.users.countByRole();
+    // B1-core: identity repository (member accounts only).
+    let counts: Record<string, number>;
+    try {
+      counts = await repositories.identity.countByRole(actorOf(request));
+    } catch (err) { return sendScopeError(reply, err); }
 
     return {
       total: Object.values(counts).reduce((sum, count) => sum + count, 0),

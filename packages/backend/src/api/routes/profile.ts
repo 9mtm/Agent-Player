@@ -1,29 +1,16 @@
 import type { FastifyInstance } from 'fastify';
+import { actorOf } from '../../auth/auth-gate.js';
 import { getDatabase } from '../../db/index.js';
 import { getUserIdFromRequest as getAuthUserId } from '../../auth/jwt.js';
 import { handleError } from '../error-handler.js';
+import { repositories } from '../../repositories/index.js';
+import { ScopeError, sendScopeError } from '../../repositories/scope.js';
 import path from 'path';
 import { uploadsPath, uploadPathFromUrl } from '../../services/uploads.js';
 import fs from 'fs';
 import { randomBytes } from 'crypto';
 
 // SECURITY: Use centralized JWT verification from auth/jwt.ts
-
-interface ProfileRow {
-  id: string;
-  email: string;
-  username: string;
-  full_name: string | null;
-  bio: string;
-  company: string;
-  location: string;
-  website: string;
-  timezone: string;
-  profile_picture_url: string | null;
-  avatar_url: string | null;
-  role: string;
-  created_at: string;
-}
 
 function getUserIdFromRequest(request: any, reply: any): string | null {
   try {
@@ -40,21 +27,17 @@ export async function profileRoutes(fastify: FastifyInstance) {
       fastify.log.info('[Profile API] 🔍 GET /api/profile called');
 
       const userId = getUserIdFromRequest(request, reply);
-      fastify.log.info('[Profile API] 🔍 User ID from JWT:', userId);
+      fastify.log.info({ userId }, '[Profile API] 🔍 User ID from JWT');
 
       if (!userId) {
         fastify.log.error('[Profile API] ❌ Unauthorized - no user ID');
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      const db = getDatabase();
-      const row = db.prepare(`
-        SELECT id, email, username, full_name, bio, company, location, website, timezone,
-               profile_picture_url, avatar_url, role, created_at
-        FROM users WHERE id = ?
-      `).get(userId) as ProfileRow | undefined;
+      // B1-core: the account's own profile through the identity repository.
+      const row = await repositories.identity.profile(actorOf(request));
 
-      fastify.log.info('[Profile API] 🔍 Database row:', row);
+      fastify.log.info({ found: !!row }, '[Profile API] 🔍 Profile row loaded');
 
       if (!row) {
         fastify.log.error('[Profile API] ❌ User not found in database');
@@ -83,12 +66,12 @@ export async function profileRoutes(fastify: FastifyInstance) {
       };
 
       fastify.log.info('[Profile API] ✅ Returning profile');
-      fastify.log.info('[Profile API] 🔍 profile_picture_url:', row.profile_picture_url);
-      fastify.log.info('[Profile API] 🔍 avatar_url:', row.avatar_url);
+      fastify.log.info({ hasPicture: !!row.profile_picture_url, hasAvatar: !!row.avatar_url }, '[Profile API] 🔍 Profile images');
 
       return reply.send(response);
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
+      if (error instanceof ScopeError) return sendScopeError(reply, error);
       return handleError(reply, error, 'internal', '[Profile] Get profile failed');
     }
   });
@@ -113,38 +96,26 @@ export async function profileRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      const db = getDatabase();
       const { firstName, lastName, email, username, bio, company, location, website, timezone } = request.body;
 
       const fullName = [firstName || '', lastName || ''].filter(Boolean).join(' ') || null;
 
-      db.prepare(`
-        UPDATE users SET
-          full_name = COALESCE(?, full_name),
-          email = COALESCE(?, email),
-          username = COALESCE(?, username),
-          bio = COALESCE(?, bio),
-          company = COALESCE(?, company),
-          location = COALESCE(?, location),
-          website = COALESCE(?, website),
-          timezone = COALESCE(?, timezone),
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(
+      // B1-core: always the caller's own account (identity repository).
+      await repositories.identity.updateProfile(actorOf(request), {
         fullName,
-        email || null,
-        username || null,
-        bio ?? null,
-        company ?? null,
-        location ?? null,
-        website ?? null,
-        timezone ?? null,
-        userId
-      );
+        email: email || null,
+        username: username || null,
+        bio: bio ?? null,
+        company: company ?? null,
+        location: location ?? null,
+        website: website ?? null,
+        timezone: timezone ?? null,
+      });
 
       return reply.send({ success: true });
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
+      if (error instanceof ScopeError) return sendScopeError(reply, error);
       return handleError(reply, error, 'internal', '[Profile] Update profile failed');
     }
   });
@@ -208,7 +179,7 @@ export async function profileRoutes(fastify: FastifyInstance) {
           }
         } catch (err) {
           // File deletion failed - continue anyway to update database
-          fastify.log.warn('[Profile] Failed to delete file:', err);
+          fastify.log.warn({ err }, '[Profile] Failed to delete file');
         }
       }
 
