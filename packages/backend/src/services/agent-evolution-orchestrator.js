@@ -10,9 +10,12 @@
  * approval applies them. Evolution never enables or changes capabilities,
  * tool grants or permissions: capability ideas are returned as
  * `suggestedCapabilities` (informational, nothing is written).
+ *
+ * B2.2c: queries run on the process driver (repositories/sql-steps.ts);
+ * the SQLite SQL and row shapes are unchanged (booleans compared as 1).
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, one, run, sql } from '../repositories/sql-steps.js';
 import { analyzeAgentPerformance } from './agent-performance-analyzer.js';
 import { extractLearningInsights } from './agent-learning-engine.js';
 import { proposeDriftFromOutcomes } from './personality-evolution.js';
@@ -30,10 +33,8 @@ import {
  * @returns {Promise<Object>} Evolution result
  */
 export async function evolveAgent(agentId) {
-  const db = getDatabase();
-
   // Check if evolution is enabled for this agent
-  const config = db.prepare('SELECT * FROM agent_evolution_config WHERE agent_id = ?').get(agentId);
+  const config = await sql().read(one('SELECT * FROM agent_evolution_config WHERE agent_id = ?', agentId));
 
   if (!config || !config.enabled) {
     return {
@@ -257,9 +258,7 @@ function suggestedCapabilityName(insight) {
  * @returns {Promise<Object>}
  */
 export async function measureEvolutionImpact(evolutionId) {
-  const db = getDatabase();
-
-  const evolution = db.prepare('SELECT * FROM agent_evolution_history WHERE id = ?').get(evolutionId);
+  const evolution = await sql().read(one('SELECT * FROM agent_evolution_history WHERE id = ?', evolutionId));
 
   if (!evolution) {
     throw new Error(`Evolution ${evolutionId} not found`);
@@ -282,7 +281,7 @@ export async function measureEvolutionImpact(evolutionId) {
   const currentPerformance = captureBaselineMetric(performanceData);
 
   // Compare with baseline
-  const config = db.prepare('SELECT * FROM agent_evolution_config WHERE agent_id = ?').get(evolution.agent_id);
+  const config = await sql().read(one('SELECT * FROM agent_evolution_config WHERE agent_id = ?', evolution.agent_id));
 
   const performanceDelta = currentPerformance.composite - (evolution.performance_before || 0);
 
@@ -312,11 +311,11 @@ export async function measureEvolutionImpact(evolutionId) {
   }
 
   // Update evolution history with performance data
-  db.prepare(`
+  await sql().read(run(`
     UPDATE agent_evolution_history
     SET performance_before = ?, performance_after = ?
     WHERE id = ?
-  `).run(evolution.performance_before || currentPerformance.composite, currentPerformance.composite, evolutionId);
+  `, evolution.performance_before || currentPerformance.composite, currentPerformance.composite, evolutionId));
 
   return {
     evolutionId,
@@ -333,32 +332,30 @@ export async function measureEvolutionImpact(evolutionId) {
  * Get evolution history for an agent
  * @param {string} agentId
  * @param {Object} filters - {status, type, limit}
- * @returns {Array}
+ * @returns {Promise<Array>}
  */
-export function getEvolutionHistory(agentId, filters = {}) {
-  const db = getDatabase();
-
-  let sql = 'SELECT * FROM agent_evolution_history WHERE agent_id = ?';
+export async function getEvolutionHistory(agentId, filters = {}) {
+  let query = 'SELECT * FROM agent_evolution_history WHERE agent_id = ?';
   const params = [agentId];
 
   if (filters.status) {
-    sql += ' AND status = ?';
+    query += ' AND status = ?';
     params.push(filters.status);
   }
 
   if (filters.type) {
-    sql += ' AND evolution_type = ?';
+    query += ' AND evolution_type = ?';
     params.push(filters.type);
   }
 
-  sql += ' ORDER BY created_at DESC';
+  query += ' ORDER BY created_at DESC';
 
   if (filters.limit) {
-    sql += ' LIMIT ?';
+    query += ' LIMIT ?';
     params.push(filters.limit);
   }
 
-  const history = db.prepare(sql).all(...params);
+  const history = await sql().read(all(query, ...params));
 
   return history.map(h => ({
     ...h,
@@ -371,12 +368,10 @@ export function getEvolutionHistory(agentId, filters = {}) {
  * @returns {Promise<Array>}
  */
 export async function evolveAllAgents() {
-  const db = getDatabase();
-
-  // Get all agents with evolution enabled
-  const configs = db.prepare(`
-    SELECT agent_id FROM agent_evolution_config WHERE enabled = TRUE
-  `).all();
+  // Get all agents with evolution enabled (an integer 0/1 column on both drivers)
+  const configs = await sql().read(all(`
+    SELECT agent_id FROM agent_evolution_config WHERE enabled = 1
+  `));
 
   const results = [];
   for (const config of configs) {

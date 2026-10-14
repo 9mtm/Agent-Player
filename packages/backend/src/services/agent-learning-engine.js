@@ -4,9 +4,13 @@
  * Extracts insights from performance metrics and activity patterns
  * Generates actionable recommendations for agent improvement
  * Uses Multi-Tier Memory System for long-term learning
+ *
+ * B2.2c: every query runs on the process driver (repositories/sql-steps.ts).
+ * The SQLite SQL and row shapes are unchanged; booleans are bound as 0/1
+ * (the column is an integer on both drivers).
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, one, run, sql } from '../repositories/sql-steps.js';
 import { getMemoryStorage } from '../memory/storage.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -48,17 +52,16 @@ export async function extractLearningInsights(agentId, performanceData) {
  * Identify patterns that lead to success
  */
 async function identifySuccessPatterns(agentId, performanceData) {
-  const db = getDatabase();
   const insights = [];
 
   // Find activities with successful outcomes
-  const successfulActivities = db.prepare(`
+  const successfulActivities = await sql().read(all(`
     SELECT * FROM agent_activity
     WHERE agent_id = ?
       AND (action_type = 'task_completed' OR (action_type = 'tool_call' AND metadata NOT LIKE '%"error"%'))
     ORDER BY created_at DESC
     LIMIT 100
-  `).all(agentId);
+  `, agentId));
 
   if (successfulActivities.length === 0) return insights;
 
@@ -115,17 +118,16 @@ async function identifySuccessPatterns(agentId, performanceData) {
  * Identify patterns that lead to failure
  */
 async function identifyFailurePatterns(agentId, performanceData) {
-  const db = getDatabase();
   const insights = [];
 
   // Find activities with failures
-  const failedActivities = db.prepare(`
+  const failedActivities = await sql().read(all(`
     SELECT * FROM agent_activity
     WHERE agent_id = ?
       AND (action_type = 'task_failed' OR metadata LIKE '%"error"%')
     ORDER BY created_at DESC
     LIMIT 100
-  `).all(agentId);
+  `, agentId));
 
   if (failedActivities.length === 0) return insights;
 
@@ -235,18 +237,17 @@ async function discoverOptimizations(agentId, performanceData) {
   }
 
   // Check for unused capabilities
-  const db = getDatabase();
-  const agent = db.prepare('SELECT capabilities FROM agents_config WHERE id = ?').get(agentId);
+  const agent = await sql().read(one('SELECT capabilities FROM agents_config WHERE id = ?', agentId));
 
   if (agent) {
     try {
       const capabilities = JSON.parse(agent.capabilities);
       const enabledCapabilities = Object.entries(capabilities).filter(([_, enabled]) => enabled);
 
-      const usageStats = db.prepare(`
+      const usageStats = await sql().read(all(`
         SELECT capability_name, usage_count FROM agent_capability_usage
         WHERE agent_id = ?
-      `).all(agentId);
+      `, agentId));
 
       const usageMap = {};
       usageStats.forEach(stat => {
@@ -282,16 +283,15 @@ async function discoverOptimizations(agentId, performanceData) {
  * Detect opportunities for new capabilities
  */
 async function detectNewCapabilityNeeds(agentId, performanceData) {
-  const db = getDatabase();
   const insights = [];
 
   // Check if agent frequently fails at tasks that might need a new capability
-  const recentFailures = db.prepare(`
+  const recentFailures = await sql().read(all(`
     SELECT summary, metadata FROM agent_activity
     WHERE agent_id = ? AND action_type = 'task_failed'
     ORDER BY created_at DESC
     LIMIT 20
-  `).all(agentId);
+  `, agentId));
 
   if (recentFailures.length === 0) return insights;
 
@@ -303,7 +303,7 @@ async function detectNewCapabilityNeeds(agentId, performanceData) {
   const fileFailures = summaries.filter(s => fileKeywords.some(kw => s.includes(kw))).length;
 
   if (fileFailures > 5) {
-    const agent = db.prepare('SELECT capabilities FROM agents_config WHERE id = ?').get(agentId);
+    const agent = await sql().read(one('SELECT capabilities FROM agents_config WHERE id = ?', agentId));
     const capabilities = agent ? JSON.parse(agent.capabilities) : {};
 
     if (!capabilities.fileOperations) {
@@ -329,7 +329,7 @@ async function detectNewCapabilityNeeds(agentId, performanceData) {
   const searchFailures = summaries.filter(s => searchKeywords.some(kw => s.includes(kw))).length;
 
   if (searchFailures > 5) {
-    const agent = db.prepare('SELECT capabilities FROM agents_config WHERE id = ?').get(agentId);
+    const agent = await sql().read(one('SELECT capabilities FROM agents_config WHERE id = ?', agentId));
     const capabilities = agent ? JSON.parse(agent.capabilities) : {};
 
     if (!capabilities.webSearch) {
@@ -357,23 +357,22 @@ async function detectNewCapabilityNeeds(agentId, performanceData) {
  * Save insights to database
  */
 async function saveInsights(agentId, insights) {
-  const db = getDatabase();
-
-  const stmt = db.prepare(`
-    INSERT INTO agent_learning_insights (id, agent_id, insight_type, title, description, confidence, evidence)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  insights.forEach(insight => {
-    stmt.run(
+  if (insights.length === 0) return;
+  // One transaction: a cycle's insights are stored all or nothing.
+  await sql().tx(function* () {
+    for (const insight of insights) {
+      yield* run(`
+        INSERT INTO agent_learning_insights (id, agent_id, insight_type, title, description, confidence, evidence)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
       uuidv4(),
       agentId,
       insight.type,
       insight.title,
       insight.description,
       insight.confidence,
-      JSON.stringify(insight.evidence)
-    );
+      JSON.stringify(insight.evidence));
+    }
   });
 }
 
@@ -435,34 +434,33 @@ async function storeInsightsInMemory(agentId, insights) {
  * @returns {Promise<Array>}
  */
 export async function getAgentInsights(agentId, filters = {}) {
-  const db = getDatabase();
-
-  let sql = 'SELECT * FROM agent_learning_insights WHERE agent_id = ?';
+  let query = 'SELECT * FROM agent_learning_insights WHERE agent_id = ?';
   const params = [agentId];
 
   if (filters.applied !== undefined) {
-    sql += ' AND applied = ?';
+    query += ' AND applied = ?';
     params.push(filters.applied ? 1 : 0);
   }
 
   if (filters.type) {
-    sql += ' AND insight_type = ?';
+    query += ' AND insight_type = ?';
     params.push(filters.type);
   }
 
   if (filters.minConfidence) {
-    sql += ' AND confidence >= ?';
+    query += ' AND confidence >= ?';
     params.push(filters.minConfidence);
   }
 
-  sql += ' ORDER BY confidence DESC, created_at DESC';
+  // id breaks ties (same order on both drivers).
+  query += ' ORDER BY confidence DESC, created_at DESC, id';
 
   if (filters.limit) {
-    sql += ' LIMIT ?';
+    query += ' LIMIT ?';
     params.push(filters.limit);
   }
 
-  const insights = db.prepare(sql).all(...params);
+  const insights = await sql().read(all(query, ...params));
 
   return insights.map(i => ({
     ...i,
@@ -476,11 +474,9 @@ export async function getAgentInsights(agentId, filters = {}) {
  * @param {number} impactScore - Measured improvement (0-1)
  */
 export async function markInsightAsApplied(insightId, impactScore = null) {
-  const db = getDatabase();
-
-  db.prepare(`
+  await sql().read(run(`
     UPDATE agent_learning_insights
-    SET applied = TRUE, applied_at = ?, impact_score = ?
+    SET applied = 1, applied_at = ?, impact_score = ?
     WHERE id = ?
-  `).run(new Date().toISOString(), impactScore, insightId);
+  `, new Date().toISOString(), impactScore, insightId));
 }

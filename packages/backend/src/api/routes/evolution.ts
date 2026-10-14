@@ -8,10 +8,12 @@
  * tier + the owner rule in the handler); reads are admin. An evolve cycle
  * never changes an agent: it files evolution proposals that the owner
  * approves, rejects or cancels under /api/evolution/:agentId/proposals.
+ *
+ * B2.2c: the route's own queries run on the process driver (sql-steps).
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { getDatabase } from '../../db/index.js';
+import { one, run, sql, type SqlParam } from '../../repositories/sql-steps.js';
 import { analyzeAgentPerformance, getAgentPerformanceSummary } from '../../services/agent-performance-analyzer.js';
 import { extractLearningInsights, getAgentInsights } from '../../services/agent-learning-engine.js';
 import {
@@ -67,9 +69,7 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
   fastify.get('/api/evolution/:agentId/status', async (request, reply) => {
     try {
       const { agentId } = request.params as { agentId: string };
-      const db = getDatabase();
-
-      const config = db.prepare('SELECT * FROM agent_evolution_config WHERE agent_id = ?').get(agentId) as any;
+      const config = await sql().read(one<any>('SELECT * FROM agent_evolution_config WHERE agent_id = ?', agentId));
 
       if (!config) {
         return reply.status(404).send({ error: 'Agent not found or evolution not configured' });
@@ -77,7 +77,7 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
 
       const performance = await getAgentPerformanceSummary(agentId);
       const insights = await getAgentInsights(agentId, { applied: false, limit: 10 });
-      const history = getEvolutionHistory(agentId, { limit: 5 });
+      const history = await getEvolutionHistory(agentId, { limit: 5 });
 
       return reply.send({
         agentId,
@@ -204,7 +204,7 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
       if (type) filters.type = type;
       if (limit) filters.limit = parseInt(limit, 10);
 
-      const history = getEvolutionHistory(agentId, filters);
+      const history = await getEvolutionHistory(agentId, filters);
 
       return reply.send({ agentId, history, total: history.length });
     } catch (error: unknown) {
@@ -336,7 +336,6 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
         allowed_evolutions, max_evolutions_per_cycle, rollback_on_degradation, degradation_threshold,
       } = request.body as any;
 
-      const db = getDatabase();
       const updates: string[] = [];
       const params: any[] = [];
 
@@ -357,9 +356,11 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
       params.push(new Date().toISOString());
       params.push(agentId);
 
-      db.prepare(`UPDATE agent_evolution_config SET ${updates.join(', ')} WHERE agent_id = ?`).run(...params);
-
-      const updatedConfig = db.prepare('SELECT * FROM agent_evolution_config WHERE agent_id = ?').get(agentId) as any;
+      // The update and the read of the row it wrote are one transaction.
+      const updatedConfig = await sql().tx(function* () {
+        yield* run(`UPDATE agent_evolution_config SET ${updates.join(', ')} WHERE agent_id = ?`, ...(params as SqlParam[]));
+        return yield* one<any>('SELECT * FROM agent_evolution_config WHERE agent_id = ?', agentId);
+      });
 
       if (enabled !== undefined || evolution_frequency !== undefined) {
         try {
@@ -386,10 +387,7 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
     if (ownerOrReply(request, reply) === null) return reply;
     try {
       const { agentId, evolutionId } = request.params as { agentId: string; evolutionId: string };
-      const db = getDatabase();
-
-      const evolution = db.prepare('SELECT * FROM agent_evolution_history WHERE id = ? AND agent_id = ?')
-        .get(evolutionId, agentId) as any;
+      const evolution = await sql().read(one<any>('SELECT * FROM agent_evolution_history WHERE id = ? AND agent_id = ?', evolutionId, agentId));
 
       if (!evolution) {
         return reply.status(404).send({ error: 'Evolution not found for this agent' });

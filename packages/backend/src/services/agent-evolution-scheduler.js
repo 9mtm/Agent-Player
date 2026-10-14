@@ -3,10 +3,15 @@
  *
  * Integrates agent evolution system with the scheduler
  * Creates and manages cron jobs for automatic evolution cycles
+ *
+ * B2.2c: cron_jobs is written only through scheduler/store.ts (one
+ * transaction under the job-name lock, so two processes never create the
+ * same agent's job twice); the other reads run on the process driver.
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, one, sql } from '../repositories/sql-steps.js';
 import { getCronEngine } from '../scheduler/engine.js';
+import { deleteJobByName, getJobByName, upsertNamedJob } from '../scheduler/store.js';
 import { v4 as uuidv4 } from 'uuid';
 
 // SECURITY (S0-A.4): auto-evolve jobs run the evolution service in-process
@@ -21,16 +26,13 @@ export function evolveActionData(agentId) {
  * Initialize evolution scheduler for all agents with enabled evolution
  */
 export async function initializeEvolutionScheduler() {
-  const db = getDatabase();
-  const cronEngine = getCronEngine();
-
   console.log('[Evolution Scheduler] 🔄 Initializing agent evolution schedules...');
 
-  // Get all agents with evolution enabled
-  const configs = db.prepare(`
+  // Get all agents with evolution enabled (an integer 0/1 column on both drivers)
+  const configs = await sql().read(all(`
     SELECT agent_id, evolution_frequency FROM agent_evolution_config
-    WHERE enabled = TRUE
-  `).all();
+    WHERE enabled = 1
+  `));
 
   let scheduled = 0;
   for (const config of configs) {
@@ -51,11 +53,10 @@ export async function initializeEvolutionScheduler() {
  * @param {string} frequency - Evolution frequency ('hourly', 'daily', 'weekly')
  */
 export async function scheduleAgentEvolution(agentId, frequency = 'daily') {
-  const db = getDatabase();
   const cronEngine = getCronEngine();
 
   // Get agent name
-  const agent = db.prepare('SELECT name FROM agents_config WHERE id = ?').get(agentId);
+  const agent = await sql().read(one('SELECT name FROM agents_config WHERE id = ?', agentId));
 
   if (!agent) {
     throw new Error(`Agent ${agentId} not found`);
@@ -67,70 +68,32 @@ export async function scheduleAgentEvolution(agentId, frequency = 'daily') {
   // Create unique job name
   const jobName = `agent-evolution-${agentId}`;
 
-  // Check if job already exists
-  const existingJob = db.prepare(`
-    SELECT id FROM cron_jobs WHERE name = ?
-  `).get(jobName);
+  // Insert, or update the existing job (this also rewrites old rows that
+  // still use the HTTP 'api-call' form, S0-A.4).
+  const { job, created } = await upsertNamedJob(uuidv4(), {
+    name: jobName,
+    description: `Auto-evolve agent: ${agent.name}`,
+    cronExpression,
+    actionType: EVOLVE_ACTION_TYPE,
+    actionData: evolveActionData(agentId),
+  });
 
-  if (existingJob) {
-    // Update existing job
-    // Also rewrites old rows that still use the HTTP 'api-call' form (S0-A.4).
-    db.prepare(`
-      UPDATE cron_jobs
-      SET cron_expression = ?, action_type = ?, action_data = ?, updated_at = ?
-      WHERE name = ?
-    `).run(cronExpression, EVOLVE_ACTION_TYPE, JSON.stringify(evolveActionData(agentId)), new Date().toISOString(), jobName);
+  if (!created) cronEngine.unscheduleJob(job.id);
+  cronEngine.scheduleJob({
+    id: job.id,
+    name: job.name,
+    description: job.description,
+    cronExpression: job.cronExpression,
+    actionType: job.actionType,
+    actionData: job.actionData,
+    enabled: job.enabled,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  });
 
-    // Reschedule
-    const job = db.prepare('SELECT * FROM cron_jobs WHERE name = ?').get(jobName);
-    cronEngine.unscheduleJob(job.id);
-    cronEngine.scheduleJob({
-      id: job.id,
-      name: job.name,
-      description: job.description,
-      cronExpression: job.cron_expression,
-      actionType: job.action_type,
-      actionData: JSON.parse(job.action_data),
-      enabled: job.enabled === 1,
-      createdAt: new Date(job.created_at),
-      updatedAt: new Date(job.updated_at),
-    });
-
-    console.log(`[Evolution Scheduler] 🔄 Updated schedule for agent "${agent.name}" (${frequency})`);
-  } else {
-    // Create new job
-    const jobId = uuidv4();
-
-    db.prepare(`
-      INSERT INTO cron_jobs (id, name, description, cron_expression, action_type, action_data, enabled, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      jobId,
-      jobName,
-      `Auto-evolve agent: ${agent.name}`,
-      cronExpression,
-      EVOLVE_ACTION_TYPE,
-      JSON.stringify(evolveActionData(agentId)),
-      1, // enabled
-      new Date().toISOString(),
-      new Date().toISOString()
-    );
-
-    // Schedule the job
-    cronEngine.scheduleJob({
-      id: jobId,
-      name: jobName,
-      description: `Auto-evolve agent: ${agent.name}`,
-      cronExpression,
-      actionType: EVOLVE_ACTION_TYPE,
-      actionData: evolveActionData(agentId),
-      enabled: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    console.log(`[Evolution Scheduler] ✅ Scheduled evolution for agent "${agent.name}" (${frequency})`);
-  }
+  console.log(created
+    ? `[Evolution Scheduler] ✅ Scheduled evolution for agent "${agent.name}" (${frequency})`
+    : `[Evolution Scheduler] 🔄 Updated schedule for agent "${agent.name}" (${frequency})`);
 }
 
 /**
@@ -138,19 +101,14 @@ export async function scheduleAgentEvolution(agentId, frequency = 'daily') {
  * @param {string} agentId - Agent ID
  */
 export async function unscheduleAgentEvolution(agentId) {
-  const db = getDatabase();
   const cronEngine = getCronEngine();
 
   const jobName = `agent-evolution-${agentId}`;
 
-  const job = db.prepare('SELECT id FROM cron_jobs WHERE name = ?').get(jobName);
+  const jobId = await deleteJobByName(jobName);
 
-  if (job) {
-    // Unschedule
-    cronEngine.unscheduleJob(job.id);
-
-    // Delete from database
-    db.prepare('DELETE FROM cron_jobs WHERE id = ?').run(job.id);
+  if (jobId) {
+    cronEngine.unscheduleJob(jobId);
 
     console.log(`[Evolution Scheduler] ⏹️  Unscheduled evolution for agent ${agentId}`);
   }
@@ -193,29 +151,25 @@ function frequencyToCron(frequency) {
 /**
  * Get evolution schedule status for an agent
  * @param {string} agentId - Agent ID
- * @returns {Object|null} Schedule info or null
+ * @returns {Promise<Object|null>} Schedule info or null
  */
-export function getEvolutionSchedule(agentId) {
-  const db = getDatabase();
-
+export async function getEvolutionSchedule(agentId) {
   const jobName = `agent-evolution-${agentId}`;
 
-  const job = db.prepare(`
-    SELECT * FROM cron_jobs WHERE name = ?
-  `).get(jobName);
+  const job = await getJobByName(jobName);
 
   if (!job) return null;
 
   return {
     jobId: job.id,
     agentId,
-    frequency: cronToFrequency(job.cron_expression),
-    cronExpression: job.cron_expression,
-    enabled: job.enabled === 1,
-    lastRun: job.last_run ? new Date(job.last_run) : null,
-    nextRun: job.next_run ? new Date(job.next_run) : null,
-    createdAt: new Date(job.created_at),
-    updatedAt: new Date(job.updated_at),
+    frequency: cronToFrequency(job.cronExpression),
+    cronExpression: job.cronExpression,
+    enabled: job.enabled,
+    lastRun: job.lastRun ?? null,
+    nextRun: job.nextRun ?? null,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
   };
 }
 

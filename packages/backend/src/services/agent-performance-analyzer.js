@@ -3,9 +3,14 @@
  *
  * Analyzes agent activity logs to compute performance metrics
  * Feeds data into the learning engine for autonomous improvement
+ *
+ * B2.2c: every query runs on the process driver (repositories/sql-steps.ts),
+ * SQLite SQL and row shapes unchanged. A cycle's metrics and capability
+ * usage are written in one transaction; the usage counters are one upsert
+ * per tool (no lost increment when two analyses run at the same time).
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, run, sql } from '../repositories/sql-steps.js';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
@@ -16,14 +21,12 @@ import { v4 as uuidv4 } from 'uuid';
  * @returns {Promise<Object>} Performance metrics
  */
 export async function analyzeAgentPerformance(agentId, periodStart, periodEnd) {
-  const db = getDatabase();
-
   // Get all activity for this agent in the period
-  const activities = db.prepare(`
+  const activities = await sql().read(all(`
     SELECT * FROM agent_activity
     WHERE agent_id = ? AND created_at BETWEEN ? AND ?
-    ORDER BY created_at ASC
-  `).all(agentId, periodStart.toISOString(), periodEnd.toISOString());
+    ORDER BY created_at ASC, id
+  `, agentId, periodStart.toISOString(), periodEnd.toISOString()));
 
   if (activities.length === 0) {
     return {
@@ -222,8 +225,6 @@ function computeAverageTaskDuration(activities) {
  * Save metrics to database
  */
 async function saveMetrics(agentId, metrics, periodStart, periodEnd, sampleSize) {
-  const db = getDatabase();
-
   const metricsToSave = [
     {
       type: 'task_success_rate',
@@ -247,57 +248,53 @@ async function saveMetrics(agentId, metrics, periodStart, periodEnd, sampleSize)
     },
   ];
 
-  const stmt = db.prepare(`
-    INSERT INTO agent_performance_metrics (id, agent_id, metric_type, value, sample_size, period_start, period_end, metadata)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  metricsToSave.forEach(metric => {
-    if (metric.metadata) {
-      stmt.run(
-        uuidv4(),
-        agentId,
-        metric.type,
-        metric.value,
-        sampleSize,
-        periodStart.toISOString(),
-        periodEnd.toISOString(),
-        JSON.stringify(metric.metadata)
-      );
+  const byTool = metrics.toolEfficiency?.byTool;
+  await sql().tx(function* () {
+    for (const metric of metricsToSave) {
+      if (!metric.metadata) continue;
+      yield* run(`
+        INSERT INTO agent_performance_metrics (id, agent_id, metric_type, value, sample_size, period_start, period_end, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      uuidv4(),
+      agentId,
+      metric.type,
+      metric.value,
+      sampleSize,
+      periodStart.toISOString(),
+      periodEnd.toISOString(),
+      JSON.stringify(metric.metadata));
     }
-  });
 
-  // Update capability usage
-  if (metrics.toolEfficiency?.byTool) {
-    await updateCapabilityUsage(agentId, metrics.toolEfficiency.byTool);
-  }
+    // Update capability usage
+    if (byTool) yield* updateCapabilityUsageStep(agentId, byTool);
+  });
 }
 
 /**
  * Update capability usage statistics
  */
-async function updateCapabilityUsage(agentId, toolStats) {
-  const db = getDatabase();
-
-  Object.entries(toolStats).forEach(([toolName, stats]) => {
-    db.prepare(`
+function* updateCapabilityUsageStep(agentId, toolStats) {
+  for (const [toolName, stats] of Object.entries(toolStats)) {
+    // The counters are qualified with the table name: PostgreSQL refuses an
+    // unqualified column that is also in `excluded`; SQLite reads it the same.
+    yield* run(`
       INSERT INTO agent_capability_usage (id, agent_id, capability_name, usage_count, success_count, failure_count, last_used_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(agent_id, capability_name) DO UPDATE SET
-        usage_count = usage_count + excluded.usage_count,
-        success_count = success_count + excluded.success_count,
-        failure_count = failure_count + excluded.failure_count,
+        usage_count = agent_capability_usage.usage_count + excluded.usage_count,
+        success_count = agent_capability_usage.success_count + excluded.success_count,
+        failure_count = agent_capability_usage.failure_count + excluded.failure_count,
         last_used_at = excluded.last_used_at
-    `).run(
-      uuidv4(),
-      agentId,
-      toolName,
-      stats.total,
-      stats.successful,
-      stats.total - stats.successful,
-      new Date().toISOString()
-    );
-  });
+    `,
+    uuidv4(),
+    agentId,
+    toolName,
+    stats.total,
+    stats.successful,
+    stats.total - stats.successful,
+    new Date().toISOString());
+  }
 }
 
 /**
@@ -306,10 +303,8 @@ async function updateCapabilityUsage(agentId, toolStats) {
  * @returns {Promise<Object>}
  */
 export async function getAgentPerformanceSummary(agentId) {
-  const db = getDatabase();
-
   // Get latest metrics for each type
-  const latestMetrics = db.prepare(`
+  const latestMetrics = await sql().read(all(`
     SELECT metric_type, value, sample_size, metadata, created_at
     FROM agent_performance_metrics
     WHERE agent_id = ?
@@ -319,7 +314,7 @@ export async function getAgentPerformanceSummary(agentId) {
           AND m2.metric_type = agent_performance_metrics.metric_type
       )
     ORDER BY created_at DESC
-  `).all(agentId);
+  `, agentId));
 
   const summary = {
     agentId,
@@ -341,10 +336,10 @@ export async function getAgentPerformanceSummary(agentId) {
   });
 
   // Get capability usage
-  const capabilities = db.prepare(`
+  const capabilities = await sql().read(all(`
     SELECT * FROM agent_capability_usage WHERE agent_id = ?
-    ORDER BY usage_count DESC
-  `).all(agentId);
+    ORDER BY usage_count DESC, capability_name
+  `, agentId));
 
   summary.capabilities = capabilities;
 
@@ -358,10 +353,8 @@ export async function getAgentPerformanceSummary(agentId) {
  * @returns {Promise<Array>}
  */
 export async function analyzeAllAgents(periodStart, periodEnd) {
-  const db = getDatabase();
-
   // Get all agents
-  const agents = db.prepare('SELECT id FROM agents_config').all();
+  const agents = await sql().read(all('SELECT id FROM agents_config'));
 
   const results = [];
   for (const agent of agents) {

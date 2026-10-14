@@ -84,6 +84,12 @@ export const PORTED = [
   'src/auth/account-lockout.ts',
   'src/repositories/pg/login-throttle.ts',
   'src/repositories/login-throttle.ts',
+  // B2.2c part 2: evolution services and route
+  'src/services/agent-learning-engine.js',
+  'src/services/agent-evolution-scheduler.js',
+  'src/services/agent-performance-analyzer.js',
+  'src/services/agent-evolution-orchestrator.js',
+  'src/api/routes/evolution.ts',
 ];
 
 /** Ported modules without SQL of their own (they compose ported services). */
@@ -296,5 +302,45 @@ test('B2.2c part 1: the cron engine claims each tick on PostgreSQL; the MCP serv
     const body = svc.slice(svc.indexOf(`export async function ${fn}`), svc.indexOf('\n}\n', svc.indexOf(`export async function ${fn}`)));
     assert.match(body, /sql\(\)\.tx\(/, `${fn}: one transaction`);
     assert.match(body, /revokeMcpGrantsStep\(/, `${fn}: grants revoked inside it`);
+  }
+});
+
+test('B2.2c part 2: with AGENT_PLAYER_DB=postgres the evolution services take PostgreSQL', async () => {
+  const saved = { db: process.env.AGENT_PLAYER_DB, url: process.env.AGENT_PLAYER_PG_URL };
+  const { PgConfigError } = await import('../src/db/pg/config.ts');
+  const { closePgPool } = await import('../src/db/pg/pool.ts');
+  const analyzer = await import('../src/services/agent-performance-analyzer.js');
+  const learning = await import('../src/services/agent-learning-engine.js');
+  const orch = await import('../src/services/agent-evolution-orchestrator.js');
+  const evoSched = await import('../src/services/agent-evolution-scheduler.js');
+  const cron = await import('../src/scheduler/store.ts');
+  const pgErr = (e) => e instanceof PgConfigError;
+  try {
+    process.env.AGENT_PLAYER_DB = 'postgres';
+    delete process.env.AGENT_PLAYER_PG_URL;
+    await assert.rejects(() => analyzer.analyzeAgentPerformance('a-1', new Date(0), new Date()), pgErr);
+    await assert.rejects(() => analyzer.getAgentPerformanceSummary('a-1'), pgErr);
+    await assert.rejects(() => learning.getAgentInsights('a-1'), pgErr);
+    await assert.rejects(() => learning.markInsightAsApplied('i-1'), pgErr);
+    await assert.rejects(() => orch.getEvolutionHistory('a-1'), pgErr);
+    await assert.rejects(() => orch.evolveAgent('a-1'), pgErr);
+    await assert.rejects(() => evoSched.getEvolutionSchedule('a-1'), pgErr);
+    await assert.rejects(() => cron.upsertNamedJob('j-1', { name: 'n', description: null, cronExpression: '* * * * *', actionType: 'custom', actionData: {} }), pgErr);
+    await assert.rejects(() => cron.deleteJobByName('n'), pgErr);
+  } finally {
+    if (saved.db === undefined) delete process.env.AGENT_PLAYER_DB; else process.env.AGENT_PLAYER_DB = saved.db;
+    if (saved.url !== undefined) process.env.AGENT_PLAYER_PG_URL = saved.url;
+    await closePgPool();
+  }
+});
+
+test('B2.2c part 2: the evolution scheduler writes cron_jobs only through the cron store', () => {
+  const src = stripComments(readFileSync(join(backend, 'src/services/agent-evolution-scheduler.js'), 'utf8'));
+  assert.doesNotMatch(src, /\b(INSERT INTO|UPDATE|DELETE FROM)\s+cron_jobs\b/);
+  assert.match(src, /upsertNamedJob\(/);
+  assert.match(src, /deleteJobByName\(/);
+  // S0-Q.23: no Evolution service writes capabilities.
+  for (const rel of ['src/services/agent-learning-engine.js', 'src/services/agent-evolution-orchestrator.js', 'src/services/agent-performance-analyzer.js']) {
+    assert.doesNotMatch(stripComments(readFileSync(join(backend, rel), 'utf8')), /UPDATE\s+agents_config/i, rel);
   }
 });

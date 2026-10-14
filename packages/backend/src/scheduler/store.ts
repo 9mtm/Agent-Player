@@ -220,3 +220,53 @@ function* ensureJobStep(id: string, def: JobDefinition, nowIso: string): Step<bo
 export function ensureNamedJob(id: string, def: JobDefinition): Promise<boolean> {
   return sql().tx(() => ensureJobStep(id, def, new Date().toISOString()));
 }
+
+/** The job with this name (the first one when several share it), or undefined. */
+export async function getJobByName(name: string): Promise<CronJob | undefined> {
+  return sql().read((function* (): Step<CronJob | undefined> {
+    const d = yield* dialect();
+    const row = yield* one<CronJobRow>('SELECT * FROM cron_jobs WHERE name = ?', name);
+    return row ? rowToJob(d, row) : undefined;
+  })());
+}
+
+function* upsertNamedStep(newId: string, def: JobDefinition, nowIso: string): Step<{ job: CronJob; created: boolean }> {
+  const d = yield* dialect();
+  // Same per-name lock as ensureNamedJob: two processes never both insert.
+  yield* lockName(`cron_jobs:name:${def.name}`);
+  const existing = yield* one<{ id: string }>('SELECT id FROM cron_jobs WHERE name = ?', def.name);
+  let created = false;
+  if (existing) {
+    yield* run(`
+      UPDATE cron_jobs
+      SET cron_expression = ?, action_type = ?, action_data = ?, updated_at = ?
+      WHERE name = ?`,
+    def.cronExpression, def.actionType, JSON.stringify(def.actionData), nowIso, def.name);
+  } else {
+    yield* run(INSERT_JOB, newId, def.name, def.description, def.cronExpression, def.actionType,
+      JSON.stringify(def.actionData), 1, nowIso, nowIso);
+    created = true;
+  }
+  const row = yield* one<CronJobRow>('SELECT * FROM cron_jobs WHERE name = ?', def.name);
+  return { job: rowToJob(d, row!), created };
+}
+
+/**
+ * Insert an enabled named job, or (when one with this name exists) update its
+ * schedule and action; the description and enabled flag of an existing job
+ * are kept. One transaction under the name lock. Returns the stored job.
+ */
+export function upsertNamedJob(newId: string, def: JobDefinition): Promise<{ job: CronJob; created: boolean }> {
+  return sql().tx(() => upsertNamedStep(newId, def, new Date().toISOString()));
+}
+
+/** Delete the job with this name; its id when one was deleted. */
+export async function deleteJobByName(name: string): Promise<string | undefined> {
+  return sql().tx(function* (): Step<string | undefined> {
+    yield* lockName(`cron_jobs:name:${name}`);
+    const row = yield* one<{ id: string }>('SELECT id FROM cron_jobs WHERE name = ?', name);
+    if (!row) return undefined;
+    yield* run('DELETE FROM cron_jobs WHERE id = ?', row.id);
+    return row.id;
+  });
+}
