@@ -19,12 +19,14 @@ const entry = join(pkgDir, 'src', 'index.ts');
 const fake = pathToFileURL(join(pkgDir, 'test', 'fixtures', 'fake-backend.mjs')).href;
 const RUN = '11111111-2222-3333-4444-555555555555';
 const TOKEN = 'tok-' + randomBytes(24).toString('hex'); // fake, test only
+const INSTANCE_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const INSTANCE_SECRET = randomBytes(32).toString('hex'); // fake, test only
 
 const root = mkdtempSync(join(tmpdir(), 'ap-mcp-'));
 test.after(() => rmSync(root, { recursive: true, force: true }));
 let n = 0;
 
-function setup({ token = TOKEN, mode = 0o600, backendUrl } = {}) {
+function setup({ token = TOKEN, mode = 0o600, backendUrl, instance = true, instanceMode = 0o600 } = {}) {
   const dir = join(root, `case-${++n}`);
   const config = join(dir, 'config', 'agent-player');
   mkdirSync(config, { recursive: true, mode: 0o700 });
@@ -32,6 +34,11 @@ function setup({ token = TOKEN, mode = 0o600, backendUrl } = {}) {
     const file = join(config, 'auth.json');
     writeFileSync(file, JSON.stringify({ createdBy: 'agent-player-cli', token, backendUrl: backendUrl ?? 'http://127.0.0.1:41522', savedAt: new Date().toISOString() }), { mode });
     chmodSync(file, mode);
+  }
+  if (instance) {
+    const file = join(config, 'instance.json');
+    writeFileSync(file, JSON.stringify({ createdBy: 'agent-player-backend', version: 1, id: INSTANCE_ID, secret: INSTANCE_SECRET }), { mode: instanceMode });
+    chmodSync(file, instanceMode);
   }
   return { dir, config, log: join(dir, 'fetch.log') };
 }
@@ -44,6 +51,8 @@ function startServer(ctx, env = {}) {
     AGENT_PLAYER_CONFIG_DIR: ctx.config,
     FAKE_LOG: ctx.log,
     FAKE_EXPECTED_TOKEN: TOKEN,
+    FAKE_INSTANCE_ID: INSTANCE_ID,
+    FAKE_INSTANCE_SECRET: INSTANCE_SECRET,
     ...env,
   });
   const child = spawn(process.execPath, ['--import', 'tsx', '--import', fake, entry], { cwd: pkgDir, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -89,7 +98,9 @@ function startServer(ctx, env = {}) {
   return { request, initialize, callTool, stop, output, send };
 }
 
-const fetchLog = (ctx) => (existsSync(ctx.log) ? readFileSync(ctx.log, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+const allLog = (ctx) => (existsSync(ctx.log) ? readFileSync(ctx.log, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+const fetchLog = (ctx) => allLog(ctx).filter((e) => !e.instance);
+const instanceLog = (ctx) => allLog(ctx).filter((e) => e.instance);
 const noToken = (srv) => {
   const { stdout, stderr } = srv.output();
   assert.ok(!stdout.includes(TOKEN), 'token on stdout');
@@ -109,11 +120,11 @@ test('initialize and tools/list over stdio', async () => {
     assert.deepEqual(tools.map((t) => t.name), ['spawn_small_agent', 'get_result', 'list_runs']);
     const spawnTool = tools[0];
     assert.deepEqual(spawnTool.inputSchema.required, ['task']);
-    assert.deepEqual(Object.keys(spawnTool.inputSchema.properties).sort(), ['drawers', 'kind', 'max_steps', 'task', 'tools']);
+    assert.deepEqual(Object.keys(spawnTool.inputSchema.properties).sort(), ['drawers', 'kind', 'max_steps', 'read_dir', 'task', 'tools']);
     assert.deepEqual(tools[1].inputSchema.required, ['run_id']);
     const unknown = await srv.request('no/such/method', {});
     assert.ok(unknown.error, 'unknown method is a JSON-RPC error');
-    assert.equal(fetchLog(ctx).length, 0, 'listing tools does not call the backend');
+    assert.equal(allLog(ctx).length, 0, 'listing tools does not call the backend');
   } finally {
     await srv.stop();
   }
@@ -284,5 +295,57 @@ test('a token file readable by others is not used; a non-owner session is explai
     assert.match(res.content[0].text, /owner/);
   } finally {
     await srv2.stop();
+  }
+});
+
+test('the backend identity is verified before the token is sent (MCP-01b)', async () => {
+  // Normal case: one challenge without a token, then the authed request.
+  const ok = setup();
+  const srv = startServer(ok);
+  try {
+    await srv.initialize();
+    const res = await srv.callTool('spawn_small_agent', { task: 'x', tools: ['read'], read_dir: '/Users/someone/project' });
+    assert.ok(!res.isError, JSON.stringify(res));
+    const all = allLog(ok);
+    assert.equal(all.length, 2);
+    assert.equal(all[0].instance, true);
+    assert.equal(all[0].hasAuth, false, 'the challenge carries no token');
+    assert.equal(all[0].redirect, 'error');
+    assert.match(all[0].url, /\/api\/instance\?nonce=[0-9a-f]{48}$/);
+    assert.equal(all[1].authOk, true);
+    assert.equal(all[1].body.read_dir, '/Users/someone/project');
+  } finally {
+    await srv.stop();
+  }
+  // Another program on the port (wrong secret) or a server without the
+  // endpoint never receives the token.
+  for (const FAKE_SCENARIO of ['rogue', 'noinstance']) {
+    const ctx = setup();
+    const s2 = startServer(ctx, { FAKE_SCENARIO });
+    try {
+      await s2.initialize();
+      const res = await s2.callTool('list_runs', {});
+      assert.equal(res.isError, true, FAKE_SCENARIO);
+      assert.match(res.content[0].text, /could not prove/);
+      assert.equal(instanceLog(ctx).length, 1);
+      assert.equal(fetchLog(ctx).length, 0, `${FAKE_SCENARIO}: no request with the token`);
+      noToken(s2);
+    } finally {
+      await s2.stop();
+    }
+  }
+  // No identity file, or one readable by others: no request at all.
+  for (const opts of [{ instance: false }, ...(process.platform === 'win32' ? [] : [{ instanceMode: 0o644 }])]) {
+    const ctx = setup(opts);
+    const s3 = startServer(ctx);
+    try {
+      await s3.initialize();
+      const res = await s3.callTool('list_runs', {});
+      assert.equal(res.isError, true);
+      assert.match(res.content[0].text, /instance/);
+      assert.equal(allLog(ctx).length, 0);
+    } finally {
+      await s3.stop();
+    }
   }
 });

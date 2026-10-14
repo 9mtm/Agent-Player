@@ -4,12 +4,18 @@
 // $FAKE_LOG as one JSON line (the token itself is never written, only whether
 // it matched).
 import { appendFileSync } from 'node:fs';
+import { createHmac, randomBytes } from 'node:crypto';
 
 const LOG = process.env.FAKE_LOG;
 const EXPECTED = process.env.FAKE_EXPECTED_TOKEN || '';
 const SCENARIO = process.env.FAKE_SCENARIO || 'ok';
 const BASE = 'http://127.0.0.1:41522';
 const RUN = '11111111-2222-3333-4444-555555555555';
+// Backend identity (MCP-01b): the real backend answers GET /api/instance with
+// an HMAC of the nonce under the per-install secret. 'rogue' = a different
+// local program on the port (wrong secret); 'noinstance' = no such endpoint.
+const INSTANCE_ID = process.env.FAKE_INSTANCE_ID || '';
+const INSTANCE_SECRET = SCENARIO === 'rogue' ? randomBytes(32).toString('hex') : (process.env.FAKE_INSTANCE_SECRET || '');
 let cardCalls = 0;
 
 const log = (entry) => { if (LOG) appendFileSync(LOG, `${JSON.stringify(entry)}\n`); };
@@ -30,6 +36,13 @@ const card = (status) => ({
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input);
   const auth = (init.headers && (init.headers.Authorization || init.headers.authorization)) || '';
+  if (url.startsWith(`${BASE}/api/instance?`)) {
+    log({ instance: true, url, hasAuth: !!auth, redirect: init.redirect });
+    if (SCENARIO === 'noinstance') return json(404, { error: 'not found' });
+    const nonce = new URL(url).searchParams.get('nonce') || '';
+    const proof = createHmac('sha256', Buffer.from(INSTANCE_SECRET, 'hex')).update(`agent-player-instance-v1:${INSTANCE_ID}:${nonce}`).digest('hex');
+    return json(200, { id: INSTANCE_ID, proof, version: 1 });
+  }
   const entry = { url, method: init.method || 'GET', authOk: auth === `Bearer ${EXPECTED}`, hasAuth: !!auth, redirect: init.redirect };
   if (init.body) entry.body = JSON.parse(init.body);
   log(entry);

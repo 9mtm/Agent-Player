@@ -7,15 +7,23 @@
  * never printed, logged or put into an error message.
  *
  * Only a backend on this machine is allowed (127.0.0.1, ::1, localhost):
- * the token never goes to another host.
+ * the token never goes to another host. Before the token is sent, the
+ * backend must prove it is this install's backend (MCP-01b): it answers a
+ * random nonce with an HMAC keyed by the per-install secret it writes, at
+ * startup, to `instance.json` next to the token file (0600). Another local
+ * program that took the port first cannot answer, and gets no token.
  */
 
 import fs from 'node:fs';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
 export const DEFAULT_BACKEND_URL = 'http://127.0.0.1:41522';
 const TOKEN_FILE_NAME = 'auth.json';
+const INSTANCE_FILE_NAME = 'instance.json';
+const INSTANCE_MARKER = 'agent-player-backend';
+const PROOF_CONTEXT = 'agent-player-instance-v1';
 const MARKER = 'agent-player-cli';
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
 
@@ -87,4 +95,45 @@ export function loadSession(env: NodeJS.ProcessEnv = process.env): Session {
   const backendUrl = checkLoopbackUrl(rawUrl);
   if (!saved) throw new SessionError(NOT_SIGNED_IN);
   return { backendUrl, token: saved.token };
+}
+
+export const NO_INSTANCE =
+  'The Agent Player backend identity file (instance.json next to the CLI token) is missing. Start the Agent Player backend once (it writes the file), then try again.';
+
+export interface InstanceIdentity { id: string; secret: string }
+
+/** The backend identity the backend wrote next to the token file (0600), or throws SessionError. */
+export function loadInstance(env: NodeJS.ProcessEnv = process.env): InstanceIdentity {
+  const file = path.join(getConfigDir(env), INSTANCE_FILE_NAME);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    throw new SessionError(NO_INSTANCE);
+  }
+  if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) {
+    throw new SessionError(`The Agent Player instance file is readable by other users; run "chmod 600 ${file}" or restart the backend.`);
+  }
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    if (data && data.createdBy === INSTANCE_MARKER && typeof data.id === 'string' && typeof data.secret === 'string' && /^[0-9a-f]{64}$/i.test(data.secret)) {
+      return { id: data.id, secret: data.secret };
+    }
+  } catch {
+    // unreadable
+  }
+  throw new SessionError(NO_INSTANCE);
+}
+
+/** HMAC the backend must return for this nonce. */
+export function expectedProof(instance: InstanceIdentity, nonce: string): string {
+  return createHmac('sha256', Buffer.from(instance.secret, 'hex')).update(`${PROOF_CONTEXT}:${instance.id}:${nonce}`).digest('hex');
+}
+
+/** Constant-time check of the backend's answer. */
+export function proofMatches(instance: InstanceIdentity, nonce: string, answer: unknown): boolean {
+  if (!answer || typeof answer !== 'object') return false;
+  const { id, proof } = answer as { id?: unknown; proof?: unknown };
+  if (id !== instance.id || typeof proof !== 'string' || !/^[0-9a-f]{64}$/.test(proof)) return false;
+  return timingSafeEqual(Buffer.from(proof, 'hex'), Buffer.from(expectedProof(instance, nonce), 'hex'));
 }

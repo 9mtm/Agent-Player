@@ -96,6 +96,28 @@ the memory drawers it needs.
   must point to `127.0.0.1`, `::1` or `localhost` (default
   `http://127.0.0.1:41522`); redirects are refused. The token is never
   printed, logged or put in an error message.
+- **Backend identity is checked before the token is sent.** At startup the
+  backend writes a per-install id and secret to `instance.json` next to
+  `auth.json` (mode 0600; the backend's own copy lives in
+  `packages/backend/.data/instance.json`). Before every request the MCP
+  server sends a random nonce to the public `GET /api/instance?nonce=…` and
+  checks the answer `HMAC-SHA256(secret, "agent-player-instance-v1:<id>:<nonce>")`
+  in constant time. Only on a match is the token sent; another local program
+  that took the port cannot answer, and gets nothing. If `instance.json` is
+  missing, start the backend once. Both files must not be readable by others.
+- **File reading is sandboxed.** `read` only works inside the small agent's own
+  workspace (`.data/workspaces/small-local-agent/`) or inside one absolute
+  directory you pass as `read_dir` (never the Agent Player backend or data
+  folder, the home folder itself or `/`; `.env*`, keys, databases, `.git` and
+  credential files stay blocked). The owner can restrict `read_dir` further
+  with `SMALL_AGENT_READ_ROOTS` (path-list) in the backend environment.
+- **Secrets are redacted** from result cards (API keys, tokens, passwords,
+  private keys); a card with redactions is marked `needs_review`.
+- **Fixed small-agent settings.** The backend always runs the small agent with
+  its built-in prompt, the `SMALL_AGENT_MODEL`/default model and fixed
+  sampling, whatever the `small-local-agent` row in `agents_config` says. Only
+  the owner may edit or delete that agent; an edited row makes every card
+  `needs_review`.
 - **Delegation never expands permissions.** Granted tools =
   requested ∩ {`memory_search`, `storage_search`, `read`} ∩ the small agent's
   own grants (the owner can narrow them in the grants API), and never an

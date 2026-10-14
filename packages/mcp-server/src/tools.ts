@@ -1,7 +1,7 @@
 /**
  * The three MCP tools and the result-card rendering.
  *
- *   spawn_small_agent  { task, kind?, tools?, drawers?, max_steps? } -> run id (+ what was granted)
+ *   spawn_small_agent  { task, kind?, tools?, drawers?, max_steps?, read_dir? } -> run id (+ what was granted)
  *   get_result         { run_id, wait_seconds? }                     -> result card
  *   list_runs          { status?, limit? }                           -> runs + capacity (queue length)
  *
@@ -41,6 +41,10 @@ export const TOOL_DEFINITIONS = [
           description: 'Memory drawers to open, e.g. "owner", "experience", "project:alpha", "task:<id>", "people:<id>". Default: none (no memory).',
         },
         max_steps: { type: 'integer', minimum: 1, maximum: 100, description: 'Step budget (model + tool calls). Default and upper limit 15.' },
+        read_dir: {
+          type: 'string', maxLength: 1024,
+          description: 'Absolute directory the "read" tool may read (only with tools including "read"; the owner\'s project folder, never the Agent Player backend or data folder; .env, keys and databases stay blocked). Default: the small agent\'s own workspace.',
+        },
       },
       required: ['task'],
       additionalProperties: false,
@@ -132,6 +136,7 @@ export function renderCard(card: any): string {
     `- steps: ${card.steps_used}/${card.max_steps}, time: ${ms(card.duration_ms)} of ${ms(card.max_duration_ms)}`,
     `- tools granted: ${card.tools_granted?.length ? card.tools_granted.join(', ') : 'none'}; used: ${card.tools_used?.length ? card.tools_used.join(', ') : 'none'}`,
     `- memory drawers: ${card.drawers?.length ? card.drawers.join(', ') : 'none'}`,
+    ...(card.read_dir ? [`- read directory: ${card.read_dir}`] : []),
     `- needs_review: ${card.needs_review}${card.review_reason ? ` (${card.review_reason})` : ''}`,
   ];
   if (card.warnings?.length) {
@@ -189,7 +194,7 @@ export async function callTool(name: string, rawArgs: unknown, deps: HandlerDeps
 }
 
 async function spawn(args: Record<string, unknown>, { backend }: HandlerDeps): Promise<ToolCallResult> {
-  only(args, ['task', 'kind', 'tools', 'drawers', 'max_steps']);
+  only(args, ['task', 'kind', 'tools', 'drawers', 'max_steps', 'read_dir']);
   if (typeof args.task !== 'string' || !args.task.trim() || args.task.length > 8000) throw new InputError('task must be a non-empty string of at most 8000 characters');
   if (args.kind !== undefined && !(KINDS as readonly unknown[]).includes(args.kind)) throw new InputError(`kind must be one of ${KINDS.join(', ')}`);
   const body: Record<string, unknown> = { task: args.task };
@@ -200,6 +205,10 @@ async function spawn(args: Record<string, unknown>, { backend }: HandlerDeps): P
   if (drawers) body.drawers = drawers;
   const maxSteps = intIn(args.max_steps, 'max_steps', 1, 100);
   if (maxSteps !== undefined) body.max_steps = maxSteps;
+  if (args.read_dir !== undefined) {
+    if (typeof args.read_dir !== 'string' || !args.read_dir.trim() || args.read_dir.length > 1024) throw new InputError('read_dir must be an absolute directory path');
+    body.read_dir = args.read_dir;
+  }
 
   const res = await backend.request('POST', '/api/small-agent/runs', body);
   const data = {
@@ -208,6 +217,7 @@ async function spawn(args: Record<string, unknown>, { backend }: HandlerDeps): P
     kind: res.kind,
     granted_tools: res.granted_tools ?? [],
     drawers: res.drawers ?? [],
+    read_dir: res.read_dir ?? null,
     budget: res.budget,
     model: res.model,
     warnings: res.warnings ?? [],

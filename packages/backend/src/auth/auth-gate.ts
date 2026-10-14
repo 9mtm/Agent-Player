@@ -65,6 +65,8 @@ export const PUBLIC_ROUTES: ReadonlySet<string> = new Set([
   key('POST', '/api/setup/complete'),
   key('POST', '/api/setup/python'),
   key('POST', '/api/auth/login'),
+  // MCP-01b: HMAC proof of the install's identity for local clients (no data, no secret).
+  key('GET', '/api/instance'),
   // @fastify/static wildcard for the repo `public/` folder (see S0-A.7).
   key('GET', '/*'),
   // Login page translations.

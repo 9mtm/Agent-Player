@@ -49,6 +49,7 @@ import { agentsConfigRoutes } from './routes/agents-config.js';
 import { approvalsRoutes } from './routes/approvals.js';
 import { taskRunsRoutes } from './routes/task-runs.js';
 import { smallAgentRoutes } from './routes/small-agent.js';
+import { instanceRoutes } from './routes/instance.js';
 import { agentGrantsRoutes } from './routes/agent-grants.js';
 import { agentPersonalityRoutes } from './routes/agent-personality.js';
 import { storageRoutes } from './routes/storage.js';
@@ -289,6 +290,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   await fastify.register(approvalsRoutes); // S1.3: owner approvals for held agent tool calls
   await fastify.register(taskRunsRoutes); // CORE-08: durable task runs (list, view, cancel, resolve)
   await fastify.register(smallAgentRoutes); // MCP-01: owner-only small local agent runs (MCP server backend)
+  await fastify.register(instanceRoutes); // MCP-01b: public instance proof for local clients (no secret returned)
   await fastify.register(agentGrantsRoutes); // S1.4: owner view/edit of agent tool grants
   await fastify.register(agentPersonalityRoutes); // CORE-01: owner-only versioned personality
   await fastify.register(storageRoutes);       // 📦 Local Storage (Cache + CDN)

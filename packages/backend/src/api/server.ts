@@ -273,6 +273,16 @@ async function start() {
     // await emailSyncService.startAllAutoSync();
     // console.log('[Server] ✅ Email sync service initialized\n');
 
+    // MCP-01b: per-install identity next to the CLI token, so the MCP server
+    // can verify this backend before it sends the owner's token.
+    try {
+      const { publishInstanceIdentity } = await import('../services/instance-identity.js');
+      const written = publishInstanceIdentity();
+      console.log(written ? '[Server] ✅ Instance identity ready for local clients' : '[Server] ⚠️  Instance identity file not written (a foreign file is in the way)');
+    } catch (err: any) {
+      console.warn('[Server] ⚠️  Could not write the instance identity:', err?.code ?? 'error');
+    }
+
     await fastify.listen({ port: PORT, host: HOST });
 
     // Check Python availability for audio features
