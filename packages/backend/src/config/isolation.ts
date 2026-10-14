@@ -47,7 +47,69 @@ export const FORCED_VARS: Readonly<Record<string, string>> = {
   AGENT_PLAYER_BACKGROUND: 'off',
   EXTENSIONS_DISABLED: 'true',
   MEMORY_EMBEDDINGS: 'hash',
+  // Stage 1 is read-only (api/read-only-stage.ts); stage 2 is not available.
+  AGENT_PLAYER_READONLY: '1',
+  AGENT_PLAYER_ISOLATED_STAGE: '1',
 };
+
+export const ISOLATED_STAGE_ENV = 'AGENT_PLAYER_ISOLATED_STAGE';
+
+/** Dead loopback port forced for every local-model endpoint (nothing listens on port 9). */
+export const DEAD_OLLAMA_URL = 'http://127.0.0.1:9';
+export const DEAD_LOCAL_MODEL_API_URL = `${DEAD_OLLAMA_URL}/v1`;
+
+/** Provider endpoints the launcher always forces to the dead port (ISO-2). */
+export const FORCED_PROVIDER_URLS: Readonly<Record<string, string>> = {
+  OLLAMA_URL: DEAD_OLLAMA_URL,
+  LOCAL_MODEL_API_URL: DEAD_LOCAL_MODEL_API_URL,
+};
+
+/**
+ * Environment names that select a model-provider endpoint: the two local
+ * ones, Ollama's own OLLAMA_HOST, and every `*_BASE_URL` / `*_API_URL` /
+ * `*_API_BASE` (the names provider SDKs read, e.g. ANTHROPIC_BASE_URL,
+ * OPENAI_BASE_URL). In isolated mode each must be a loopback http URL.
+ */
+export function isProviderEndpointVar(name: string): boolean {
+  return name === 'OLLAMA_URL' || name === 'LOCAL_MODEL_API_URL' || name === 'OLLAMA_HOST'
+    || /_(BASE_URL|API_URL|API_BASE)$/.test(name);
+}
+
+/** Thrown when isolated mode refuses an action (HTTP 403, code `isolated_mode`). */
+export class IsolatedModeError extends Error {
+  readonly statusCode = 403;
+  readonly code = 'isolated_mode';
+  constructor(message: string) {
+    super(message);
+    this.name = 'IsolatedModeError';
+  }
+}
+
+export function isIsolatedMode(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[ISOLATED_ENV] === '1';
+}
+
+/**
+ * ISO-2: in isolated mode the settings layer never stores a provider that
+ * leaves the machine: the provider must stay `local` and its URL must be a
+ * loopback http URL. Outside isolated mode this does nothing.
+ */
+export function assertProviderSettingsAllowed(
+  updates: { provider?: unknown; local?: { url?: unknown } | null } | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (!isIsolatedMode(env) || !updates || typeof updates !== 'object') return;
+  if (updates.provider !== undefined && updates.provider !== 'local') {
+    throw new IsolatedModeError('isolated mode allows only the local provider');
+  }
+  const url = updates.local && typeof updates.local === 'object' ? updates.local.url : undefined;
+  if (url !== undefined && (typeof url !== 'string' || !isLoopbackHttpUrl(url))) {
+    throw new IsolatedModeError('isolated mode allows only a loopback provider URL');
+  }
+}
+
+/** The 403 body for an IsolatedModeError (no detail beyond the code). */
+export const ISOLATED_MODE_BODY = Object.freeze({ error: 'Forbidden', code: 'isolated_mode' });
 
 const LOOPBACK_ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})$/;
 
@@ -149,11 +211,21 @@ export function checkLauncherEnv(
   const port = checkPort(env.PORT, errors);
   const origins = checkOrigins(env.ALLOWED_ORIGINS, errors);
   checkCommon(env, errors);
+  const stage = (env[ISOLATED_STAGE_ENV] ?? '').trim();
+  if (stage === '2') {
+    errors.push(`${ISOLATED_STAGE_ENV}=2 is not available: stage 2 needs a separately reviewed setup`);
+  } else if (stage !== '' && stage !== '1') {
+    errors.push(`${ISOLATED_STAGE_ENV} must be unset or 1`);
+  }
   for (const [name, forced] of Object.entries(FORCED_VARS)) {
+    if (name === ISOLATED_STAGE_ENV) continue;
     if (set(env, name) && env[name]!.trim().toLowerCase() !== forced) errors.push(`${name} must be unset or ${forced}`);
   }
-  for (const name of ['OLLAMA_URL', 'LOCAL_MODEL_API_URL']) {
-    if (set(env, name) && !isLoopbackHttpUrl(env[name]!)) errors.push(`${name} must be a loopback http URL`);
+  // ISO-2: the provider endpoints are always forced to the dead port; an
+  // inherited value (even a loopback one) is refused, never passed through.
+  for (const name of Object.keys(env)) {
+    if (!isProviderEndpointVar(name) || !set(env, name)) continue;
+    errors.push(`${name} must be unset (stage 1 forces every model endpoint to the dead port ${DEAD_OLLAMA_URL}; stage 2 needs a separately reviewed setup)`);
   }
   if (errors.length || dataDir === null || port === null || origins === null) return { ok: false, errors };
   return { ok: true, config: { dataDir, port, origins } };
@@ -167,9 +239,6 @@ export function isLoopbackHttpUrl(value: string): boolean {
     return false;
   }
 }
-
-/** Dead loopback port used for Ollama when the operator names none (nothing listens on port 9). */
-export const DEAD_OLLAMA_URL = 'http://127.0.0.1:9';
 
 /**
  * The child environment, built from nothing (like `env -i`): no inherited
@@ -194,8 +263,7 @@ export function buildIsolatedChildEnv(
     AGENT_PLAYER_DATA_DIR: cfg.dataDir,
     [ISOLATED_ENV]: '1',
     ...FORCED_VARS,
-    OLLAMA_URL: (parent.OLLAMA_URL ?? '').trim() || DEAD_OLLAMA_URL,
-    LOCAL_MODEL_API_URL: (parent.LOCAL_MODEL_API_URL ?? '').trim() || `${DEAD_OLLAMA_URL}/v1`,
+    ...FORCED_PROVIDER_URLS,
   };
   for (const name of ['LANG', 'LC_ALL', 'TZ']) {
     if (parent[name]) child[name] = parent[name];
@@ -217,6 +285,18 @@ export function checkIsolatedServerEnv(env: NodeJS.ProcessEnv, ctx: IsolationCon
   for (const [name, forced] of Object.entries(FORCED_VARS)) {
     if ((env[name] ?? '').trim().toLowerCase() !== forced) errors.push(`${name} must be ${forced}`);
   }
+  // ISO-2: both local endpoints are exactly the dead port, and no other
+  // provider endpoint variable may point off the machine.
+  for (const [name, forced] of Object.entries(FORCED_PROVIDER_URLS)) {
+    if ((env[name] ?? '').trim() !== forced) errors.push(`${name} must be ${forced}`);
+  }
+  for (const name of Object.keys(env)) {
+    if (isProviderEndpointVar(name) && set(env, name) && !isLoopbackHttpUrl(env[name]!)) {
+      errors.push(`${name} must be a loopback http URL`);
+    }
+  }
+  // CLI providers and every exec-class tool stay off (tools/exec-policy.ts also refuses them).
+  if (set(env, 'AGENT_EXEC_TOOLS')) errors.push('AGENT_EXEC_TOOLS must be unset (CLI providers and exec tools are off)');
   if (dataDir) {
     if (!isInsideOrEqual(cwd, dataDir)) errors.push('the working directory must be inside AGENT_PLAYER_DATA_DIR');
     for (const name of ['HOME', 'XDG_CONFIG_HOME', 'TMPDIR']) {

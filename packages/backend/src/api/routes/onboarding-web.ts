@@ -19,6 +19,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { authorizeActiveRole } from '../../auth/route-guards.js';
 import { handleError } from '../error-handler.js';
+import { IsolatedModeError, ISOLATED_MODE_BODY } from '../../config/isolation.js';
 import {
   WizardInputError,
   completeWizard,
@@ -80,6 +81,7 @@ export async function onboardingWebRoutes(fastify: FastifyInstance) {
     try {
       return { success: true, state: await saveWizardStep(userId, step, currentStep) };
     } catch (error) {
+      if (error instanceof IsolatedModeError) return reply.code(403).send(ISOLATED_MODE_BODY);
       return handleError(reply, error, 'internal', '[Onboarding]');
     }
   });

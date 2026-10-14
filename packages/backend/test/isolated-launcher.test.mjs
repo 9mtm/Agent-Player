@@ -99,13 +99,35 @@ test('launcher: ALLOWED_ORIGINS must be an exact list of loopback origins', () =
   }
 });
 
-test('launcher: forced values cannot be overridden; Ollama URLs must be loopback', () => {
+test('launcher: forced values cannot be overridden', () => {
   assert.match(refused({ ...good, AGENT_PLAYER_BACKGROUND: 'on' }), /AGENT_PLAYER_BACKGROUND must be unset or off/);
   assert.match(refused({ ...good, EXTENSIONS_DISABLED: 'false' }), /EXTENSIONS_DISABLED/);
   assert.match(refused({ ...good, MEMORY_EMBEDDINGS: 'ollama' }), /MEMORY_EMBEDDINGS/);
-  assert.match(refused({ ...good, OLLAMA_URL: 'http://10.0.0.5:11434' }), /OLLAMA_URL must be a loopback/);
-  assert.match(refused({ ...good, LOCAL_MODEL_API_URL: 'https://api.example.com/v1' }), /LOCAL_MODEL_API_URL/);
-  assert.equal(iso.checkLauncherEnv({ ...good, OLLAMA_URL: 'http://127.0.0.1:11434' }, ctx).ok, true, 'an explicit loopback Ollama is the operator choice');
+  assert.match(refused({ ...good, AGENT_PLAYER_READONLY: '0' }), /AGENT_PLAYER_READONLY must be unset or 1/);
+  assert.equal(iso.checkLauncherEnv({ ...good, AGENT_PLAYER_READONLY: '1', AGENT_PLAYER_ISOLATED_STAGE: '1' }, ctx).ok, true);
+});
+
+test('ISO-2 launcher: every provider endpoint is refused when inherited, even a loopback one', () => {
+  for (const [name, value] of [['OLLAMA_URL', 'http://127.0.0.1:11434'], ['OLLAMA_URL', 'http://10.0.0.5:11434'],
+    ['LOCAL_MODEL_API_URL', 'http://127.0.0.1:11434/v1'], ['LOCAL_MODEL_API_URL', 'https://api.example.com/v1'],
+    ['OLLAMA_URL', 'http://127.0.0.1:9/'], ['OLLAMA_HOST', '127.0.0.1:11434'], ['ANTHROPIC_BASE_URL', 'https://x.example'],
+    ['OPENAI_BASE_URL', 'http://127.0.0.1:1'], ['OPENAI_API_BASE', 'https://x.example'], ['FOO_API_URL', 'https://x.example']]) {
+    const text = refused({ ...good, [name]: value });
+    assert.match(text, new RegExp(`${name} must be unset`), name);
+    assert.match(text, /stage 2 needs a separately reviewed setup/);
+    assert.equal(text.includes(value), false, 'no value echoed');
+  }
+});
+
+test('ISO-2 launcher: stage 2 is never available here; stage defaults to 1', () => {
+  assert.match(refused({ ...good, AGENT_PLAYER_ISOLATED_STAGE: '2' }), /stage 2 needs a separately reviewed setup/);
+  assert.match(refused({ ...good, AGENT_PLAYER_ISOLATED_STAGE: '2', OLLAMA_URL: 'http://127.0.0.1:11434' }), /OLLAMA_URL must be unset/);
+  assert.match(refused({ ...good, AGENT_PLAYER_ISOLATED_STAGE: '3' }), /AGENT_PLAYER_ISOLATED_STAGE must be unset or 1/);
+  const env = iso.buildIsolatedChildEnv(iso.checkLauncherEnv(good, ctx).config, { OLLAMA_URL: 'http://127.0.0.1:11434', LOCAL_MODEL_API_URL: 'http://127.0.0.1:11434/v1' }, '/n');
+  assert.equal(env.AGENT_PLAYER_ISOLATED_STAGE, '1');
+  assert.equal(env.AGENT_PLAYER_READONLY, '1');
+  assert.equal(env.OLLAMA_URL, 'http://127.0.0.1:9', 'never inherited');
+  assert.equal(env.LOCAL_MODEL_API_URL, 'http://127.0.0.1:9/v1', 'never inherited');
 });
 
 test('launcher: refusal messages never echo values', () => {
@@ -119,7 +141,8 @@ test('launcher: the child environment is built from nothing (no inherited secret
   const parent = { ...good, JWT_SECRET: 'x', ENCRYPTION_KEY: 'x', ANTHROPIC_API_KEY: 'x', OPENAI_API_KEY: 'x', AGENT_EXEC_TOOLS: 'true',
     SMTP_PASS: 'x', NODE_OPTIONS: '--require /tmp/evil.js', PATH: '/opt/homebrew/bin:/usr/bin', TZ: 'Europe/Berlin' };
   const env = iso.buildIsolatedChildEnv(r.config, parent, '/node/bin');
-  assert.deepEqual(Object.keys(env).sort(), ['AGENT_PLAYER_BACKGROUND', 'AGENT_PLAYER_DATA_DIR', 'AGENT_PLAYER_ISOLATED', 'ALLOWED_ORIGINS',
+  assert.deepEqual(Object.keys(env).sort(), ['AGENT_PLAYER_BACKGROUND', 'AGENT_PLAYER_DATA_DIR', 'AGENT_PLAYER_ISOLATED',
+    'AGENT_PLAYER_ISOLATED_STAGE', 'AGENT_PLAYER_READONLY', 'ALLOWED_ORIGINS',
     'EXTENSIONS_DISABLED', 'HOME', 'HOST', 'LOCAL_MODEL_API_URL', 'MEMORY_EMBEDDINGS', 'NEXT_PUBLIC_APP_URL', 'NODE_ENV', 'OLLAMA_URL',
     'PATH', 'PORT', 'TMPDIR', 'TZ', 'XDG_CONFIG_HOME']);
   assert.equal(env.HOST, '127.0.0.1');
@@ -151,6 +174,58 @@ test('server (AGENT_PLAYER_ISOLATED=1): the same rules, plus cwd/HOME/TMPDIR ins
   assert.match(errs({ AGENT_PLAYER_DATA_DIR: join(repoRoot, 'x') }), /outside the source checkout/);
   assert.match(errs({ ALLOWED_ORIGINS: undefined }), /ALLOWED_ORIGINS/);
   assert.match(errs({ PORT: undefined }), /PORT is required/);
+  assert.match(errs({ AGENT_PLAYER_READONLY: undefined }), /AGENT_PLAYER_READONLY must be 1/);
+});
+
+test('ISO-2 server (AGENT_PLAYER_ISOLATED=1): provider endpoints are the dead port, others loopback; CLI/exec off', () => {
+  const env = iso.buildIsolatedChildEnv(iso.checkLauncherEnv(good, ctx).config, {}, '/node/bin');
+  const errs = (patch) => iso.checkIsolatedServerEnv({ ...env, ...patch }, ctx, join(dataDir, 'run')).join('\n');
+  assert.equal(errs({}), '');
+  assert.match(errs({ OLLAMA_URL: 'http://127.0.0.1:11434' }), /OLLAMA_URL must be http:\/\/127\.0\.0\.1:9/);
+  assert.match(errs({ OLLAMA_URL: undefined }), /OLLAMA_URL must be/);
+  assert.match(errs({ LOCAL_MODEL_API_URL: 'https://api.example.com/v1' }), /LOCAL_MODEL_API_URL must be/);
+  assert.match(errs({ ANTHROPIC_BASE_URL: 'https://api.example.com' }), /ANTHROPIC_BASE_URL must be a loopback http URL/);
+  assert.match(errs({ OPENAI_API_BASE: 'https://api.example.com' }), /OPENAI_API_BASE must be a loopback/);
+  assert.match(errs({ SOME_API_URL: 'http://10.0.0.1:1' }), /SOME_API_URL must be a loopback/);
+  assert.match(errs({ OLLAMA_HOST: '0.0.0.0:11434' }), /OLLAMA_HOST must be a loopback/);
+  assert.equal(errs({ OPENAI_BASE_URL: 'http://127.0.0.1:9/v1' }), '', 'a loopback endpoint is accepted server-side');
+  assert.match(errs({ AGENT_EXEC_TOOLS: 'true' }), /AGENT_EXEC_TOOLS must be unset/);
+});
+
+test('ISO-2: isolated mode forces exec tools and CLI providers off', async () => {
+  const { isExecToolsEnabled } = await import(join(backendDir, 'src/tools/exec-policy.ts'));
+  const { claudeCliTool, geminiCliTool } = await import(join(backendDir, 'src/tools/cli/index.ts'));
+  const saved = { a: process.env.AGENT_EXEC_TOOLS, i: process.env.AGENT_PLAYER_ISOLATED };
+  try {
+    process.env.AGENT_EXEC_TOOLS = 'true';
+    process.env.AGENT_PLAYER_ISOLATED = '1';
+    assert.equal(isExecToolsEnabled(), false);
+    for (const tool of [claudeCliTool, geminiCliTool]) {
+      const r = await tool.execute({ prompt: 'x' }, { workspaceDir: base, userId: 'u' });
+      assert.match(r.content[0].text, /is disabled: host command execution for agents is off/, tool.name);
+    }
+    delete process.env.AGENT_PLAYER_ISOLATED;
+    assert.equal(isExecToolsEnabled(), true, 'outside isolated mode the operator flag still works');
+  } finally {
+    if (saved.a === undefined) delete process.env.AGENT_EXEC_TOOLS; else process.env.AGENT_EXEC_TOOLS = saved.a;
+    if (saved.i === undefined) delete process.env.AGENT_PLAYER_ISOLATED; else process.env.AGENT_PLAYER_ISOLATED = saved.i;
+  }
+});
+
+test('ISO-2 settings: isolated mode refuses a non-loopback or remote provider (IsolatedModeError, 403 isolated_mode)', () => {
+  const on = { AGENT_PLAYER_ISOLATED: '1' };
+  const refusedSettings = (u) => assert.throws(() => iso.assertProviderSettingsAllowed(u, on),
+    (e) => e instanceof iso.IsolatedModeError && e.statusCode === 403 && e.code === 'isolated_mode', JSON.stringify(u));
+  refusedSettings({ local: { url: 'http://10.0.0.5:11434', model: 'm' } });
+  refusedSettings({ local: { url: 'https://ollama.example.com', model: 'm' } });
+  refusedSettings({ local: { url: 'http://user:pw@127.0.0.1:11434', model: 'm' } });
+  refusedSettings({ local: { url: 42 } });
+  refusedSettings({ provider: 'claude' });
+  refusedSettings({ provider: 'openai' });
+  iso.assertProviderSettingsAllowed({ provider: 'local', local: { url: 'http://127.0.0.1:9', model: 'm' } }, on);
+  iso.assertProviderSettingsAllowed({ temperature: 0.2 }, on);
+  iso.assertProviderSettingsAllowed({ provider: 'claude', local: { url: 'http://10.0.0.5:1' } }, {}); // not isolated: unchanged
+  assert.deepEqual({ ...iso.ISOLATED_MODE_BODY }, { error: 'Forbidden', code: 'isolated_mode' });
 });
 
 test('data root unset: every helper returns the legacy location unchanged', () => {

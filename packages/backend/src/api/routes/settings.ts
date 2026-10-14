@@ -9,6 +9,7 @@ import type { AgentSettings } from '../../settings/types.js';
 import { authorizeActiveRole, OWNER_OR_ADMIN } from '../../auth/route-guards.js';
 import { getGlobalProviderApiKey } from '../../credentials/authority.js';
 import { safeErrorFields } from '../../services/safe-error-log.js';
+import { IsolatedModeError, ISOLATED_MODE_BODY } from '../../config/isolation.js';
 import {
   providerRejectedBody,
   providerUnreachableBody,
@@ -69,6 +70,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
           message: 'Settings updated successfully',
         };
       } catch (error: any) {
+        if (error instanceof IsolatedModeError) return reply.status(403).send(ISOLATED_MODE_BODY);
         // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
         return handleError(reply, error, 'internal', '[Settings]');
       }

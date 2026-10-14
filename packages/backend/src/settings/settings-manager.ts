@@ -9,6 +9,7 @@ import { DEFAULT_SETTINGS } from './types.js';
 import { encrypt, decrypt, maskApiKey, isEncrypted } from './encryption.js';
 import { isMaskedSecret } from '../credentials/secret-mask.js';
 import { getDatabase } from '../db/index.js';
+import { assertProviderSettingsAllowed } from '../config/isolation.js';
 
 export class SettingsManager {
   private get db() {
@@ -98,6 +99,8 @@ export class SettingsManager {
    * Update settings (encrypts API keys before saving)
    */
   updateSettings(settings: Partial<AgentSettings>): void {
+    // RUN-ISO ISO-2: an isolated server never stores a provider that leaves the machine.
+    assertProviderSettingsAllowed(settings);
     const current = this.getSettings();
     const updated = { ...current, ...settings };
 

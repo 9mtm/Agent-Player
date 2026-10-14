@@ -29,6 +29,8 @@ export const EXEC_CLASS_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 export function isExecToolsEnabled(): boolean {
+  // RUN-ISO ISO-2: an isolated server never runs exec tools or CLI providers.
+  if (process.env.AGENT_PLAYER_ISOLATED === '1') return false;
   return process.env[EXEC_TOOLS_ENV_FLAG] === 'true';
 }
 
