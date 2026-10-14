@@ -15,6 +15,7 @@
  * ENCRYPTION_KEY); only ciphertext, IV and auth tag are stored.
  */
 
+import { dataPathOr } from '../config/data-root.js';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -58,11 +59,11 @@ export class CredentialStorage implements ICredentialStorage {
 
   constructor(credentialsDir?: string, runner: SqlRunner = credentialsRunnerFor(dbDriver())) {
     // Default to home directory
-    this.credentialsDir = credentialsDir || path.join(
+    this.credentialsDir = credentialsDir || dataPathOr(path.join(
       os.homedir(),
       '.agent-player',
       'credentials'
-    );
+    ), 'credentials');
     this.sql = runner;
     this.encryption = getEncryptionService();
   }

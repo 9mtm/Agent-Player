@@ -5,10 +5,11 @@
  * File-based storage for agent identity and learned patterns
  */
 
+import { dataPath } from '../config/data-root.js';
 import fs from 'fs/promises';
 import path from 'path';
 
-const AGENTS_DIR = path.join(process.cwd(), '.data', 'agents');
+const AGENTS_DIR = dataPath('agents');
 
 export interface AgentFiles {
   personality: string;

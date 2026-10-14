@@ -3,6 +3,7 @@
  * Persistent storage for audit events using SQLite
  */
 
+import { dataPathOr } from '../config/data-root.js';
 import Database from 'better-sqlite3';
 import { mkdirSync, existsSync } from 'fs';
 import { dirname } from 'path';
@@ -22,7 +23,7 @@ export class AuditStorage {
   private config: AuditConfig;
   private dbPath: string;
 
-  constructor(dbPath: string = './.data/audit/audit.db', config: Partial<AuditConfig> = {}) {
+  constructor(dbPath: string = dataPathOr('./.data/audit/audit.db', 'audit', 'audit.db'), config: Partial<AuditConfig> = {}) {
     this.dbPath = dbPath;
     this.config = { ...DEFAULT_AUDIT_CONFIG, ...config };
   }
@@ -410,7 +411,7 @@ export class AuditStorage {
 let auditStorage: AuditStorage | null = null;
 
 // Default audit database path (can be overridden via environment variable)
-const DEFAULT_AUDIT_DB_PATH = process.env.AUDIT_DB_PATH || './.data/audit/audit.db';
+const DEFAULT_AUDIT_DB_PATH = process.env.AUDIT_DB_PATH || dataPathOr('./.data/audit/audit.db', 'audit', 'audit.db');
 
 export function getAuditStorage(
   dbPath?: string,

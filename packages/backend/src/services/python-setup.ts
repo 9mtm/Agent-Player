@@ -8,6 +8,7 @@
  * Usage: npm run setup:python
  */
 
+import { dataPath } from '../config/data-root.js';
 import https from 'https';
 import http from 'http';
 import path from 'path';
@@ -19,7 +20,7 @@ import { clearCache } from './python-env.js';
 
 const PYTHON_VERSION = process.env.PYTHON_EMBED_VERSION || '3.12.8';
 
-const DATA_DIR = path.join(process.cwd(), '.data', 'python');
+const DATA_DIR = dataPath('python');
 const SETUP_FLAG = path.join(DATA_DIR, '.setup-complete');
 const REQUIREMENTS_PATH = path.join(process.cwd(), 'python-scripts', 'requirements.txt');
 

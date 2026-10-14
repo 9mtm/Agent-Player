@@ -11,6 +11,7 @@
  * a working directory inside the server's data directory.
  */
 
+import { dataRoot } from '../config/data-root.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -118,7 +119,8 @@ function realOrResolved(p: string): string {
 
 /** Directories that hold server data (DB, encryption keys, backups). */
 function protectedDataDirs(): string[] {
-  const dirs = [path.join(process.cwd(), '.data')];
+  // The data root and, when AGENT_PLAYER_DATA_DIR moves it, the legacy <cwd>/.data too.
+  const dirs = [dataRoot(), path.join(process.cwd(), '.data')];
   if (process.env.DATABASE_PATH) dirs.push(path.dirname(process.env.DATABASE_PATH));
   return dirs.map(realOrResolved);
 }

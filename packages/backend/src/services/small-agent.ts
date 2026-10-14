@@ -33,6 +33,7 @@
  * secret-looking values are redacted from it.
  */
 
+import { dataPath, dataRoot } from '../config/data-root.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -250,7 +251,7 @@ const HOME_CREDENTIAL_DIRS = ['.config', '.aws', '.kube', '.docker', '.gnupg', '
  */
 export function smallAgentProtectedTrees(): string[] {
   const home = os.homedir();
-  const list = [process.cwd(), path.join(process.cwd(), '.data'), path.join(process.cwd(), '.data', 'secrets.env'), cliConfigDir(), '/etc', '/private/etc'];
+  const list = [process.cwd(), dataRoot(), dataPath('secrets.env'), path.join(process.cwd(), '.data'), cliConfigDir(), '/etc', '/private/etc'];
   if (process.env.DATABASE_PATH) list.push(path.dirname(process.env.DATABASE_PATH));
   for (const d of HOME_CREDENTIAL_DIRS) list.push(path.join(home, d));
   try {

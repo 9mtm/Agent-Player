@@ -5,6 +5,7 @@
  * to browse, search, and install Claude Skills.
  */
 
+import { dataPathOr } from '../config/data-root.js';
 import { Octokit } from '@octokit/rest';
 import { getDatabase } from '../db/index.js';
 import fs from 'fs/promises';
@@ -14,7 +15,7 @@ import { isValidSkillName, isValidSkillSourcePath } from '../skills/skill-ids.js
 const ANTHROPIC_REPO_OWNER = 'anthropics';
 const ANTHROPIC_REPO_NAME = 'skills';
 const SKILLS_BASE_PATH = 'skills';
-const LOCAL_SKILLS_DIR = '.data/skills';
+const LOCAL_SKILLS_DIR = dataPathOr('.data/skills', 'skills');
 
 /** True when `filePath` resolves to a file directly inside the local skills directory. */
 function isInsideLocalSkillsDir(filePath: string): boolean {

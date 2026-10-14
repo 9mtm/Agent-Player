@@ -3,6 +3,7 @@
  * POST /api/world-generator/ai - Generate world from text prompt
  */
 
+import { dataPath } from '../../config/data-root.js';
 import { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
@@ -128,7 +129,7 @@ Generate the 3D world JSON description:`,
       const filename = `ai-world-${timestamp}.json`;
 
       // Save to storage
-      const storagePath = path.join(process.cwd(), '.data', 'storage', 'cdn', 'worlds');
+      const storagePath = dataPath('storage', 'cdn', 'worlds');
       if (!fs.existsSync(storagePath)) {
         fs.mkdirSync(storagePath, { recursive: true });
       }

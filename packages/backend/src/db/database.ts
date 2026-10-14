@@ -3,6 +3,7 @@
  * Replaces the temporary in-memory database
  */
 
+import { mainDatabasePath } from '../config/data-root.js';
 import Database from 'better-sqlite3';
 import { readFileSync, readdirSync, chmodSync } from 'fs';
 import { join, dirname } from 'path';
@@ -368,7 +369,7 @@ let dbInstance: DatabaseManager | null = null;
 export function getDatabase(config?: DatabaseConfig): DatabaseManager {
   if (!dbInstance) {
     const defaultConfig: DatabaseConfig = {
-      path: process.env.DATABASE_PATH || join(process.cwd(), '.data', 'agent-player.db'),
+      path: mainDatabasePath(),
       verbose: process.env.NODE_ENV === 'development'
     };
 

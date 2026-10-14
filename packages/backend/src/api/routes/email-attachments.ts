@@ -8,6 +8,7 @@
  * - Delete attachment
  */
 
+import { dataPathOr } from '../../config/data-root.js';
 import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
@@ -135,7 +136,7 @@ export default async function emailAttachmentsRoutes(fastify: FastifyInstance) {
             // Save to storage
             const fileId = uuidv4();
             const ext = path.extname(filename);
-            const storagePath = path.join('.data', 'storage', 'cdn', 'email-attachments', `${fileId}${ext}`);
+            const storagePath = path.join(dataPathOr('.data'), 'storage', 'cdn', 'email-attachments', `${fileId}${ext}`);
 
             // Ensure directory exists
             await fs.mkdir(path.dirname(storagePath), { recursive: true });

@@ -12,6 +12,7 @@
  * promise on PostgreSQL (`Maybe<T>`); callers await them.
  */
 
+import { dataPathOr } from '../config/data-root.js';
 import { v4 as uuidv4 } from 'uuid';
 import Database from 'better-sqlite3';
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
@@ -112,7 +113,7 @@ export class KeyManager {
   /**
    * Initialize the key manager
    */
-  async initialize(dbPath: string = './.data/encryption/keys.db'): Promise<void> {
+  async initialize(dbPath: string = dataPathOr('./.data/encryption/keys.db', 'encryption', 'keys.db')): Promise<void> {
     if (this.driver === 'postgres') {
       // Main PostgreSQL database; the table comes from migrations-pg (no file, no PRAGMA).
       await requirePgTable(this.table, 'r003_vault_keys');

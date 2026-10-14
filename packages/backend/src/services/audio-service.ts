@@ -1,3 +1,4 @@
+import { dataPath } from '../config/data-root.js';
 import OpenAI from 'openai';
 import fs from 'fs';
 import path from 'path';
@@ -32,7 +33,7 @@ export class AudioService {
     }
 
     // Create audio storage directory
-    this.audioDir = path.join(process.cwd(), '.data', 'audio');
+    this.audioDir = dataPath('audio');
     if (!fs.existsSync(this.audioDir)) {
       fs.mkdirSync(this.audioDir, { recursive: true });
     }

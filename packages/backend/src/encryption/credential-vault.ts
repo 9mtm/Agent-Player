@@ -13,6 +13,7 @@
  * return a promise on PostgreSQL (`Maybe<T>`); callers await them.
  */
 
+import { dataPathOr } from '../config/data-root.js';
 import { v4 as uuidv4 } from 'uuid';
 import Database from 'better-sqlite3';
 import { mkdirSync, existsSync } from 'fs';
@@ -143,7 +144,7 @@ export class CredentialVault {
    */
   async initialize(dbPath?: string): Promise<void> {
     // Use environment variable or default path
-    const resolvedPath = dbPath || process.env.ENCRYPTION_DB_PATH || './.data/encryption/credentials.db';
+    const resolvedPath = dbPath || process.env.ENCRYPTION_DB_PATH || dataPathOr('./.data/encryption/credentials.db', 'encryption', 'credentials.db');
 
     // Ensure key manager is initialized
     await this.keyManager.initialize();

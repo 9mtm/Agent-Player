@@ -17,6 +17,7 @@
  * at startup.
  */
 
+import { dataPathOr } from '../config/data-root.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -30,7 +31,9 @@ function repoRoot(): string {
 }
 
 export function getUploadsRoot(): string {
-  return process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : path.join(repoRoot(), '.data', 'uploads');
+  if (process.env.UPLOADS_DIR) return path.resolve(process.env.UPLOADS_DIR);
+  // RUN-ISO F1: under AGENT_PLAYER_DATA_DIR when set (never two levels above cwd).
+  return dataPathOr(path.join(repoRoot(), '.data', 'uploads'), 'uploads');
 }
 
 /** Old location (repo `public/storage`), only for the explicit move. */

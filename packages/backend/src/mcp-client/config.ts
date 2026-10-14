@@ -8,6 +8,7 @@
  * sanitized). Server names cannot contain `_`, so the split is unambiguous.
  */
 
+import { dataPathOr } from '../config/data-root.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -47,7 +48,7 @@ const RESERVED_HEADERS = new Set(['host', 'content-length', 'content-type', 'acc
 /** Env vars the owner may not set for a stdio server (loader / interpreter hijack, server secrets). */
 const RESERVED_ENV = new Set([
   'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH', 'NODE_OPTIONS',
-  'ENCRYPTION_KEY', 'JWT_SECRET', 'DATABASE_PATH', 'AGENT_EXEC_TOOLS',
+  'ENCRYPTION_KEY', 'JWT_SECRET', 'DATABASE_PATH', 'AGENT_EXEC_TOOLS', 'AGENT_PLAYER_DATA_DIR',
 ]);
 
 export class McpConfigError extends Error {}
@@ -195,10 +196,13 @@ function inside(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-/** Base folder for stdio MCP servers: MCP_SERVERS_DIR or ~/.agent-player/mcp-servers. */
+/** Base folder for stdio MCP servers: MCP_SERVERS_DIR, else <data root>/mcp-servers or ~/.agent-player/mcp-servers. */
 export function mcpServersBaseDir(): string {
   const configured = (process.env.MCP_SERVERS_DIR || '').trim();
-  return path.resolve(configured || path.join(os.homedir(), '.agent-player', 'mcp-servers'));
+  // RUN-ISO F1: under AGENT_PLAYER_DATA_DIR when set. That folder is a data
+  // directory, so ensureServerWorkDir refuses it (fails closed) unless
+  // MCP_SERVERS_DIR names a folder outside it.
+  return path.resolve(configured || dataPathOr(path.join(os.homedir(), '.agent-player', 'mcp-servers'), 'mcp-servers'));
 }
 
 /**

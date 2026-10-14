@@ -20,6 +20,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { dataRootOverride } from './data-root.js';
 
 export const SECRETS_FILE_NAME = 'secrets.env';
 
@@ -106,8 +107,13 @@ export interface SecretsReport {
   weak: string[];
 }
 
-export function defaultDataDir(cwd: string = process.cwd()): string {
-  return path.join(cwd, '.data');
+/** `AGENT_PLAYER_DATA_DIR` when set (and no cwd is given), else `<cwd>/.data`. */
+export function defaultDataDir(cwd?: string): string {
+  if (cwd === undefined) {
+    const root = dataRootOverride();
+    if (root) return root;
+  }
+  return path.join(cwd ?? process.cwd(), '.data');
 }
 
 export function secretsFilePath(dataDir: string = defaultDataDir()): string {

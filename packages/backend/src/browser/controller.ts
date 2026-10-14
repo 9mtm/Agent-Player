@@ -3,6 +3,7 @@
  * Manages browser instances and sessions
  */
 
+import { dataPathOr } from '../config/data-root.js';
 import { v4 as uuidv4 } from 'uuid';
 import { mkdirSync, existsSync } from 'fs';
 import {
@@ -45,8 +46,8 @@ interface SessionData {
 
 export class BrowserController {
   private sessions: Map<string, SessionData> = new Map();
-  private screenshotDir: string = './.data/browser/screenshots';
-  private downloadDir: string = './.data/browser/downloads';
+  private screenshotDir: string = dataPathOr('./.data/browser/screenshots', 'browser', 'screenshots');
+  private downloadDir: string = dataPathOr('./.data/browser/downloads', 'browser', 'downloads');
   private startTime: Date = new Date();
   private stats: BrowserStats = {
     activeSessions: 0,

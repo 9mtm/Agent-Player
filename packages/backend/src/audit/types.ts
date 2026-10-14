@@ -3,6 +3,8 @@
  * Track and monitor all sensitive operations
  */
 
+import { dataPathOr } from '../config/data-root.js';
+
 /** Audit event severity levels */
 export type AuditSeverity = 'low' | 'medium' | 'high' | 'critical';
 
@@ -179,7 +181,7 @@ export const DEFAULT_AUDIT_CONFIG: AuditConfig = {
   maxEvents: 100000,
   logToConsole: process.env.NODE_ENV === 'development',
   logToFile: true,
-  filePath: './.data/audit/audit.log',
+  filePath: dataPathOr('./.data/audit/audit.log', 'audit', 'audit.log'),
   sanitize: true,
   sensitiveFields: ['password', 'token', 'secret', 'apiKey', 'credential', 'key'],
 };

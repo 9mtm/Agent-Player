@@ -31,6 +31,7 @@
  * that start with `###` are written with a leading backslash.
  */
 
+import { dataPath } from '../config/data-root.js';
 import { isoUtc } from '../api/timestamps.js';
 import fs from 'fs/promises';
 import path from 'path';
@@ -104,7 +105,7 @@ export function isFileProposal(p: Pick<MemoryProposal, 'source'>): boolean {
 // ---------------------------------------------------------------------------
 
 function agentsRoot(): string {
-  return path.resolve(process.cwd(), '.data', 'agents');
+  return dataPath('agents');
 }
 
 export function isValidAgentId(id: unknown): id is string {

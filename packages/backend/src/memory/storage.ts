@@ -9,6 +9,7 @@
  * ranks the same rows the same way on SQLite and PostgreSQL.
  */
 
+import { dataPathOr } from '../config/data-root.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
@@ -110,7 +111,7 @@ const UPSERT_SQL = `
 export class MemoryStorage implements IMemoryStorage {
   private memoryDir: string;
 
-  constructor(memoryDir = '../../.data/memory') {
+  constructor(memoryDir = dataPathOr('../../.data/memory', 'memory')) {
     this.memoryDir = memoryDir;
   }
 

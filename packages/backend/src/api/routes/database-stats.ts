@@ -3,6 +3,7 @@
  * Provides real-time statistics about the database
  */
 
+import { dataPath, mainDatabasePath } from '../../config/data-root.js';
 import { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { existsSync, statSync } from 'fs';
@@ -10,7 +11,7 @@ import { join } from 'path';
 import { handleError } from '../error-handler.js';
 
 // Use the same path logic as the database module
-const DATABASE_PATH = process.env.DATABASE_PATH || join(process.cwd(), '.data', 'agent-player.db');
+const DATABASE_PATH = mainDatabasePath();
 
 interface TableStats {
     name: string;
@@ -157,7 +158,7 @@ export async function databaseStatsRoutes(fastify: FastifyInstance) {
             const { join } = await import('path');
 
             const dbPath = DATABASE_PATH;
-            const backupsDir = join(process.cwd(), '.data', 'backups');
+            const backupsDir = dataPath('backups');
 
             // Create backups directory if it doesn't exist
             if (!existsSync(backupsDir)) {
@@ -196,7 +197,7 @@ export async function databaseStatsRoutes(fastify: FastifyInstance) {
             const { readdirSync } = await import('fs');
             const { join } = await import('path');
 
-            const backupsDir = join(process.cwd(), '.data', 'backups');
+            const backupsDir = dataPath('backups');
 
             if (!existsSync(backupsDir)) {
                 return reply.send({ backups: [] });
@@ -235,7 +236,7 @@ export async function databaseStatsRoutes(fastify: FastifyInstance) {
                 return reply.status(400).send({ error: 'Invalid filename' });
             }
 
-            const backupPath = join(process.cwd(), '.data', 'backups', filename);
+            const backupPath = dataPath('backups', filename);
 
             if (!existsSync(backupPath)) {
                 return reply.status(404).send({ error: 'Backup not found' });
@@ -267,7 +268,7 @@ export async function databaseStatsRoutes(fastify: FastifyInstance) {
                 return reply.status(400).send({ error: 'Invalid filename' });
             }
 
-            const backupPath = join(process.cwd(), '.data', 'backups', filename);
+            const backupPath = dataPath('backups', filename);
 
             if (!existsSync(backupPath)) {
                 return reply.status(404).send({ error: 'Backup not found' });

@@ -17,6 +17,8 @@
  *    match. The secret itself is never sent.
  */
 
+import { dataRootOverride } from '../config/data-root.js';
+import { dataPath } from '../config/data-root.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -29,12 +31,15 @@ const PROOF_CONTEXT = 'agent-player-instance-v1';
 export interface InstanceIdentity { id: string; secret: string }
 
 export function instanceDataFile(): string {
-  return path.join(process.cwd(), '.data', INSTANCE_FILE_NAME);
+  return dataPath(INSTANCE_FILE_NAME);
 }
 
 /** CLI config directory (same rules as packages/cli/src/utils/auth-store.ts). */
 export function cliConfigDir(env: NodeJS.ProcessEnv = process.env): string {
   if (env.AGENT_PLAYER_CONFIG_DIR) return env.AGENT_PLAYER_CONFIG_DIR;
+  // RUN-ISO F1: with a data root, the CLI config copy stays inside it.
+  const root = dataRootOverride(env);
+  if (root) return path.join(root, 'cli-config');
   if (env.XDG_CONFIG_HOME) return path.join(env.XDG_CONFIG_HOME, 'agent-player');
   if (process.platform === 'win32' && env.APPDATA) return path.join(env.APPDATA, 'agent-player');
   return path.join(os.homedir(), '.config', 'agent-player');

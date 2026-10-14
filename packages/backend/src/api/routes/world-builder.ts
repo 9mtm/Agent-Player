@@ -3,6 +3,7 @@
  * CRUD operations for world builder data
  */
 
+import { dataPath } from '../../config/data-root.js';
 import { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
@@ -45,7 +46,7 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
           if (file && file.filepath) {
             const fs = await import('fs');
             const path = await import('path');
-            const fullPath = path.join(process.cwd(), '.data', 'storage', file.filepath);
+            const fullPath = dataPath('storage', file.filepath);
 
             if (fs.existsSync(fullPath)) {
               const content = fs.readFileSync(fullPath, 'utf-8');
@@ -117,7 +118,7 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
       const fs = await import('fs');
       const path = await import('path');
 
-      const storagePath = path.join(process.cwd(), '.data', 'storage', 'cdn', 'worlds');
+      const storagePath = dataPath('storage', 'cdn', 'worlds');
       fastify.log.info('[World Builder API] 🔍 Storage path:', storagePath);
 
       if (!fs.existsSync(storagePath)) {
@@ -248,7 +249,7 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
         if (file && file.filepath) {
           const fs = await import('fs');
           const path = await import('path');
-          const fullPath = path.join(process.cwd(), '.data', 'storage', file.filepath);
+          const fullPath = dataPath('storage', file.filepath);
 
           fastify.log.info('[World Builder API] 🔍 File full path:', fullPath);
 

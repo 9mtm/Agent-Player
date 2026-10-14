@@ -28,6 +28,7 @@
  *  5. files are opened with O_NOFOLLOW and must be regular files; size limits.
  */
 
+import { dataPath, dataRoot } from '../../config/data-root.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -44,7 +45,7 @@ export class FileSandboxError extends Error {
 
 /** Directory that holds all agent workspaces. */
 export function workspacesBaseDir(): string {
-  return path.join(process.cwd(), '.data', 'workspaces');
+  return dataPath('workspaces');
 }
 
 /** Directory name of an agent's workspace (safe characters only). */
@@ -136,7 +137,7 @@ function isEnvFileName(name: string): boolean {
 
 /** Backend data folder (`<cwd>/.data`), on-disk case. */
 export function backendDataDir(): string {
-  return canonicalPath(path.join(process.cwd(), '.data'));
+  return canonicalPath(dataRoot());
 }
 
 /**

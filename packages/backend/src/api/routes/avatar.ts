@@ -1,3 +1,4 @@
+import { dataPath } from '../../config/data-root.js';
 import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { getAudioService } from '../../services/audio-service.js';
@@ -342,7 +343,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
 
       const audioService = getAudioService();
       const { audioId } = await audioService.textToSpeech({ text, language, voice });
-      const audioPath = path.join(process.cwd(), '.data', 'audio', `${audioId}.mp3`);
+      const audioPath = dataPath('audio', `${audioId}.mp3`);
 
       if (!fs.existsSync(audioPath)) {
         return reply.status(500).send({ error: 'Audio file not found after TTS' });
@@ -380,7 +381,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
 
       const audioService = getAudioService();
       const { audioId } = await audioService.textToSpeech({ text, language, voice });
-      const audioPath = path.join(process.cwd(), '.data', 'audio', `${audioId}.mp3`);
+      const audioPath = dataPath('audio', `${audioId}.mp3`);
 
       if (!fs.existsSync(audioPath)) return reply.status(500).send({ error: 'Audio file not found' });
 

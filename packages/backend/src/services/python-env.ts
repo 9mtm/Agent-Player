@@ -9,13 +9,14 @@
  * scattered across audio-service.ts and desktop.ts.
  */
 
+import { dataPath } from '../config/data-root.js';
 import path from 'path';
 import fs from 'fs';
 import { spawn, execSync, type ChildProcess, type SpawnOptions } from 'child_process';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const DATA_DIR = path.join(process.cwd(), '.data', 'python');
+const DATA_DIR = dataPath('python');
 const SETUP_FLAG = path.join(DATA_DIR, '.setup-complete');
 
 // ─── Types ───────────────────────────────────────────────────────────────────

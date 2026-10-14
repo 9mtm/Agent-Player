@@ -1,3 +1,4 @@
+import { dataPath } from '../../config/data-root.js';
 import type { FastifyInstance } from 'fastify';
 import { handleError } from '../error-handler.js';
 import { getAudioService } from '../../services/audio-service.js';
@@ -107,7 +108,7 @@ export async function registerAudioRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: 'Audio file not found' });
       }
 
-      const audioPath = path.join(process.cwd(), '.data', 'audio', `${id}.mp3`);
+      const audioPath = dataPath('audio', `${id}.mp3`);
 
       // Check if file exists
       if (!fs.existsSync(audioPath)) {
@@ -136,7 +137,7 @@ export async function registerAudioRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'Invalid audio id' });
       }
 
-      const audioPath = path.join(process.cwd(), '.data', 'audio', `${id}.mp3`);
+      const audioPath = dataPath('audio', `${id}.mp3`);
 
       if (fs.existsSync(audioPath)) {
         fs.unlinkSync(audioPath);

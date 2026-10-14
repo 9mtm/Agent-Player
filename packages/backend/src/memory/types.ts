@@ -3,6 +3,8 @@
  * Enhanced memory architecture with temporal layers and relationships
  */
 
+import { dataPathOr } from '../config/data-root.js';
+
 // ============ Core Types ============
 
 /** Memory entry type */
@@ -282,8 +284,8 @@ export interface MemoryConfig {
 
 /** Default memory configuration */
 export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
-  storageDir: './.data/memory',
-  dbPath: './.data/memory/memory.db',
+  storageDir: dataPathOr('./.data/memory', 'memory'),
+  dbPath: dataPathOr('./.data/memory/memory.db', 'memory', 'memory.db'),
   embeddingProvider: 'local',
   chunkSize: 400,
   chunkOverlap: 80,

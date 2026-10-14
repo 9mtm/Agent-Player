@@ -4,6 +4,7 @@
  * Routes messages between channels and agent with shared context
  */
 
+import { dataPathOr } from '../config/data-root.js';
 import { EventEmitter } from 'events';
 import {
   GatewayEvent
@@ -39,7 +40,7 @@ export class UnifiedGateway extends EventEmitter implements IGateway {
       maxHistorySize: config.maxHistorySize || 100,
       syncAcrossChannels: config.syncAcrossChannels ?? true,
       notifyAllChannels: config.notifyAllChannels ?? false,
-      storageDir: config.storageDir || './.data/gateway'
+      storageDir: config.storageDir || dataPathOr('./.data/gateway', 'gateway')
     };
 
     this.sessionManager = getSessionManager(

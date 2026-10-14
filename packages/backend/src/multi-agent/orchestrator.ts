@@ -3,6 +3,7 @@
  * Manages agent spawning, task assignment, and coordination
  */
 
+import { dataPathOr } from '../config/data-root.js';
 import { v4 as uuidv4 } from 'uuid';
 import Database from 'better-sqlite3';
 import { mkdirSync, existsSync } from 'fs';
@@ -35,7 +36,7 @@ export class AgentOrchestrator {
   /**
    * Initialize the orchestrator
    */
-  async initialize(dbPath: string = './.data/multi-agent/orchestrator.db'): Promise<void> {
+  async initialize(dbPath: string = dataPathOr('./.data/multi-agent/orchestrator.db', 'multi-agent', 'orchestrator.db')): Promise<void> {
     const dir = dirname(dbPath);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });

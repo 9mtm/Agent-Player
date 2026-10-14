@@ -1,3 +1,4 @@
+import { dataPath, dataRoot } from '../../config/data-root.js';
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -11,7 +12,7 @@ import { safeErrorFields } from '../../services/safe-error-log.js';
 
 const execAsync = promisify(exec);
 
-const SETUP_FLAG_FILE = join(process.cwd(), '.data', '.setup_complete');
+const SETUP_FLAG_FILE = dataPath('.setup_complete');
 
 /** True once a real owner/admin account exists (system accounts excluded). */
 function ownerExists(): boolean {
@@ -99,7 +100,7 @@ export default async function setupRoutes(fastify: FastifyInstance) {
 
       // Check/create required directories
       try {
-        const dataDir = join(process.cwd(), '.data');
+        const dataDir = dataRoot();
         if (!existsSync(dataDir)) {
           mkdirSync(dataDir, { recursive: true });
         }
@@ -137,7 +138,7 @@ export default async function setupRoutes(fastify: FastifyInstance) {
   // Initialize database and run migrations
   fastify.post('/api/setup/database', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const dataDir = join(process.cwd(), '.data');
+      const dataDir = dataRoot();
 
       // Ensure .data directory exists
       if (!existsSync(dataDir)) {
@@ -267,7 +268,7 @@ export default async function setupRoutes(fastify: FastifyInstance) {
   // Mark setup as complete
   fastify.post('/api/setup/complete', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const dataDir = join(process.cwd(), '.data');
+      const dataDir = dataRoot();
 
       // Ensure .data directory exists
       if (!existsSync(dataDir)) {

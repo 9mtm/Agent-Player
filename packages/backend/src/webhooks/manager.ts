@@ -3,6 +3,7 @@
  * Manages webhook configurations and triggers
  */
 
+import { dataPathOr } from '../config/data-root.js';
 import { v4 as uuidv4 } from 'uuid';
 import Database from 'better-sqlite3';
 import { mkdirSync, existsSync } from 'fs';
@@ -27,7 +28,7 @@ export class WebhookManager {
   /**
    * Initialize the webhook manager
    */
-  async initialize(dbPath: string = './.data/webhooks/webhooks.db'): Promise<void> {
+  async initialize(dbPath: string = dataPathOr('./.data/webhooks/webhooks.db', 'webhooks', 'webhooks.db')): Promise<void> {
     const dir = dirname(dbPath);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
