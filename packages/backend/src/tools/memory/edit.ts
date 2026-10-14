@@ -9,9 +9,21 @@
  */
 
 import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
-import { toolMemoryDrawers, toolMemoryUser } from './scope.js';
-import { agentChange, type AgentChangeResult } from '../../memory/learning.js';
-import { agentActor } from '../../memory/versions.js';
+import { toolMemoryUser } from './scope.js';
+import type { AgentChangeResult } from '../../memory/learning.js';
+import { repositories } from '../../repositories/index.js';
+import { toolActor } from '../../repositories/actor.js';
+import { ScopeError } from '../../repositories/scope.js';
+
+/** B1.6: the memory repository reaches only the run user's memories in open drawers. */
+async function change(context: ToolExecutionContext | undefined, input: Parameters<typeof repositories.memory.change>[1]): Promise<AgentChangeResult> {
+  try {
+    return await repositories.memory.change(toolActor(context), input);
+  } catch (err) {
+    if (err instanceof ScopeError) return { status: 'refused', reason: err.message };
+    throw err;
+  }
+}
 
 function text(t: string, data?: Record<string, unknown>, error?: string): ToolResult {
   return { content: [{ type: 'text', text: t }], ...(data ? { data } : {}), ...(error ? { error } : {}) };
@@ -46,20 +58,17 @@ credentials, health, legal, permissions, decisions) wait for the owner's approva
     required: ['id'],
   },
   async execute(params: { id?: unknown; content?: unknown; importance?: unknown; reason?: unknown }, context?: ToolExecutionContext): Promise<ToolResult> {
-    const userId = toolMemoryUser(context);
-    if (!userId) return text('Error: no user for this memory', undefined, 'No user for this memory');
+    if (!toolMemoryUser(context)) return text('Error: no user for this memory', undefined, 'No user for this memory');
     if (typeof params.id !== 'string' || !params.id) return text('Error: id is required', undefined, 'id is required');
     if (params.content !== undefined && (typeof params.content !== 'string' || !params.content.trim())) {
       return text('Error: content must be text', undefined, 'Invalid content');
     }
-    const result = await agentChange({
-      userId, memoryId: params.id, op: 'update',
+    const result = await change(context, {
+      memoryId: params.id, op: 'update',
       updates: {
         content: params.content as string | undefined,
         importance: typeof params.importance === 'number' ? params.importance : undefined,
       },
-      actor: agentActor(context?.agentId), agentId: context?.agentId,
-      openDrawers: toolMemoryDrawers(context), outsider: !!context?.toolPolicy,
       reason: typeof params.reason === 'string' ? params.reason : null,
     });
     return answer(result, 'update', params.id);
@@ -81,13 +90,10 @@ To erase something completely because the owner said "forget this", use memory_f
     required: ['id'],
   },
   async execute(params: { id?: unknown; reason?: unknown }, context?: ToolExecutionContext): Promise<ToolResult> {
-    const userId = toolMemoryUser(context);
-    if (!userId) return text('Error: no user for this memory', undefined, 'No user for this memory');
+    if (!toolMemoryUser(context)) return text('Error: no user for this memory', undefined, 'No user for this memory');
     if (typeof params.id !== 'string' || !params.id) return text('Error: id is required', undefined, 'id is required');
-    const result = await agentChange({
-      userId, memoryId: params.id, op: 'delete',
-      actor: agentActor(context?.agentId), agentId: context?.agentId,
-      openDrawers: toolMemoryDrawers(context), outsider: !!context?.toolPolicy,
+    const result = await change(context, {
+      memoryId: params.id, op: 'delete',
       reason: typeof params.reason === 'string' ? params.reason : null,
     });
     return answer(result, 'delete', params.id);

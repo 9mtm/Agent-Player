@@ -5,18 +5,12 @@
  */
 
 import { actorOf } from '../../auth/auth-gate.js';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { authenticateActiveUser, type UserRole } from '../../auth/route-guards.js';
-import { getDatabase } from '../../db/index.js';
+import type { FastifyInstance } from 'fastify';
 import { v4 as uuidv4 } from 'uuid';
 import { getMemoryStorage } from '../../memory/storage.js';
-import { getMemoryRetrieval } from '../../memory/retrieval.js';
-import { MemoryTiersService } from '../../services/memory-tiers.js';
-import { getConsolidationService } from '../../services/memory-consolidation.js';
 import { MEMORY_TYPES, isMemoryType } from '../../memory/types.js';
 import { DrawerInputError, normalizeDrawer, ownerScopeFromInput, selectDrawers, type DrawerRef } from '../../memory/drawers.js';
 import type { Memory, MemoryType, ImportanceLevel, MultiTierLayer } from '../../memory/types.js';
-import { learn, type LearningCandidate } from '../../memory/learning.js';
 import { repositories } from '../../repositories/index.js';
 import { requestMeta } from '../../repositories/audit.js';
 import { ScopeError, sendScopeError } from '../../repositories/scope.js';
@@ -85,19 +79,10 @@ function recallDrawers(input: Record<string, unknown>): { drawers: DrawerRef[] }
  * body is ignored. Memories of other users answer 404 (there is no owner-wide
  * memory view). Server-wide maintenance (consolidation run, its log) is
  * owner-only.
- */
-interface MemoryCaller { id: string; role: UserRole }
-
-function caller(request: FastifyRequest): MemoryCaller {
-  return (request as any).memoryCaller as MemoryCaller;
-}
-
-/**
- * B1-core: the CRUD, drawers, versions, forget and tombstone routes go through
- * the memory repository (repositories/memory.ts) with the request's actor,
- * which enforces "own memories only" centrally. The remaining routes below
- * (search, extract, relevant, layers, ...) still take the user from the
- * preHandler (token) - B1-rest.
+ *
+ * B1-core / B1.6: every route goes through the memory repository
+ * (repositories/memory.ts, memory-recall.ts) with the request's actor, which
+ * enforces "own memories only" (and owner-only maintenance) centrally.
  */
 const memoryRepo = repositories.memory;
 
@@ -108,17 +93,12 @@ function memoryError(reply: import('fastify').FastifyReply, err: unknown) {
 }
 
 export async function memoryRoutes(fastify: FastifyInstance) {
-  const storage = getMemoryStorage();
-  const retrieval = getMemoryRetrieval();
-
   // Initialize storage
-  await storage.initialize();
+  await getMemoryStorage().initialize();
 
   // Encapsulated to this plugin: applies to the memory routes only.
   fastify.addHook('preHandler', async (request, reply) => {
-    const user = authenticateActiveUser(request);
-    if (!user) return reply.code(401).send({ error: 'Authentication required' });
-    (request as any).memoryCaller = user satisfies MemoryCaller;
+    if (!actorOf(request)) return reply.code(401).send({ error: 'Authentication required' });
   });
 
   /**
@@ -344,12 +324,11 @@ export async function memoryRoutes(fastify: FastifyInstance) {
   });
 
   /**
-   * POST /api/memory/search - Search memories by semantic similarity (with Multi-Tier Memory support)
+   * POST /api/memory/search - Search own memories (Multi-Tier Memory filters)
    */
   fastify.post('/api/memory/search', async (request, reply) => {
-    const body = { ...(request.body as object || {}), userId: caller(request).id } as {
+    const body = { ...(request.body as object || {}) } as {
       query: string;
-      userId: string;
       type?: MemoryType;
       layer?: MultiTierLayer;
       limit?: number;
@@ -369,16 +348,18 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     const scope = scoped ? recallDrawers(input) : {};
     if (!scope) return reply.code(400).send({ error: 'Invalid drawer scope' });
 
-    const results = await storage.search({
-      ...scope,
-      query: body.query,
-      userId: body.userId,
-      type: body.type,
-      layer: body.layer,
-      limit: body.limit,
-      minImportance: body.minImportance as ImportanceLevel | undefined,
-      minImportanceScore: body.minImportanceScore,
-    });
+    let results;
+    try {
+      results = await memoryRepo.search(actorOf(request), {
+        ...scope,
+        query: body.query,
+        type: body.type,
+        layer: body.layer,
+        limit: body.limit,
+        minImportance: body.minImportance as ImportanceLevel | undefined,
+        minImportanceScore: body.minImportanceScore,
+      });
+    } catch (err) { return memoryError(reply, err); }
 
     return {
       success: true,
@@ -391,10 +372,7 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * POST /api/memory/extract - Extract memories from text
    */
   fastify.post('/api/memory/extract', async (request, reply) => {
-    const body = { ...(request.body as object || {}), userId: caller(request).id } as {
-      text: string;
-      userId: string;
-    };
+    const body = { ...(request.body as object || {}) } as { text: string };
 
     if (!body.text || typeof body.text !== 'string') {
       return reply.code(400).send({
@@ -404,13 +382,10 @@ export async function memoryRoutes(fastify: FastifyInstance) {
 
     // CORE-05: extracted items are classified; routine ones are saved, important
     // ones become proposals for the owner (or are not saved for other accounts).
-    const candidates = await retrieval.extractCandidates(body.text, body.userId);
-    const outcome = await learn({
-      userId: body.userId,
-      candidates: candidates as LearningCandidate[],
-      actor: 'extraction',
-      metadata: { source: 'conversation' },
-    });
+    let outcome;
+    try {
+      outcome = await memoryRepo.extract(actorOf(request), body.text);
+    } catch (err) { return memoryError(reply, err); }
 
     return {
       success: true,
@@ -429,7 +404,6 @@ export async function memoryRoutes(fastify: FastifyInstance) {
       query: string;
       limit?: string;
     };
-    const userId = caller(request).id;
 
     if (!query) {
       return reply.code(400).send({
@@ -440,12 +414,10 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     const scope = recallDrawers(request.query as Record<string, unknown>);
     if (!scope) return reply.code(400).send({ error: 'Invalid drawer scope' });
 
-    const memories = await retrieval.findRelevant(
-      query,
-      userId,
-      limit ? parseInt(limit) : 5,
-      scope.drawers
-    );
+    let memories;
+    try {
+      memories = await memoryRepo.relevant(actorOf(request), query, limit ? parseInt(limit) : 5, scope.drawers);
+    } catch (err) { return memoryError(reply, err); }
 
     return {
       success: true,
@@ -455,26 +427,23 @@ export async function memoryRoutes(fastify: FastifyInstance) {
   });
 
   /**
-   * GET /api/memory/summary - Get memory summary for a user
+   * GET /api/memory/summary - Memory summary of the caller
    */
   fastify.get('/api/memory/summary', async (request, reply) => {
-    const userId = caller(request).id;
-
-    const summary = await retrieval.getSummary(userId);
-
-    return {
-      success: true,
-      summary
-    };
+    try {
+      const summary = await memoryRepo.summary(actorOf(request));
+      return { success: true, summary };
+    } catch (err) { return memoryError(reply, err); }
   });
 
   /**
-   * POST /api/memory/consolidate - Consolidate similar memories
+   * POST /api/memory/consolidate - Consolidate similar own memories
    */
   fastify.post('/api/memory/consolidate', async (request, reply) => {
-    const userId = caller(request).id;
-
-    const consolidated = await retrieval.consolidate(userId);
+    let consolidated: number;
+    try {
+      consolidated = await memoryRepo.consolidateDuplicates(actorOf(request));
+    } catch (err) { return memoryError(reply, err); }
 
     return {
       success: true,
@@ -499,22 +468,17 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * GET /api/memory/layers/stats - Get statistics for all memory layers
    */
   fastify.get('/api/memory/layers/stats', async (request, reply) => {
-    const userId = caller(request).id;
-
-    const stats = await MemoryTiersService.getLayerStats(userId);
-
-    return {
-      success: true,
-      stats
-    };
+    try {
+      const stats = await memoryRepo.layerStats(actorOf(request));
+      return { success: true, stats };
+    } catch (err) { return memoryError(reply, err); }
   });
 
   /**
-   * POST /api/memory/layers/promote - Promote a memory to the next layer
+   * POST /api/memory/layers/promote - Promote an own memory to the next layer
    */
   fastify.post('/api/memory/layers/promote', async (request, reply) => {
-    const body = { ...(request.body as object || {}), userId: caller(request).id } as {
-      userId: string;
+    const body = { ...(request.body as object || {}) } as {
       memoryId: string;
       targetLayer: 'experiential' | 'factual';
     };
@@ -526,12 +490,9 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     }
 
     let success = false;
-
-    if (body.targetLayer === 'experiential') {
-      success = await MemoryTiersService.promoteToExperiential(body.userId, body.memoryId);
-    } else if (body.targetLayer === 'factual') {
-      success = await MemoryTiersService.promoteToFactual(body.userId, body.memoryId);
-    }
+    try {
+      success = await memoryRepo.promote(actorOf(request), body.memoryId, body.targetLayer);
+    } catch (err) { return memoryError(reply, err); }
 
     if (!success) {
       return reply.code(400).send({
@@ -547,15 +508,13 @@ export async function memoryRoutes(fastify: FastifyInstance) {
 
   /**
    * POST /api/memory/layers/consolidate - Manually trigger memory consolidation
+   * (runs across every user's memories: owner only)
    */
   fastify.post('/api/memory/layers/consolidate', async (request, reply) => {
-    // Runs across every user's memories: owner only.
-    if (caller(request).role !== 'owner') {
-      return reply.code(403).send({ error: 'This action requires the owner account' });
-    }
-    const consolidationService = getConsolidationService();
-
-    const result = await consolidationService.runManual();
+    let result;
+    try {
+      result = await memoryRepo.runConsolidation(actorOf(request));
+    } catch (err) { return memoryError(reply, err); }
 
     return {
       success: true,
@@ -565,18 +524,14 @@ export async function memoryRoutes(fastify: FastifyInstance) {
   });
 
   /**
-   * GET /api/memory/layers/consolidate/log - Get consolidation log
+   * GET /api/memory/layers/consolidate/log - Server-wide consolidation log (owner only)
    */
   fastify.get('/api/memory/layers/consolidate/log', async (request, reply) => {
-    // Server-wide log: owner only.
-    if (caller(request).role !== 'owner') {
-      return reply.code(403).send({ error: 'This action requires the owner account' });
-    }
     const { limit } = request.query as { limit?: string };
-
-    const log = await MemoryTiersService.getConsolidationLog(
-      limit ? parseInt(limit) : 10
-    );
+    let log;
+    try {
+      log = await memoryRepo.consolidationLog(actorOf(request), limit ? parseInt(limit) : 10);
+    } catch (err) { return memoryError(reply, err); }
 
     return {
       success: true,
@@ -589,9 +544,10 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * GET /api/memory/layers/candidates - Get promotion candidates
    */
   fastify.get('/api/memory/layers/candidates', async (request, reply) => {
-    const userId = caller(request).id;
-
-    const candidates = await MemoryTiersService.getPromotionCandidates(userId);
+    let candidates;
+    try {
+      candidates = await memoryRepo.promotionCandidates(actorOf(request));
+    } catch (err) { return memoryError(reply, err); }
 
     return {
       success: true,
@@ -614,14 +570,11 @@ export async function memoryRoutes(fastify: FastifyInstance) {
         error: 'memoryId and importanceScore are required'
       });
     }
-    try {
-      await memoryRepo.assertAccess(actorOf(request), body.memoryId);
-    } catch (err) { return memoryError(reply, err); }
 
-    const success = await MemoryTiersService.updateImportanceScore(
-      body.memoryId,
-      body.importanceScore
-    );
+    let success: boolean;
+    try {
+      success = await memoryRepo.setImportanceScore(actorOf(request), body.memoryId, body.importanceScore);
+    } catch (err) { return memoryError(reply, err); }
 
     if (!success) {
       return reply.code(404).send({ error: 'Memory not found' });

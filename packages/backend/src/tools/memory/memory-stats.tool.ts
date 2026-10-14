@@ -9,9 +9,9 @@
  */
 
 import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
-import { getDatabase } from '../../db/index.js';
-import { drawerSqlFilter } from '../../memory/drawers.js';
-import { toolMemoryDrawers, toolMemoryUser } from './scope.js';
+import { toolMemoryUser } from './scope.js';
+import { repositories } from '../../repositories/index.js';
+import { toolActor } from '../../repositories/actor.js';
 
 export const memoryStatsTool: Tool = {
   name: 'memory_stats',
@@ -39,65 +39,22 @@ Use this before memory_reflect or memory_search to understand what you know.`,
   },
 
   async execute(_params: Record<string, any>, context?: ToolExecutionContext): Promise<ToolResult> {
-    // CORE-03: the run's own user (never a model-supplied id), open drawers only.
-    const userId = toolMemoryUser(context);
-    const drawers = toolMemoryDrawers(context);
-    if (!userId || drawers.length === 0) {
+    // CORE-03: the run's own user (never a model-supplied id), open drawers
+    // only (B1.6: counted by the memory repository from the tool call's actor).
+    if (!toolMemoryUser(context)) {
       return { content: [{ type: 'text', text: 'No memories stored yet for this user.' }] };
     }
-    const scope = drawerSqlFilter(drawers);
-    const where = `user_id = ? AND ${scope.sql}`;
-    const args = [userId, ...scope.params];
 
     try {
-      const db = getDatabase().getDb();
-
-      // Total count
-      const total = (db.prepare(`SELECT COUNT(*) as n FROM memories WHERE ${where}`).get(...args) as any)?.n ?? 0;
-
-      if (total === 0) {
+      const stats = await repositories.memory.stats(toolActor(context));
+      if (!stats || stats.total === 0) {
         return {
           content: [{ type: 'text', text: 'No memories stored yet for this user.' }],
         };
       }
-
-      // Count by type
-      const byType = db.prepare(`
-        SELECT type, COUNT(*) as n
-        FROM memories WHERE ${where}
-        GROUP BY type ORDER BY n DESC
-      `).all(...args) as Array<{ type: string; n: number }>;
-
-      // Count by importance bracket
-      const highImp = (db.prepare(`
-        SELECT COUNT(*) as n FROM memories WHERE ${where} AND importance_score >= 0.7
-      `).get(...args) as any)?.n ?? 0;
-
-      // Date range
-      const dates = db.prepare(`
-        SELECT MIN(created_at) as oldest, MAX(created_at) as newest
-        FROM memories WHERE ${where}
-      `).get(...args) as any;
-
-      // Top tags (tags is stored as JSON array string)
-      const allTagRows = db.prepare(`
-        SELECT tags FROM memories WHERE ${where} AND tags IS NOT NULL
-      `).all(...args) as Array<{ tags: string }>;
-
-      const tagCounts: Record<string, number> = {};
-      for (const row of allTagRows) {
-        try {
-          const tags: string[] = JSON.parse(row.tags);
-          for (const tag of tags) {
-            tagCounts[tag] = (tagCounts[tag] || 0) + 1;
-          }
-        } catch {
-          // skip malformed
-        }
-      }
-      const topTags = Object.entries(tagCounts)
-        .sort(([, a], [, b]) => b - a)
-        .slice(0, 10);
+      const { total, byType, topTags } = stats;
+      const highImp = stats.highImportance;
+      const dates = { oldest: stats.oldest ?? undefined, newest: stats.newest ?? undefined };
 
       // Build readable output
       const lines: string[] = [];

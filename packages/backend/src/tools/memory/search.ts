@@ -6,10 +6,11 @@
  */
 
 import type { Tool, ToolResult } from './types.js';
-import { getMemoryStorage } from '../../memory/storage.js';
 import type { MemoryType } from '../../memory/types.js';
 import type { ToolExecutionContext } from '../types.js';
-import { toolMemoryDrawers, toolMemoryUser } from './scope.js';
+import { toolMemoryUser } from './scope.js';
+import { repositories } from '../../repositories/index.js';
+import { toolActor } from '../../repositories/actor.js';
 
 interface MemorySearchParams {
   /** Search query */
@@ -156,16 +157,13 @@ Returns:
 
   async execute(params: MemorySearchParams, context?: ToolExecutionContext): Promise<ToolResult> {
     try {
-      const storage = getMemoryStorage();
-      // CORE-03: the run's own user and only the drawers selected for this turn.
-      const userId = toolMemoryUser(context);
-      if (!userId) throw new Error('No user for this memory search');
+      // CORE-03: the run's own user and only the drawers selected for this turn
+      // (B1.6: enforced by the memory repository from the tool call's actor).
+      if (!toolMemoryUser(context)) throw new Error('No user for this memory search');
 
       // Search memories using new Multi-Tier Memory API
-      const results = await storage.search({
+      const results = await repositories.memory.search(toolActor(context), {
         query: params.query,
-        userId,
-        drawers: toolMemoryDrawers(context),
         type: params.type,
         layer: params.layer,
         limit: params.limit || 5,

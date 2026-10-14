@@ -8,11 +8,12 @@
  */
 
 import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
-import { getMemoryStorage } from '../../memory/storage.js';
 import { v4 as uuidv4 } from 'uuid';
 import type { Memory } from '../../memory/types.js';
 import { sameDrawer } from '../../memory/drawers.js';
-import { narrowestDrawer, toolMemoryDrawers, toolMemoryUser } from './scope.js';
+import { narrowestDrawer, toolMemoryUser } from './scope.js';
+import { repositories } from '../../repositories/index.js';
+import { toolActor } from '../../repositories/actor.js';
 
 interface MemoryReflectParams {
   lookbackCount?: number;
@@ -68,17 +69,16 @@ Parameters:
     const limit = Math.min(50, Math.max(1, Number(lookbackCount) || 20));
     // CORE-03: the run's own user (never a model-supplied id) and only the
     // drawers open for this turn. No user or no drawers -> nothing to read.
-    const userId = toolMemoryUser(context);
-    const drawers = toolMemoryDrawers(context);
-    if (!userId || drawers.length === 0) {
+    // B1.6: read and saved through the memory repository (the tool call's actor).
+    const actor = toolActor(context);
+    const drawers = [...(actor.drawers ?? [])];
+    if (!toolMemoryUser(context) || drawers.length === 0) {
       return { content: [{ type: 'text', text: 'No memories found to reflect on.' }] };
     }
 
     try {
-      const storage = getMemoryStorage();
       // Same order as before: importance first, then newest.
-      const allMemories = storage.getByDrawers(userId, drawers).sort((a, b) =>
-        (b.importanceScore ?? 0.5) - (a.importanceScore ?? 0.5) || b.createdAt.getTime() - a.createdAt.getTime());
+      const allMemories = await repositories.memory.reachable(actor);
 
       if (allMemories.length === 0) {
         return {
@@ -196,9 +196,8 @@ Parameters:
       const drawer = narrowestDrawer(sourceDrawers) ?? narrowestDrawer(drawers)!;
 
       // Save reflection as a new memory (Multi-Tier Memory: experiential layer)
-      const reflectionMemory: Memory = {
+      const reflectionMemory: Omit<Memory, 'userId'> = {
         id: uuidv4(),
-        userId,
         type: 'fact',
         content: reflectionContent,
         importance: 6,
@@ -219,7 +218,7 @@ Parameters:
         drawer,
       };
 
-      await storage.save(reflectionMemory);
+      await repositories.memory.saveDerived(actor, reflectionMemory);
 
       return {
         content: [{

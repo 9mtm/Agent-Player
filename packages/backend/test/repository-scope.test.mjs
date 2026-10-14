@@ -341,6 +341,69 @@ test('memory: an agent run reads only open drawers; forget refuses closed drawer
   checks += 6;
 });
 
+test('memory (recall, learning, layers, owner maintenance, import): scope matrix', async () => {
+  const R = repositories.memory;
+  //                                                                   owner admin user guest other agent outsdr service none
+  const OWN_MEMORY                                                  = ['ok', 'ok', 'ok', 403, 'ok', 'ok', 'ok', 403, 401];
+  await row('memory.search', (a) => R.search(a, { query: 'fact' }), OWN_MEMORY);
+  await row('memory.relevant', (a) => R.relevant(a, 'fact', 5, [{ kind: 'owner' }]), OWN_MEMORY);
+  await row('memory.learn(invalid content)', (a) => R.learn(a, { candidates: [{ content: '' }] }), OWN_MEMORY);
+  await row('memory.change(missing)', (a) => R.change(a, { memoryId: 'missing', op: 'delete' }), OWN_MEMORY);
+  await row('memory.stats', (a) => R.stats(a), OWN_MEMORY);
+  await row('memory.reachable', (a) => R.reachable(a), OWN_MEMORY);
+  await row('memory.saveDerived(owner drawer)', (a) => R.saveDerived(a, { ...newMemory(), drawer: { kind: 'owner' } }),
+                                                                      ['ok', 'ok', 'ok', 403, 'ok', 'ok', 403, 403, 401]);
+  await row('memory.saveDerived(closed drawer)', (a) => R.saveDerived(a, { ...newMemory(), drawer: { kind: 'project', key: 'beta' } }),
+                                                                      ['ok', 'ok', 'ok', 403, 'ok', 403, 403, 403, 401]);
+  await row('memory.summary', (a) => R.summary(a), MEMBERS);
+  await row('memory.consolidateDuplicates', (a) => R.consolidateDuplicates(a), MEMBERS);
+  await row('memory.extract', (a) => R.extract(a, 'nothing to learn here'), MEMBERS);
+  await row('memory.layerStats', (a) => R.layerStats(a), MEMBERS);
+  await row('memory.promote(missing)', (a) => R.promote(a, 'missing', 'factual'), MEMBERS);
+  await row('memory.promotionCandidates', (a) => R.promotionCandidates(a), MEMBERS);
+  await row('memory.setImportanceScore(user memory)', (a) => R.setImportanceScore(a, M_USER.id, 0.5),
+                                                                      [404, 404, 'ok', 403, 404, 403, 403, 403, 401]);
+  await row('memory.consolidationLog', (a) => R.consolidationLog(a, 5), OWNER_ONLY);
+  // owner maintenance (CORE-05/06/07) and the import pipeline (CLI-02)
+  const NOTHING = { kind: 'project', key: 'nothing-here' };
+  await row('memory.weeklySummary', (a) => R.weeklySummary(a), OWNER_ONLY);
+  await row('memory.runWeeklySummary', (a) => R.runWeeklySummary(a), OWNER_ONLY);
+  await row('memory.embeddingStatus', (a) => R.embeddingStatus(a), OWNER_ONLY);
+  await row('memory.reembed', (a) => R.reembed(a, 1), OWNER_ONLY);
+  await row('memory.forgetAll(empty drawer)', (a) => R.forgetAll(a, NOTHING), OWNER_ONLY);
+  await row('memory.retention', (a) => R.retention(a), OWNER_ONLY);
+  await row('memory.setRetention(invalid)', (a) => R.setRetention(a, { taskTtlDays: 'x' }), OWNER_ONLY);
+  await row('memory.runRetention(dry run)', (a) => R.runRetention(a, true), OWNER_ONLY);
+  await row('memory.importSettings', (a) => R.importSettings(a), OWNER_ONLY);
+  await row('memory.setImportSettings', (a) => R.setImportSettings(a, {}), OWNER_ONLY);
+  await row('memory.importPreview(no files)', (a) => R.importPreview(a, { files: [] }), OWNER_ONLY);
+  await row('memory.imports', (a) => R.imports(a), OWNER_ONLY);
+  await row('memory.importView(missing)', (a) => R.importView(a, 'missing'), OWNER_ONLY);
+  await row('memory.reviseImport(missing)', (a) => R.reviseImport(a, 'missing', {}), OWNER_ONLY);
+  await row('memory.commitImport(missing)', (a) => R.commitImport(a, 'missing', {}), OWNER_ONLY);
+  await row('memory.cancelImport(missing)', (a) => R.cancelImport(a, 'missing'), OWNER_ONLY);
+  await row('memory.runConsolidation', (a) => R.runConsolidation(a), OWNER_ONLY);
+});
+
+test('memory recall: agent runs read only open drawers, outsiders nothing, accounts only their own', async () => {
+  const R = repositories.memory;
+  const ids = (results) => results.map((r) => r.memory.id);
+  const agentHits = ids(await silent(() => R.search(ACTORS.agent, { query: 'user fact', limit: 20 })));
+  assert.ok(!agentHits.includes(M_USER_BETA.id) && !agentHits.includes(M_OTHER.id), 'closed drawer and other user stay hidden');
+  const narrowed = ids(await silent(() => R.search(ACTORS.agent, { query: 'user fact', limit: 20, drawers: [{ kind: 'project', key: 'beta' }] })));
+  assert.deepEqual(narrowed, [], 'an asked drawer that is not open is dropped');
+  assert.deepEqual(await silent(() => R.search(ACTORS.outsider, { query: 'user fact' })), [], 'an outsider turn reads nothing');
+  assert.equal(await R.stats(ACTORS.outsider), null);
+  const userHits = ids(await silent(() => R.search(ACTORS.user, { query: 'user fact', limit: 20 })));
+  assert.ok(!userHits.includes(M_OTHER.id));
+  assert.ok((await R.reachable(ACTORS.agent)).every((m) => m.userId === 'rs-user' && m.drawer && !(m.drawer.kind === 'project' && m.drawer.key === 'beta')));
+  const refused = await R.change(ACTORS.agent, { memoryId: M_USER_BETA.id, op: 'delete' });
+  assert.equal(refused.status, 'refused');
+  const otherRefused = await R.change(ACTORS.agent, { memoryId: M_OTHER.id, op: 'delete' });
+  assert.equal(otherRefused.status, 'refused', "another user's memory is not found");
+  checks += 8;
+});
+
 // --- audit --------------------------------------------------------------------
 
 test('audit: scope matrix', async () => {
@@ -398,7 +461,7 @@ test('withTransaction: one actor, commit or roll back, synchronous on SQLite', a
 test('routes: no user id from body/query in the moved routes; SYSTEM_ACTOR never in routes', () => {
   const routesDir = join(backendDir, 'src/api/routes');
   const moved = ['task-runs.ts', 'agent-grants.ts', 'agent-personality.ts', 'credentials.ts', 'audit.ts', 'memory-files.ts', 'profile.ts',
-    'agents-config.ts'];
+    'agents-config.ts', 'memory.ts', 'memory-learning.ts', 'memory-import.ts'];
   for (const f of moved) {
     const src = readFileSync(join(routesDir, f), 'utf8');
     assert.doesNotMatch(src, /(body|query)\)?(\s+as\s+[^;]*?)?\??\.userId\b/, `${f} reads a user id from the request`);
@@ -406,7 +469,17 @@ test('routes: no user id from body/query in the moved routes; SYSTEM_ACTOR never
   for (const f of readdirSync(routesDir)) {
     assert.doesNotMatch(readFileSync(join(routesDir, f), 'utf8'), /SYSTEM_ACTOR/, `${f} must not use SYSTEM_ACTOR`);
   }
-  checks += moved.length + 1;
+  // B1.6: the memory tools reach memory only through the repository (no own
+  // storage/database access, no model-supplied user id).
+  const toolsDir = join(backendDir, 'src/tools/memory');
+  const memoryTools = ['search.ts', 'save.ts', 'edit.ts', 'forget.ts', 'memory-reflect.tool.ts', 'memory-stats.tool.ts'];
+  for (const f of memoryTools) {
+    const src = readFileSync(join(toolsDir, f), 'utf8');
+    assert.doesNotMatch(src, /getMemoryStorage|getDatabase|(?<!\.)\bagentChange\(|(?<!\.)\blearn\(/, `${f} must use the memory repository`);
+    assert.doesNotMatch(src, /params\??\.userId\b/, `${f} reads a user id from the model`);
+    assert.match(src, /repositories\.memory\./, `${f} uses the memory repository`);
+  }
+  checks += moved.length + 1 + memoryTools.length * 3;
 });
 
 test('matrix size', () => {

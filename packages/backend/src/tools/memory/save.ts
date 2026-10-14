@@ -7,10 +7,10 @@
 
 import type { Tool, ToolResult } from './types.js';
 import type { MemoryType } from '../../memory/types.js';
-import { learn } from '../../memory/learning.js';
-import { agentActor } from '../../memory/versions.js';
 import type { ToolExecutionContext } from '../types.js';
-import { toolMemoryDrawers, toolMemoryUser } from './scope.js';
+import { toolMemoryUser } from './scope.js';
+import { repositories } from '../../repositories/index.js';
+import { toolActor } from '../../repositories/actor.js';
 import { DrawerInputError, defaultDrawerForType, parseDrawerId, sameDrawer, type DrawerRef } from '../../memory/drawers.js';
 
 interface MemorySaveParams {
@@ -126,9 +126,9 @@ Examples:
   async execute(params: MemorySaveParams, context?: ToolExecutionContext): Promise<ToolResult> {
     try {
       // CORE-03: the run's own user; a drawer only from those open for this turn.
-      const userId = toolMemoryUser(context);
-      if (!userId) throw new Error('No user for this memory');
-      const open = toolMemoryDrawers(context);
+      if (!toolMemoryUser(context)) throw new Error('No user for this memory');
+      const actor = toolActor(context);
+      const open = actor.drawers ?? [];
       let drawer: DrawerRef = defaultDrawerForType(params.type || 'conversation');
       if (params.drawer !== undefined && params.drawer !== null && params.drawer !== '') {
         try {
@@ -147,13 +147,10 @@ Examples:
       const type = params.type || 'conversation';
 
       // CORE-05: routine facts are saved (versioned); important ones become a
-      // proposal the owner approves. Outsider turns never auto-save.
-      const outcome = await learn({
-        userId,
-        candidates: [{ content: params.content, type, importance, drawer, origin: context?.toolPolicy ? 'outsider' : 'agent' }],
-        actor: agentActor(context?.agentId),
-        agentId: context?.agentId,
-        openDrawers: open,
+      // proposal the owner approves. Outsider turns never auto-save (B1.6:
+      // the memory repository sets user, drawers, origin and version actor).
+      const outcome = await repositories.memory.learn(actor, {
+        candidates: [{ content: params.content, type, importance, drawer }],
         metadata: { ...params.metadata, tags: params.tags || [], savedAt: new Date().toISOString() },
       });
       const memory = outcome.saved[0];
