@@ -19,6 +19,7 @@ import { buildAiToolsContext } from './ai-tools.js';
 import { getJsonRenderPrompt } from './json-render-prompt.js';
 import { buildDynamicSystemPrompt, detectChatContext, type ChatContext } from './system-prompts.js';
 import { chunkText, openSseStream } from '../../services/chat-sse.js';
+import { safeErrorFields } from '../../services/safe-error-log.js';
 
 /** UTF-8 text per final-answer frame: a 256 KiB answer needs about 64 frames. */
 export const ANSWER_FRAME_BYTES = 4 * 1024;
@@ -100,6 +101,7 @@ export async function streamChatClaude(
   memoryDrawers?: import('../../memory/drawers.js').DrawerRef[]
 ): Promise<FastifyReply> {
   console.log('[Chat] 🚀 Starting Claude agentic stream');
+  const startedAt = Date.now();
   console.log('[Chat]   Model:', model);
   console.log('[Chat]   Messages:', messages.length);
   console.log('[Chat]   Tools offered:', tools.length);
@@ -383,7 +385,8 @@ export async function streamChatClaude(
 
   } catch (error: any) {
     // SECURITY: Don't expose error details in SSE stream (H-09)
-    console.error('[Chat] ❌ Claude error:', error);
+    // FU-01: safe fields only; provider errors can echo the request or a key.
+    console.error('[Chat] ❌ Claude error', safeErrorFields(error, startedAt));
     reply.raw.write(
       `data: ${JSON.stringify({
         type: 'error',

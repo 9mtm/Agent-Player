@@ -18,6 +18,7 @@ import { authenticateActiveUser } from '../../auth/route-guards.js';
 import { geminiCliTool } from '../../tools/cli/gemini-cli.js';
 import { claudeCliTool } from '../../tools/cli/claude-cli.js';
 import { getJsonRenderPrompt } from './json-render-prompt.js';
+import { safeErrorFields } from '../../services/safe-error-log.js';
 import { resolveProviderApiKey } from '../../credentials/authority.js';
 import { readPersonality, readMemory } from '../../services/agent-files.js';
 import { getCurrentPersonality } from '../../services/personality-store.js';
@@ -560,6 +561,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
   if (provider === 'gemini-cli') {
     console.log('[Chat] 🖥️ Using Gemini CLI bridge');
     openSseStream(reply.raw);
+    const startedAt = Date.now();
     try {
       // Build Gemini prompt: system instructions + json-render + user message
       const geminiSystemParts = [customSystemPrompt, getJsonRenderPrompt()].filter(Boolean).join('\n\n---\n\n');
@@ -576,7 +578,8 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       reply.raw.write(`data: ${JSON.stringify({ content: '', done: true })}\n\n`);
     } catch (err: any) {
       // SECURITY: Don't expose error details in stream (H-09)
-      console.error('[Chat] Gemini CLI error:', err);
+      // FU-01: safe fields only; the error can carry stderr, the prompt or paths.
+      console.error('[Chat] Gemini CLI error', safeErrorFields(err, startedAt));
       reply.raw.write(`data: ${JSON.stringify({ content: '❌ Gemini CLI request failed', done: true })}\n\n`);
     }
     reply.raw.end();
@@ -587,6 +590,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
   if (provider === 'claude-cli') {
     console.log('[Chat] 🔧 Using Claude Code CLI bridge');
     openSseStream(reply.raw);
+    const startedAt = Date.now();
     try {
       // Build Claude CLI prompt: system instructions + user message
       // NOTE: Skip json-render prompt for CLI to keep under Windows CMD length limit
@@ -607,7 +611,8 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       reply.raw.write(`data: ${JSON.stringify({ content: '', done: true })}\n\n`);
     } catch (err: any) {
       // SECURITY: Don't expose error details in stream (H-09)
-      console.error('[Chat] Claude CLI error:', err);
+      // FU-01: safe fields only; the error can carry stderr, the prompt or paths.
+      console.error('[Chat] Claude CLI error', safeErrorFields(err, startedAt));
       reply.raw.write(`data: ${JSON.stringify({ content: '❌ Claude CLI request failed', done: true })}\n\n`);
     }
     reply.raw.end();

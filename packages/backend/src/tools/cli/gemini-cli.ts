@@ -20,6 +20,7 @@ import * as fs from 'node:fs/promises';
 import type { Tool, ToolResult } from '../types.js';
 import { execToolRefusal, isExecToolsEnabled, minimalChildEnv } from '../exec-policy.js';
 import { getEnvProviderApiKey } from '../../credentials/authority.js';
+import { safeErrorFields } from '../../services/safe-error-log.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -108,6 +109,7 @@ export const geminiCliTool: Tool = {
       GEMINI_API_KEY: getEnvProviderApiKey('gemini') || undefined, // S1.1: via the credential authority
     });
 
+    const startedAt = Date.now();
     try {
       let stdout: string;
       let stderr: string;
@@ -117,7 +119,6 @@ export const geminiCliTool: Tool = {
         const binName = path.basename(gemini, '.cmd');
         const shellArgs = args.map(a => (a.includes(' ') ? `"${a.replace(/"/g, '\\"')}"` : a)).join(' ');
         const shellCmd = `${binName} ${shellArgs}`;
-        console.log(`[GeminiCLI] Shell cmd: ${shellCmd}`);
         ({ stdout, stderr } = await execAsync(shellCmd, {
           timeout,
           maxBuffer: 1024 * 1024 * 10,
@@ -145,7 +146,8 @@ export const geminiCliTool: Tool = {
         ? `Gemini CLI timed out after ${timeout}ms`
         : err.stderr || err.message;
 
-      console.error(`[GeminiCLI] ❌ Error:`, msg);
+      // SECURITY (FU-01): stderr and the message can hold the prompt, paths or tokens.
+      console.error('[GeminiCLI] ❌ Error', safeErrorFields(err, startedAt));
 
       // Only show install hint when the binary itself is missing (ENOENT), not for API errors
       const notFound = err.code === 'ENOENT';

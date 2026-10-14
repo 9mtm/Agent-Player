@@ -26,6 +26,7 @@ import {
   minimalChildEnv,
   safeChildCwd,
 } from '../exec-policy.js';
+import { safeErrorFields } from '../../services/safe-error-log.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -171,6 +172,7 @@ export const claudeCliTool: Tool = {
     const args: string[] = ['-p', prompt];
     if (model) args.push('--model', model);
 
+    const startedAt = Date.now();
     try {
 
       let stdout: string;
@@ -208,7 +210,8 @@ export const claudeCliTool: Tool = {
         ? `Claude CLI timed out after ${timeout}ms`
         : err.stderr || err.message;
 
-      console.error(`[ClaudeCLI] ❌ Error:`, msg);
+      // SECURITY (FU-01): stderr and the message can hold the prompt, paths or tokens.
+      console.error('[ClaudeCLI] ❌ Error', safeErrorFields(err, startedAt));
 
       // Only show install hint when the binary itself is missing (ENOENT), not for API errors
       const notFound = err.code === 'ENOENT';
