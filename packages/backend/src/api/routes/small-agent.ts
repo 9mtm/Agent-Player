@@ -1,8 +1,10 @@
 /**
  * Small-agent runs API (MCP-01, D-HYBRID). Owner only.
  *
- *   POST /api/small-agent/runs        { task, tools?, drawers?, max_steps?, kind? }
- *                                     -> 201 { run_id, status, kind, granted_tools, drawers, budget, model, warnings, capacity }
+ *   POST /api/small-agent/runs        { task, tools?, drawers?, max_steps?, kind?, read_dir? }
+ *                                     -> 201 { run_id, status, kind, granted_tools, drawers, read_dir, budget, model, warnings, capacity }
+ *                                     read_dir: absolute directory `read` is confined to (MCP-01b);
+ *                                     default: the small agent's own workspace. Never the backend tree.
  *                                     -> 429 { error, capacity } when SMALL_AGENT_MAX_CONCURRENT runs are active
  *   GET  /api/small-agent/runs        ?status=&limit=  -> { runs, capacity }
  *   GET  /api/small-agent/runs/:id    -> { card }   (the result card, see services/small-agent.ts)
@@ -46,21 +48,21 @@ function start(runId: string): void {
 export async function smallAgentRoutes(fastify: FastifyInstance) {
   const ownerOnly = { config: { access: 'owner' as const } };
 
-  fastify.post<{ Body: { task?: unknown; tools?: unknown; drawers?: unknown; max_steps?: unknown; kind?: unknown } }>(
+  fastify.post<{ Body: { task?: unknown; tools?: unknown; drawers?: unknown; max_steps?: unknown; kind?: unknown; read_dir?: unknown } }>(
     '/api/small-agent/runs', ownerOnly, async (request, reply) => {
       const user = owner(request, reply);
       if (!user) return reply;
       const body = (request.body && typeof request.body === 'object' ? request.body : {}) as Record<string, unknown>;
       try {
         const res = await spawnSmallAgentRun({
-          ownerId: user.id, task: body.task, tools: body.tools, drawers: body.drawers, maxSteps: body.max_steps, kind: body.kind,
+          ownerId: user.id, task: body.task, tools: body.tools, drawers: body.drawers, maxSteps: body.max_steps, kind: body.kind, readDir: body.read_dir,
         });
         logAudit({
           event_type: 'data.create', event_category: 'data_modification', severity: 'info',
           user_id: user.id, ip_address: request.ip, user_agent: request.headers['user-agent'],
           request_method: request.method, request_path: request.routeOptions?.url ?? undefined,
           resource_type: 'task_run', resource_id: res.run.id, action: 'small_agent.spawn', success: true,
-          metadata: { kind: res.kind, tools: res.grantedTools, drawers: res.drawers.map(drawerId), maxSteps: res.run.max_steps, warnings: res.warnings.length },
+          metadata: { kind: res.kind, tools: res.grantedTools, drawers: res.drawers.map(drawerId), maxSteps: res.run.max_steps, warnings: res.warnings.length, readDir: res.readRoot !== null },
         });
         start(res.run.id);
         return reply.code(201).send({
@@ -69,6 +71,7 @@ export async function smallAgentRoutes(fastify: FastifyInstance) {
           kind: res.kind,
           granted_tools: res.grantedTools,
           drawers: res.drawers.map(drawerId),
+          read_dir: res.readRoot,
           budget: { max_steps: res.run.max_steps, max_duration_ms: res.run.max_duration_ms },
           model: res.model,
           warnings: res.warnings,

@@ -24,6 +24,20 @@ import {
   validateAgentName,
   validateExclude,
 } from '../../services/agent-names.js';
+import { SMALL_AGENT_ID } from '../../services/small-agent.js';
+
+/**
+ * MCP-01b: the small local agent is a reserved, owner-controlled agent.
+ * Only the owner may change, delete or promote it (its prompt and model are
+ * ignored by the executor anyway; an edited row makes its cards ask for review).
+ */
+function reservedAgentGuard(id: string, req: { authUser?: { role: string } | null }, reply: FastifyReply): FastifyReply | null {
+  if (id !== SMALL_AGENT_ID) return null;
+  if (req.authUser?.role !== 'owner') {
+    return reply.status(403).send({ error: 'The small local agent is reserved; only the owner can change it', code: 'reserved_agent' });
+  }
+  return null;
+}
 
 /** Map naming errors to 400 / 409; anything else is rethrown. */
 function nameErrorReply(err: unknown, reply: FastifyReply): FastifyReply | null {
@@ -179,6 +193,8 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
       const db = getDatabase();
       const { id } = req.params;
       const body = req.body || {};
+      const reserved = reservedAgentGuard(id, req, reply);
+      if (reserved) return reserved;
 
       const existing = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(id) as AgentConfig | undefined;
       if (!existing) return reply.status(404).send({ error: 'Agent not found' });
@@ -246,6 +262,8 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
     try {
       const db = getDatabase();
       const { id } = req.params;
+      const reserved = reservedAgentGuard(id, req, reply);
+      if (reserved) return reserved;
 
       if (!db.prepare('SELECT id FROM agents_config WHERE id = ?').get(id)) {
         return reply.status(404).send({ error: 'Agent not found' });
@@ -302,6 +320,8 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
     try {
       const db = getDatabase();
       const { id } = req.params;
+      const reserved = reservedAgentGuard(id, req, reply);
+      if (reserved) return reserved;
       const row = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(id) as AgentConfig | undefined;
       if (!row) return reply.status(404).send({ error: 'Agent not found' });
       const totalCount = (db.prepare('SELECT COUNT(*) as cnt FROM agents_config').get() as { cnt: number }).cnt;

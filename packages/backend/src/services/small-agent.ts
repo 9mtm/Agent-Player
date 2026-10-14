@@ -18,10 +18,24 @@
  *  - capacity: at most SMALL_AGENT_MAX_CONCURRENT (default 2) active runs;
  *             further spawns are refused (429), never queued silently.
  *
+ *  - read:   only inside the small agent's own workspace
+ *             (.data/workspaces/small-local-agent/), or inside one directory
+ *             the owner names at spawn (`read_dir`), never the backend tree
+ *             or the data directory (MCP-01b, S1.6 sandbox + deny list).
+ *  - settings: the executor always uses the built-in SYSTEM_PROMPT, the
+ *             env/default model and fixed sampling settings, never the
+ *             editable agents_config row (MCP-01b). An edited row only makes
+ *             the card ask for review.
+ *
  * What a run was allowed is stored in small_agent_runs when it is created
  * and read again by the executor on every attempt (smallAgentRunScope).
- * The result card says whether a large agent must review the output.
+ * The result card says whether a large agent must review the output;
+ * secret-looking values are redacted from it.
  */
+
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 
 import { getDatabase } from '../db/index.js';
 import { getOrchestrator } from '../multi-agent/index.js';
@@ -40,6 +54,8 @@ import {
   subagentDrawers,
   type DrawerRef,
 } from '../memory/drawers.js';
+import { redactSecrets } from './secret-redact.js';
+import { denyReason, isInside } from '../tools/core/file-sandbox.js';
 import { createRun, getRun, getSteps, elapsedMs, type TaskRunRow, type TaskRunStatus } from './task-runs.js';
 
 export const SMALL_AGENT_ID = 'small-local-agent';
@@ -59,13 +75,17 @@ const MAX_REQUESTED_TOOLS = 20;
 const MAX_REQUESTED_DRAWERS = 14;
 const MAX_CARD_OUTPUT_CHARS = 20_000;
 
-const SYSTEM_PROMPT = [
+export const SYSTEM_PROMPT = [
   'You are the small local helper agent of Agent Player.',
   'A larger agent gave you one light task: a lookup, a summary, a classification or a draft.',
   'Do only that task. Use only the tools you were given; you cannot send messages, change files or run commands.',
   'If you cannot do the task with what you have, say so plainly.',
   'Answer with the result only. Start with a one-line summary, then the details.',
 ].join(' ');
+
+/** Fixed sampling settings of the small agent (not taken from agents_config). */
+export const SMALL_AGENT_TEMPERATURE = 0.2;
+export const SMALL_AGENT_MAX_TOKENS = 2048;
 
 function envInt(name: string, fallback: number, min: number, max: number): number {
   const v = Number.parseInt(process.env[name] ?? '', 10);
@@ -105,13 +125,15 @@ export function ensureSmallAgent(): void {
   if (!exists) {
     db.prepare(`
       INSERT OR IGNORE INTO agents_config (id, name, description, system_prompt, model, provider, temperature, max_tokens, cron_enabled)
-      VALUES (?, ?, ?, ?, ?, 'ollama', 0.2, 2048, 0)
+      VALUES (?, ?, ?, ?, ?, 'ollama', ?, ?, 0)
     `).run(
       SMALL_AGENT_ID,
       'Small local agent',
       'Local Qwen helper for light tasks delegated by a large agent (lookups, summaries, classification, drafts).',
       SYSTEM_PROMPT,
       smallAgentDefaults().model,
+      SMALL_AGENT_TEMPERATURE,
+      SMALL_AGENT_MAX_TOKENS,
     );
     const available = createToolsRegistry({ workspaceDir: process.cwd() }).listRegistered();
     setAgentGrants(SMALL_AGENT_ID, { grants: [...SMALL_AGENT_SAFE_TOOLS] }, 'system:small-agent', available);
@@ -206,6 +228,73 @@ export function resolveSmallAgentDrawers(requested: unknown): { drawers: DrawerR
 }
 
 // ---------------------------------------------------------------------------
+// Read directory (MCP-01b)
+// ---------------------------------------------------------------------------
+
+function realOrResolved(p: string): string {
+  try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+}
+
+/** Places a small-agent read directory may never overlap (backend tree, data dirs). */
+function protectedTrees(): string[] {
+  const list = [process.cwd(), path.join(process.cwd(), '.data')];
+  if (process.env.DATABASE_PATH) list.push(path.dirname(process.env.DATABASE_PATH));
+  return [...new Set(list.map(realOrResolved))];
+}
+
+/** Owner-configured allow-list (SMALL_AGENT_READ_ROOTS, path-delimiter separated); empty -> any safe directory. */
+function configuredReadRoots(): string[] {
+  return (process.env.SMALL_AGENT_READ_ROOTS ?? '').split(path.delimiter).map((x) => x.trim()).filter(Boolean)
+    .filter((x) => path.isAbsolute(x)).map(realOrResolved);
+}
+
+/**
+ * Validate a directory the owner lets a small-agent run read. Returns its
+ * real path. Refused: relative paths, missing/non-directories, the
+ * filesystem root, the home directory itself, anything that contains or is
+ * inside the backend working folder or a data directory, deny-listed places
+ * (.git, .ssh, ...), and anything outside SMALL_AGENT_READ_ROOTS when set.
+ */
+export function validateSmallAgentReadDir(input: unknown): string {
+  if (typeof input !== 'string' || !input.trim()) throw new SmallAgentInputError('read_dir must be an absolute directory path');
+  // eslint-disable-next-line no-control-regex
+  if (input.length > 1024 || /[\u0000-\u001f\u007f]/.test(input)) throw new SmallAgentInputError('read_dir is not a valid path');
+  if (!path.isAbsolute(input)) throw new SmallAgentInputError('read_dir must be an absolute directory path');
+  let real: string;
+  try {
+    real = fs.realpathSync(input);
+    if (!fs.statSync(real).isDirectory()) throw new Error('not a directory');
+  } catch {
+    throw new SmallAgentInputError('read_dir must be an existing directory');
+  }
+  if (real === path.parse(real).root) throw new SmallAgentInputError('read_dir cannot be the filesystem root');
+  if (real === realOrResolved(os.homedir())) throw new SmallAgentInputError('read_dir cannot be the whole home directory; name a project folder');
+  for (const t of protectedTrees()) {
+    if (isInside(t, real) || isInside(real, t)) throw new SmallAgentInputError('read_dir cannot be or contain the Agent Player backend or data folder');
+  }
+  if (denyReason('', real)) throw new SmallAgentInputError('read_dir points to a protected location');
+  const allowed = configuredReadRoots();
+  if (allowed.length && !allowed.some((r) => isInside(r, real))) {
+    throw new SmallAgentInputError('read_dir is outside the directories allowed by SMALL_AGENT_READ_ROOTS');
+  }
+  return real;
+}
+
+/** Fields of the small agent's agents_config row that differ from the built-in defaults. */
+export function smallAgentConfigDrift(): string[] {
+  const row = getDatabase().prepare('SELECT system_prompt, model, provider, temperature, max_tokens FROM agents_config WHERE id = ?')
+    .get(SMALL_AGENT_ID) as { system_prompt: string | null; model: string; provider: string; temperature: number; max_tokens: number } | undefined;
+  if (!row) return [];
+  const drift: string[] = [];
+  if ((row.system_prompt ?? '') !== SYSTEM_PROMPT) drift.push('system_prompt');
+  if (row.model !== smallAgentDefaults().model) drift.push('model');
+  if (row.provider !== 'ollama') drift.push('provider');
+  if (Number(row.temperature) !== SMALL_AGENT_TEMPERATURE) drift.push('temperature');
+  if (Number(row.max_tokens) !== SMALL_AGENT_MAX_TOKENS) drift.push('max_tokens');
+  return drift;
+}
+
+// ---------------------------------------------------------------------------
 // Capacity
 // ---------------------------------------------------------------------------
 
@@ -231,6 +320,7 @@ export function smallAgentCapacity(): SmallAgentCapacity {
 interface SmallAgentRunRow {
   run_id: string; task_id: string; requested_by: string; kind: SmallAgentKind;
   requested_tools: string; granted_tools: string; drawers: string; model: string; warnings: string; created_at: string;
+  read_root: string | null;
 }
 
 function parseList<T = string>(json: string | null | undefined): T[] {
@@ -249,6 +339,8 @@ export interface SpawnInput {
   drawers?: unknown;
   maxSteps?: unknown;
   kind?: unknown;
+  /** Owner-chosen directory `read` may use instead of the agent's workspace. */
+  readDir?: unknown;
 }
 
 export interface SpawnResult {
@@ -259,6 +351,7 @@ export interface SpawnResult {
   model: string;
   warnings: string[];
   capacity: SmallAgentCapacity;
+  readRoot: string | null;
 }
 
 // One spawn at a time in this process, so the capacity check and the insert
@@ -294,12 +387,18 @@ async function doSpawn(input: SpawnInput): Promise<SpawnResult> {
   const drawers = resolveSmallAgentDrawers(input.drawers);
   for (const x of tools.dropped) warnings.push(`tool "${x.item}" not given: ${x.reason}`);
   for (const x of drawers.dropped) warnings.push(`drawer "${x.item}" not opened: ${x.reason}`);
+  let readRoot: string | null = null;
+  if (input.readDir !== undefined && input.readDir !== null) {
+    const real = validateSmallAgentReadDir(input.readDir);
+    if (tools.granted.includes('read')) readRoot = real;
+    else warnings.push('read_dir ignored: the "read" tool was not given to this run');
+  }
 
   const capacity = smallAgentCapacity();
   if (capacity.active >= capacity.limit) throw new SmallAgentCapacityError(capacity);
 
-  const agent = getDatabase().prepare('SELECT model FROM agents_config WHERE id = ?').get(SMALL_AGENT_ID) as { model: string } | undefined;
-  const model = agent?.model || d.model;
+  // MCP-01b: always the env/default model, never the editable agents_config row.
+  const model = d.model;
 
   // The task text lives only in the encrypted run input, not in the
   // orchestrator's task title/description.
@@ -323,12 +422,12 @@ async function doSpawn(input: SpawnInput): Promise<SpawnResult> {
     maxDurationMs: d.maxDurationMs,
   });
   getDatabase().prepare(`
-    INSERT INTO small_agent_runs (run_id, task_id, requested_by, kind, requested_tools, granted_tools, drawers, model, warnings)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO small_agent_runs (run_id, task_id, requested_by, kind, requested_tools, granted_tools, drawers, model, warnings, read_root)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(run.id, task.id, input.ownerId, kind, JSON.stringify(tools.requested), JSON.stringify(tools.granted),
-    JSON.stringify(drawers.drawers), model, JSON.stringify(warnings));
+    JSON.stringify(drawers.drawers), model, JSON.stringify(warnings), readRoot);
 
-  return { run, kind, grantedTools: tools.granted, drawers: drawers.drawers, model, warnings, capacity: smallAgentCapacity() };
+  return { run, kind, grantedTools: tools.granted, drawers: drawers.drawers, model, warnings, capacity: smallAgentCapacity(), readRoot };
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +439,13 @@ export interface SmallAgentRunScope {
   grants: AgentToolGrants;
   memoryDrawers: DrawerRef[];
   userId: string | null;
+  /** Owner-chosen read directory (re-validated), or undefined -> the agent's own workspace. */
+  fileReadRoot?: string;
+  /** Built-in settings the executor uses (never the agents_config row). */
+  model: string;
+  systemPrompt: string;
+  temperature: number;
+  maxTokens: number;
 }
 
 /**
@@ -352,21 +458,36 @@ export function smallAgentRunScope(
   current: AgentToolGrants,
   registered: ReadonlyArray<ToolInfo>,
 ): SmallAgentRunScope {
-  const row = getDatabase().prepare('SELECT granted_tools, drawers FROM small_agent_runs WHERE run_id = ?').get(run.id) as
-    Pick<SmallAgentRunRow, 'granted_tools' | 'drawers'> | undefined;
-  if (!row) return { grants: { agentId: SMALL_AGENT_ID, tools: new Map() }, memoryDrawers: [], userId: null };
+  const row = getDatabase().prepare('SELECT granted_tools, drawers, model, read_root FROM small_agent_runs WHERE run_id = ?').get(run.id) as
+    Pick<SmallAgentRunRow, 'granted_tools' | 'drawers' | 'model' | 'read_root'> | undefined;
+  const settings = {
+    model: row?.model || smallAgentDefaults().model,
+    systemPrompt: SYSTEM_PROMPT,
+    temperature: SMALL_AGENT_TEMPERATURE,
+    maxTokens: SMALL_AGENT_MAX_TOKENS,
+  };
+  if (!row) return { grants: { agentId: SMALL_AGENT_ID, tools: new Map() }, memoryDrawers: [], userId: null, ...settings };
+  // The stored read directory must still be valid; otherwise `read` is
+  // dropped for this attempt (fail closed).
+  let fileReadRoot: string | undefined;
+  let readOk = true;
+  if (row.read_root) {
+    try { fileReadRoot = validateSmallAgentReadDir(row.read_root); } catch { readOk = false; }
+  }
   const allowed = parseList(row.granted_tools).filter((name) => {
+    if (name === 'read' && !readOk) return false;
     if (typeof name !== 'string' || !SMALL_AGENT_SAFE_TOOLS.includes(name)) return false;
     const tool = registered.find((t) => t.name === name);
     return !!tool && !isToolExecClass(tool) && approvalCategory(tool) === null;
   });
   const grants = intersectGrants(staticGrants(allowed, SMALL_AGENT_ID), current);
   const memoryDrawers = selectDrawers({ audience: 'subagent', passed: parseList<DrawerRef>(row.drawers) });
-  return { grants, memoryDrawers, userId: run.user_id };
+  return { grants, memoryDrawers, userId: run.user_id, fileReadRoot, ...settings };
 }
 
-export function smallAgentSystemPrompt(stored: string | null | undefined): string {
-  return stored && stored.trim() ? stored : SYSTEM_PROMPT;
+/** MCP-01b: the small agent always runs with the built-in prompt (the stored row is ignored). */
+export function smallAgentSystemPrompt(_stored?: string | null): string {
+  return SYSTEM_PROMPT;
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +508,8 @@ export interface ResultCard {
   agent: string;
   tools_granted: string[];
   tools_used: string[];
+  /** Directory `read` was confined to (null -> the small agent's own workspace). */
+  read_dir: string | null;
   drawers: string[];
   needs_review: boolean;
   review_reason: string | null;
@@ -426,12 +549,18 @@ export function smallAgentCard(runId: string): ResultCard | null {
     output = output.slice(0, MAX_CARD_OUTPUT_CHARS);
     runtime.push(`output cut to ${MAX_CARD_OUTPUT_CHARS} characters`);
   }
+  // MCP-01b: secret-looking values never leave through the card.
+  const redacted = redactSecrets(output);
+  output = redacted.text;
+  if (redacted.count) runtime.push(`${redacted.count} secret-looking value(s) redacted from the output`);
+  const drift = smallAgentConfigDrift();
+  if (drift.length) runtime.push(`the small-local-agent settings were edited (${drift.join(', ')}); the built-in settings were used`);
   const failedTools = steps.filter((s) => s.kind === 'tool' && (s.status === 'failed' || s.status === 'unknown'));
   if (failedTools.length) runtime.push(`${failedTools.length} tool step(s) failed`);
   const toolsUsed = [...new Set(steps.filter((s) => s.kind === 'tool' && s.tool_name).map((s) => s.tool_name!))];
   const outsideGrant = toolsUsed.filter((t) => !parseList(meta.granted_tools).includes(t));
   if (outsideGrant.length) runtime.push(`the model asked for tools it was not given (refused): ${outsideGrant.join(', ')}`);
-  if (toolsUsed.includes('read')) runtime.push('the agent read workspace files; check that nothing private is quoted');
+  if (toolsUsed.includes('read')) runtime.push(meta.read_root ? 'the agent read files from the directory given at spawn; check that nothing private is quoted' : 'the agent read files from its own workspace; check that nothing private is quoted');
   if (run.status === 'failed') runtime.push(`run failed: ${run.status_reason ?? 'unknown reason'}`);
   if (run.status === 'cancelled') runtime.push('run was cancelled');
   if (run.status === 'waiting_approval') runtime.push(`run is waiting for the owner (${run.status_reason ?? 'decision'})`);
@@ -448,7 +577,7 @@ export function smallAgentCard(runId: string): ResultCard | null {
 
   const summary = run.status === 'completed'
     ? summaryOf(output) || '(no output)'
-    : run.status === 'failed' ? `Failed: ${run.status_reason ?? 'unknown reason'}`
+    : run.status === 'failed' ? `Failed: ${redactSecrets(run.status_reason ?? 'unknown reason').text}`
     : run.status === 'cancelled' ? 'Cancelled.'
     : run.status === 'waiting_approval' ? `Waiting for the owner (${run.status_reason ?? 'decision'}).`
     : run.status === 'running' ? 'Running.' : 'Queued.';
@@ -467,6 +596,7 @@ export function smallAgentCard(runId: string): ResultCard | null {
     agent: SMALL_AGENT_ID,
     tools_granted: parseList(meta.granted_tools),
     tools_used: toolsUsed,
+    read_dir: meta.read_root ?? null,
     drawers: parseList<DrawerRef>(meta.drawers).map((d) => drawerId(d)),
     needs_review: reviewReason !== null,
     review_reason: reviewReason,
@@ -494,7 +624,7 @@ export function listSmallAgentRuns(filter: { status?: string; limit?: number }):
     run_id: r.id,
     status: r.status,
     kind: r.small_kind,
-    summary: r.output_preview ? summaryOf(r.output_preview) : (r.status === 'failed' ? r.status_reason : null),
+    summary: r.output_preview ? summaryOf(redactSecrets(r.output_preview).text) : (r.status === 'failed' && r.status_reason ? redactSecrets(r.status_reason).text : null),
     steps_used: r.steps_used,
     max_steps: r.max_steps,
     created_at: r.created_at,

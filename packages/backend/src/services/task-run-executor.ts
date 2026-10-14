@@ -253,11 +253,13 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
       // MCP-01: the small local agent. Tools = what the run was given at
       // spawn ∩ the agent's grants now (never wider); only the stored
       // drawers; memory of the owner who spawned it.
-      if (agent.provider !== 'ollama') return await fail(`Agent "${agent.name}" must use the local ollama provider.`, agent.id);
       const scope = smallAgentRunScope(run, registry.getContext().grants!, registry.listRegistered());
-      registry.updateContext({ grants: scope.grants, memoryDrawers: scope.memoryDrawers, userId: scope.userId ?? undefined });
-      systemPrompt = smallAgentSystemPrompt(agent.system_prompt);
-      driver = ollamaDriver(agent, systemPrompt, registry.getToolsForAPI());
+      // MCP-01b: `read` only in the owner-chosen directory (or the agent's own
+      // workspace); prompt, model and sampling are the built-in ones, never
+      // the editable agents_config row.
+      registry.updateContext({ grants: scope.grants, memoryDrawers: scope.memoryDrawers, userId: scope.userId ?? undefined, fileReadRoot: scope.fileReadRoot });
+      systemPrompt = smallAgentSystemPrompt();
+      driver = ollamaDriver({ ...agent, model: scope.model, temperature: scope.temperature, max_tokens: scope.maxTokens }, systemPrompt, registry.getToolsForAPI());
     } else {
       // SECURITY (S1.1): key from the credential authority (agent's own key,
       // then the historical cron fallback row); never another agent's key.
