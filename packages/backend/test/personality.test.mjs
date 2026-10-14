@@ -174,9 +174,9 @@ test('lock blocks saves and rollbacks; unlock + rollback restores an old version
   assert.equal((await app.inject({ method: 'POST', url: `${base('pe-agent')}/rollback`, headers: auth('pe-owner'), payload: { version: 1 } })).statusCode, 409);
   // CORE-01c: drift is proposal-only; a locked personality refuses even the proposal.
   assert.equal(store.applyPersonalityDrift, undefined, 'drift has no direct entry point');
-  assert.throws(() => store.createPersonalityProposal('pe-agent', { traits: { doubt: 0 }, reason: 'r' }, 'evolution', 'evolution'),
+  await assert.rejects(() => store.createPersonalityProposal('pe-agent', { traits: { doubt: 0 }, reason: 'r' }, 'evolution', 'evolution'),
     (e) => e instanceof store.PersonalityProposalError && e.code === 'personality_locked');
-  assert.equal(store.getCurrentPersonality('pe-agent').version, locked);
+  assert.equal((await store.getCurrentPersonality('pe-agent')).version, locked);
 
   const unlock = await app.inject({ method: 'POST', url: `${base('pe-agent')}/unlock`, headers: auth('pe-owner') });
   assert.equal(unlock.json().locked, false);
@@ -194,15 +194,15 @@ test('lock blocks saves and rollbacks; unlock + rollback restores an old version
   assert.deepEqual(versionsOf('pe-agent'), [1, 2, 3, 4, 5]);
 });
 
-test('slow drift is bounded per step and never moves locked traits (via an approved proposal)', () => {
-  store.savePersonalityVersion('pe-other', { traits: { ...P.DEFAULT_TRAITS }, lockedTraits: ['caution'] }, 'pe-owner');
-  const p = store.createPersonalityProposal('pe-other', { traits: { doubt: 100, caution: 0, warmth: 48 }, reason: 'test' }, 'evolution', 'evolution');
-  const { version: d } = store.approvePersonalityProposal('pe-other', p.id, 'pe-owner', p.reviewHash);
+test('slow drift is bounded per step and never moves locked traits (via an approved proposal)', async () => {
+  await store.savePersonalityVersion('pe-other', { traits: { ...P.DEFAULT_TRAITS }, lockedTraits: ['caution'] }, 'pe-owner');
+  const p = await store.createPersonalityProposal('pe-other', { traits: { doubt: 100, caution: 0, warmth: 48 }, reason: 'test' }, 'evolution', 'evolution');
+  const { version: d } = await store.approvePersonalityProposal('pe-other', p.id, 'pe-owner', p.reviewHash);
   assert.equal(d.source, 'evolution');
   assert.equal(d.traits.doubt, 55);   // +5 max
   assert.equal(d.traits.caution, 50); // locked
   assert.equal(d.traits.warmth, 48);  // within the step
-  assert.throws(() => store.createPersonalityProposal('pe-other', { traits: { doubt: 500 }, reason: 'x' }, 'evolution', 'evolution'), P.PersonalityInputError);
+  await assert.rejects(() => store.createPersonalityProposal('pe-other', { traits: { doubt: 500 }, reason: 'x' }, 'evolution', 'evolution'), P.PersonalityInputError);
 });
 
 test('traitsToBehavior is pure, deterministic and monotonic', () => {

@@ -78,7 +78,7 @@ const { isoUtc } = await import(join(backendDir, 'src/api/timestamps.ts'));
 tools.registerExtensionTool({ name: 'uc_risky', description: 'needs approval', extensionId: 'uc', requiresApproval: true,
   input_schema: { type: 'object', properties: {} }, execute: async () => ({ content: [{ type: 'text', text: 'ran' }] }) });
 const avail = tools.createToolsRegistry({ workspaceDir: dir }).listRegistered();
-grants.setAgentGrants('c-agent', { grants: ['uc_risky', 'memory_search'] }, 'c-owner', avail);
+await grants.setAgentGrants('c-agent', { grants: ['uc_risky', 'memory_search'] }, 'c-owner', avail);
 
 const { generateToken } = await import(join(backendDir, 'src/auth/jwt.ts'));
 const { buildServer } = await import(join(backendDir, 'src/api/app.ts'));

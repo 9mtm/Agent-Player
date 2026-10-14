@@ -14,9 +14,11 @@
  * Personality never grants tools or permissions (see services/personality.ts).
  */
 
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { isoUtc } from '../api/timestamps.js';
-import { getDatabase } from '../db/index.js';
+import { all, dialect, one, run, sql, type Step } from '../repositories/sql-steps.js';
+import { forUpdate, nowIsoText } from '../db/pg/dialect.js';
+import { orderedId } from '../repositories/ordered-id.js';
 import { readPersonality, writePersonality } from './agent-files.js';
 import {
   DEFAULT_DIALECT,
@@ -106,25 +108,42 @@ function defaults(agentId: string): PersonalityVersion {
   };
 }
 
-export function agentExists(agentId: string): boolean {
-  return !!getDatabase().prepare('SELECT 1 FROM agents_config WHERE id = ?').get(agentId);
+export function* agentExistsStep(agentId: string): Step<boolean> {
+  return !!(yield* one('SELECT 1 AS ok FROM agents_config WHERE id = ?', agentId));
 }
 
-/** Current personality, or defaults (version 0) when nothing is stored. Null if the agent does not exist. */
-export function getCurrentPersonality(agentId: string): PersonalityVersion | null {
-  if (!agentExists(agentId)) return null;
-  const row = getDatabase()
-    .prepare('SELECT * FROM agent_personality_versions WHERE agent_id = ? ORDER BY version DESC LIMIT 1')
-    .get(agentId) as Row | undefined;
+export function agentExists(agentId: string): Promise<boolean> {
+  return sql().read(agentExistsStep(agentId));
+}
+
+/**
+ * Inside a transaction: lock the agent row on PostgreSQL, so concurrent
+ * writers of the same agent's personality run one after another (the next
+ * version number, the pending-proposal limits). SQLite: a plain read (its
+ * write transaction is already exclusive). False when the agent is missing.
+ */
+function* lockAgent(agentId: string): Step<boolean> {
+  const d = yield* dialect();
+  return !!(yield* one(`SELECT id FROM agents_config WHERE id = ?${forUpdate(d)}`, agentId));
+}
+
+function* currentPersonalityStep(agentId: string, opts: { lock?: boolean } = {}): Step<PersonalityVersion | null> {
+  if (!(opts.lock ? yield* lockAgent(agentId) : yield* agentExistsStep(agentId))) return null;
+  const row = yield* one<Row>('SELECT * FROM agent_personality_versions WHERE agent_id = ? ORDER BY version DESC LIMIT 1', agentId);
   return row ? fromRow(row) : defaults(agentId);
 }
 
-export function listPersonalityVersions(agentId: string): PersonalityVersion[] | null {
-  if (!agentExists(agentId)) return null;
-  const rows = getDatabase()
-    .prepare('SELECT * FROM agent_personality_versions WHERE agent_id = ? ORDER BY version DESC')
-    .all(agentId) as Row[];
-  return rows.map(fromRow);
+/** Current personality, or defaults (version 0) when nothing is stored. Null if the agent does not exist. */
+export function getCurrentPersonality(agentId: string): Promise<PersonalityVersion | null> {
+  return sql().read(currentPersonalityStep(agentId));
+}
+
+export function listPersonalityVersions(agentId: string): Promise<PersonalityVersion[] | null> {
+  return sql().read((function* () {
+    if (!(yield* agentExistsStep(agentId))) return null;
+    const rows = yield* all<Row>('SELECT * FROM agent_personality_versions WHERE agent_id = ? ORDER BY version DESC', agentId);
+    return rows.map(fromRow);
+  })());
 }
 
 interface NewVersion {
@@ -138,23 +157,23 @@ interface NewVersion {
   note: string | null;
 }
 
-/** Append a version atomically (next number computed inside the transaction). */
-function appendVersion(agentId: string, createdBy: string, v: NewVersion): PersonalityVersion {
-  const db = getDatabase();
-  // DatabaseManager.transaction runs the function at once inside a transaction.
-  const version = db.transaction(() => {
-    const max = (db.prepare('SELECT MAX(version) AS v FROM agent_personality_versions WHERE agent_id = ?').get(agentId) as { v: number | null }).v ?? 0;
-    const version = max + 1;
-    db.prepare(`
-      INSERT INTO agent_personality_versions
-        (agent_id, version, traits, preset, dialect, locked, locked_traits, source, based_on_version, note, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(agentId, version, JSON.stringify(v.traits), v.preset, v.dialect, v.locked ? 1 : 0,
-      JSON.stringify(v.lockedTraits), v.source, v.basedOnVersion, v.note, createdBy);
-    return version;
-  });
-  const row = db.prepare('SELECT * FROM agent_personality_versions WHERE agent_id = ? AND version = ?').get(agentId, version) as Row;
-  return fromRow(row);
+/**
+ * Append a version (a step: run inside the caller's transaction; the agent
+ * row is locked first on PostgreSQL, so the next number is computed by one
+ * writer at a time).
+ */
+function* appendVersion(agentId: string, createdBy: string, v: NewVersion): Step<PersonalityVersion> {
+  if (!(yield* lockAgent(agentId))) throw new PersonalityNotFoundError('Agent not found');
+  const max = (yield* one<{ v: number | null }>('SELECT MAX(version) AS v FROM agent_personality_versions WHERE agent_id = ?', agentId))?.v ?? 0;
+  const version = max + 1;
+  yield* run(`
+    INSERT INTO agent_personality_versions
+      (agent_id, version, traits, preset, dialect, locked, locked_traits, source, based_on_version, note, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, agentId, version, JSON.stringify(v.traits), v.preset, v.dialect, v.locked ? 1 : 0,
+    JSON.stringify(v.lockedTraits), v.source, v.basedOnVersion, v.note, createdBy);
+  const row = yield* one<Row>('SELECT * FROM agent_personality_versions WHERE agent_id = ? AND version = ?', agentId, version);
+  return fromRow(row as Row);
 }
 
 function validNote(note: unknown): string | null {
@@ -218,49 +237,54 @@ export function checkOwnerPersonalityInput(input: SaveInput): void {
  * Owner saves a new version. Start values: the chosen preset, else the
  * current traits; then the given traits override. Refused while locked.
  */
-export function savePersonalityVersion(agentId: string, input: SaveInput, createdBy: string): PersonalityVersion {
+export async function savePersonalityVersion(agentId: string, input: SaveInput, createdBy: string): Promise<PersonalityVersion> {
   const allowed = new Set(['traits', 'preset', 'dialect', 'lockedTraits', 'note']);
   for (const k of Object.keys(input || {})) {
     if (!allowed.has(k)) throw new PersonalityInputError(`Unknown field: ${k.slice(0, 40)}`);
   }
-  const current = getCurrentPersonality(agentId);
-  if (!current) throw new PersonalityNotFoundError('Agent not found');
-  if (current.locked) throw new PersonalityLockedError('Personality is locked; unlock it first');
-  const merged = mergeOwnerInput(current, input);
-  return appendVersion(agentId, createdBy, {
-    ...merged, locked: false, source: 'owner', basedOnVersion: current.version || null,
+  // One transaction: the version that is checked (locked) and merged is the one appended to.
+  return sql().tx(function* () {
+    const current = yield* currentPersonalityStep(agentId, { lock: true });
+    if (!current) throw new PersonalityNotFoundError('Agent not found');
+    if (current.locked) throw new PersonalityLockedError('Personality is locked; unlock it first');
+    const merged = mergeOwnerInput(current, input);
+    return yield* appendVersion(agentId, createdBy, {
+      ...merged, locked: false, source: 'owner', basedOnVersion: current.version || null,
+    });
   });
 }
 
 /** Lock or unlock the whole personality. Adds a version (history stays complete). */
-export function setPersonalityLocked(agentId: string, locked: boolean, createdBy: string): PersonalityVersion {
-  const current = getCurrentPersonality(agentId);
-  if (!current) throw new PersonalityNotFoundError('Agent not found');
-  if (current.locked === locked) return current;
-  return appendVersion(agentId, createdBy, {
-    traits: current.traits, preset: current.preset, dialect: current.dialect, locked,
-    lockedTraits: current.lockedTraits, source: locked ? 'lock' : 'unlock',
-    basedOnVersion: current.version || null, note: null,
+export async function setPersonalityLocked(agentId: string, locked: boolean, createdBy: string): Promise<PersonalityVersion> {
+  return sql().tx(function* () {
+    const current = yield* currentPersonalityStep(agentId, { lock: true });
+    if (!current) throw new PersonalityNotFoundError('Agent not found');
+    if (current.locked === locked) return current;
+    return yield* appendVersion(agentId, createdBy, {
+      traits: current.traits, preset: current.preset, dialect: current.dialect, locked,
+      lockedTraits: current.lockedTraits, source: locked ? 'lock' : 'unlock',
+      basedOnVersion: current.version || null, note: null,
+    });
   });
 }
 
 /** Roll back: a new version with the traits, preset and dialect of an older one. Refused while locked. */
-export function rollbackPersonality(agentId: string, toVersion: unknown, createdBy: string): PersonalityVersion {
+export async function rollbackPersonality(agentId: string, toVersion: unknown, createdBy: string): Promise<PersonalityVersion> {
   if (typeof toVersion !== 'number' || !Number.isInteger(toVersion) || toVersion < 1) {
     throw new PersonalityInputError('version must be a positive integer');
   }
-  const current = getCurrentPersonality(agentId);
-  if (!current) throw new PersonalityNotFoundError('Agent not found');
-  if (current.locked) throw new PersonalityLockedError('Personality is locked; unlock it first');
-  const row = getDatabase()
-    .prepare('SELECT * FROM agent_personality_versions WHERE agent_id = ? AND version = ?')
-    .get(agentId, toVersion) as Row | undefined;
-  if (!row) throw new PersonalityNotFoundError('Version not found');
-  const target = fromRow(row);
-  return appendVersion(agentId, createdBy, {
-    traits: target.traits, preset: target.preset, dialect: target.dialect, locked: false,
-    lockedTraits: target.lockedTraits, source: 'rollback', basedOnVersion: target.version,
-    note: `rollback to version ${target.version}`,
+  return sql().tx(function* () {
+    const current = yield* currentPersonalityStep(agentId, { lock: true });
+    if (!current) throw new PersonalityNotFoundError('Agent not found');
+    if (current.locked) throw new PersonalityLockedError('Personality is locked; unlock it first');
+    const row = yield* one<Row>('SELECT * FROM agent_personality_versions WHERE agent_id = ? AND version = ?', agentId, toVersion);
+    if (!row) throw new PersonalityNotFoundError('Version not found');
+    const target = fromRow(row);
+    return yield* appendVersion(agentId, createdBy, {
+      traits: target.traits, preset: target.preset, dialect: target.dialect, locked: false,
+      lockedTraits: target.lockedTraits, source: 'rollback', basedOnVersion: target.version,
+      note: `rollback to version ${target.version}`,
+    });
   });
 }
 
@@ -269,7 +293,7 @@ export function rollbackPersonality(agentId: string, toVersion: unknown, created
 // ---------------------------------------------------------------------------
 
 /**
- * Seed version 1 of a just-created agent. Runs inside the creation
+ * Seed version 1 of a just-created agent. A step: runs inside the creation
  * transaction (a throw rolls the new agent back).
  *  - `explicit` (the owner's preset/traits/dialect/lockedTraits) wins:
  *    source 'owner'; the role default is the starting point for traits
@@ -277,22 +301,22 @@ export function rollbackPersonality(agentId: string, toVersion: unknown, created
  *  - otherwise the role default (defaultPersonalityForRole): source 'seed'.
  * Refused when the agent already has a version (never overwrites history).
  */
-export function seedPersonalityForNewAgent(
+export function* seedPersonalityForNewAgent(
   agentId: string,
   opts: { role: AgentRole | null; department: string | null; explicit?: SaveInput | null },
   createdBy: string,
-): PersonalityVersion {
-  const current = getCurrentPersonality(agentId);
+): Step<PersonalityVersion> {
+  const current = yield* currentPersonalityStep(agentId, { lock: true });
   if (!current) throw new PersonalityNotFoundError('Agent not found');
   if (current.version !== 0) throw new PersonalityInputError('The agent already has a personality');
   const seed = defaultPersonalityForRole({ role: opts.role, department: opts.department });
   const start = { traits: seed.traits, preset: seed.preset as string | null, dialect: seed.dialect, lockedTraits: [] as TraitName[] };
   if (opts.explicit) {
     const merged = mergeOwnerInput(start, opts.explicit);
-    return appendVersion(agentId, createdBy, { ...merged, locked: false, source: 'owner', basedOnVersion: null, note: merged.note ?? 'set at creation' });
+    return yield* appendVersion(agentId, createdBy, { ...merged, locked: false, source: 'owner', basedOnVersion: null, note: merged.note ?? 'set at creation' });
   }
   const note = opts.role ? `default for role ${opts.role}${opts.department ? ` (${opts.department})` : ''}` : 'default';
-  return appendVersion(agentId, createdBy, { ...start, locked: false, source: 'seed', basedOnVersion: null, note });
+  return yield* appendVersion(agentId, createdBy, { ...start, locked: false, source: 'seed', basedOnVersion: null, note });
 }
 
 // ---------------------------------------------------------------------------
@@ -442,18 +466,28 @@ function targetTraits(current: Traits, input: Record<string, unknown>): Partial<
   return out;
 }
 
-export function getPersonalityProposal(agentId: string, id: string): PersonalityProposal | null {
-  const row = getDatabase().prepare('SELECT * FROM personality_proposals WHERE id = ? AND agent_id = ?').get(id, agentId) as ProposalRow | undefined;
+function* proposalStep(agentId: string, id: string): Step<PersonalityProposal | null> {
+  const row = yield* one<ProposalRow>('SELECT * FROM personality_proposals WHERE id = ? AND agent_id = ?', id, agentId);
   return row ? proposalFromRow(row) : null;
 }
 
-/** Newest first (at most 200). Null when the agent does not exist. */
-export function listPersonalityProposals(agentId: string, status?: ProposalStatus): PersonalityProposal[] | null {
-  if (!agentExists(agentId)) return null;
-  const rows = (status
-    ? getDatabase().prepare('SELECT * FROM personality_proposals WHERE agent_id = ? AND status = ? ORDER BY created_at DESC, rowid DESC LIMIT 200').all(agentId, status)
-    : getDatabase().prepare('SELECT * FROM personality_proposals WHERE agent_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 200').all(agentId)) as ProposalRow[];
-  return rows.map(proposalFromRow);
+export function getPersonalityProposal(agentId: string, id: string): Promise<PersonalityProposal | null> {
+  return sql().read(proposalStep(agentId, id));
+}
+
+/**
+ * Newest first (at most 200). Null when the agent does not exist. Ties on
+ * created_at (millisecond ISO text) are ordered by id (B2.2b-3: an explicit
+ * key instead of SQLite's rowid, so both drivers give the same order).
+ */
+export function listPersonalityProposals(agentId: string, status?: ProposalStatus): Promise<PersonalityProposal[] | null> {
+  return sql().read((function* () {
+    if (!(yield* agentExistsStep(agentId))) return null;
+    const rows = status
+      ? yield* all<ProposalRow>('SELECT * FROM personality_proposals WHERE agent_id = ? AND status = ? ORDER BY created_at DESC, id DESC LIMIT 200', agentId, status)
+      : yield* all<ProposalRow>('SELECT * FROM personality_proposals WHERE agent_id = ? ORDER BY created_at DESC, id DESC LIMIT 200', agentId);
+    return rows.map(proposalFromRow);
+  })());
 }
 
 /**
@@ -466,7 +500,7 @@ export function listPersonalityProposals(agentId: string, status?: ProposalStatu
  * Callers pass a trusted `source`/`createdBy` (the repository decides them
  * from the actor, never from the body).
  */
-export function createPersonalityProposal(agentId: string, raw: unknown, source: ProposalSource, createdBy: string): PersonalityProposal {
+export async function createPersonalityProposal(agentId: string, raw: unknown, source: ProposalSource, createdBy: string): Promise<PersonalityProposal> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new PersonalityInputError('Body must be an object');
   const input = raw as Record<string, unknown>;
   const allowed = new Set(['traits', 'delta', 'reason', 'evidence']);
@@ -475,10 +509,11 @@ export function createPersonalityProposal(agentId: string, raw: unknown, source:
   }
   const reason = validReason(input.reason);
   const evidence = validEvidence(input.evidence);
-  const db = getDatabase();
-  const id = randomUUID();
-  db.transaction(() => {
-    const current = getCurrentPersonality(agentId);
+  const id = orderedId(); // sorts in creation order (list ties on created_at)
+  return sql().tx(function* () {
+    // The agent row is locked (PostgreSQL), so the Evolution dedup and the
+    // pending limit below are decided by one writer at a time.
+    const current = yield* currentPersonalityStep(agentId, { lock: true });
     if (!current) throw new PersonalityNotFoundError('Agent not found');
     if (current.locked) throw new PersonalityProposalError(409, 'Personality is locked; unlock it first', 'personality_locked');
     const target = targetTraits(current.traits, input);
@@ -490,28 +525,28 @@ export function createPersonalityProposal(agentId: string, raw: unknown, source:
     // owner decides it before Evolution suggests the next one). Checked inside
     // the transaction, so two cycles cannot both insert.
     if (source === 'evolution') {
-      const open = db.prepare(`SELECT id FROM personality_proposals WHERE agent_id = ? AND source = 'evolution' AND status = 'pending' LIMIT 1`).get(agentId);
+      const open = yield* one(`SELECT id FROM personality_proposals WHERE agent_id = ? AND source = 'evolution' AND status = 'pending' LIMIT 1`, agentId);
       if (open) throw new PersonalityProposalError(409, 'Evolution already has a pending proposal for this agent', 'pending_exists');
     }
-    const pending = (db.prepare(`SELECT COUNT(*) AS n FROM personality_proposals WHERE agent_id = ? AND status = 'pending'`).get(agentId) as { n: number }).n;
+    const pending = (yield* one<{ n: number }>(`SELECT COUNT(*) AS n FROM personality_proposals WHERE agent_id = ? AND status = 'pending'`, agentId))!.n;
     if (pending >= MAX_PENDING_PROPOSALS) {
       throw new PersonalityProposalError(429, 'Too many pending personality proposals for this agent; decide some first', 'too_many_pending');
     }
     const reviewHash = personalityProposalReviewHash({ id, agentId, baseVersion: current.version, proposedTraits, reason, evidence });
-    db.prepare(`
+    yield* run(`
       INSERT INTO personality_proposals (id, agent_id, base_version, base_traits, proposed_traits, reason, evidence, source, review_hash, created_by)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, agentId, current.version, JSON.stringify(current.traits), JSON.stringify(proposedTraits), reason,
+    `, id, agentId, current.version, JSON.stringify(current.traits), JSON.stringify(proposedTraits), reason,
       JSON.stringify(evidence), source, reviewHash, createdBy);
+    return (yield* proposalStep(agentId, id))!;
   });
-  return getPersonalityProposal(agentId, id)!;
 }
 
 const REVIEW_HASH = /^[0-9a-f]{64}$/;
 
 /** Exists for this agent, still pending, and the caller reviewed exactly this content. */
-function decidable(agentId: string, id: string, expectedReviewHash: unknown): PersonalityProposal {
-  const p = getPersonalityProposal(agentId, id);
+function* decidable(agentId: string, id: string, expectedReviewHash: unknown): Step<PersonalityProposal> {
+  const p = yield* proposalStep(agentId, id);
   if (!p) throw new PersonalityProposalError(404, 'Proposal not found');
   if (p.status !== 'pending') throw new PersonalityProposalError(409, `Proposal is already ${p.status}`, 'already_decided');
   if (typeof expectedReviewHash !== 'string' || !REVIEW_HASH.test(expectedReviewHash)) {
@@ -524,11 +559,14 @@ function decidable(agentId: string, id: string, expectedReviewHash: unknown): Pe
 }
 
 /** The claim: exactly one decision moves the row out of 'pending'. */
-function claimDecision(agentId: string, id: string, status: 'approved' | 'rejected' | 'stale' | 'cancelled', decidedBy: string, note: string | null): void {
-  const res = getDatabase().prepare(`
-    UPDATE personality_proposals SET status = ?, decided_by = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), decision_note = ?
+function* claimDecision(agentId: string, id: string, status: 'approved' | 'rejected' | 'stale' | 'cancelled', decidedBy: string, note: string | null): Step<void> {
+  const d = yield* dialect();
+  // On PostgreSQL a concurrent decision waits on the row lock, then sees the
+  // row no longer 'pending' and changes nothing (READ COMMITTED re-check).
+  const res = yield* run(`
+    UPDATE personality_proposals SET status = ?, decided_by = ?, decided_at = ${nowIsoText(d)}, decision_note = ?
     WHERE id = ? AND agent_id = ? AND status = 'pending'
-  `).run(status, decidedBy, note, id, agentId) as { changes: number };
+  `, status, decidedBy, note, id, agentId);
   if (res.changes !== 1) throw new PersonalityProposalError(409, 'Proposal was already decided', 'already_decided');
 }
 
@@ -537,14 +575,14 @@ function claimDecision(agentId: string, id: string, status: 'approved' | 'reject
  * caller is approvePersonalityProposal, inside its transaction, after the
  * claim. There is no other way for drift to reach a personality.
  */
-function applyPersonalityDrift(agentId: string, proposal: PersonalityProposal, createdBy: string): PersonalityVersion {
-  const current = getCurrentPersonality(agentId);
+function* applyPersonalityDrift(agentId: string, proposal: PersonalityProposal, createdBy: string): Step<PersonalityVersion> {
+  const current = yield* currentPersonalityStep(agentId, { lock: true });
   if (!current) throw new PersonalityNotFoundError('Agent not found');
   if (current.locked) throw new PersonalityProposalError(409, 'Personality is locked; unlock it first', 'personality_locked');
   // base_version == current (checked by the caller), so this re-bounding is a
   // no-op for an untouched row and a safety net for anything else.
   const traits = boundedDrift(current.traits, proposal.proposedTraits, current.lockedTraits, MAX_DRIFT_STEP);
-  return appendVersion(agentId, createdBy, {
+  return yield* appendVersion(agentId, createdBy, {
     traits, preset: current.preset, dialect: current.dialect, locked: false,
     lockedTraits: current.lockedTraits, source: 'evolution', basedOnVersion: proposal.baseVersion || null,
     note: `approved proposal ${proposal.id}`,
@@ -558,39 +596,36 @@ function applyPersonalityDrift(agentId: string, proposal: PersonalityProposal, c
  * base_version) and record it on the proposal. A concurrent decision makes
  * the claim fail and nothing is written (409 `already_decided`).
  */
-export function approvePersonalityProposal(
+export async function approvePersonalityProposal(
   agentId: string, id: string, decidedBy: string, expectedReviewHash: unknown,
-): { proposal: PersonalityProposal; version: PersonalityVersion } {
-  const db = getDatabase();
-  let stale = false;
-  let version: PersonalityVersion | null = null;
-  db.transaction(() => {
-    const p = decidable(agentId, id, expectedReviewHash);
-    const current = getCurrentPersonality(agentId);
+): Promise<{ proposal: PersonalityProposal; version: PersonalityVersion }> {
+  const out = await sql().tx(function* () {
+    const p = yield* decidable(agentId, id, expectedReviewHash);
+    const current = yield* currentPersonalityStep(agentId, { lock: true });
     if (!current) throw new PersonalityNotFoundError('Agent not found');
     if (current.version !== p.baseVersion) {
-      claimDecision(agentId, id, 'stale', decidedBy, null);
-      stale = true;
-      return;
+      yield* claimDecision(agentId, id, 'stale', decidedBy, null);
+      return null; // committed: the row stays 'stale'
     }
-    claimDecision(agentId, id, 'approved', decidedBy, null);
-    version = applyPersonalityDrift(agentId, p, decidedBy);
-    db.prepare('UPDATE personality_proposals SET applied_version = ? WHERE id = ? AND agent_id = ?').run(version.version, id, agentId);
+    yield* claimDecision(agentId, id, 'approved', decidedBy, null);
+    const version = yield* applyPersonalityDrift(agentId, p, decidedBy);
+    yield* run('UPDATE personality_proposals SET applied_version = ? WHERE id = ? AND agent_id = ?', version.version, id, agentId);
+    return { proposal: (yield* proposalStep(agentId, id))!, version };
   });
-  if (stale) throw new PersonalityProposalError(409, 'The personality changed after this proposal was made; it was marked stale', 'stale');
-  return { proposal: getPersonalityProposal(agentId, id)!, version: version! };
+  if (!out) throw new PersonalityProposalError(409, 'The personality changed after this proposal was made; it was marked stale', 'stale');
+  return out;
 }
 
 /** Owner rejects: nothing in the personality changes. Same checks and claim as approve. */
-export function rejectPersonalityProposal(
+export async function rejectPersonalityProposal(
   agentId: string, id: string, decidedBy: string, expectedReviewHash: unknown, note?: unknown,
-): PersonalityProposal {
+): Promise<PersonalityProposal> {
   const decisionNote = validDecisionNote(note);
-  getDatabase().transaction(() => {
-    decidable(agentId, id, expectedReviewHash);
-    claimDecision(agentId, id, 'rejected', decidedBy, decisionNote);
+  return sql().tx(function* () {
+    yield* decidable(agentId, id, expectedReviewHash);
+    yield* claimDecision(agentId, id, 'rejected', decidedBy, decisionNote);
+    return (yield* proposalStep(agentId, id))!;
   });
-  return getPersonalityProposal(agentId, id)!;
 }
 
 /**
@@ -599,23 +634,25 @@ export function rejectPersonalityProposal(
  * (pending only, reviewHash, `changes === 1`). Who may cancel is decided by
  * the repository (the owner, or the owner/admin account that created it).
  */
-export function cancelPersonalityProposal(
+export async function cancelPersonalityProposal(
   agentId: string, id: string, decidedBy: string, expectedReviewHash: unknown,
-): PersonalityProposal {
-  getDatabase().transaction(() => {
-    decidable(agentId, id, expectedReviewHash);
-    claimDecision(agentId, id, 'cancelled', decidedBy, null);
+): Promise<PersonalityProposal> {
+  return sql().tx(function* () {
+    yield* decidable(agentId, id, expectedReviewHash);
+    yield* claimDecision(agentId, id, 'cancelled', decidedBy, null);
+    return (yield* proposalStep(agentId, id))!;
   });
-  return getPersonalityProposal(agentId, id)!;
 }
 
 /** Pending proposal of this agent from this source, newest first (dedup for Evolution). */
-export function pendingProposalFrom(agentId: string, source: ProposalSource): PersonalityProposal | null {
-  const row = getDatabase().prepare(`
-    SELECT * FROM personality_proposals WHERE agent_id = ? AND source = ? AND status = 'pending'
-    ORDER BY created_at DESC, rowid DESC LIMIT 1
-  `).get(agentId, source) as ProposalRow | undefined;
-  return row ? proposalFromRow(row) : null;
+export function pendingProposalFrom(agentId: string, source: ProposalSource): Promise<PersonalityProposal | null> {
+  return sql().read((function* () {
+    const row = yield* one<ProposalRow>(`
+      SELECT * FROM personality_proposals WHERE agent_id = ? AND source = ? AND status = 'pending'
+      ORDER BY created_at DESC, id DESC LIMIT 1
+    `, agentId, source);
+    return row ? proposalFromRow(row) : null;
+  })());
 }
 
 /** Write the readable copy of the current version into PERSONALITY.md. */

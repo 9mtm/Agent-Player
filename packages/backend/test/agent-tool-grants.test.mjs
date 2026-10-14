@@ -117,7 +117,7 @@ test('an ungranted call is refused even if the model emits it; exec needs grant 
   assert.equal(existsSync(target), false);
 
   // Owner grants fake_proc (exec-class): still refused while the exec gate is off.
-  grants.setAgentGrants('gr-new', { grants: ['memory_search', 'fake_proc'] }, 'gr-owner', registryFor('gr-new').listRegistered());
+  await grants.setAgentGrants('gr-new', { grants: ['memory_search', 'fake_proc'] }, 'gr-owner', registryFor('gr-new').listRegistered());
   const reg2 = registryFor('gr-new');
   assert.deepEqual(names(reg2), ['memory_search']);
   assert.match((await quietly(() => reg2.execute('fake_proc', {}))).error, /disabled/i);
@@ -125,19 +125,19 @@ test('an ungranted call is refused even if the model emits it; exec needs grant 
 
 test('destination scopes: only granted destinations run', async () => {
   addAgent('gr-scope');
-  grants.setAgentGrants('gr-scope', { grants: [{ tool: 'fake_notify', scopes: { destinations: ['ok-1'] } }] }, 'gr-owner', registryFor('gr-scope').listRegistered());
+  await grants.setAgentGrants('gr-scope', { grants: [{ tool: 'fake_notify', scopes: { destinations: ['ok-1'] } }] }, 'gr-owner', registryFor('gr-scope').listRegistered());
   const reg = registryFor('gr-scope');
   notified.length = 0;
   assert.match((await quietly(() => reg.execute('fake_notify', { target: 'other' }))).error, /agent grants/);
   assert.equal((await quietly(() => reg.execute('fake_notify', { target: 'ok-1' }))).error, undefined);
   assert.deepEqual(notified, ['ok-1']);
-  assert.throws(() => grants.setAgentGrants('gr-scope', { grants: [{ tool: 'fake_notify', scopes: { anything: 1 } }] }, 'gr-owner', []), /unknown scope/);
+  await assert.rejects(() => grants.setAgentGrants('gr-scope', { grants: [{ tool: 'fake_notify', scopes: { anything: 1 } }] }, 'gr-owner', []), /unknown scope/);
 });
 
 test('chat: the model sees only granted tools and ungranted emitted calls are refused', async () => {
   addAgent('gr-chat');
   await quietly(() => setAgentApiKey('gr-chat', 'sk-ant-test-' + randomBytes(12).toString('hex')));
-  grants.setAgentGrants('gr-chat', { grants: ['memory_search', 'read'] }, 'gr-owner', registryFor('gr-chat').listRegistered());
+  await grants.setAgentGrants('gr-chat', { grants: ['memory_search', 'read'] }, 'gr-owner', registryFor('gr-chat').listRegistered());
   modelRequests.length = 0;
   const target = join(dir, 'chat-pwned.txt');
   emitToolCalls = [
@@ -160,27 +160,27 @@ test('chat: the model sees only granted tools and ungranted emitted calls are re
   for (const r of results) assert.match(JSON.stringify(r.content), /not permitted for this agent/);
 });
 
-test('sub-agents and delegated runs only get a subset of the parent\'s grants', () => {
+test('sub-agents and delegated runs only get a subset of the parent\'s grants', async () => {
   addAgent('gr-parent');
   addAgent('gr-child');
   const avail = registryFor('gr-parent').listRegistered();
-  grants.setAgentGrants('gr-parent', { grants: ['memory_search', 'read', { tool: 'fake_notify', scopes: { destinations: ['a', 'b'] } }] }, 'gr-owner', avail);
+  await grants.setAgentGrants('gr-parent', { grants: ['memory_search', 'read', { tool: 'fake_notify', scopes: { destinations: ['a', 'b'] } }] }, 'gr-owner', avail);
 
-  assert.throws(() => grants.setAgentGrants('gr-child', { grants: ['write'], parentAgentId: 'gr-parent' }, 'gr-owner', avail), /subset/);
-  assert.throws(() => grants.setAgentGrants('gr-child', { grants: ['fake_notify'], parentAgentId: 'gr-parent' }, 'gr-owner', avail), /subset/);
-  assert.throws(() => grants.setAgentGrants('gr-child', { grants: [{ tool: 'fake_notify', scopes: { destinations: ['c'] } }], parentAgentId: 'gr-parent' }, 'gr-owner', avail), /subset/);
-  grants.setAgentGrants('gr-child', { grants: ['memory_search', 'read', { tool: 'fake_notify', scopes: { destinations: ['a'] } }], parentAgentId: 'gr-parent' }, 'gr-owner', avail);
-  assert.throws(() => grants.setAgentGrants('gr-parent', { grants: ['read'], parentAgentId: 'gr-child' }, 'gr-owner', avail), /cycle/);
+  await assert.rejects(() => grants.setAgentGrants('gr-child', { grants: ['write'], parentAgentId: 'gr-parent' }, 'gr-owner', avail), /subset/);
+  await assert.rejects(() => grants.setAgentGrants('gr-child', { grants: ['fake_notify'], parentAgentId: 'gr-parent' }, 'gr-owner', avail), /subset/);
+  await assert.rejects(() => grants.setAgentGrants('gr-child', { grants: [{ tool: 'fake_notify', scopes: { destinations: ['c'] } }], parentAgentId: 'gr-parent' }, 'gr-owner', avail), /subset/);
+  await grants.setAgentGrants('gr-child', { grants: ['memory_search', 'read', { tool: 'fake_notify', scopes: { destinations: ['a'] } }], parentAgentId: 'gr-parent' }, 'gr-owner', avail);
+  await assert.rejects(() => grants.setAgentGrants('gr-parent', { grants: ['read'], parentAgentId: 'gr-child' }, 'gr-owner', avail), /cycle/);
 
   // The parent later loses `read`: the child's effective grants shrink with it.
-  grants.setAgentGrants('gr-parent', { grants: ['memory_search', { tool: 'fake_notify', scopes: { destinations: ['a', 'b'] } }] }, 'gr-owner', avail);
+  await grants.setAgentGrants('gr-parent', { grants: ['memory_search', { tool: 'fake_notify', scopes: { destinations: ['a', 'b'] } }] }, 'gr-owner', avail);
   assert.deepEqual(names(registryFor('gr-child')), ['fake_notify', 'memory_search']);
 
   // A delegated run (task spawned by gr-new, which only has memory_search) gets the intersection.
-  const delegated = grants.loadAgentGrants('gr-child', avail, ['gr-new']);
+  const delegated = await grants.loadAgentGrants('gr-child', avail, ['gr-new']);
   assert.deepEqual([...delegated.tools.keys()].sort(), ['memory_search']);
   // Delegated from an unknown agent: nothing (fail closed).
-  assert.deepEqual([...grants.loadAgentGrants('gr-child', avail, ['ghost']).tools.keys()], []);
+  assert.deepEqual([...(await grants.loadAgentGrants('gr-child', avail, ['ghost'])).tools.keys()], []);
   // The cron runner passes the task's spawners.
   const reg = registryFor('gr-child', { delegatedFrom: ['gr-new'] });
   assert.deepEqual(names(reg), ['memory_search']);

@@ -25,7 +25,8 @@
  * Personality never grants tools; grants are permissions. agents_config
  * CRUD and naming live in agents-config.ts (same repository, B1.6).
  *
- * SQLite implementation over tools/grants.ts and services/personality-store.ts.
+ * Over tools/grants.ts and services/personality-store.ts, on the process
+ * driver (B2.2b-3: SQLite or PostgreSQL through repositories/sql-steps.ts).
  */
 
 import type { Actor } from './actor.js';
@@ -51,7 +52,7 @@ import {
   type SaveInput,
 } from '../services/personality-store.js';
 
-import { sqliteAgentConfigs, type AgentConfigsRepository } from './agents-config.js';
+import { agentConfigs, type AgentConfigsRepository } from './agents-config.js';
 
 type Available = ReadonlyArray<Pick<Tool, 'name' | 'execClass'>>;
 
@@ -110,8 +111,8 @@ function internalProposer(actor: Actor | null | undefined, agentId: string): { s
   throw new ScopeError(403, 'Use the personality proposals API');
 }
 
-export const sqliteAgents: AgentsRepository = {
-  ...sqliteAgentConfigs,
+export const agentsRepository: AgentsRepository = {
+  ...agentConfigs,
 
   async grantView(actor, agentId, available) {
     requireOwner(actor);
@@ -182,7 +183,7 @@ export const sqliteAgents: AgentsRepository = {
     const a = requireAdmin(actor);
     if (a.kind !== 'user' || !a.userId) throw new ScopeError(403, MSG.admin);
     if (!isOwner(a)) {
-      const p = getPersonalityProposal(agentId, id);
+      const p = await getPersonalityProposal(agentId, id);
       if (!p) throw new PersonalityProposalError(404, 'Proposal not found');
       if (p.createdBy !== a.userId) throw new ScopeError(403, 'Only the owner or the person who made this proposal can cancel it');
     }

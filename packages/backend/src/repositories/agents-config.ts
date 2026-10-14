@@ -38,8 +38,8 @@
 import { randomBytes } from 'node:crypto';
 import type { Actor } from './actor.js';
 import { ScopeError, isOwner, isSystem, requireAdmin, requireMember } from './scope.js';
-import { withTransaction } from './transaction.js';
-import { getDatabase } from '../db/index.js';
+import { all, dialect, one, run, sql, type Step } from './sql-steps.js';
+import { nowText } from '../db/pg/dialect.js';
 import { setAgentApiKey, removeAgentApiKey } from '../credentials/authority.js';
 import {
   normalizeAgentName,
@@ -124,7 +124,10 @@ export interface AgentConfigsRepository {
   deleteConfig(actor: Actor | null | undefined, id: string): Promise<void>;
 }
 
-const row = (id: string) => getDatabase().prepare('SELECT * FROM agents_config WHERE id = ?').get(id) as AgentConfigRow | undefined;
+function* rowStep(id: string): Step<AgentConfigRow | undefined> {
+  return yield* one<AgentConfigRow>('SELECT * FROM agents_config WHERE id = ?', id);
+}
+const row = (id: string) => sql().read(rowStep(id));
 const newAgentId = () => `agent-${Date.now()}-${randomBytes(3).toString('hex')}`;
 
 /** Owner/admin; the reserved small local agent: owner only (MCP-01b). */
@@ -153,20 +156,20 @@ function roleAndDepartment(body: { role?: unknown; department?: unknown }): { ro
   }
 }
 
-export const sqliteAgentConfigs: AgentConfigsRepository = {
+export const agentConfigs: AgentConfigsRepository = {
   async listConfigs(actor) {
     requireMember(actor);
-    return getDatabase().prepare('SELECT * FROM agents_config ORDER BY is_primary DESC, created_at ASC').all() as AgentConfigRow[];
+    return sql().read(all<AgentConfigRow>('SELECT * FROM agents_config ORDER BY is_primary DESC, created_at ASC'));
   },
 
   async getConfig(actor, id) {
     requireMember(actor);
-    return row(id) ?? null;
+    return (await row(id)) ?? null;
   },
 
   async suggestName(actor, input) {
     const a = requireAdmin(actor);
-    const language = resolveNamingLanguage(a.userId, input.language);
+    const language = await resolveNamingLanguage(a.userId, input.language);
     return suggestAgentName(language, validateExclude(input.exclude));
   },
 
@@ -193,20 +196,20 @@ export const sqliteAgentConfigs: AgentConfigsRepository = {
     let name: string;
     let language: string | null = null;
     if (body.name === undefined || body.name === null || body.name === '') {
-      const suggestion = suggestAgentName(resolveNamingLanguage(a.userId, body.language));
+      const suggestion = await suggestAgentName(await resolveNamingLanguage(a.userId, body.language));
       name = suggestion.name;
       language = suggestion.language;
     } else {
       name = validateAgentName(body.name);
-      if (body.language !== undefined) language = resolveNamingLanguage(a.userId, body.language);
+      if (body.language !== undefined) language = await resolveNamingLanguage(a.userId, body.language);
     }
 
-    await withTransaction(a, () => {
-      reserveAgentName(name, id, { reason: 'create', language, reservedBy: a.userId });
-      getDatabase().prepare(`
+    await sql().tx(function* () {
+      yield* reserveAgentName(name, id, { reason: 'create', language, reservedBy: a.userId });
+      yield* run(`
         INSERT INTO agents_config (id, name, description, emoji, system_prompt, model, provider, temperature, max_tokens, capabilities, api_key, role, department)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)
-      `).run(
+      `,
         id,
         name,
         body.description || '',
@@ -220,12 +223,12 @@ export const sqliteAgentConfigs: AgentConfigsRepository = {
         role,
         department,
       );
-      if (role || explicit) seedPersonalityForNewAgent(id, { role, department, explicit }, a.userId ?? 'system');
+      if (role || explicit) yield* seedPersonalityForNewAgent(id, { role, department, explicit }, a.userId ?? 'system');
     });
 
     // SECURITY (S1.1): the key goes to the encrypted credentials store only.
     if (typeof body.api_key === 'string' && body.api_key.trim()) await setAgentApiKey(id, body.api_key);
-    return row(id) as AgentConfigRow;
+    return (await row(id)) as AgentConfigRow;
   },
 
   async updateConfig(actor, id, raw, ifMatch) {
@@ -243,23 +246,23 @@ export const sqliteAgentConfigs: AgentConfigsRepository = {
       throw err;
     }
 
-    const existing = row(id);
+    const existing = await row(id);
     if (!existing) throw new AgentConfigError(404, NOT_FOUND);
     if (expected !== null && expected !== existing.version) throw new AgentConfigConflictError(existing);
 
     // Only the fields that were sent (partial update; no stale rewrite of the others).
     const sets: string[] = [];
-    const args: unknown[] = [];
+    const args: Array<string | number | null> = [];
     const text = (k: 'description' | 'emoji' | 'system_prompt' | 'model' | 'provider') => {
       if (body[k] === undefined) return null;
       if (typeof body[k] !== 'string') return `${k} must be a string`;
-      sets.push(`${k} = ?`); args.push(body[k]);
+      sets.push(`${k} = ?`); args.push(body[k] as string);
       return null;
     };
     const num = (k: 'temperature' | 'max_tokens') => {
       if (body[k] === undefined) return null;
       if (typeof body[k] !== 'number' || !Number.isFinite(body[k] as number)) return `${k} must be a number`;
-      sets.push(`${k} = ?`); args.push(body[k]);
+      sets.push(`${k} = ?`); args.push(body[k] as number);
       return null;
     };
     for (const problem of [text('description'), text('emoji'), text('system_prompt'), text('model'), text('provider'), num('temperature'), num('max_tokens')]) {
@@ -285,17 +288,20 @@ export const sqliteAgentConfigs: AgentConfigsRepository = {
 
     const LOST = Symbol('version_conflict');
     try {
-      await withTransaction(a, () => {
-        if (renamed) reserveAgentName(name, id, { reason: 'rename', reservedBy: a.userId });
+      await sql().tx(function* () {
+        const d = yield* dialect();
+        if (renamed) yield* reserveAgentName(name, id, { reason: 'rename', reservedBy: a.userId });
         if (sets.length) {
-          const r = getDatabase().prepare(`UPDATE agents_config SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ?${expected !== null ? ' AND version = ?' : ''}`)
-            .run(...args, id, ...(expected !== null ? [expected] : []));
+          // Compare-and-set: on PostgreSQL a concurrent update holds the row
+          // lock; this one then re-checks `version` and changes nothing.
+          const r = yield* run(`UPDATE agents_config SET ${sets.join(', ')}, updated_at = ${nowText(d)} WHERE id = ?${expected !== null ? ' AND version = ?' : ''}`,
+            ...args, id, ...(expected !== null ? [expected] : []));
           if (r.changes === 0) throw LOST; // rolls back the name reservation too
         }
       });
     } catch (err) {
       if (err !== LOST) throw err;
-      const current = row(id);
+      const current = await row(id);
       if (!current) throw new AgentConfigError(404, NOT_FOUND);
       throw new AgentConfigConflictError(current);
     }
@@ -303,32 +309,32 @@ export const sqliteAgentConfigs: AgentConfigsRepository = {
     // SECURITY (S1.1): a new key goes to the encrypted credentials store; an
     // empty or masked value keeps the stored key.
     if (typeof body.api_key === 'string' && body.api_key.trim()) await setAgentApiKey(id, body.api_key);
-    return row(id) as AgentConfigRow;
+    return (await row(id)) as AgentConfigRow;
   },
 
   async setPrimary(actor, id) {
-    const a = adminFor(actor, id);
-    if (!row(id)) throw new AgentConfigError(404, NOT_FOUND);
-    await withTransaction(a, () => {
-      const db = getDatabase();
-      db.prepare('UPDATE agents_config SET is_primary = 0, updated_at = datetime(\'now\')').run();
-      db.prepare('UPDATE agents_config SET is_primary = 1, updated_at = datetime(\'now\') WHERE id = ?').run(id);
+    adminFor(actor, id);
+    if (!(await row(id))) throw new AgentConfigError(404, NOT_FOUND);
+    await sql().tx(function* () {
+      const d = yield* dialect();
+      yield* run(`UPDATE agents_config SET is_primary = 0, updated_at = ${nowText(d)}`);
+      yield* run(`UPDATE agents_config SET is_primary = 1, updated_at = ${nowText(d)} WHERE id = ?`, id);
     });
   },
 
   async duplicateConfig(actor, id) {
     const a = requireAdmin(actor);
-    const original = row(id);
+    const original = await row(id);
     if (!original) throw new AgentConfigError(404, NOT_FOUND);
     const newId = newAgentId();
     // CORE-02: a copy is a new agent, so it gets its own new unique name.
-    const suggestion = suggestAgentName(resolveNamingLanguage(a.userId));
-    await withTransaction(a, () => {
-      reserveAgentName(suggestion.name, newId, { reason: 'duplicate', language: suggestion.language, reservedBy: a.userId });
-      getDatabase().prepare(`
+    const suggestion = await suggestAgentName(await resolveNamingLanguage(a.userId));
+    await sql().tx(function* () {
+      yield* reserveAgentName(suggestion.name, newId, { reason: 'duplicate', language: suggestion.language, reservedBy: a.userId });
+      yield* run(`
         INSERT INTO agents_config (id, name, description, emoji, system_prompt, model, provider, temperature, max_tokens, capabilities, role, department)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+      `,
         newId,
         suggestion.name,
         original.description,
@@ -343,16 +349,16 @@ export const sqliteAgentConfigs: AgentConfigsRepository = {
         original.department ?? null,
       );
     });
-    return row(newId) as AgentConfigRow;
+    return (await row(newId)) as AgentConfigRow;
   },
 
   async deleteConfig(actor, id) {
     adminFor(actor, id);
-    const existing = row(id);
+    const existing = await row(id);
     if (!existing) throw new AgentConfigError(404, NOT_FOUND);
-    const totalCount = (getDatabase().prepare('SELECT COUNT(*) as cnt FROM agents_config').get() as { cnt: number }).cnt;
+    const totalCount = (await sql().read(one<{ cnt: number }>('SELECT COUNT(*) as cnt FROM agents_config')))!.cnt;
     if (existing.is_primary === 1 && totalCount > 1) throw new AgentConfigError(400, 'Cannot delete the primary agent. Set another agent as primary first.');
     await removeAgentApiKey(id);
-    getDatabase().prepare('DELETE FROM agents_config WHERE id = ?').run(id);
+    await sql().read(run('DELETE FROM agents_config WHERE id = ?', id));
   },
 };

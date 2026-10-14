@@ -12,7 +12,7 @@ import { AgentRuntime, type Message, type Skill } from '../../agent/index.js';
 import { getSettingsManager } from '../../settings/index.js';
 import { getDatabase } from '../../db/index.js';
 import { streamChatClaude } from './agentic-chat.js';
-import { createToolsRegistry } from '../../tools/index.js';
+import { createAgentToolsRegistry } from '../../tools/index.js';
 import { channelTurnFromHeaders, type ChannelToolPolicy } from '../../tools/channel-policy.js';
 import { authenticateActiveUser } from '../../auth/route-guards.js';
 import { geminiCliTool } from '../../tools/cli/gemini-cli.js';
@@ -59,9 +59,9 @@ function getPrimaryAgent(): AgentConfig | null {
 }
 
 /** Behaviour parameters from the agent's current personality version (CORE-01). */
-function personalityBehavior(agentId: string): Behavior | null {
+async function personalityBehavior(agentId: string): Promise<Behavior | null> {
   try {
-    const current = getCurrentPersonality(agentId);
+    const current = await getCurrentPersonality(agentId);
     return current ? traitsToBehavior(current.traits, current.dialect) : null;
   } catch (err) {
     console.warn('[Chat] Personality unavailable, using agent defaults');
@@ -252,7 +252,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // output length and the working-style prompt block. An explicit request
     // value still wins. Personality never changes tools or approvals: the
     // tool registry below is built from grants only.
-    const behavior = agentConfig?.id ? personalityBehavior(agentConfig.id) : null;
+    const behavior = agentConfig?.id ? await personalityBehavior(agentConfig.id) : null;
     const resolvedTemp = temperature ?? behavior?.temperature ?? agentConfig?.temperature ?? 0.7;
     const resolvedMaxTokens = maxTokens ?? behavior?.maxTokens ?? agentConfig?.max_tokens;
     const agentName = agentConfig?.name;
@@ -455,7 +455,7 @@ async function streamChat(
   });
 
   // Get real tools from the tools registry (11 tools: exec, read, write, browser×4, memory×2, desktop)
-  const toolsRegistry = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers });
+  const toolsRegistry = await createAgentToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers });
   const tools = toolsRegistry.getToolsForAPI();
 
   console.log('[Chat] 🔧 Available tools:', tools.length);
@@ -814,7 +814,7 @@ async function nonStreamChat(
   });
 
   // Get real tools from the tools registry
-  const toolsRegistryNS = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers });
+  const toolsRegistryNS = await createAgentToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers });
   const tools = toolsRegistryNS.getToolsForAPI();
   if (provider === 'claude' && apiKey) {
     console.log('[Chat] 🤖 Using Claude API (non-stream)');

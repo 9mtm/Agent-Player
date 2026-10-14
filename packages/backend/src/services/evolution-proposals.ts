@@ -18,7 +18,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { isoUtc } from '../api/timestamps.js';
-import { getDatabase } from '../db/index.js';
+import { all, dialect, one, run, sql, type Step } from '../repositories/sql-steps.js';
+import { forUpdate, nowIsoText } from '../db/pg/dialect.js';
+import { orderedId } from '../repositories/ordered-id.js';
 import { getAgentDir } from './agent-files.js';
 
 export const EVOLUTION_PROPOSAL_KINDS = ['prompt_append', 'personality_text'] as const;
@@ -122,10 +124,14 @@ function writePersonalitySync(agentId: string, content: string): void {
   writeFileSync(personalityPath(agentId), content, 'utf-8');
 }
 
-/** Current content of the proposal's target; null when the agent does not exist. */
-function targetContent(agentId: string, kind: EvolutionProposalKind): string | null {
-  const agent = getDatabase().prepare('SELECT system_prompt FROM agents_config WHERE id = ?').get(agentId) as
-    { system_prompt: string | null } | undefined;
+/**
+ * Current content of the proposal's target; null when the agent does not
+ * exist. Inside a transaction the agent row is locked on PostgreSQL, so the
+ * content that is hashed/compared is the content that gets changed.
+ */
+function* targetContent(agentId: string, kind: EvolutionProposalKind): Step<string | null> {
+  const d = yield* dialect();
+  const agent = yield* one<{ system_prompt: string | null }>(`SELECT system_prompt FROM agents_config WHERE id = ?${forUpdate(d)}`, agentId);
   if (!agent) return null;
   return kind === 'prompt_append' ? (agent.system_prompt ?? '') : readPersonalitySync(agentId);
 }
@@ -147,19 +153,24 @@ function decisionNote(v: unknown): string | null {
 
 // --- read -------------------------------------------------------------------
 
-export function getEvolutionProposal(agentId: string, id: string): EvolutionProposal | null {
-  const row = getDatabase().prepare('SELECT * FROM evolution_proposals WHERE id = ? AND agent_id = ?').get(id, agentId) as Row | undefined;
+function* proposalStep(agentId: string, id: string): Step<EvolutionProposal | null> {
+  const row = yield* one<Row>('SELECT * FROM evolution_proposals WHERE id = ? AND agent_id = ?', id, agentId);
   return row ? fromRow(row) : null;
 }
 
-/** Newest first (at most 200). Null when the agent does not exist. */
-export function listEvolutionProposals(agentId: string, status?: EvolutionProposalStatus): EvolutionProposal[] | null {
-  const db = getDatabase();
-  if (!db.prepare('SELECT 1 FROM agents_config WHERE id = ?').get(agentId)) return null;
-  const rows = (status
-    ? db.prepare('SELECT * FROM evolution_proposals WHERE agent_id = ? AND status = ? ORDER BY created_at DESC, rowid DESC LIMIT 200').all(agentId, status)
-    : db.prepare('SELECT * FROM evolution_proposals WHERE agent_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 200').all(agentId)) as Row[];
-  return rows.map(fromRow);
+export function getEvolutionProposal(agentId: string, id: string): Promise<EvolutionProposal | null> {
+  return sql().read(proposalStep(agentId, id));
+}
+
+/** Newest first (at most 200; ties on created_at by id). Null when the agent does not exist. */
+export function listEvolutionProposals(agentId: string, status?: EvolutionProposalStatus): Promise<EvolutionProposal[] | null> {
+  return sql().read((function* () {
+    if (!(yield* one('SELECT 1 AS ok FROM agents_config WHERE id = ?', agentId))) return null;
+    const rows = status
+      ? yield* all<Row>('SELECT * FROM evolution_proposals WHERE agent_id = ? AND status = ? ORDER BY created_at DESC, id DESC LIMIT 200', agentId, status)
+      : yield* all<Row>('SELECT * FROM evolution_proposals WHERE agent_id = ? ORDER BY created_at DESC, id DESC LIMIT 200', agentId);
+    return rows.map(fromRow);
+  })());
 }
 
 // --- create -----------------------------------------------------------------
@@ -181,40 +192,40 @@ export type CreateOutcome =
  * File a pending proposal. Nothing about the agent changes. The same text
  * for the same target that is already pending is not filed twice.
  */
-export function createEvolutionProposal(agentId: string, input: NewEvolutionProposal, createdBy: string = EVOLUTION_AUTHOR): CreateOutcome {
+export async function createEvolutionProposal(agentId: string, input: NewEvolutionProposal, createdBy: string = EVOLUTION_AUTHOR): Promise<CreateOutcome> {
   if (!EVOLUTION_PROPOSAL_KINDS.includes(input.kind)) throw new EvolutionProposalError(400, 'Unknown proposal kind', 'invalid_input');
   const title = text(input.title, 'title', MAX_TITLE_CHARS).trim();
   const proposedText = text(input.proposedText, 'proposedText', MAX_PROPOSED_TEXT_CHARS);
   const reason = text(input.reason, 'reason', MAX_REASON_CHARS).trim();
   const confidence = typeof input.confidence === 'number' && Number.isFinite(input.confidence) ? input.confidence : null;
   const insightType = typeof input.insightType === 'string' ? input.insightType.slice(0, 40) : null;
-  const db = getDatabase();
-  const id = randomUUID();
-  let outcome: CreateOutcome | null = null;
-  db.transaction(() => {
-    const base = targetContent(agentId, input.kind);
-    if (base === null) { outcome = { status: 'skipped', reason: 'agent_not_found' }; return; }
-    const dup = db.prepare(`SELECT id FROM evolution_proposals WHERE agent_id = ? AND kind = ? AND proposed_text = ? AND status = 'pending' LIMIT 1`)
-      .get(agentId, input.kind, proposedText) as { id: string } | undefined;
-    if (dup) { outcome = { status: 'skipped', reason: 'pending_exists', proposalId: dup.id }; return; }
-    const pending = (db.prepare(`SELECT COUNT(*) AS n FROM evolution_proposals WHERE agent_id = ? AND status = 'pending'`).get(agentId) as { n: number }).n;
-    if (pending >= MAX_PENDING_EVOLUTION_PROPOSALS) { outcome = { status: 'skipped', reason: 'too_many_pending' }; return; }
+  const id = orderedId(); // sorts in creation order (list ties on created_at)
+  return sql().tx(function* (): Step<CreateOutcome> {
+    // The agent row is locked (PostgreSQL): the dedup and the pending limit
+    // are decided by one writer at a time.
+    const base = yield* targetContent(agentId, input.kind);
+    if (base === null) return { status: 'skipped', reason: 'agent_not_found' };
+    const dup = yield* one<{ id: string }>(`SELECT id FROM evolution_proposals WHERE agent_id = ? AND kind = ? AND proposed_text = ? AND status = 'pending' LIMIT 1`,
+      agentId, input.kind, proposedText);
+    if (dup) return { status: 'skipped', reason: 'pending_exists', proposalId: dup.id };
+    const pending = (yield* one<{ n: number }>(`SELECT COUNT(*) AS n FROM evolution_proposals WHERE agent_id = ? AND status = 'pending'`, agentId))!.n;
+    if (pending >= MAX_PENDING_EVOLUTION_PROPOSALS) return { status: 'skipped', reason: 'too_many_pending' };
     const baseHash = sha256(base);
     const reviewHash = evolutionProposalReviewHash({ id, agentId, kind: input.kind, baseHash, title, proposedText, reason });
-    db.prepare(`
+    yield* run(`
       INSERT INTO evolution_proposals (id, agent_id, kind, title, proposed_text, reason, insight_type, confidence, base_hash, review_hash, created_by)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, agentId, input.kind, title, proposedText, reason, insightType, confidence, baseHash, reviewHash, createdBy);
+    `, id, agentId, input.kind, title, proposedText, reason, insightType, confidence, baseHash, reviewHash, createdBy);
+    return { status: 'proposed', proposal: (yield* proposalStep(agentId, id))! };
   });
-  return outcome ?? { status: 'proposed', proposal: getEvolutionProposal(agentId, id)! };
 }
 
 // --- decide -----------------------------------------------------------------
 
 const REVIEW_HASH = /^[0-9a-f]{64}$/;
 
-function decidable(agentId: string, id: string, expectedReviewHash: unknown): EvolutionProposal {
-  const p = getEvolutionProposal(agentId, id);
+function* decidable(agentId: string, id: string, expectedReviewHash: unknown): Step<EvolutionProposal> {
+  const p = yield* proposalStep(agentId, id);
   if (!p) throw new EvolutionProposalError(404, 'Proposal not found', 'not_found');
   if (p.status !== 'pending') throw new EvolutionProposalError(409, `Proposal is already ${p.status}`, 'already_decided');
   if (typeof expectedReviewHash !== 'string' || !REVIEW_HASH.test(expectedReviewHash)) {
@@ -227,11 +238,12 @@ function decidable(agentId: string, id: string, expectedReviewHash: unknown): Ev
 }
 
 /** Exactly one decision moves the row out of 'pending'. */
-function claim(agentId: string, id: string, status: Exclude<EvolutionProposalStatus, 'pending'>, decidedBy: string, note: string | null): void {
-  const res = getDatabase().prepare(`
-    UPDATE evolution_proposals SET status = ?, decided_by = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), decision_note = ?
+function* claim(agentId: string, id: string, status: Exclude<EvolutionProposalStatus, 'pending'>, decidedBy: string, note: string | null): Step<void> {
+  const d = yield* dialect();
+  const res = yield* run(`
+    UPDATE evolution_proposals SET status = ?, decided_by = ?, decided_at = ${nowIsoText(d)}, decision_note = ?
     WHERE id = ? AND agent_id = ? AND status = 'pending'
-  `).run(status, decidedBy, note, id, agentId) as { changes: number };
+  `, status, decidedBy, note, id, agentId);
   if (res.changes !== 1) throw new EvolutionProposalError(409, 'Proposal was already decided', 'already_decided');
 }
 
@@ -247,58 +259,56 @@ const HISTORY_TYPE: Record<EvolutionProposalKind, string> = {
  * PERSONALITY.md write happens inside the transaction, so a failed write
  * rolls the decision back.
  */
-export function approveEvolutionProposal(
+export async function approveEvolutionProposal(
   agentId: string, id: string, decidedBy: string, expectedReviewHash: unknown,
-): { proposal: EvolutionProposal; historyId: string } {
-  const db = getDatabase();
-  let stale = false;
+): Promise<{ proposal: EvolutionProposal; historyId: string }> {
   const historyId = randomUUID();
-  db.transaction(() => {
-    const p = decidable(agentId, id, expectedReviewHash);
-    const before = targetContent(agentId, p.kind);
+  const proposal = await sql().tx(function* () {
+    const p = yield* decidable(agentId, id, expectedReviewHash);
+    const before = yield* targetContent(agentId, p.kind);
     if (before === null) throw new EvolutionProposalError(404, 'Agent not found', 'not_found');
     if (sha256(before) !== p.baseHash) {
-      claim(agentId, id, 'stale', decidedBy, null);
-      stale = true;
-      return;
+      yield* claim(agentId, id, 'stale', decidedBy, null);
+      return null; // committed: the row stays 'stale'
     }
-    claim(agentId, id, 'approved', decidedBy, null);
+    yield* claim(agentId, id, 'approved', decidedBy, null);
     const after = before + p.proposedText;
-    db.prepare(`
+    yield* run(`
       INSERT INTO agent_evolution_history (id, agent_id, evolution_type, change_description, before_value, after_value, trigger_reason, insight_ids, status)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
-    `).run(historyId, agentId, HISTORY_TYPE[p.kind], `Approved proposal: ${p.title}`.slice(0, 300), before, after, p.reason,
+    `, historyId, agentId, HISTORY_TYPE[p.kind], `Approved proposal: ${p.title}`.slice(0, 300), before, after, p.reason,
       JSON.stringify([]));
-    db.prepare('UPDATE evolution_proposals SET applied_history_id = ? WHERE id = ? AND agent_id = ?').run(historyId, id, agentId);
+    yield* run('UPDATE evolution_proposals SET applied_history_id = ? WHERE id = ? AND agent_id = ?', historyId, id, agentId);
     if (p.kind === 'prompt_append') {
-      db.prepare('UPDATE agents_config SET system_prompt = ?, updated_at = ? WHERE id = ?').run(after, new Date().toISOString(), agentId);
+      yield* run('UPDATE agents_config SET system_prompt = ?, updated_at = ? WHERE id = ?', after, new Date().toISOString(), agentId);
     } else {
       writePersonalitySync(agentId, after); // last step: a throw rolls everything back
     }
+    return (yield* proposalStep(agentId, id))!;
   });
-  if (stale) throw new EvolutionProposalError(409, 'The target changed after this proposal was made; it was marked stale', 'stale');
-  return { proposal: getEvolutionProposal(agentId, id)!, historyId };
+  if (!proposal) throw new EvolutionProposalError(409, 'The target changed after this proposal was made; it was marked stale', 'stale');
+  return { proposal, historyId };
 }
 
-export function rejectEvolutionProposal(
+export async function rejectEvolutionProposal(
   agentId: string, id: string, decidedBy: string, expectedReviewHash: unknown, note?: unknown,
-): EvolutionProposal {
+): Promise<EvolutionProposal> {
   const n = decisionNote(note);
-  getDatabase().transaction(() => {
-    decidable(agentId, id, expectedReviewHash);
-    claim(agentId, id, 'rejected', decidedBy, n);
+  return sql().tx(function* () {
+    yield* decidable(agentId, id, expectedReviewHash);
+    yield* claim(agentId, id, 'rejected', decidedBy, n);
+    return (yield* proposalStep(agentId, id))!;
   });
-  return getEvolutionProposal(agentId, id)!;
 }
 
-export function cancelEvolutionProposal(
+export async function cancelEvolutionProposal(
   agentId: string, id: string, decidedBy: string, expectedReviewHash: unknown,
-): EvolutionProposal {
-  getDatabase().transaction(() => {
-    decidable(agentId, id, expectedReviewHash);
-    claim(agentId, id, 'cancelled', decidedBy, null);
+): Promise<EvolutionProposal> {
+  return sql().tx(function* () {
+    yield* decidable(agentId, id, expectedReviewHash);
+    yield* claim(agentId, id, 'cancelled', decidedBy, null);
+    return (yield* proposalStep(agentId, id))!;
   });
-  return getEvolutionProposal(agentId, id)!;
 }
 
 // --- rollback of an applied change -----------------------------------------
@@ -311,32 +321,32 @@ export function cancelEvolutionProposal(
  * capabilities are changed by the owner in the agent settings, never by
  * Evolution.
  */
-export function rollbackEvolutionHistory(agentId: string, evolutionId: string): { evolutionId: string; type: string } {
-  const db = getDatabase();
-  let type = '';
-  db.transaction(() => {
-    const h = db.prepare('SELECT * FROM agent_evolution_history WHERE id = ? AND agent_id = ?').get(evolutionId, agentId) as
-      { evolution_type: string; before_value: string | null; after_value: string | null; status: string } | undefined;
+export async function rollbackEvolutionHistory(agentId: string, evolutionId: string): Promise<{ evolutionId: string; type: string }> {
+  const type = await sql().tx(function* () {
+    const d = yield* dialect();
+    const h = yield* one<{ evolution_type: string; before_value: string | null; after_value: string | null; status: string }>(
+      `SELECT * FROM agent_evolution_history WHERE id = ? AND agent_id = ?${forUpdate(d)}`, evolutionId, agentId);
     if (!h) throw new EvolutionProposalError(404, 'Evolution not found for this agent', 'not_found');
     if (h.status === 'rolled_back') throw new EvolutionProposalError(409, 'Evolution already rolled back', 'already_rolled_back');
-    type = h.evolution_type;
+    const type = h.evolution_type;
     const kind: EvolutionProposalKind | null = type === 'prompt_update' ? 'prompt_append' : type === 'personality_text' ? 'personality_text' : null;
     if (!kind) {
       throw new EvolutionProposalError(409, 'Only prompt and PERSONALITY.md changes can be rolled back here; capabilities are edited in the agent settings', 'rollback_unsupported');
     }
-    const current = targetContent(agentId, kind);
+    const current = yield* targetContent(agentId, kind);
     if (current === null) throw new EvolutionProposalError(404, 'Agent not found', 'not_found');
     if (current !== (h.after_value ?? '')) {
       throw new EvolutionProposalError(409, 'The content changed after this evolution; it cannot be rolled back safely', 'stale');
     }
-    const res = db.prepare(`UPDATE agent_evolution_history SET status = 'rolled_back', rolled_back_at = ? WHERE id = ? AND status != 'rolled_back'`)
-      .run(new Date().toISOString(), evolutionId) as { changes: number };
+    const res = yield* run(`UPDATE agent_evolution_history SET status = 'rolled_back', rolled_back_at = ? WHERE id = ? AND status != 'rolled_back'`,
+      new Date().toISOString(), evolutionId);
     if (res.changes !== 1) throw new EvolutionProposalError(409, 'Evolution already rolled back', 'already_rolled_back');
     if (kind === 'prompt_append') {
-      db.prepare('UPDATE agents_config SET system_prompt = ?, updated_at = ? WHERE id = ?').run(h.before_value ?? '', new Date().toISOString(), agentId);
+      yield* run('UPDATE agents_config SET system_prompt = ?, updated_at = ? WHERE id = ?', h.before_value ?? '', new Date().toISOString(), agentId);
     } else {
       writePersonalitySync(agentId, h.before_value ?? '');
     }
+    return type;
   });
   return { evolutionId, type };
 }

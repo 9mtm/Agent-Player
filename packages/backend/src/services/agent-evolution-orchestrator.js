@@ -118,7 +118,7 @@ async function runConfigEvolution(agentId, config) {
     for (const insight of proposable) {
       for (const draft of proposalDrafts(insight)) {
         try {
-          const outcome = createEvolutionProposal(agentId, draft);
+          const outcome = await createEvolutionProposal(agentId, draft);
           proposals.push(outcome.status === 'proposed'
             ? { status: 'proposed', proposalId: outcome.proposal.id, kind: draft.kind, title: draft.title }
             : { status: 'skipped', reason: outcome.reason, kind: draft.kind, title: draft.title, ...(outcome.proposalId ? { proposalId: outcome.proposalId } : {}) });
@@ -293,7 +293,7 @@ export async function measureEvolutionImpact(evolutionId) {
     let rolledBack = false;
     let rollbackError;
     try {
-      rollbackEvolutionHistory(evolution.agent_id, evolutionId);
+      await rollbackEvolutionHistory(evolution.agent_id, evolutionId);
       rolledBack = true;
     } catch (error) {
       rollbackError = error?.code || 'rollback_failed';

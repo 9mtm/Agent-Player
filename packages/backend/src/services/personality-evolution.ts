@@ -26,7 +26,8 @@
  * refused an action, not that asking was unwanted.
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, dialect, one, sql } from '../repositories/sql-steps.js';
+import { nowPlusText, offset } from '../db/pg/dialect.js';
 import { repositories } from '../repositories/index.js';
 import { SYSTEM_ACTOR } from '../repositories/actor.js';
 import type { TraitName } from './personality.js';
@@ -123,27 +124,31 @@ function windowOf(v: unknown): number {
 }
 
 /** Verified outcomes of an agent's finished task runs in the last `windowDays` days. */
-export function collectOutcomeStats(agentId: string, windowDays: unknown = DEFAULT_WINDOW_DAYS): OutcomeStats {
+export function collectOutcomeStats(agentId: string, windowDays: unknown = DEFAULT_WINDOW_DAYS): Promise<OutcomeStats> {
   const days = windowOf(windowDays);
-  const db = getDatabase();
-  const since = `-${days} days`;
-  const ids = (sql: string) => (db.prepare(sql).all(agentId, since) as Array<{ id: string }>).map((r) => r.id);
-  const scope = `r.agent_id = ? AND r.finished_at IS NOT NULL AND r.finished_at >= datetime('now', ?)`;
-  const contractRuns = (db.prepare(`SELECT COUNT(*) AS n FROM task_runs r WHERE ${scope} AND r.verification_status IS NOT NULL`)
-    .get(agentId, since) as { n: number }).n;
-  return {
+  // '-30 days': the same modifier text SQLite read before; an interval on PostgreSQL.
+  const since = offset(-days, 'days');
+  return sql().read((function* () {
+    const d = yield* dialect();
+    // finished_at is TEXT ('YYYY-MM-DD HH:MM:SS', UTC) on both drivers: compared as text.
+    const scope = `r.agent_id = ? AND r.finished_at IS NOT NULL AND r.finished_at >= ${nowPlusText(d)}`;
+    const ids = function* (q: string) { return (yield* all<{ id: string }>(q, agentId, since)).map((r) => r.id); };
+    const contractRuns = (yield* one<{ n: number }>(`SELECT COUNT(*) AS n FROM task_runs r WHERE ${scope} AND r.verification_status IS NOT NULL`,
+      agentId, since))!.n;
+    return {
     windowDays: days,
     contractRuns,
-    firstRoundFailures: ids(`
+    firstRoundFailures: yield* ids(`
       SELECT r.id FROM task_runs r JOIN task_run_verifications v ON v.run_id = r.id AND v.round = 0
       WHERE ${scope} AND v.status = 'failed_verification' ORDER BY r.finished_at DESC, r.id`),
-    ownerRejections: ids(`
+    ownerRejections: yield* ids(`
       SELECT r.id FROM task_runs r
       WHERE ${scope} AND r.review_decision = 'rejected' AND r.reviewer_kind = 'owner' ORDER BY r.finished_at DESC, r.id`),
-    verificationExhausted: ids(`
+    verificationExhausted: yield* ids(`
       SELECT r.id FROM task_runs r
       WHERE ${scope} AND r.verification_status = 'failed_verification' ORDER BY r.finished_at DESC, r.id`),
-  };
+    };
+  })());
 }
 
 export type DriftProposalOutcome =
@@ -157,10 +162,10 @@ export type DriftProposalOutcome =
  * already pending, or the personality/traits are locked.
  */
 export async function proposeDriftFromOutcomes(agentId: string, opts: { windowDays?: unknown } = {}): Promise<DriftProposalOutcome> {
-  if (!agentExists(agentId)) return { status: 'skipped', reason: 'agent_not_found' };
-  const open = pendingProposalFrom(agentId, 'evolution');
+  if (!(await agentExists(agentId))) return { status: 'skipped', reason: 'agent_not_found' };
+  const open = await pendingProposalFrom(agentId, 'evolution');
   if (open) return { status: 'skipped', reason: 'pending_exists', proposalId: open.id };
-  const stats = collectOutcomeStats(agentId, opts.windowDays);
+  const stats = await collectOutcomeStats(agentId, opts.windowDays);
   const suggestion = suggestPersonalityDrift(stats);
   if (!suggestion) return { status: 'skipped', reason: 'no_signal', stats };
   try {

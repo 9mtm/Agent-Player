@@ -22,7 +22,7 @@ export * from './credentials/index.js';
 // Utility function to create a pre-configured registry
 import { ToolsRegistry } from './registry.js';
 import type { ToolExecutionContext } from './types.js';
-import { defaultGrants, loadAgentGrants } from './grants.js';
+import { defaultGrants, loadAgentGrants, loadAgentGrantsSync } from './grants.js';
 
 // Import tools from organized directories
 import {
@@ -145,7 +145,42 @@ export function getExtensionTools(extensionId?: string): Tool[] {
 /**
  * Create a tools registry with all tools registered
  */
+/**
+ * The tools registry for a context. When the context has no `grants`, the
+ * agent's grants are loaded synchronously: SQLite only (on PostgreSQL this
+ * throws when an agentId is given; use createAgentToolsRegistry).
+ */
 export function createToolsRegistry(context: ToolExecutionContext): ToolsRegistry {
+  const registry = buildToolsRegistry(context);
+  // SECURITY (S1.2): the agent's grants (∩ parents / delegating agents).
+  // No agent -> minimal default set (fail closed).
+  if (!context.grants) {
+    registry.updateContext({
+      grants: context.agentId
+        ? loadAgentGrantsSync(context.agentId, registry.listRegistered(), context.delegatedFrom || [])
+        : defaultGrants(),
+    });
+  }
+  return registry;
+}
+
+/**
+ * createToolsRegistry with the agent's grants loaded asynchronously (both
+ * drivers; B2.2b-3). Use it wherever the caller can await.
+ */
+export async function createAgentToolsRegistry(context: ToolExecutionContext): Promise<ToolsRegistry> {
+  const registry = buildToolsRegistry(context);
+  if (!context.grants) {
+    registry.updateContext({
+      grants: context.agentId
+        ? await loadAgentGrants(context.agentId, registry.listRegistered(), context.delegatedFrom || [])
+        : defaultGrants(),
+    });
+  }
+  return registry;
+}
+
+function buildToolsRegistry(context: ToolExecutionContext): ToolsRegistry {
   const registry = new ToolsRegistry(context);
 
   // Register core tools (CLI bridges gemini_cli/claude_cli stay unregistered)
@@ -161,16 +196,6 @@ export function createToolsRegistry(context: ToolExecutionContext): ToolsRegistr
   // M1: tools of active owner-registered MCP servers (never granted by default)
   for (const tool of getMcpTools()) {
     registry.register(tool);
-  }
-
-  // SECURITY (S1.2): the agent's grants (∩ parents / delegating agents).
-  // No agent -> minimal default set (fail closed).
-  if (!context.grants) {
-    registry.updateContext({
-      grants: context.agentId
-        ? loadAgentGrants(context.agentId, registry.listRegistered(), context.delegatedFrom || [])
-        : defaultGrants(),
-    });
   }
 
   const coreToolsCount = 19;  // Increased from 18 (added execute_code)

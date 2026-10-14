@@ -60,8 +60,8 @@ const addAgent = (id, autoApprove = 1) => {
 addAgent('d-parent');
 addAgent('d-child');
 const avail = tools.createToolsRegistry({ workspaceDir: dir }).listRegistered();
-grants.setAgentGrants('d-parent', { grants: ['memory_search'] }, 'owner', avail);
-grants.setAgentGrants('d-child', { grants: ['memory_search', 'read', 'write'] }, 'owner', avail);
+await grants.setAgentGrants('d-parent', { grants: ['memory_search'] }, 'owner', avail);
+await grants.setAgentGrants('d-child', { grants: ['memory_search', 'read', 'write'] }, 'owner', avail);
 await setAgentApiKey('d-child', 'sk-ant-test-' + randomBytes(12).toString('hex'));
 
 console.log = quiet.log;
@@ -75,8 +75,8 @@ test.after(() => {
 });
 
 const quietly = async (fn) => { const l = console.log, w = console.warn; console.log = () => {}; console.warn = () => {}; try { return await fn(); } finally { console.log = l; console.warn = w; } };
-const effective = (agentId, taskId) =>
-  [...grants.loadAgentGrants(agentId, avail, cronSvc.delegatingAgents(taskId)).tools.keys()].sort();
+const effective = async (agentId, taskId) =>
+  [...(await grants.loadAgentGrants(agentId, avail, cronSvc.delegatingAgents(taskId))).tools.keys()].sort();
 
 test('task_create records the spawner server-side; model cannot set approval, recurrence or assignee overrides', async () => {
   assert.equal(taskCreateTool.input_schema.properties.requires_approval, undefined);
@@ -92,7 +92,7 @@ test('task_create records the spawner server-side; model cannot set approval, re
   const row = orchestrator.db.prepare('SELECT spawned_by, origin FROM tasks WHERE id = ?').get(task.id);
   assert.deepEqual({ ...row }, { spawned_by: 'd-parent', origin: 'agent' }, 'origin persisted');
   // The child only gets what the spawning parent has.
-  assert.deepEqual(effective('d-child', task.id), ['memory_search']);
+  assert.deepEqual((await effective('d-child', task.id)), ['memory_search']);
 });
 
 test('requires_approval comes only from the target agent setting', async () => {
@@ -108,22 +108,22 @@ test('requires_approval comes only from the target agent setting', async () => {
 
 test('a task with no recorded origin (not created by the owner) fails closed to the default set', async () => {
   const forged = await quietly(() => orchestrator.createTask({ title: 'f', description: 'f' }));
-  assert.deepEqual(effective('d-child', forged.id), ['memory_search']);
-  assert.ok(effective('d-child', forged.id).every((t) => grants.DEFAULT_AGENT_TOOLS.includes(t)));
+  assert.deepEqual((await effective('d-child', forged.id)), ['memory_search']);
+  assert.ok((await effective('d-child', forged.id)).every((t) => grants.DEFAULT_AGENT_TOOLS.includes(t)));
   // task_create without a calling agent: no spawner -> fail closed too.
   const res = await quietly(() => taskCreateTool.execute({ title: 'n', description: 'n', assigned_to: 'd-child' }, { workspaceDir: dir }));
-  assert.deepEqual(effective('d-child', res.details.taskId), ['memory_search']);
+  assert.deepEqual((await effective('d-child', res.details.taskId)), ['memory_search']);
   // Unknown task id: fail closed.
-  assert.deepEqual(effective('d-child', 'task_missing'), ['memory_search']);
+  assert.deepEqual((await effective('d-child', 'task_missing')), ['memory_search']);
   // A non-owner API caller is an unknown principal as well.
   const admin = await quietly(() => orchestrator.createTask({ title: 'a', description: 'a', origin: 'user:some-admin' }));
-  assert.deepEqual(effective('d-child', admin.id), ['memory_search']);
+  assert.deepEqual((await effective('d-child', admin.id)), ['memory_search']);
 });
 
 test('owner-created tasks run with the agent\'s own grants', async () => {
   const owned = await quietly(() => orchestrator.createTask({ title: 'o', description: 'o', origin: 'owner' }));
   assert.deepEqual(cronSvc.delegatingAgents(owned.id), []);
-  assert.deepEqual(effective('d-child', owned.id), ['memory_search', 'read', 'write']);
+  assert.deepEqual((await effective('d-child', owned.id)), ['memory_search', 'read', 'write']);
 });
 
 test('cron run: delegated task offers only the subset; recurring copy keeps origin and assignee', async () => {
@@ -147,5 +147,5 @@ test('cron run: delegated task offers only the subset; recurring copy keeps orig
   assert.equal(copies[0].assignedTo, 'd-child', 'assignee never taken from task input');
   assert.equal(copies[0].spawnedBy, 'd-parent');
   assert.equal(copies[0].parentId, parentTask.id);
-  assert.deepEqual(effective('d-child', copies[0].id), ['memory_search']);
+  assert.deepEqual((await effective('d-child', copies[0].id)), ['memory_search']);
 });

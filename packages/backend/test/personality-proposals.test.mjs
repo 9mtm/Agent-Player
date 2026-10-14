@@ -120,7 +120,7 @@ test('creating an agent seeds version 1 from its role; an explicit preset wins',
   assert.equal(ev.statusCode, 201, ev.body);
   const evId = ev.json().agent.id;
   assert.equal(ev.json().agent.role, 'evaluator');
-  const evP = store.getCurrentPersonality(evId);
+  const evP = await store.getCurrentPersonality(evId);
   assert.equal(evP.version, 1);
   assert.equal(evP.source, 'seed');
   assert.equal(evP.preset, 'strict-evaluator');
@@ -129,15 +129,15 @@ test('creating an agent seeds version 1 from its role; an explicit preset wins',
   const dev = await createAgent({ name: 'Dev Specialist', role: 'specialist', department: ' Development ' }, 'pp-admin');
   assert.equal(dev.statusCode, 201, dev.body);
   assert.equal(dev.json().agent.department, 'development');
-  assert.equal(store.getCurrentPersonality(dev.json().agent.id).preset, 'precise-developer');
+  assert.equal((await store.getCurrentPersonality(dev.json().agent.id)).preset, 'precise-developer');
 
   const other = await createAgent({ name: 'Legal Specialist', role: 'specialist', department: 'legal' });
-  assert.equal(store.getCurrentPersonality(other.json().agent.id).preset, 'balanced-assistant');
+  assert.equal((await store.getCurrentPersonality(other.json().agent.id)).preset, 'balanced-assistant');
 
   // Explicit owner choice wins over the role default.
   const explicit = await createAgent({ name: 'Creative Evaluator', role: 'evaluator', personality: { preset: 'bold-creative', traits: { warmth: 20 } } });
   assert.equal(explicit.statusCode, 201, explicit.body);
-  const exP = store.getCurrentPersonality(explicit.json().agent.id);
+  const exP = await store.getCurrentPersonality(explicit.json().agent.id);
   assert.equal(exP.source, 'owner');
   assert.equal(exP.preset, 'bold-creative');
   assert.equal(exP.traits.warmth, 20);
@@ -179,8 +179,8 @@ test('agent creation refuses bad role/department/personality and admins cannot s
 // --- proposals -----------------------------------------------------------------
 
 test('a proposal clamps each change to 5, skips locked traits and changes nothing yet', async () => {
-  store.savePersonalityVersion('pp-a', { preset: 'balanced-assistant', lockedTraits: ['warmth'] }, 'pp-owner');
-  const before = store.getCurrentPersonality('pp-a');
+  await store.savePersonalityVersion('pp-a', { preset: 'balanced-assistant', lockedTraits: ['warmth'] }, 'pp-owner');
+  const before = await store.getCurrentPersonality('pp-a');
   const res = await propose('pp-a', { traits: { doubt: 100, creativity: 0, warmth: 0, curiosity: before.traits.curiosity + 2 }, reason: 'Too trusting in recent runs', evidence: ['run:1', 'memory:2'] });
   assert.equal(res.statusCode, 201, res.body);
   const p = res.json();
@@ -199,7 +199,7 @@ test('a proposal clamps each change to 5, skips locked traits and changes nothin
   const expected = createHash('sha256').update(JSON.stringify(['personality-proposal-review/v1', p.id, 'pp-a', p.baseVersion,
     Object.fromEntries(P.TRAIT_NAMES.map((n) => [n, p.proposedTraits[n]])), p.reason, p.evidence])).digest('hex');
   assert.equal(p.reviewHash, expected);
-  assert.equal(store.getCurrentPersonality('pp-a').version, before.version, 'nothing applied');
+  assert.equal((await store.getCurrentPersonality('pp-a')).version, before.version, 'nothing applied');
 
   // delta form works the same way (also bounded)
   const d = await propose('pp-a', { delta: { persistence: 40, warmth: -10 }, reason: 'delta form' });
@@ -221,7 +221,7 @@ test('a proposal clamps each change to 5, skips locked traits and changes nothin
 });
 
 test('a locked personality refuses proposals with 409 personality_locked', async () => {
-  store.setPersonalityLocked('pp-lock', true, 'pp-owner');
+  await store.setPersonalityLocked('pp-lock', true, 'pp-owner');
   const res = await propose('pp-lock', { traits: { doubt: 60 }, reason: 'x' });
   assert.equal(res.statusCode, 409);
   assert.equal(res.json().code, 'personality_locked');
@@ -231,7 +231,7 @@ test('a locked personality refuses proposals with 409 personality_locked', async
 });
 
 test('approve with the right hash appends one version based on base_version; twice -> already_decided', async () => {
-  const before = store.getCurrentPersonality('pp-a');
+  const before = await store.getCurrentPersonality('pp-a');
   const p = (await propose('pp-a', { traits: { thoroughness: 100 }, reason: 'Missed checks' })).json();
   const ok = await approve('pp-a', p.id, { expectedReviewHash: p.reviewHash });
   assert.equal(ok.statusCode, 200, ok.body);
@@ -276,7 +276,7 @@ test('approve after reject -> already_decided; reject keeps the personality', as
 
 test('a changed base version -> 409 stale and the proposal becomes stale', async () => {
   const p = (await propose('pp-c', { traits: { doubt: 70 }, reason: 'r' })).json();
-  store.savePersonalityVersion('pp-c', { traits: { warmth: 10 } }, 'pp-owner'); // the personality moved on
+  await store.savePersonalityVersion('pp-c', { traits: { warmth: 10 } }, 'pp-owner'); // the personality moved on
   const before = versionsOf('pp-c');
   const res = await approve('pp-c', p.id, { expectedReviewHash: p.reviewHash });
   assert.equal(res.statusCode, 409);
@@ -285,7 +285,7 @@ test('a changed base version -> 409 stale and the proposal becomes stale', async
   assert.deepEqual(versionsOf('pp-c'), before, 'nothing written');
   // A lock also moves the version: an older proposal goes stale.
   const q = (await propose('pp-c', { traits: { doubt: 70 }, reason: 'r2' })).json();
-  store.setPersonalityLocked('pp-c', true, 'pp-owner');
+  await store.setPersonalityLocked('pp-c', true, 'pp-owner');
   assert.equal((await approve('pp-c', q.id, { expectedReviewHash: q.reviewHash })).json().code, 'stale');
 });
 
@@ -376,8 +376,8 @@ test('reason, evidence and note limits', async () => {
 
 test('personality changes never alter tool grants or permissions', async () => {
   const available = [{ name: 'memory_search', execClass: false }, { name: 'web_search', execClass: false }];
-  getAgentGrantView('pp-grants', available);
-  setAgentGrants('pp-grants', { grants: ['memory_search'] }, 'pp-owner', available);
+  await getAgentGrantView('pp-grants', available);
+  await setAgentGrants('pp-grants', { grants: ['memory_search'] }, 'pp-owner', available);
   const snapshot = () => ({
     grants: db.prepare('SELECT * FROM agent_tool_grants ORDER BY agent_id, tool_name').all(),
     profiles: db.prepare('SELECT * FROM agent_grant_profiles ORDER BY agent_id').all(),

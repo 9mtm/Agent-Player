@@ -12,7 +12,8 @@
  */
 
 import { randomInt } from 'node:crypto';
-import { getDatabase } from '../db/index.js';
+import { all, dialect, one, run, sql, type Step } from '../repositories/sql-steps.js';
+import { insertOrIgnore } from '../db/pg/dialect.js';
 import { LANGUAGES } from '../onboarding/web-wizard.js';
 
 export type NameLanguage = (typeof LANGUAGES)[number];
@@ -130,54 +131,68 @@ export function validateAgentName(value: unknown): string {
 }
 
 /** Add the names of agents that exist now (idempotent). */
-export function syncExistingAgentNames(): void {
-  const db = getDatabase();
-  const rows = db.prepare('SELECT id, name FROM agents_config').all() as Array<{ id: string; name: string }>;
-  const insert = db.prepare(`INSERT OR IGNORE INTO used_agent_names (name_key, name, agent_id, reason) VALUES (?, ?, ?, 'existing')`);
+export function* syncExistingAgentNamesStep(): Step<void> {
+  const d = yield* dialect();
+  const rows = yield* all<{ id: string; name: string }>('SELECT id, name FROM agents_config');
+  const insert = insertOrIgnore(d, `INSERT INTO used_agent_names (name_key, name, agent_id, reason) VALUES (?, ?, ?, 'existing')`);
   for (const r of rows) {
     if (typeof r.name !== 'string') continue;
     const key = normalizeAgentName(r.name);
-    if (key) insert.run(key, r.name, r.id);
+    if (key) yield* run(insert, key, r.name, r.id);
   }
 }
 
-function holderOf(key: string): string | null {
-  const row = getDatabase().prepare('SELECT agent_id FROM used_agent_names WHERE name_key = ?').get(key) as { agent_id: string } | undefined;
+export function syncExistingAgentNames(): Promise<void> {
+  return sql().read(syncExistingAgentNamesStep());
+}
+
+function* holderOf(key: string): Step<string | null> {
+  const row = yield* one<{ agent_id: string }>('SELECT agent_id FROM used_agent_names WHERE name_key = ?', key);
   return row ? row.agent_id : null;
 }
 
 /** True when nobody holds or ever held this name (or only `agentId` itself did). */
-export function isAgentNameAvailable(name: string, agentId?: string): boolean {
-  syncExistingAgentNames();
-  const holder = holderOf(normalizeAgentName(name));
-  return holder === null || (agentId !== undefined && holder === agentId);
+export async function isAgentNameAvailable(name: string, agentId?: string): Promise<boolean> {
+  return sql().read((function* () {
+    yield* syncExistingAgentNamesStep();
+    const holder = yield* holderOf(normalizeAgentName(name));
+    return holder === null || (agentId !== undefined && holder === agentId);
+  })());
 }
 
 /**
- * Reserve a name for an agent for good. Call inside the same transaction as
- * the insert/update of agents_config. A name the same agent held before may
- * be taken back (it is still that agent's identity); another agent's name,
- * current or past, is refused.
+ * Reserve a name for an agent for good. A step: run it inside the same
+ * transaction as the insert/update of agents_config. A name the same agent
+ * held before may be taken back (it is still that agent's identity);
+ * another agent's name, current or past, is refused. The insert skips a
+ * key that exists (also one a concurrent transaction just committed on
+ * PostgreSQL), and the holder is read again, so a race ends in
+ * AgentNameTakenError, never in a duplicate-key error.
  */
-export function reserveAgentName(
+export function* reserveAgentName(
   name: string, agentId: string,
   opts: { reason: 'create' | 'rename' | 'duplicate'; language?: string | null; reservedBy?: string | null },
-): void {
-  syncExistingAgentNames();
+): Step<void> {
+  const d = yield* dialect();
+  yield* syncExistingAgentNamesStep();
   const key = normalizeAgentName(name);
   if (!key) throw new AgentNameInputError('name is required');
-  const holder = holderOf(key);
+  let holder = yield* holderOf(key);
   if (holder !== null && holder !== agentId) throw new AgentNameTakenError();
   if (holder === null) {
-    getDatabase().prepare(`
+    const res = yield* run(insertOrIgnore(d, `
       INSERT INTO used_agent_names (name_key, name, language, agent_id, reason, reserved_by) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(key, name, opts.language ?? null, agentId, opts.reason, opts.reservedBy ?? null);
+    `), key, name, opts.language ?? null, agentId, opts.reason, opts.reservedBy ?? null);
+    if (res.changes !== 1) {
+      holder = yield* holderOf(key);
+      if (holder !== agentId) throw new AgentNameTakenError();
+    }
   }
 }
 
-function onboardingLanguage(userId: string): NameLanguage | null {
+function* onboardingLanguage(userId: string): Step<NameLanguage | null> {
   try {
-    const row = getDatabase().prepare('SELECT answers FROM onboarding_state WHERE user_id = ?').get(userId) as { answers: string } | undefined;
+    const row = yield* one<{ answers: string }>('SELECT answers FROM onboarding_state WHERE user_id = ?', userId);
     if (!row) return null;
     const lang = JSON.parse(row.answers)?.language;
     return isNameLanguage(lang) ? lang : null;
@@ -186,20 +201,22 @@ function onboardingLanguage(userId: string): NameLanguage | null {
   }
 }
 
-/** Requested language > the user's onboarding language > the owner's > English. */
-export function resolveNamingLanguage(userId: string | null | undefined, requested?: unknown): NameLanguage {
+function* namingLanguage(userId: string | null | undefined, requested?: unknown): Step<NameLanguage> {
   if (requested !== undefined && requested !== null) {
     if (!isNameLanguage(requested)) throw new AgentNameInputError('Unsupported language');
     return requested;
   }
   if (userId) {
-    const own = onboardingLanguage(userId);
+    const own = yield* onboardingLanguage(userId);
     if (own) return own;
   }
-  const owner = getDatabase()
-    .prepare(`SELECT id FROM users WHERE role = 'owner' AND status = 'active' ORDER BY created_at ASC LIMIT 1`)
-    .get() as { id: string } | undefined;
-  return (owner && onboardingLanguage(owner.id)) || DEFAULT_NAME_LANGUAGE;
+  const owner = yield* one<{ id: string }>(`SELECT id FROM users WHERE role = 'owner' AND status = 'active' ORDER BY created_at ASC LIMIT 1`);
+  return (owner && (yield* onboardingLanguage(owner.id))) || DEFAULT_NAME_LANGUAGE;
+}
+
+/** Requested language > the user's onboarding language > the owner's > English. */
+export function resolveNamingLanguage(userId: string | null | undefined, requested?: unknown): Promise<NameLanguage> {
+  return sql().read(namingLanguage(userId, requested));
 }
 
 export interface NameSuggestion {
@@ -224,10 +241,17 @@ function shuffled<T>(items: readonly T[]): T[] {
  * reserve it. `exclude` skips names the caller already showed (e.g. the
  * current draft), so "Generate" gives a different one.
  */
-export function suggestAgentName(language: NameLanguage, exclude: readonly string[] = []): NameSuggestion {
-  syncExistingAgentNames();
-  const db = getDatabase();
-  const used = new Set((db.prepare('SELECT name_key FROM used_agent_names').all() as Array<{ name_key: string }>).map((r) => r.name_key));
+export function suggestAgentName(language: NameLanguage, exclude: readonly string[] = []): Promise<NameSuggestion> {
+  return sql().read(suggestAgentNameStep(language, exclude));
+}
+
+function* suggestAgentNameStep(language: NameLanguage, exclude: readonly string[]): Step<NameSuggestion> {
+  yield* syncExistingAgentNamesStep();
+  const used = new Set((yield* all<{ name_key: string }>('SELECT name_key FROM used_agent_names')).map((r) => r.name_key));
+  return pickName(language, used, exclude);
+}
+
+function pickName(language: NameLanguage, used: ReadonlySet<string>, exclude: readonly string[]): NameSuggestion {
   const skip = new Set(exclude.map(normalizeAgentName));
   const list = AGENT_NAME_LISTS[language];
   const free = list.filter((n) => !used.has(normalizeAgentName(n)) && !skip.has(normalizeAgentName(n)));

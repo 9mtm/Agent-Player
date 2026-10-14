@@ -101,7 +101,7 @@ tools.registerExtensionTool({ name: 'x_slow', description: 'slow step', extensio
   input_schema: { type: 'object', properties: {} },
   execute: async () => { await new Promise((r) => setTimeout(r, slowToolMs)); return { content: [{ type: 'text', text: 'slow done' }] }; } });
 const avail = tools.createToolsRegistry({ workspaceDir: dir }).listRegistered();
-grants.setAgentGrants('s-agent', { grants: ['x_slow'] }, 's-owner', avail);
+await grants.setAgentGrants('s-agent', { grants: ['x_slow'] }, 's-owner', avail);
 
 const { generateToken } = await import(join(backendDir, 'src/auth/jwt.ts'));
 const { buildServer } = await import(join(backendDir, 'src/api/app.ts'));

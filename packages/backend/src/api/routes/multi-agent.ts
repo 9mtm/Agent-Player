@@ -13,7 +13,7 @@ import {
   type MessageType,
 } from '../../multi-agent/index.js';
 import { getDatabase } from '../../db/index.js';
-import { createToolsRegistry } from '../../tools/index.js';
+import { createAgentToolsRegistry } from '../../tools/index.js';
 import { UNKNOWN_PRINCIPAL } from '../../tools/grants.js';
 import { ContractValidationError, storeTaskContract, validateContract, type TaskContract } from '../../services/task-contracts.js';
 import { runDefaults } from '../../services/task-runs.js';
@@ -289,7 +289,7 @@ export async function multiAgentRoutes(fastify: FastifyInstance): Promise<void> 
       if (body.assignedTo && !assignee) return reply.status(400).send({ error: `contract: agent "${body.assignedTo}" not found` });
       try {
         const grants = assignee
-          ? createToolsRegistry({ workspaceDir: process.cwd(), agentId: assignee.id, delegatedFrom: isOwner ? [] : [UNKNOWN_PRINCIPAL] }).getContext().grants ?? null
+          ? (await createAgentToolsRegistry({ workspaceDir: process.cwd(), agentId: assignee.id, delegatedFrom: isOwner ? [] : [UNKNOWN_PRINCIPAL] })).getContext().grants ?? null
           : null;
         const d = runDefaults();
         contract = validateContract(body.contract, { grants, maxSteps: d.maxSteps, maxDurationMs: d.maxDurationMs, creatorIsOwner: isOwner });

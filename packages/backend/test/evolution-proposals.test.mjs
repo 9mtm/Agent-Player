@@ -253,9 +253,9 @@ test('a changed base gives 409 stale (prompt and PERSONALITY.md); rollback after
   assert.equal(personalityText('ep-stale'), '# Edited by hand\n');
 
   // Approve a fresh proposal, then edit the prompt: rollback must not drop the edit.
-  const fresh = EP.createEvolutionProposal('ep-stale', { kind: 'prompt_append', title: 't', proposedText: '\n\nextra', reason: 'r' });
+  const fresh = await EP.createEvolutionProposal('ep-stale', { kind: 'prompt_append', title: 't', proposedText: '\n\nextra', reason: 'r' });
   assert.equal(fresh.status, 'proposed');
-  const applied = EP.approveEvolutionProposal('ep-stale', fresh.proposal.id, 'ep-owner', fresh.proposal.reviewHash);
+  const applied = await EP.approveEvolutionProposal('ep-stale', fresh.proposal.id, 'ep-owner', fresh.proposal.reviewHash);
   db.prepare('UPDATE agents_config SET system_prompt = ? WHERE id = ?').run('Edited again.', 'ep-stale');
   const rb = await post(`/api/evolution/ep-stale/rollback/${applied.historyId}`, 'ep-owner');
   assert.equal(rb.statusCode, 409);
@@ -279,22 +279,22 @@ test('capabilities are never changed by any Evolution path', async () => {
   // Approving every remaining pending proposal still never touches capabilities.
   for (const id of agents) {
     for (const p of pendingOf(id)) {
-      try { EP.approveEvolutionProposal(id, p.id, 'ep-owner', (await view(id, p.id)).reviewHash); } catch (err) { assert.ok(err instanceof EP.EvolutionProposalError); }
+      try { await EP.approveEvolutionProposal(id, p.id, 'ep-owner', (await view(id, p.id)).reviewHash); } catch (err) { assert.ok(err instanceof EP.EvolutionProposalError); }
     }
   }
   await quietly(() => evolveAgent('ep-cycle'));
   assert.deepEqual(caps(), agents.map(() => CAPS));
 });
 
-test('proposed text is bounded and stored verbatim as data', () => {
-  assert.throws(
+test('proposed text is bounded and stored verbatim as data', async () => {
+  await assert.rejects(
     () => EP.createEvolutionProposal('ep-cycle', { kind: 'prompt_append', title: 't', proposedText: 'x'.repeat(EP.MAX_PROPOSED_TEXT_CHARS + 1), reason: 'r' }),
     (err) => err instanceof EP.EvolutionProposalError && err.status === 400 && err.code === 'invalid_input',
   );
-  assert.throws(() => EP.createEvolutionProposal('ep-cycle', { kind: 'capability', title: 't', proposedText: 'x', reason: 'r' }), EP.EvolutionProposalError);
+  await assert.rejects(() => EP.createEvolutionProposal('ep-cycle', { kind: 'capability', title: 't', proposedText: 'x', reason: 'r' }), EP.EvolutionProposalError);
   const odd = '\n\n${process.exit(1)} <script>alert(1)</script> `rm -rf /`';
-  const out = EP.createEvolutionProposal('ep-cycle', { kind: 'prompt_append', title: 'odd', proposedText: odd, reason: 'r' });
+  const out = await EP.createEvolutionProposal('ep-cycle', { kind: 'prompt_append', title: 'odd', proposedText: odd, reason: 'r' });
   assert.equal(out.status, 'proposed');
   assert.equal(out.proposal.proposedText, odd);
-  assert.equal(EP.createEvolutionProposal('nope', { kind: 'prompt_append', title: 't', proposedText: 'x', reason: 'r' }).reason, 'agent_not_found');
+  assert.equal((await EP.createEvolutionProposal('nope', { kind: 'prompt_append', title: 't', proposedText: 'x', reason: 'r' })).reason, 'agent_not_found');
 });

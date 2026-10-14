@@ -222,7 +222,7 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
     if (ownerOrReply(request, reply) === null) return reply;
     const { agentId, evolutionId } = request.params as { agentId: string; evolutionId: string };
     try {
-      rollbackEvolutionHistory(agentId, evolutionId);
+      await rollbackEvolutionHistory(agentId, evolutionId);
       return reply.send({ success: true, evolutionId, rolledBack: true, message: 'Evolution rolled back successfully' });
     } catch (error: unknown) {
       return sendProposalError(reply, error, '[Evolution API] POST /api/evolution/:agentId/rollback/:evolutionId');
@@ -241,7 +241,7 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: 'Unknown status' });
     }
     try {
-      const proposals = listEvolutionProposals(agentId, status as EvolutionProposalStatus | undefined);
+      const proposals = await listEvolutionProposals(agentId, status as EvolutionProposalStatus | undefined);
       if (!proposals) return reply.status(404).send({ error: 'Agent not found' });
       return reply.send({ agentId, proposals, total: proposals.length });
     } catch (error: unknown) {
@@ -254,7 +254,7 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
     const { agentId, proposalId } = request.params as { agentId: string; proposalId: string };
     if (!AGENT_ID.test(agentId) || !PROPOSAL_ID.test(proposalId)) return reply.status(404).send({ error: 'Proposal not found', code: 'not_found' });
     try {
-      const proposal = getEvolutionProposal(agentId, proposalId);
+      const proposal = await getEvolutionProposal(agentId, proposalId);
       if (!proposal) return reply.status(404).send({ error: 'Proposal not found', code: 'not_found' });
       return reply.send({ proposal });
     } catch (error: unknown) {
@@ -274,7 +274,7 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
     if (owner === null) return reply;
     const { agentId, proposalId } = request.params as { agentId: string; proposalId: string };
     try {
-      const out = approveEvolutionProposal(agentId, proposalId, owner, bodyOf(request).expectedReviewHash);
+      const out = await approveEvolutionProposal(agentId, proposalId, owner, bodyOf(request).expectedReviewHash);
       return reply.send(out);
     } catch (err) { return sendProposalError(reply, err, '[Evolution API] POST /api/evolution/:agentId/proposals/:proposalId/approve'); }
   });
@@ -286,7 +286,7 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
     const { agentId, proposalId } = request.params as { agentId: string; proposalId: string };
     const body = bodyOf(request);
     try {
-      return reply.send({ proposal: rejectEvolutionProposal(agentId, proposalId, owner, body.expectedReviewHash, body.note) });
+      return reply.send({ proposal: await rejectEvolutionProposal(agentId, proposalId, owner, body.expectedReviewHash, body.note) });
     } catch (err) { return sendProposalError(reply, err, '[Evolution API] POST /api/evolution/:agentId/proposals/:proposalId/reject'); }
   });
 
@@ -296,7 +296,7 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
     if (owner === null) return reply;
     const { agentId, proposalId } = request.params as { agentId: string; proposalId: string };
     try {
-      return reply.send({ proposal: cancelEvolutionProposal(agentId, proposalId, owner, bodyOf(request).expectedReviewHash) });
+      return reply.send({ proposal: await cancelEvolutionProposal(agentId, proposalId, owner, bodyOf(request).expectedReviewHash) });
     } catch (err) { return sendProposalError(reply, err, '[Evolution API] POST /api/evolution/:agentId/proposals/:proposalId/cancel'); }
   });
 

@@ -119,14 +119,14 @@ test('suggestPersonalityDrift: owner rejections raise thoroughness, exhausted re
 // --- Evolution files a proposal, never a version ------------------------------------
 
 test('Evolution path: verified outcomes create one pending proposal and no version; dedup while pending', async () => {
-  store.savePersonalityVersion('pe-evo', { preset: 'balanced-assistant' }, 'pe-owner');
-  const before = store.getCurrentPersonality('pe-evo');
+  await store.savePersonalityVersion('pe-evo', { preset: 'balanced-assistant' }, 'pe-owner');
+  const before = await store.getCurrentPersonality('pe-evo');
   const failed = [1, 2, 3].map(() => addRun('pe-evo', { firstRound: 'failed_verification' }));
   addRun('pe-evo'); addRun('pe-evo');
   addRun('pe-evo', { firstRound: 'failed_verification', daysAgo: 60 }); // outside the window
   addRun('pe-quiet'); // another agent's runs do not count
 
-  const s = evo.collectOutcomeStats('pe-evo');
+  const s = await evo.collectOutcomeStats('pe-evo');
   assert.equal(s.contractRuns, 5);
   assert.deepEqual([...s.firstRoundFailures].sort(), [...failed].sort());
 
@@ -139,7 +139,7 @@ test('Evolution path: verified outcomes create one pending proposal and no versi
   assert.deepEqual(p.delta, { doubt: 2, thoroughness: 2 });
   assert.deepEqual([...p.evidence].sort(), failed.map((id) => `task-run:${id}`).sort());
   assert.deepEqual(versionsOf('pe-evo'), [before.version], 'no version written');
-  assert.deepEqual(store.getCurrentPersonality('pe-evo').traits, before.traits);
+  assert.deepEqual((await store.getCurrentPersonality('pe-evo')).traits, before.traits);
 
   // Dedup: a second cycle while the first is pending files nothing.
   addRun('pe-evo', { firstRound: 'failed_verification' });
@@ -171,8 +171,8 @@ test('Evolution path: no signal, locked personality and unknown agent are skips,
   assert.deepEqual((await evo.proposeDriftFromOutcomes('pe-quiet')).reason, 'no_signal');
   for (let i = 0; i < 3; i++) addRun('pe-locked', { review: 'rejected' });
   addRun('pe-locked', { review: 'rejected', reviewer: 'large_agent' }); // not the owner
-  assert.equal(evo.collectOutcomeStats('pe-locked').ownerRejections.length, 3);
-  store.setPersonalityLocked('pe-locked', true, 'pe-owner');
+  assert.equal((await evo.collectOutcomeStats('pe-locked')).ownerRejections.length, 3);
+  await store.setPersonalityLocked('pe-locked', true, 'pe-owner');
   assert.equal((await evo.proposeDriftFromOutcomes('pe-locked')).reason, 'personality_locked');
   assert.equal((await evo.proposeDriftFromOutcomes('ghost')).reason, 'agent_not_found');
   assert.equal(proposalsOf('pe-locked').length + proposalsOf('pe-quiet').length, 0);
@@ -220,7 +220,7 @@ test('PUT /api/agents/:id edits role/department with create validation; the pers
   const created = await quietly(() => app.inject({ method: 'POST', url: '/api/agents', headers: auth('pe-owner'), payload: { name: 'Role Editing Agent', role: 'evaluator' } }));
   assert.equal(created.statusCode, 201, created.body);
   const agent = created.json().agent;
-  const before = store.getCurrentPersonality(agent.id);
+  const before = await store.getCurrentPersonality(agent.id);
   assert.equal(before.preset, 'strict-evaluator');
   const put = (payload, who = 'pe-owner') => quietly(() => app.inject({ method: 'PUT', url: `/api/agents/${agent.id}`, headers: auth(who), payload }));
 
@@ -230,7 +230,7 @@ test('PUT /api/agents/:id edits role/department with create validation; the pers
   assert.equal(ok.json().agent.department, 'marketing team');
   assert.equal(ok.json().agent.version, agent.version + 1);
   // Role change: metadata only.
-  const after = store.getCurrentPersonality(agent.id);
+  const after = await store.getCurrentPersonality(agent.id);
   assert.equal(after.version, before.version);
   assert.deepEqual(after.traits, before.traits);
   assert.equal(after.preset, 'strict-evaluator');
@@ -271,7 +271,7 @@ test('duplicate copies role and department, not personality versions', async () 
 // --- cancel ------------------------------------------------------------------------
 
 test('cancel: owner cancels any pending proposal; creator admin cancels own; others 403; decided -> 409', async () => {
-  store.savePersonalityVersion('pe-cancel', { preset: 'balanced-assistant' }, 'pe-owner');
+  await store.savePersonalityVersion('pe-cancel', { preset: 'balanced-assistant' }, 'pe-owner');
   const propose = async (who, reason) => {
     const res = await app.inject({ method: 'POST', url: `${base('pe-cancel')}/proposals`, headers: auth(who), payload: { delta: { curiosity: 2 }, reason } });
     assert.equal(res.statusCode, 201, res.body);

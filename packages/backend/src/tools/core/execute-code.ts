@@ -280,8 +280,8 @@ if (pkg.scripts?.test) {
       console.log('[ExecuteCodeTool]   Code length:', code.length, 'chars');
 
       // Import registry dynamically to avoid circular dependency
-      const { createToolsRegistry } = await import('../index.js');
-      const registry = createToolsRegistry(context);
+      const { createAgentToolsRegistry } = await import('../index.js');
+      const registry = await createAgentToolsRegistry(context);
 
       // Create safe toolbox
       const toolbox = createToolbox(context, registry);

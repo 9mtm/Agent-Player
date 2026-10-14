@@ -29,7 +29,8 @@
  *    the call's destination must be in the list.
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, atomic, dialect, one, run, sql, sqliteSync, type Step } from '../repositories/sql-steps.js';
+import { forUpdate, nowText } from '../db/pg/dialect.js';
 import type { Tool, ToolResult } from './types.js';
 import { isToolExecClass } from './exec-policy.js';
 import { isMcpToolName, NO_MCP_AGENTS, normalizeToolNameInput } from '../mcp-client/config.js';
@@ -167,18 +168,19 @@ export function grantCallRefusal(
 
 interface ProfileRow { agent_id: string; source: string; parent_agent_id: string | null; version?: number }
 
-function agentExists(agentId: string): boolean {
-  return !!getDatabase().prepare('SELECT 1 FROM agents_config WHERE id = ?').get(agentId);
+type Available = ReadonlyArray<Pick<Tool, 'name' | 'execClass'>>;
+
+function* agentExists(agentId: string, lock = false): Step<boolean> {
+  const d = yield* dialect();
+  return !!(yield* one(`SELECT id FROM agents_config WHERE id = ?${lock ? forUpdate(d) : ''}`, agentId));
 }
 
-function readProfile(agentId: string): ProfileRow | undefined {
-  return getDatabase().prepare('SELECT agent_id, source, parent_agent_id, version FROM agent_grant_profiles WHERE agent_id = ?')
-    .get(agentId) as ProfileRow | undefined;
+function* readProfile(agentId: string): Step<ProfileRow | undefined> {
+  return yield* one<ProfileRow>('SELECT agent_id, source, parent_agent_id, version FROM agent_grant_profiles WHERE agent_id = ?', agentId);
 }
 
-function readGrantRows(agentId: string): Map<string, GrantScopes | null> {
-  const rows = getDatabase().prepare('SELECT tool_name, scopes FROM agent_tool_grants WHERE agent_id = ?')
-    .all(agentId) as Array<{ tool_name: string; scopes: string | null }>;
+function* readGrantRows(agentId: string): Step<Map<string, GrantScopes | null>> {
+  const rows = yield* all<{ tool_name: string; scopes: string | null }>('SELECT tool_name, scopes FROM agent_tool_grants WHERE agent_id = ?', agentId);
   const tools = new Map<string, GrantScopes | null>();
   for (const row of rows) {
     let scopes: GrantScopes | null = null;
@@ -189,60 +191,57 @@ function readGrantRows(agentId: string): Map<string, GrantScopes | null> {
     }
     // M1: an MCP grant only counts while bound to the tool's current server
     // instance + fingerprint (a re-created server or changed tool needs a fresh grant).
+    // (MCP bindings are still SQLite-only: mcp-client/grant-binding.ts.)
     if (isMcpToolName(row.tool_name) && !isMcpGrantBound(agentId, row.tool_name)) continue;
     tools.set(row.tool_name, scopes);
   }
   return tools;
 }
 
-function writeGrantRows(agentId: string, entries: Array<{ tool: string; scopes: GrantScopes | null }>, by: string | null): void {
-  const db = getDatabase().getDb();
-  const del = db.prepare('DELETE FROM agent_tool_grants WHERE agent_id = ?');
-  const ins = db.prepare('INSERT INTO agent_tool_grants (agent_id, tool_name, scopes, granted_by) VALUES (?, ?, ?, ?)');
-  del.run(agentId);
-  for (const e of entries) ins.run(agentId, e.tool, e.scopes ? JSON.stringify(e.scopes) : null, by);
+function* writeGrantRows(agentId: string, entries: Array<{ tool: string; scopes: GrantScopes | null }>, by: string | null): Step<void> {
+  yield* run('DELETE FROM agent_tool_grants WHERE agent_id = ?', agentId);
+  for (const e of entries) {
+    yield* run('INSERT INTO agent_tool_grants (agent_id, tool_name, scopes, granted_by) VALUES (?, ?, ?, ?)', agentId, e.tool, e.scopes ? JSON.stringify(e.scopes) : null, by);
+  }
 }
 
 /**
  * Make sure an existing agent has a grant profile; seeds legacy or default
- * grants once. `available` = tools registered right now.
+ * grants once (one transaction; on PostgreSQL the agent row is locked, so
+ * two first uses at the same time seed once). `available` = tools
+ * registered right now.
  */
-export function ensureGrantProfile(agentId: string, available: ReadonlyArray<Pick<Tool, 'name' | 'execClass'>>): ProfileRow | undefined {
-  if (!agentExists(agentId)) return undefined;
-  const db = getDatabase().getDb();
-  const seed = db.transaction(() => {
-    const profile = readProfile(agentId);
+function* ensureGrantProfileStep(agentId: string, available: Available): Step<ProfileRow | undefined> {
+  if (!(yield* agentExists(agentId))) return undefined;
+  return yield* atomic(function* () {
+    const d = yield* dialect();
+    if (!(yield* agentExists(agentId, true))) return undefined;
+    const profile = yield* readProfile(agentId);
     if (profile && profile.source !== 'legacy-pending') return profile;
     if (profile) {
       const names = available.filter((t) => !isToolExecClass(t) && !isMcpToolName(t.name)).map((t) => t.name);
-      writeGrantRows(agentId, names.map((tool) => ({ tool, scopes: null })), 'system:legacy');
-      db.prepare(`UPDATE agent_grant_profiles SET source = 'legacy', updated_at = datetime('now') WHERE agent_id = ?`).run(agentId);
+      yield* writeGrantRows(agentId, names.map((tool) => ({ tool, scopes: null })), 'system:legacy');
+      yield* run(`UPDATE agent_grant_profiles SET source = 'legacy', updated_at = ${nowText(d)} WHERE agent_id = ?`, agentId);
     } else {
-      writeGrantRows(agentId, DEFAULT_AGENT_TOOLS.map((tool) => ({ tool, scopes: null })), 'system:default');
-      db.prepare(`INSERT INTO agent_grant_profiles (agent_id, source) VALUES (?, 'default')`).run(agentId);
+      yield* writeGrantRows(agentId, DEFAULT_AGENT_TOOLS.map((tool) => ({ tool, scopes: null })), 'system:default');
+      yield* run(`INSERT INTO agent_grant_profiles (agent_id, source) VALUES (?, 'default')`, agentId);
     }
-    return readProfile(agentId);
+    return yield* readProfile(agentId);
   });
-  return seed();
 }
 
-/**
- * Effective grants for an agent: its own grants, intersected with every
- * parent up the chain and with `delegatedFrom` agents (task spawners).
- * Unknown agent -> nothing granted. DB errors -> default set (fail closed).
- */
-export function loadAgentGrants(
-  agentId: string,
-  available: ReadonlyArray<Pick<Tool, 'name' | 'execClass'>>,
-  delegatedFrom: string[] = []
-): AgentToolGrants {
+export function ensureGrantProfile(agentId: string, available: Available): Promise<ProfileRow | undefined> {
+  return sql().read(ensureGrantProfileStep(agentId, available));
+}
+
+function* loadAgentGrantsStep(agentId: string, available: Available, delegatedFrom: string[]): Step<AgentToolGrants> {
   try {
-    const own = loadOwn(agentId, available, new Set());
+    const own = yield* loadOwn(agentId, available, new Set());
     let grants = own;
     for (const parent of delegatedFrom) {
       if (parent === UNKNOWN_PRINCIPAL || !parent) { grants = intersectGrants(grants, defaultGrants()); continue; }
       if (parent === agentId) continue;
-      grants = intersectGrants(grants, loadOwn(parent, available, new Set()));
+      grants = intersectGrants(grants, yield* loadOwn(parent, available, new Set()));
     }
     return grants;
   } catch (err: any) {
@@ -251,17 +250,36 @@ export function loadAgentGrants(
   }
 }
 
-function loadOwn(agentId: string, available: ReadonlyArray<Pick<Tool, 'name' | 'execClass'>>, seen: Set<string>): AgentToolGrants {
-  const profile = ensureGrantProfile(agentId, available);
+/**
+ * Effective grants for an agent: its own grants, intersected with every
+ * parent up the chain and with `delegatedFrom` agents (task spawners).
+ * Unknown agent -> nothing granted. DB errors -> default set (fail closed).
+ */
+export function loadAgentGrants(agentId: string, available: Available, delegatedFrom: string[] = []): Promise<AgentToolGrants> {
+  return sql().read(loadAgentGrantsStep(agentId, available, delegatedFrom));
+}
+
+/**
+ * loadAgentGrants, synchronously: SQLite only (createToolsRegistry's
+ * synchronous path). Throws SyncOnPostgresError on PostgreSQL, where the
+ * grants are loaded with loadAgentGrants() (tools/index.ts
+ * createAgentToolsRegistry).
+ */
+export function loadAgentGrantsSync(agentId: string, available: Available, delegatedFrom: string[] = []): AgentToolGrants {
+  return sqliteSync(loadAgentGrantsStep(agentId, available, delegatedFrom));
+}
+
+function* loadOwn(agentId: string, available: Available, seen: Set<string>): Step<AgentToolGrants> {
+  const profile = yield* ensureGrantProfileStep(agentId, available);
   if (!profile) return { agentId, tools: new Map() }; // unknown agent: nothing
-  const own = readGrantRows(agentId);
+  const own = yield* readGrantRows(agentId);
   if (NO_MCP_AGENTS.has(agentId)) for (const name of [...own.keys()]) if (isMcpToolName(name)) own.delete(name);
   let grants: AgentToolGrants = { agentId, tools: own };
   seen.add(agentId);
   const parent = profile.parent_agent_id;
   if (parent) {
     if (seen.has(parent) || seen.size >= MAX_PARENT_DEPTH) return { agentId, tools: new Map() }; // cycle: fail closed
-    grants = intersectGrants(grants, loadOwn(parent, available, seen));
+    grants = intersectGrants(grants, yield* loadOwn(parent, available, seen));
   }
   return grants;
 }
@@ -276,17 +294,19 @@ export interface GrantView {
 }
 
 /** Stored grants of an agent (own, not intersected), seeding if needed. */
-export function getAgentGrantView(agentId: string, available: ReadonlyArray<Pick<Tool, 'name' | 'execClass'>>): GrantView | null {
-  const profile = ensureGrantProfile(agentId, available);
-  if (!profile) return null;
-  const tools = readGrantRows(agentId);
-  return {
-    agentId,
-    source: profile.source,
-    parentAgentId: profile.parent_agent_id,
-    version: readProfile(agentId)?.version ?? 1,
-    grants: [...tools.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([tool, scopes]) => ({ tool, scopes })),
-  };
+export function getAgentGrantView(agentId: string, available: Available): Promise<GrantView | null> {
+  return sql().read((function* () {
+    const profile = yield* ensureGrantProfileStep(agentId, available);
+    if (!profile) return null;
+    const tools = yield* readGrantRows(agentId);
+    return {
+      agentId,
+      source: profile.source,
+      parentAgentId: profile.parent_agent_id,
+      version: (yield* readProfile(agentId))?.version ?? 1,
+      grants: [...tools.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([tool, scopes]) => ({ tool, scopes })),
+    };
+  })());
 }
 
 export class GrantValidationError extends Error {}
@@ -303,9 +323,18 @@ export function setAgentGrants(
   agentId: string,
   input: { grants: unknown; parentAgentId?: unknown; expectedVersion?: number | null },
   by: string,
-  available: ReadonlyArray<Pick<Tool, 'name' | 'execClass'>>
-): { before: string[]; after: string[]; parentAgentId: string | null; version: number } {
-  const profile = ensureGrantProfile(agentId, available);
+  available: Available,
+): Promise<{ before: string[]; after: string[]; parentAgentId: string | null; version: number }> {
+  return sql().read(setAgentGrantsStep(agentId, input, by, available));
+}
+
+function* setAgentGrantsStep(
+  agentId: string,
+  input: { grants: unknown; parentAgentId?: unknown; expectedVersion?: number | null },
+  by: string,
+  available: Available,
+): Step<{ before: string[]; after: string[]; parentAgentId: string | null; version: number }> {
+  const profile = yield* ensureGrantProfileStep(agentId, available);
   if (!profile) throw new GrantValidationError('Agent not found');
   if (!Array.isArray(input.grants) || input.grants.length > 500) throw new GrantValidationError('grants must be an array (max 500)');
 
@@ -331,7 +360,7 @@ export function setAgentGrants(
   let parentAgentId: string | null = profile.parent_agent_id;
   if (input.parentAgentId !== undefined) {
     if (input.parentAgentId === null || input.parentAgentId === '') parentAgentId = null;
-    else if (typeof input.parentAgentId !== 'string' || !agentExists(input.parentAgentId)) throw new GrantValidationError('parent agent not found');
+    else if (typeof input.parentAgentId !== 'string' || !(yield* agentExists(input.parentAgentId))) throw new GrantValidationError('parent agent not found');
     else if (input.parentAgentId === agentId) throw new GrantValidationError('an agent cannot be its own parent');
     else parentAgentId = input.parentAgentId;
   }
@@ -340,9 +369,10 @@ export function setAgentGrants(
     let cursor: string | null = parentAgentId;
     for (let i = 0; cursor && i < MAX_PARENT_DEPTH + 1; i++) {
       if (cursor === agentId) throw new GrantValidationError('parent chain would form a cycle');
-      cursor = readProfile(cursor)?.parent_agent_id ?? null;
+      const next: ProfileRow | undefined = yield* readProfile(cursor);
+      cursor = next?.parent_agent_id ?? null;
     }
-    const parent = loadOwn(parentAgentId, available, new Set());
+    const parent = yield* loadOwn(parentAgentId, available, new Set());
     for (const e of entries) {
       if (!parent.tools.has(e.tool)) throw new GrantValidationError(`"${e.tool}" is not granted to the parent agent; a sub-agent only gets a subset of its parent's grants`);
       const p = parent.tools.get(e.tool);
@@ -355,17 +385,22 @@ export function setAgentGrants(
     }
   }
 
-  const before = [...readGrantRows(agentId).keys()].sort();
-  const db = getDatabase().getDb();
+  const before = [...(yield* readGrantRows(agentId)).keys()].sort();
   const expected = input.expectedVersion ?? null;
-  db.transaction(() => {
-    // Compare-and-set first: nothing is written when the version moved on.
-    const r = db.prepare(`UPDATE agent_grant_profiles SET source = 'owner', parent_agent_id = ?, updated_by = ?, updated_at = datetime('now'), version = version + 1
-                          WHERE agent_id = ?${expected !== null ? ' AND version = ?' : ''}`)
-      .run(parentAgentId, by, agentId, ...(expected !== null ? [expected] : []));
-    if (r.changes === 0) throw new GrantConflictError(readProfile(agentId)?.version ?? 1);
-    writeGrantRows(agentId, entries, by);
+  yield* atomic(function* () {
+    const d = yield* dialect();
+    // Compare-and-set first: nothing is written when the version moved on
+    // (on PostgreSQL a concurrent writer holds the row lock; this UPDATE then
+    // re-checks the version and changes nothing).
+    const r = yield* run(`UPDATE agent_grant_profiles SET source = 'owner', parent_agent_id = ?, updated_by = ?, updated_at = ${nowText(d)}, version = version + 1
+                          WHERE agent_id = ?${expected !== null ? ' AND version = ?' : ''}`,
+      parentAgentId, by, agentId, ...(expected !== null ? [expected] : []));
+    if (r.changes === 0) throw new GrantConflictError((yield* readProfile(agentId))?.version ?? 1);
+    yield* writeGrantRows(agentId, entries, by);
+    // Last: MCP bindings are still SQLite-only (mcp-client/grant-binding.ts).
+    // On SQLite they are part of this transaction; on PostgreSQL a throw here
+    // still rolls the grant rows back.
     writeMcpBindings(agentId, entries.map((e) => e.tool).filter(isMcpToolName), by);
-  })();
-  return { before, after: entries.map((e) => e.tool).sort(), parentAgentId, version: readProfile(agentId)?.version ?? 1 };
+  });
+  return { before, after: entries.map((e) => e.tool).sort(), parentAgentId, version: (yield* readProfile(agentId))?.version ?? 1 };
 }
