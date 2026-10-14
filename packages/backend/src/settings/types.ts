@@ -2,6 +2,8 @@
  * Settings Types
  */
 
+import { defaultOllamaUrl } from '../config/ollama-url.js';
+
 export interface AgentSettings {
   // AI Provider
   provider: 'local' | 'claude' | 'openai';
@@ -40,7 +42,8 @@ export interface AgentSettings {
 export const DEFAULT_SETTINGS: AgentSettings = {
   provider: 'local',
   local: {
-    url: 'http://127.0.0.1:11434',
+    // F4: follows OLLAMA_URL / LOCAL_MODEL_API_URL (default http://127.0.0.1:11434).
+    url: defaultOllamaUrl(),
     model: 'qwen3.8:27b',
   },
   temperature: 0.7,

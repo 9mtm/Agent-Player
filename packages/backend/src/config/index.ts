@@ -3,6 +3,9 @@
  * All backend routes and services should import from this file
  */
 
+import { dataPathOr } from './data-root.js';
+import { defaultOllamaApiUrl, defaultOllamaUrl } from './ollama-url.js';
+
 export const config = {
   /**
    * Server Configuration
@@ -22,7 +25,7 @@ export const config = {
    * Database Configuration
    */
   databaseUrl: process.env.DATABASE_URL || 'file:./.data/agent-player.db',
-  databasePath: process.env.DATABASE_PATH || './.data/agent-player.db',
+  databasePath: process.env.DATABASE_PATH || dataPathOr('./.data/agent-player.db', 'agent-player.db'),
 
   /**
    * OAuth Redirect URIs
@@ -45,8 +48,8 @@ export const config = {
     // Provider API keys are not kept here: read them through the credential
     // authority (credentials/authority.ts, S1.1).
     ollama: {
-      url: process.env.OLLAMA_URL || 'http://127.0.0.1:11434',
-      apiUrl: process.env.LOCAL_MODEL_API_URL || 'http://127.0.0.1:11434/v1',
+      url: defaultOllamaUrl(),
+      apiUrl: defaultOllamaApiUrl(),
       modelName: process.env.DEFAULT_MODEL || process.env.LOCAL_MODEL_NAME || 'qwen3.8:27b',
       apiKey: process.env.LOCAL_MODEL_API_KEY || 'sk-dummy',
     },
@@ -57,14 +60,14 @@ export const config = {
    */
   storage: {
     provider: process.env.STORAGE_PROVIDER || 'local',
-    dataDir: './.data',
+    dataDir: dataPathOr('./.data'),
   },
 
   /**
    * Optional Channels
    */
   channels: {
-    whatsappSessionPath: process.env.WHATSAPP_SESSION_PATH || './.data/whatsapp-session',
+    whatsappSessionPath: process.env.WHATSAPP_SESSION_PATH || dataPathOr('./.data/whatsapp-session', 'whatsapp-session'),
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
     discordBotToken: process.env.DISCORD_BOT_TOKEN || '',
   },
