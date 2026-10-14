@@ -3,6 +3,8 @@
 // message never reach the server log.
 // FU-02: they never reach the client either. A non-zero exit returns
 // "❌ <Label> CLI failed (exit N)." and a timeout returns a timeout note only.
+// FU-03: an exit 0 with empty stdout returns "<Label> CLI returned no output.",
+// never stderr.
 // The "CLIs" are throwaway shell scripts in a temp dir (no real binary, no
 // network). Throwaway DB/keys.
 // Run: node --import tsx --test test/cli-error-logging.test.mjs
@@ -60,7 +62,7 @@ db.prepare(`INSERT INTO agents_config (id, name, provider, model) VALUES ('c-cla
 
 const { geminiCliTool } = await import(join(backendDir, 'src/tools/cli/gemini-cli.ts'));
 const { claudeCliTool } = await import(join(backendDir, 'src/tools/cli/claude-cli.ts'));
-const { safeErrorFields, cliFailureText } = await import(join(backendDir, 'src/services/safe-error-log.ts'));
+const { safeErrorFields, cliFailureText, cliNoOutputText } = await import(join(backendDir, 'src/services/safe-error-log.ts'));
 const { generateToken } = await import(join(backendDir, 'src/auth/jwt.ts'));
 const { buildServer } = await import(join(backendDir, 'src/api/app.ts'));
 const app = await buildServer({ logger: false });
@@ -193,6 +195,45 @@ for (const [agentId, tool, tag, reply] of [
       assertNoLeak(logged);
     } finally {
       tool.execute = original;
+    }
+  });
+}
+
+test('cliNoOutputText is a fixed generic text', () => {
+  assert.equal(cliNoOutputText('Gemini'), 'Gemini CLI returned no output.');
+  assert.equal(cliNoOutputText('Claude'), 'Claude CLI returned no output.');
+});
+
+for (const [tool, name, label, tag] of [[geminiCliTool, 'gemini', 'Gemini', '[GeminiCLI]'], [claudeCliTool, 'claude', 'Claude', '[ClaudeCLI]']]) {
+  test(`${label} CLI exits 0 with stderr only: the answer is a generic text, never stderr`, async () => {
+    const quietScript = `#!/bin/sh\necho "${STDERR_SECRET}" >&2\necho "$@" >&2\nexit 0\n`;
+    const failScript = `#!/bin/sh\necho "${STDERR_SECRET}" >&2\necho "$@" >&2\nexit 3\n`;
+    const paths = [join(dir, name), join(binDir, name)];
+    for (const p of paths) { writeFileSync(p, quietScript); chmodSync(p, 0o755); }
+    logged.length = 0;
+    try {
+      const result = await muted(() => tool.execute({ prompt: PROMPT_SECRET }));
+      assert.equal(result.content[0].text, `${label} CLI returned no output.`);
+      assert.equal(result.error, undefined, 'exit 0 is not an error');
+      assert.ok(logged.some((l) => l.startsWith(`${tag} ✅ Response length: 0 chars`)), 'the length line was logged');
+      assertNoLeak([JSON.stringify(result), ...logged]);
+    } finally {
+      for (const p of paths) { writeFileSync(p, failScript); chmodSync(p, 0o755); }
+    }
+  });
+
+  test(`${label} CLI exits 0 with stdout and stderr: only stdout is returned`, async () => {
+    const okScript = `#!/bin/sh\necho "${STDERR_SECRET}" >&2\necho "  plain answer  "\nexit 0\n`;
+    const failScript = `#!/bin/sh\necho "${STDERR_SECRET}" >&2\necho "$@" >&2\nexit 3\n`;
+    const paths = [join(dir, name), join(binDir, name)];
+    for (const p of paths) { writeFileSync(p, okScript); chmodSync(p, 0o755); }
+    logged.length = 0;
+    try {
+      const result = await muted(() => tool.execute({ prompt: PROMPT_SECRET }));
+      assert.equal(result.content[0].text, 'plain answer');
+      assertNoLeak([JSON.stringify(result), ...logged]);
+    } finally {
+      for (const p of paths) { writeFileSync(p, failScript); chmodSync(p, 0o755); }
     }
   });
 }

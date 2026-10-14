@@ -10,6 +10,7 @@
 import type { FastifyReply } from 'fastify';
 import { randomUUID } from 'crypto';
 import { getTranslator } from '../i18n/index.js';
+import { safeErrorFields } from '../services/safe-error-log.js';
 
 /**
  * Error categories for proper HTTP status codes
@@ -166,4 +167,18 @@ export function handleSmartError(
 
   // Unknown errors - hide details
   return handleError(reply, error, 'internal', context);
+}
+
+/** Fixed body for an unexpected 500 (FU-03). */
+export const INTERNAL_ERROR_BODY = Object.freeze({ error: 'Internal error', code: 'internal_error' });
+
+/**
+ * Reply 500 with the fixed generic body and log only safe fields (FU-03).
+ *
+ * The error message, stack and any attached text (stderr, SQL, paths, the
+ * prompt) never reach the client or the log; the log line names the route.
+ */
+export function sendInternalError(reply: FastifyReply, route: string, error: unknown): FastifyReply {
+  console.error(`${route} internal error`, safeErrorFields(error));
+  return reply.status(500).send({ ...INTERNAL_ERROR_BODY });
 }

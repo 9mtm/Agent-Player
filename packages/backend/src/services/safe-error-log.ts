@@ -61,3 +61,12 @@ export function cliFailureText(label: string, err: unknown, timeoutMs?: number):
   if (f.killed) parts.push('killed');
   return `${label} CLI failed${parts.length ? ` (${parts.join(', ')})` : ''}.`;
 }
+
+/**
+ * Client-safe text for a CLI bridge call that exited 0 with no stdout (FU-03).
+ *
+ * stderr is never used as the answer: it can hold the prompt, paths or tokens.
+ */
+export function cliNoOutputText(label: string): string {
+  return `${label} CLI returned no output.`;
+}

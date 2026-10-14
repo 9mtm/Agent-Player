@@ -36,6 +36,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { repositories } from '../../repositories/index.js';
 import { ScopeError, actorOrReply, requireAdmin, requireOwner } from '../../repositories/scope.js';
 import { logAudit } from '../../services/audit-logger.js';
+import { safeErrorFields } from '../../services/safe-error-log.js';
+import { sendInternalError } from '../error-handler.js';
 import { DIALECTS, PRESETS, PersonalityInputError, TRAIT_NAMES, traitsToBehavior } from '../../services/personality.js';
 import {
   PROPOSAL_STATUSES,
@@ -68,6 +70,15 @@ function view(p: PersonalityVersion) {
   return { ...p, behavior: traitsToBehavior(p.traits, p.dialect) };
 }
 
+/**
+ * Unexpected errors -> generic 500, safe-field log (FU-03). ScopeError keeps
+ * its own status through the framework handler, as before.
+ */
+function internalError(reply: FastifyReply, route: string, err: unknown): FastifyReply {
+  if (err instanceof ScopeError) throw err;
+  return sendInternalError(reply, `[Personality] ${route}`, err);
+}
+
 type Params = { Params: { id: string } };
 type ProposalParams = { Params: { id: string; pid: string } };
 
@@ -95,14 +106,14 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
       if (err instanceof PersonalityInputError) { audit(false, { error_message: err.message }); return reply.code(400).send({ error: err.message }); }
       if (err instanceof PersonalityLockedError) { audit(false, { error_message: err.message }); return reply.code(409).send({ error: err.message }); }
       if (err instanceof PersonalityNotFoundError) return reply.code(404).send({ error: err.message });
-      throw err;
+      return internalError(reply, action, err);
     }
     audit(true, { metadata: { version: result.version, source: result.source, traits: result.traits, dialect: result.dialect, locked: result.locked } });
     try {
       await exportPersonalityFile(result);
     } catch (err) {
       // The database is canonical; a failed readable export does not undo the version.
-      request.log.warn({ err }, '[Personality] PERSONALITY.md export failed');
+      request.log.warn(safeErrorFields(err), '[Personality] PERSONALITY.md export failed');
     }
     return view(result);
   }
@@ -110,22 +121,30 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
   fastify.get<Params>('/api/agents/:id/personality/current', { config }, async (request, reply) => {
     if (ownerOf(request, reply) === null) return reply;
     if (!AGENT_ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid agent id' });
-    const current = await repositories.agents.currentPersonality(actorOf(request), request.params.id);
-    if (!current) return reply.code(404).send({ error: 'Agent not found' });
-    return {
-      ...view(current),
-      traitNames: TRAIT_NAMES,
-      dialects: DIALECTS,
-      presets: Object.entries(PRESETS).map(([id, p]) => ({ id, label: p.label, traits: p.traits })),
-    };
+    try {
+      const current = await repositories.agents.currentPersonality(actorOf(request), request.params.id);
+      if (!current) return reply.code(404).send({ error: 'Agent not found' });
+      return {
+        ...view(current),
+        traitNames: TRAIT_NAMES,
+        dialects: DIALECTS,
+        presets: Object.entries(PRESETS).map(([id, p]) => ({ id, label: p.label, traits: p.traits })),
+      };
+    } catch (err) {
+      return internalError(reply, 'GET /api/agents/:id/personality/current', err);
+    }
   });
 
   fastify.get<Params>('/api/agents/:id/personality/versions', { config }, async (request, reply) => {
     if (ownerOf(request, reply) === null) return reply;
     if (!AGENT_ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid agent id' });
-    const versions = await repositories.agents.personalityVersions(actorOf(request), request.params.id);
-    if (!versions) return reply.code(404).send({ error: 'Agent not found' });
-    return { agentId: request.params.id, versions };
+    try {
+      const versions = await repositories.agents.personalityVersions(actorOf(request), request.params.id);
+      if (!versions) return reply.code(404).send({ error: 'Agent not found' });
+      return { agentId: request.params.id, versions };
+    } catch (err) {
+      return internalError(reply, 'GET /api/agents/:id/personality/versions', err);
+    }
   });
 
   fastify.post<Params & { Body: Record<string, unknown> }>('/api/agents/:id/personality/versions', { config }, async (request, reply) => {
@@ -188,7 +207,7 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
         if (err instanceof PersonalityProposalError) proposalAudit(request, userId, 'agent_personality.proposal.create', false, agentId, { code: err.code }, err.message);
         return handled;
       }
-      throw err;
+      return internalError(reply, 'agent_personality.proposal.create', err);
     }
   });
 
@@ -197,17 +216,25 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
     if (!AGENT_ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid agent id' });
     const status = request.query?.status;
     if (status !== undefined && !(PROPOSAL_STATUSES as readonly string[]).includes(status)) return reply.code(400).send({ error: 'Invalid status' });
-    const proposals = await repositories.agents.personalityProposals(actorOf(request), request.params.id, status as ProposalStatus | undefined);
-    if (!proposals) return reply.code(404).send({ error: 'Agent not found' });
-    return { agentId: request.params.id, proposals };
+    try {
+      const proposals = await repositories.agents.personalityProposals(actorOf(request), request.params.id, status as ProposalStatus | undefined);
+      if (!proposals) return reply.code(404).send({ error: 'Agent not found' });
+      return { agentId: request.params.id, proposals };
+    } catch (err) {
+      return internalError(reply, 'GET /api/agents/:id/personality/proposals', err);
+    }
   });
 
   fastify.get<ProposalParams>('/api/agents/:id/personality/proposals/:pid', { config: ownerConfig }, async (request, reply) => {
     if (ownerOf(request, reply) === null) return reply;
     if (!AGENT_ID.test(request.params.id) || !PROPOSAL_ID.test(request.params.pid)) return reply.code(404).send({ error: 'Proposal not found' });
-    const proposal = await repositories.agents.personalityProposal(actorOf(request), request.params.id, request.params.pid);
-    if (!proposal) return reply.code(404).send({ error: 'Proposal not found' });
-    return proposal;
+    try {
+      const proposal = await repositories.agents.personalityProposal(actorOf(request), request.params.id, request.params.pid);
+      if (!proposal) return reply.code(404).send({ error: 'Proposal not found' });
+      return proposal;
+    } catch (err) {
+      return internalError(reply, 'GET /api/agents/:id/personality/proposals/:pid', err);
+    }
   });
 
   const bodyOf = (request: FastifyRequest): Record<string, unknown> =>
@@ -227,7 +254,7 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
         await exportPersonalityFile(result.version);
       } catch (err) {
         // The database is canonical; a failed readable export does not undo the approval.
-        request.log.warn({ err }, '[Personality] PERSONALITY.md export failed');
+        request.log.warn(safeErrorFields(err), '[Personality] PERSONALITY.md export failed');
       }
       return { proposal: result.proposal, version: view(result.version) };
     } catch (err) {
@@ -236,7 +263,7 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
         if (err instanceof PersonalityProposalError) proposalAudit(request, ownerId, 'agent_personality.proposal.approve', false, agentId, { proposalId: pid, code: err.code }, err.message);
         return handled;
       }
-      throw err;
+      return internalError(reply, 'agent_personality.proposal.approve', err);
     }
   });
 
@@ -256,7 +283,7 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
         if (err instanceof PersonalityProposalError) proposalAudit(request, ownerId, 'agent_personality.proposal.reject', false, agentId, { proposalId: pid, code: err.code }, err.message);
         return handled;
       }
-      throw err;
+      return internalError(reply, 'agent_personality.proposal.reject', err);
     }
   });
 
@@ -277,7 +304,7 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
         }
         return handled;
       }
-      throw err;
+      return internalError(reply, 'agent_personality.proposal.cancel', err);
     }
   });
 }

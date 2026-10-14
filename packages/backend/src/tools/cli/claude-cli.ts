@@ -26,7 +26,7 @@ import {
   minimalChildEnv,
   safeChildCwd,
 } from '../exec-policy.js';
-import { cliFailureText, safeErrorFields } from '../../services/safe-error-log.js';
+import { cliFailureText, cliNoOutputText, safeErrorFields } from '../../services/safe-error-log.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -198,8 +198,11 @@ export const claudeCliTool: Tool = {
         }));
       }
 
-      const output = (stdout || stderr || '(no output)').trim();
-      console.log(`[ClaudeCLI] ✅ Response length: ${output.length} chars`);
+      // SECURITY (FU-03): stderr is never the answer, even on exit 0 (it can
+      // hold the prompt, paths or tokens). Empty stdout gets a generic text.
+      const answer = (stdout || '').trim();
+      const output = answer || cliNoOutputText('Claude');
+      console.log(`[ClaudeCLI] ✅ Response length: ${answer.length} chars, stderr length: ${(stderr || '').length} chars`);
 
       return {
         content: [{ type: 'text', text: output }],

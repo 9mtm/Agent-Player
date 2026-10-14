@@ -20,7 +20,7 @@ import * as fs from 'node:fs/promises';
 import type { Tool, ToolResult } from '../types.js';
 import { execToolRefusal, isExecToolsEnabled, minimalChildEnv } from '../exec-policy.js';
 import { getEnvProviderApiKey } from '../../credentials/authority.js';
-import { cliFailureText, safeErrorFields } from '../../services/safe-error-log.js';
+import { cliFailureText, cliNoOutputText, safeErrorFields } from '../../services/safe-error-log.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -134,8 +134,11 @@ export const geminiCliTool: Tool = {
         }));
       }
 
-      const output = (stdout || stderr || '(no output)').trim();
-      console.log(`[GeminiCLI] ✅ Response length: ${output.length} chars`);
+      // SECURITY (FU-03): stderr is never the answer, even on exit 0 (it can
+      // hold the prompt, paths or tokens). Empty stdout gets a generic text.
+      const answer = (stdout || '').trim();
+      const output = answer || cliNoOutputText('Gemini');
+      console.log(`[GeminiCLI] ✅ Response length: ${answer.length} chars, stderr length: ${(stderr || '').length} chars`);
 
       return {
         content: [{ type: 'text', text: output }],

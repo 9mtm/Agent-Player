@@ -22,6 +22,8 @@ import {
 } from '../../services/agent-evolution-orchestrator.js';
 import { updateEvolutionSchedule } from '../../services/agent-evolution-scheduler.js';
 import { actorOf } from '../../auth/auth-gate.js';
+import { sendInternalError } from '../error-handler.js';
+import { safeErrorFields } from '../../services/safe-error-log.js';
 import { actorOrReply, requireOwner } from '../../repositories/scope.js';
 import { proposeDriftFromOutcomes } from '../../services/personality-evolution.js';
 import {
@@ -52,9 +54,10 @@ function bodyOf(request: FastifyRequest): Record<string, unknown> {
   return b && typeof b === 'object' && !Array.isArray(b) ? b as Record<string, unknown> : {};
 }
 
-function sendProposalError(reply: FastifyReply, err: unknown) {
+/** Typed proposal errors keep their 4xx code; anything else is a generic 500 (FU-03). */
+function sendProposalError(reply: FastifyReply, err: unknown, route: string) {
   if (err instanceof EvolutionProposalError) return reply.status(err.status).send({ error: err.message, code: err.code });
-  throw err;
+  return sendInternalError(reply, route, err);
 }
 
 export default async function evolutionRoutes(fastify: FastifyInstance) {
@@ -87,9 +90,8 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
         recentEvolutions: history,
         status: config.enabled ? 'active' : 'disabled',
       });
-    } catch (error: any) {
-      console.error('[Evolution API] Error getting status:', error);
-      return reply.status(500).send({ error: error.message });
+    } catch (error: unknown) {
+      return sendInternalError(reply, '[Evolution API] GET /api/evolution/:agentId/status', error);
     }
   });
 
@@ -113,9 +115,8 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
         performanceData,
         analyzed: true,
       });
-    } catch (error: any) {
-      console.error('[Evolution API] Error analyzing performance:', error);
-      return reply.status(500).send({ error: error.message });
+    } catch (error: unknown) {
+      return sendInternalError(reply, '[Evolution API] POST /api/evolution/:agentId/analyze', error);
     }
   });
 
@@ -134,9 +135,8 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
         success: !(result as any).error,
         ...result,
       });
-    } catch (error: any) {
-      console.error('[Evolution API] Error evolving agent:', error);
-      return reply.status(500).send({ error: error.message });
+    } catch (error: unknown) {
+      return sendInternalError(reply, '[Evolution API] POST /api/evolution/:agentId/evolve', error);
     }
   });
 
@@ -160,9 +160,13 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
     if (body.windowDays !== undefined && (typeof body.windowDays !== 'number' || !Number.isInteger(body.windowDays) || body.windowDays < 1 || body.windowDays > 90)) {
       return reply.status(400).send({ error: 'windowDays must be an integer from 1 to 90' });
     }
-    const outcome = await proposeDriftFromOutcomes(agentId, { windowDays: body.windowDays });
-    if (outcome.status === 'skipped' && outcome.reason === 'agent_not_found') return reply.status(404).send({ error: 'Agent not found' });
-    return reply.status(outcome.status === 'proposed' ? 201 : 200).send(outcome);
+    try {
+      const outcome = await proposeDriftFromOutcomes(agentId, { windowDays: body.windowDays });
+      if (outcome.status === 'skipped' && outcome.reason === 'agent_not_found') return reply.status(404).send({ error: 'Agent not found' });
+      return reply.status(outcome.status === 'proposed' ? 201 : 200).send(outcome);
+    } catch (error: unknown) {
+      return sendInternalError(reply, '[Evolution API] POST /api/evolution/:agentId/personality-proposal', error);
+    }
   });
 
   /**
@@ -182,9 +186,8 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
       };
 
       return reply.send({ success: true, summary, results });
-    } catch (error: any) {
-      console.error('[Evolution API] Error evolving all agents:', error);
-      return reply.status(500).send({ error: error.message });
+    } catch (error: unknown) {
+      return sendInternalError(reply, '[Evolution API] POST /api/evolution/evolve-all', error);
     }
   });
 
@@ -204,9 +207,8 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
       const history = getEvolutionHistory(agentId, filters);
 
       return reply.send({ agentId, history, total: history.length });
-    } catch (error: any) {
-      console.error('[Evolution API] Error getting history:', error);
-      return reply.status(500).send({ error: error.message });
+    } catch (error: unknown) {
+      return sendInternalError(reply, '[Evolution API] GET /api/evolution/:agentId/history', error);
     }
   });
 
@@ -222,10 +224,8 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
     try {
       rollbackEvolutionHistory(agentId, evolutionId);
       return reply.send({ success: true, evolutionId, rolledBack: true, message: 'Evolution rolled back successfully' });
-    } catch (error: any) {
-      if (error instanceof EvolutionProposalError) return sendProposalError(reply, error);
-      console.error('[Evolution API] Error rolling back evolution:', error);
-      return reply.status(500).send({ error: 'Rollback failed' });
+    } catch (error: unknown) {
+      return sendProposalError(reply, error, '[Evolution API] POST /api/evolution/:agentId/rollback/:evolutionId');
     }
   });
 
@@ -240,18 +240,26 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
     if (status !== undefined && !(EVOLUTION_PROPOSAL_STATUSES as readonly string[]).includes(status)) {
       return reply.status(400).send({ error: 'Unknown status' });
     }
-    const proposals = listEvolutionProposals(agentId, status as EvolutionProposalStatus | undefined);
-    if (!proposals) return reply.status(404).send({ error: 'Agent not found' });
-    return reply.send({ agentId, proposals, total: proposals.length });
+    try {
+      const proposals = listEvolutionProposals(agentId, status as EvolutionProposalStatus | undefined);
+      if (!proposals) return reply.status(404).send({ error: 'Agent not found' });
+      return reply.send({ agentId, proposals, total: proposals.length });
+    } catch (error: unknown) {
+      return sendInternalError(reply, '[Evolution API] GET /api/evolution/:agentId/proposals', error);
+    }
   });
 
   /** GET /api/evolution/:agentId/proposals/:proposalId   admin (read) */
   fastify.get('/api/evolution/:agentId/proposals/:proposalId', async (request, reply) => {
     const { agentId, proposalId } = request.params as { agentId: string; proposalId: string };
     if (!AGENT_ID.test(agentId) || !PROPOSAL_ID.test(proposalId)) return reply.status(404).send({ error: 'Proposal not found', code: 'not_found' });
-    const proposal = getEvolutionProposal(agentId, proposalId);
-    if (!proposal) return reply.status(404).send({ error: 'Proposal not found', code: 'not_found' });
-    return reply.send({ proposal });
+    try {
+      const proposal = getEvolutionProposal(agentId, proposalId);
+      if (!proposal) return reply.status(404).send({ error: 'Proposal not found', code: 'not_found' });
+      return reply.send({ proposal });
+    } catch (error: unknown) {
+      return sendInternalError(reply, '[Evolution API] GET /api/evolution/:agentId/proposals/:proposalId', error);
+    }
   });
 
   /**
@@ -268,7 +276,7 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
     try {
       const out = approveEvolutionProposal(agentId, proposalId, owner, bodyOf(request).expectedReviewHash);
       return reply.send(out);
-    } catch (err) { return sendProposalError(reply, err); }
+    } catch (err) { return sendProposalError(reply, err, '[Evolution API] POST /api/evolution/:agentId/proposals/:proposalId/approve'); }
   });
 
   /** POST .../proposals/:proposalId/reject   owner   body { expectedReviewHash, note? ≤500 } -> 200 { proposal } */
@@ -279,7 +287,7 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
     const body = bodyOf(request);
     try {
       return reply.send({ proposal: rejectEvolutionProposal(agentId, proposalId, owner, body.expectedReviewHash, body.note) });
-    } catch (err) { return sendProposalError(reply, err); }
+    } catch (err) { return sendProposalError(reply, err, '[Evolution API] POST /api/evolution/:agentId/proposals/:proposalId/reject'); }
   });
 
   /** POST .../proposals/:proposalId/cancel   owner   body { expectedReviewHash } -> 200 { proposal } */
@@ -289,7 +297,7 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
     const { agentId, proposalId } = request.params as { agentId: string; proposalId: string };
     try {
       return reply.send({ proposal: cancelEvolutionProposal(agentId, proposalId, owner, bodyOf(request).expectedReviewHash) });
-    } catch (err) { return sendProposalError(reply, err); }
+    } catch (err) { return sendProposalError(reply, err, '[Evolution API] POST /api/evolution/:agentId/proposals/:proposalId/cancel'); }
   });
 
   /**
@@ -311,9 +319,8 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
       const insights = await getAgentInsights(agentId, filters);
 
       return reply.send({ agentId, insights, total: insights.length });
-    } catch (error: any) {
-      console.error('[Evolution API] Error getting insights:', error);
-      return reply.status(500).send({ error: error.message });
+    } catch (error: unknown) {
+      return sendInternalError(reply, '[Evolution API] GET /api/evolution/:agentId/insights', error);
     }
   });
 
@@ -358,7 +365,7 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
         try {
           await updateEvolutionSchedule(agentId, updatedConfig.enabled, updatedConfig.evolution_frequency);
         } catch (schedError) {
-          console.error('[Evolution API] Failed to sync scheduler:', schedError);
+          console.error('[Evolution API] Failed to sync scheduler', safeErrorFields(schedError));
         }
       }
 
@@ -367,9 +374,8 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
         agentId,
         config: { ...updatedConfig, allowed_evolutions: JSON.parse(updatedConfig.allowed_evolutions) },
       });
-    } catch (error: any) {
-      console.error('[Evolution API] Error updating config:', error);
-      return reply.status(500).send({ error: error.message });
+    } catch (error: unknown) {
+      return sendInternalError(reply, '[Evolution API] PUT /api/evolution/:agentId/config', error);
     }
   });
 
@@ -392,9 +398,8 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
       const result = await measureEvolutionImpact(evolutionId);
 
       return reply.send({ success: true, ...result });
-    } catch (error: any) {
-      console.error('[Evolution API] Error measuring impact:', error);
-      return reply.status(500).send({ error: error.message });
+    } catch (error: unknown) {
+      return sendInternalError(reply, '[Evolution API] POST /api/evolution/:agentId/measure/:evolutionId', error);
     }
   });
 }
