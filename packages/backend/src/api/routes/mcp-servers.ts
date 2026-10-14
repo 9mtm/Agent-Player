@@ -106,9 +106,9 @@ export async function mcpServersRoutes(fastify: FastifyInstance) {
     const { id } = request.params;
     if (badId(id, reply)) return reply;
     try {
-      const { server, disabled } = await updateServer(id, request.body || {}, ownerId);
-      audit(request, ownerId, 'mcp_server.update', true, id, { ...summary(server), disabledByChange: disabled });
-      return { ...server, disabledByChange: disabled };
+      const { server, disabled, revokedGrants } = await updateServer(id, request.body || {}, ownerId);
+      audit(request, ownerId, 'mcp_server.update', true, id, { ...summary(server), disabledByChange: disabled, revokedGrants: revokedGrants.length });
+      return { ...server, disabledByChange: disabled, revokedGrants };
     } catch (err) {
       return fail(request, reply, ownerId, 'mcp_server.update', id, err);
     }
@@ -120,9 +120,9 @@ export async function mcpServersRoutes(fastify: FastifyInstance) {
     const { id } = request.params;
     if (badId(id, reply)) return reply;
     try {
-      const row = await deleteServer(id);
-      audit(request, ownerId, 'mcp_server.delete', true, id, { name: row.name, transport: row.transport });
-      return { deleted: true, id };
+      const row = await deleteServer(id, ownerId);
+      audit(request, ownerId, 'mcp_server.delete', true, id, { name: row.name, transport: row.transport, revokedGrants: row.revokedGrants.length });
+      return { deleted: true, id, revokedGrants: row.revokedGrants };
     } catch (err) {
       return fail(request, reply, ownerId, 'mcp_server.delete', id, err);
     }
@@ -164,9 +164,9 @@ export async function mcpServersRoutes(fastify: FastifyInstance) {
     const { id } = request.params;
     if (badId(id, reply)) return reply;
     try {
-      const result = await refreshServer(id);
+      const result = await refreshServer(id, ownerId);
       audit(request, ownerId, 'mcp_server.refresh', true, id, {
-        name: result.server.name, discovered: result.discovered, skipped: result.skipped.map((s) => s.tool), truncated: result.truncated,
+        name: result.server.name, discovered: result.discovered, skipped: result.skipped.map((s) => s.tool), truncated: result.truncated, revokedGrants: result.revokedGrants.length,
       });
       return result;
     } catch (err) {

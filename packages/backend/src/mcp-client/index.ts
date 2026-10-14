@@ -10,3 +10,4 @@ export * from './store.js';
 export * from './connection.js';
 export * from './tools.js';
 export * from './service.js';
+export * from './grant-binding.js';

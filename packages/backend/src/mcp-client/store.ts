@@ -34,6 +34,8 @@ export interface McpServerRow {
   last_error: string | null;
   last_discovered_at: string | null;
   created_by: string | null;
+  /** Random id per server instance; renewed when the launch spec / URL changes (grant binding). */
+  generation: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -47,6 +49,8 @@ export interface McpToolRow {
   input_schema: string;
   annotations: string | null;
   requires_approval: number | null;
+  /** Grant binding fingerprint (server id + generation + name + schema + annotations). */
+  fingerprint: string | null;
   discovered_at: string;
 }
 

@@ -18,6 +18,31 @@ import {
   writeSecrets, type McpServerRow, type McpServerView,
 } from './store.js';
 import { invalidateMcpTools } from './tools.js';
+import { grantedNamesWithPrefix, revokeMcpGrants, toolFingerprint, type RevokedGrant } from './grant-binding.js';
+import { logAudit } from '../services/audit-logger.js';
+import { MCP_TOOL_PREFIX } from './config.js';
+
+/**
+ * Remove MCP grants that no longer match a server's tools and audit it
+ * (stale-authorization guard: a re-created server, a changed target or a
+ * changed/vanished tool never inherits an old grant).
+ */
+function revokeAndAudit(server: { id: string; name: string }, toolNames: string[], reason: string, actor: string | null): RevokedGrant[] {
+  const revoked = revokeMcpGrants(toolNames);
+  if (revoked.length) {
+    logAudit({
+      event_type: 'authz.permission.change', event_category: 'authorization', severity: 'warning',
+      user_id: actor ?? undefined, resource_type: 'mcp_server', resource_id: server.id,
+      action: 'agent_tool_grants.revoke_mcp', success: true,
+      metadata: { server: server.name, reason, revoked },
+    });
+  }
+  return revoked;
+}
+
+function serverPrefix(name: string): string {
+  return `${MCP_TOOL_PREFIX}${name}__`;
+}
 
 export class McpPolicyError extends Error {
   constructor(message: string, readonly status: number, readonly code: string, readonly extra: Record<string, unknown> = {}) { super(message); }
@@ -90,10 +115,12 @@ export async function createServer(input: ServerInput, ownerId: string): Promise
   const hash = transport === 'stdio' ? launchHash({ command: command!, args, envNames: secrets.envNames }) : null;
   getDatabase().prepare(`
     INSERT INTO mcp_servers (id, name, description, transport, command, args, url, allow_remote, env_names, header_names,
-      secret_credential_id, enabled, launch_hash, timeout_ms, max_result_bytes, status, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'disabled', ?)
+      secret_credential_id, enabled, launch_hash, timeout_ms, max_result_bytes, status, created_by, generation)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'disabled', ?, ?)
   `).run(id, name, description, transport, command, transport === 'stdio' ? JSON.stringify(args) : null, url, allowRemote ? 1 : 0,
-    JSON.stringify(secrets.envNames), JSON.stringify(secrets.headerNames), secrets.credentialId, hash, timeoutMs, maxResultBytes, ownerId);
+    JSON.stringify(secrets.envNames), JSON.stringify(secrets.headerNames), secrets.credentialId, hash, timeoutMs, maxResultBytes, ownerId, randomUUID());
+  // A former server with the same name never passes its grants on.
+  revokeAndAudit({ id, name }, grantedNamesWithPrefix(serverPrefix(name)), 'server_added', ownerId);
   return serverView(getServerRow(id)!);
 }
 
@@ -102,7 +129,7 @@ export async function createServer(input: ServerInput, ownerId: string): Promise
  * env names) or where an http/sse server connects (url, allowRemote)
  * disables it; it must be enabled (and for stdio approved) again.
  */
-export async function updateServer(id: string, input: ServerInput, ownerId: string): Promise<{ server: McpServerView; disabled: boolean }> {
+export async function updateServer(id: string, input: ServerInput, ownerId: string): Promise<{ server: McpServerView; disabled: boolean; revokedGrants: RevokedGrant[] }> {
   const row = getServerRow(id);
   if (!row) throw new McpPolicyError('MCP server not found', 404, 'not_found');
   if (input.name !== undefined && input.name !== row.name) throw new McpConfigError('the name cannot be changed (it is part of the tool names)');
@@ -142,9 +169,18 @@ export async function updateServer(id: string, input: ServerInput, ownerId: stri
   `).run(description, command, row.transport === 'stdio' ? JSON.stringify(args) : null, url, allowRemote ? 1 : 0,
     JSON.stringify(secrets.envNames), JSON.stringify(secrets.headerNames), secrets.credentialId, hash, timeoutMs, maxResultBytes,
     disable ? 1 : 0, disable ? 1 : 0, id);
+  let revokedGrants: RevokedGrant[] = [];
+  if (targetChanged) {
+    // New target = new server generation: its tools must be discovered again
+    // and granted again.
+    const db = getDatabase();
+    db.prepare(`UPDATE mcp_servers SET generation = ?, status = CASE WHEN enabled = 1 THEN 'enabled' ELSE status END WHERE id = ?`).run(randomUUID(), id);
+    db.prepare('DELETE FROM mcp_server_tools WHERE server_id = ?').run(id);
+    revokedGrants = revokeAndAudit(row, grantedNamesWithPrefix(serverPrefix(row.name)), 'target_changed', ownerId);
+  }
   await closeConnection(id);
   invalidateMcpTools();
-  return { server: serverView(getServerRow(id)!), disabled: disable };
+  return { server: serverView(getServerRow(id)!), disabled: disable, revokedGrants };
 }
 
 /**
@@ -177,14 +213,15 @@ export async function disableServer(id: string): Promise<McpServerView> {
   return serverView(getServerRow(id)!);
 }
 
-export async function deleteServer(id: string): Promise<McpServerRow> {
+export async function deleteServer(id: string, actor: string | null = null): Promise<McpServerRow & { revokedGrants: RevokedGrant[] }> {
   const row = getServerRow(id);
   if (!row) throw new McpPolicyError('MCP server not found', 404, 'not_found');
   await closeConnection(id);
+  const revokedGrants = revokeAndAudit(row, grantedNamesWithPrefix(serverPrefix(row.name)), 'server_deleted', actor);
   getDatabase().prepare('DELETE FROM mcp_servers WHERE id = ?').run(id);
   await deleteSecrets(row.secret_credential_id);
   invalidateMcpTools();
-  return row;
+  return { ...row, revokedGrants };
 }
 
 export interface DiscoveryResult {
@@ -192,10 +229,12 @@ export interface DiscoveryResult {
   discovered: number;
   skipped: Array<{ tool: string; reason: string }>;
   truncated: boolean;
+  /** Grants removed because their tool vanished or changed (schema/annotations). */
+  revokedGrants: RevokedGrant[];
 }
 
 /** Connect, tools/list, store the validated tools (replacing the old list). */
-export async function refreshServer(id: string): Promise<DiscoveryResult> {
+export async function refreshServer(id: string, actor: string | null = null): Promise<DiscoveryResult> {
   const row = getServerRow(id);
   if (!row) throw new McpPolicyError('MCP server not found', 404, 'not_found');
   if (row.enabled !== 1) throw new McpPolicyError('enable the MCP server before discovering its tools', 409, 'disabled');
@@ -213,7 +252,8 @@ export async function refreshServer(id: string): Promise<DiscoveryResult> {
     throw new McpPolicyError(`discovery failed: ${err?.message || 'the MCP server could not be reached'}`, 502, `mcp_${code}`);
   }
 
-  const overrides = new Map(listToolRows(id).map((t) => [t.tool_name, t.requires_approval]));
+  const oldTools = listToolRows(id);
+  const overrides = new Map(oldTools.map((t) => [t.tool_name, t.requires_approval]));
   const skipped: DiscoveryResult['skipped'] = [];
   const keep: Array<{ tool: string; registry: string; title: string | null; description: string | null; schema: string; annotations: string | null }> = [];
   const seenRegistry = new Set<string>();
@@ -248,15 +288,21 @@ export async function refreshServer(id: string): Promise<DiscoveryResult> {
       annotations,
     });
   }
+  const fingerprints = new Map(keep.map((k) => [k.registry, toolFingerprint({ serverId: id, generation: row.generation, toolName: k.tool, inputSchema: k.schema, annotations: k.annotations })]));
+  // Grants of tools that vanished or changed are removed (a changed tool needs a fresh grant).
+  const stale = new Set(oldTools.filter((t) => !t.fingerprint || fingerprints.get(t.registry_name) !== t.fingerprint).map((t) => t.registry_name));
+  for (const name of grantedNamesWithPrefix(serverPrefix(row.name))) if (!fingerprints.has(name)) stale.add(name);
+  let revokedGrants: RevokedGrant[] = [];
   db.transaction(() => {
+    revokedGrants = revokeAndAudit(row, [...stale], 'tools_changed_on_refresh', actor);
     db.prepare('DELETE FROM mcp_server_tools WHERE server_id = ?').run(id);
-    const ins = db.prepare(`INSERT INTO mcp_server_tools (server_id, tool_name, registry_name, title, description, input_schema, annotations, requires_approval)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-    for (const k of keep) ins.run(id, k.tool, k.registry, k.title, k.description, k.schema, k.annotations, overrides.get(k.tool) ?? null);
+    const ins = db.prepare(`INSERT INTO mcp_server_tools (server_id, tool_name, registry_name, title, description, input_schema, annotations, requires_approval, fingerprint)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const k of keep) ins.run(id, k.tool, k.registry, k.title, k.description, k.schema, k.annotations, overrides.get(k.tool) ?? null, fingerprints.get(k.registry));
     db.prepare(`UPDATE mcp_servers SET status = 'ready', last_error = NULL, last_discovered_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(id);
   });
   invalidateMcpTools();
-  return { server: serverView(getServerRow(id)!), discovered: keep.length, skipped, truncated: listed.truncated };
+  return { server: serverView(getServerRow(id)!), discovered: keep.length, skipped, truncated: listed.truncated, revokedGrants };
 }
 
 /** Owner setting for one tool: requiresApproval true / false / null (= derived from the server's hints). */

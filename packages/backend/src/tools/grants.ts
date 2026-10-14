@@ -23,6 +23,8 @@
  *  - MCP tools (M1, mcp__<server>__<tool>) are never granted by default:
  *    not in the default set, not seeded for legacy agents, and never for
  *    the small agent. The grants API accepts `mcp:<server>:<tool>` too.
+ *    Each MCP grant is bound to the tool's current fingerprint
+ *    (mcp-client/grant-binding.ts); a stale binding is not a grant.
  *  - A grant may carry scopes, e.g. {"destinations": ["123"]} for a send tool:
  *    the call's destination must be in the list.
  */
@@ -31,6 +33,7 @@ import { getDatabase } from '../db/index.js';
 import type { Tool, ToolResult } from './types.js';
 import { isToolExecClass } from './exec-policy.js';
 import { isMcpToolName, NO_MCP_AGENTS, normalizeToolNameInput } from '../mcp-client/config.js';
+import { currentMcpTool, isMcpGrantBound, writeMcpBindings } from '../mcp-client/grant-binding.js';
 
 export interface GrantScopes {
   /** Allowed destinations for a send/call tool (chat ids, channels, numbers). */
@@ -184,6 +187,9 @@ function readGrantRows(agentId: string): Map<string, GrantScopes | null> {
     } catch {
       continue; // unreadable scopes: fail closed (tool not granted)
     }
+    // M1: an MCP grant only counts while bound to the tool's current server
+    // instance + fingerprint (a re-created server or changed tool needs a fresh grant).
+    if (isMcpToolName(row.tool_name) && !isMcpGrantBound(agentId, row.tool_name)) continue;
     tools.set(row.tool_name, scopes);
   }
   return tools;
@@ -310,6 +316,7 @@ export function setAgentGrants(
     const tool = typeof rawTool === 'string' ? normalizeToolNameInput(rawTool) : rawTool;
     if (typeof tool !== 'string' || !TOOL_NAME_PATTERN.test(tool)) throw new GrantValidationError('invalid tool name');
     if (isMcpToolName(tool) && NO_MCP_AGENTS.has(agentId)) throw new GrantValidationError(`"${tool}": this agent may never use MCP tools`);
+    if (isMcpToolName(tool) && !currentMcpTool(tool)) throw new GrantValidationError(`"${tool}" is not a discovered MCP tool; refresh its server first`);
     if (seenNames.has(tool)) throw new GrantValidationError(`duplicate tool "${tool}"`);
     seenNames.add(tool);
     let scopes: GrantScopes | null;
@@ -358,6 +365,7 @@ export function setAgentGrants(
       .run(parentAgentId, by, agentId, ...(expected !== null ? [expected] : []));
     if (r.changes === 0) throw new GrantConflictError(readProfile(agentId)?.version ?? 1);
     writeGrantRows(agentId, entries, by);
+    writeMcpBindings(agentId, entries.map((e) => e.tool).filter(isMcpToolName), by);
   })();
   return { before, after: entries.map((e) => e.tool).sort(), parentAgentId, version: readProfile(agentId)?.version ?? 1 };
 }

@@ -47,7 +47,7 @@ const mcp = await import(join(backendDir, 'src/mcp-client/index.ts'));
 const approvals = await import(join(backendDir, 'src/tools/approvals.ts'));
 const { createChannelToolPolicy } = await import(join(backendDir, 'src/tools/channel-policy.ts'));
 const { generateToken } = await import(join(backendDir, 'src/auth/jwt.ts'));
-const { createFixtureServer } = await import(join(backendDir, 'test/fixtures/mcp-fixture-server.mjs'));
+const { createFixtureServer, FIXTURE_TOOLS } = await import(join(backendDir, 'test/fixtures/mcp-fixture-server.mjs'));
 const { WebStandardStreamableHTTPServerTransport } = await import('@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js');
 const { default: Fastify } = await import('fastify');
 
@@ -202,6 +202,9 @@ test('MCP tools are never granted by default (new, default and legacy agents)', 
 });
 
 test('grant per agent (qualified or registry name); call returns labelled untrusted output; audited without values', async () => {
+  const undiscovered = await call('PUT', '/api/agents/m-agent/tool-grants', { grants: ['mcp__fixture__nope'] });
+  assert.equal(undiscovered.statusCode, 400, undiscovered.body);
+  assert.match(undiscovered.json().error, /not a discovered MCP tool/);
   const view = await grant('m-agent', ['memory_search', 'mcp:fixture:echo', 'mcp__fixture__write_note', 'mcp__fixture__slow', 'mcp__fixture__big',
     'mcp__fixture__env_probe', 'mcp__fixture__inject', 'mcp__fixture__fail', 'mcp__fixture__tool_error']);
   assert.ok(view.grants.some((g) => g.tool === 'mcp__fixture__echo'));
@@ -223,6 +226,19 @@ test('grant per agent (qualified or registry name); call returns labelled untrus
   assert.deepEqual(meta.argumentNames, ['text']);
   assert.equal(meta.agentId, 'm-agent');
   assert.ok(!JSON.stringify(db.prepare('SELECT * FROM audit_logs').all()).includes(secretArg), 'no argument values in the audit log');
+});
+
+test('a grant only counts while bound to the tool fingerprint it was given for', async () => {
+  const fp = db.prepare(`SELECT fingerprint FROM mcp_server_tools WHERE registry_name = 'mcp__fixture__echo'`).get().fingerprint;
+  assert.match(fp, /^[0-9a-f]{64}$/);
+  db.prepare(`UPDATE mcp_server_tools SET fingerprint = ? WHERE registry_name = 'mcp__fixture__echo'`).run('0'.repeat(64));
+  try {
+    assert.ok(!mcpNames(registry({ agentId: 'm-agent' })).includes('mcp__fixture__echo'));
+    assert.match((await registry({ agentId: 'm-agent' }).execute('mcp__fixture__echo', { text: 'x' })).error, /grants/);
+  } finally {
+    db.prepare(`UPDATE mcp_server_tools SET fingerprint = ? WHERE registry_name = 'mcp__fixture__echo'`).run(fp);
+  }
+  assert.ok(mcpNames(registry({ agentId: 'm-agent' })).includes('mcp__fixture__echo'));
 });
 
 test('arguments are validated against the schema before the call', async () => {
@@ -335,11 +351,18 @@ test('a launch change disables the server and needs a new approval; disabled exp
   assert.equal(upd.json().disabledByChange, true);
   assert.equal(upd.json().enabled, false);
   assert.equal(upd.json().launchApproved, false);
+  // New target = new generation: tools must be rediscovered and grants given again.
+  assert.ok(upd.json().revokedGrants.some((g) => g.agentId === 'm-agent' && g.tool === 'mcp__fixture__echo'));
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM agent_tool_grants WHERE tool_name LIKE 'mcp%'`).get().n, 0);
+  assert.deepEqual(upd.json().tools, []);
   assert.ok(!mcp.getMcpTools().some((t) => t.mcp.serverName === 'fixture'));
   const again = await call('POST', `/api/mcp/servers/${stdio.id}/enable`, {});
   assert.equal(again.statusCode, 409);
   assert.equal((await call('POST', `/api/mcp/servers/${stdio.id}/enable`, { launchHash: again.json().launchHash })).statusCode, 200);
+  assert.equal((await call('POST', `/api/mcp/servers/${stdio.id}/refresh`)).statusCode, 200);
   assert.ok(mcp.getMcpTools().some((t) => t.mcp.serverName === 'fixture'));
+  assert.deepEqual(mcpNames(registry({ agentId: 'm-agent' })), [], 'old grants do not come back');
+  assert.ok(audits('agent_tool_grants.revoke_mcp').some((r) => JSON.parse(r.metadata).reason === 'target_changed'));
   const off = await call('POST', `/api/mcp/servers/${stdio.id}/disable`);
   assert.equal(off.statusCode, 200);
   assert.ok(!mcp.getMcpTools().some((t) => t.mcp.serverName === 'fixture'));
@@ -414,6 +437,28 @@ test('http transport: discovery, grant, call, headers sent, errors mapped, chann
       delete process.env.CHANNEL_AGENT_TOOLS_TELEGRAM;
     }
 
+    // Refresh: a changed schema or a vanished tool drops its grants (audited).
+    const echoDef = FIXTURE_TOOLS.find((t) => t.name === 'echo');
+    const savedSchema = echoDef.inputSchema;
+    const failIdx = FIXTURE_TOOLS.findIndex((t) => t.name === 'fail');
+    const [failDef] = FIXTURE_TOOLS.splice(failIdx, 1);
+    echoDef.inputSchema = { type: 'object', properties: { text: { type: 'string', maxLength: 10 } }, required: ['text'] };
+    try {
+      const changed = await call('POST', `/api/mcp/servers/${id}/refresh`);
+      assert.equal(changed.statusCode, 200, changed.body);
+      assert.deepEqual(changed.json().revokedGrants.map((g) => g.tool).sort(), ['mcp__local__echo', 'mcp__local__fail']);
+      assert.deepEqual(mcpNames(registry({ agentId: 'm-other' })), []);
+      assert.ok(audits('agent_tool_grants.revoke_mcp').some((r) => JSON.parse(r.metadata).reason === 'tools_changed_on_refresh'));
+    } finally {
+      echoDef.inputSchema = savedSchema;
+      FIXTURE_TOOLS.splice(failIdx, 0, failDef);
+    }
+    assert.equal((await call('POST', `/api/mcp/servers/${id}/refresh`)).statusCode, 200);
+    await grant('m-other', ['mcp__local__echo']);
+    const unchanged = await call('POST', `/api/mcp/servers/${id}/refresh`);
+    assert.deepEqual(unchanged.json().revokedGrants, [], 'an unchanged tool keeps its grant');
+    assert.deepEqual(mcpNames(registry({ agentId: 'm-other' })), ['mcp__local__echo']);
+
     // Unreachable server: clean error.
     mcp.__setMcpFetchForTests(async () => { const e = new Error('connect ECONNREFUSED 127.0.0.1:65535 /secret'); e.code = 'ECONNREFUSED'; throw e; });
     await mcp.closeAllConnections();
@@ -424,8 +469,36 @@ test('http transport: discovery, grant, call, headers sent, errors mapped, chann
 
     const del = await call('DELETE', `/api/mcp/servers/${id}`);
     assert.equal(del.statusCode, 200);
+    assert.deepEqual(del.json().revokedGrants, [{ agentId: 'm-other', tool: 'mcp__local__echo' }]);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mcp_server_tools WHERE server_id = ?').get(id).n, 0);
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM agent_tool_grants WHERE tool_name LIKE 'mcp%'`).get().n, 0);
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM mcp_grant_bindings`).get().n, 0);
     assert.ok(!mcp.getMcpTools().some((t) => t.mcp.serverName === 'local'));
+    assert.ok(audits('agent_tool_grants.revoke_mcp').some((r) => JSON.parse(r.metadata).reason === 'server_deleted'));
+
+    // A new server with the same name never inherits grants, even a leftover row.
+    mcp.__setMcpFetchForTests(async (url, init) => {
+      const req = new Request(new URL(String(url)), init);
+      if (req.method === 'GET') return new Response(null, { status: 405 });
+      return transport2.handleRequest(req);
+    });
+    const server2 = createFixtureServer();
+    const transport2 = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID(), enableJsonResponse: true });
+    await server2.connect(transport2);
+    try {
+      const re = await call('POST', '/api/mcp/servers', { name: 'local', transport: 'http', url: 'http://127.0.0.1:65535/mcp' });
+      assert.equal(re.statusCode, 201, re.body);
+      assert.notEqual(re.json().id, id);
+      assert.equal((await call('POST', `/api/mcp/servers/${re.json().id}/enable`, {})).statusCode, 200);
+      assert.equal((await call('POST', `/api/mcp/servers/${re.json().id}/refresh`)).statusCode, 200);
+      db.prepare(`INSERT INTO agent_tool_grants (agent_id, tool_name, granted_by) VALUES ('m-other', 'mcp__local__echo', 'forged')`).run();
+      db.prepare(`INSERT INTO mcp_grant_bindings (agent_id, tool_name, server_id, fingerprint) VALUES ('m-other', 'mcp__local__echo', ?, 'stale')`).run(id);
+      assert.deepEqual(mcpNames(registry({ agentId: 'm-other' })), [], 'old server instance binding is not a grant');
+      assert.match((await registry({ agentId: 'm-other' }).execute('mcp__local__echo', { text: 'x' })).error, /grants/);
+      await call('DELETE', `/api/mcp/servers/${re.json().id}`);
+    } finally {
+      await transport2.close();
+    }
   } finally {
     mcp.__setMcpFetchForTests(null);
     await transport.close();
@@ -433,7 +506,7 @@ test('http transport: discovery, grant, call, headers sent, errors mapped, chann
 });
 
 test('audit entries for add / enable / disable / refresh / update / delete / grant / call', () => {
-  for (const action of ['mcp_server.add', 'mcp_server.enable', 'mcp_server.disable', 'mcp_server.refresh', 'mcp_server.update', 'mcp_server.delete', 'mcp_tool.approval_setting', 'agent_tool_grants.update', 'mcp.tool.call']) {
+  for (const action of ['mcp_server.add', 'mcp_server.enable', 'mcp_server.disable', 'mcp_server.refresh', 'mcp_server.update', 'mcp_server.delete', 'mcp_tool.approval_setting', 'agent_tool_grants.update', 'agent_tool_grants.revoke_mcp', 'mcp.tool.call']) {
     assert.ok(audits(action).some((r) => r.success === 1), action);
   }
   const all = JSON.stringify(db.prepare('SELECT * FROM audit_logs').all());
