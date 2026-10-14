@@ -20,6 +20,7 @@ import { config } from '../config/index.js';
 import { dataRoot, mainDatabasePath } from '../config/data-root.js';
 import { dbDriver } from '../db/pg/config.js';
 import { ISOLATED_ENV } from '../config/isolation.js';
+import { assertSafeIsolatedTree } from '../config/isolated-tree.js';
 import { flushAuditWritesWithin, SHUTDOWN_AUDIT_FLUSH_MS } from '../services/audit-logger.js';
 
 const PORT = config.port;
@@ -60,6 +61,9 @@ async function start() {
     console.log('[Server] 🚀 Initializing backend systems...\n');
 
     const summary = await initializeBackend(fastify);
+
+    // RUN-ISO ISO-1: re-check the data tree after every store was opened.
+    if (process.env[ISOLATED_ENV] === '1') assertSafeIsolatedTree(path.resolve(dataRoot()));
 
     await fastify.listen({ port: PORT, host: HOST });
 
