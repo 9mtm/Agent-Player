@@ -152,6 +152,15 @@ test('protected trees are refused even inside an allowed root (CLI config dir, c
     const res = await spawn({ task: 'SCENARIO:plain', tools: ['read'], read_dir });
     assert.equal(res.statusCode, 400, `${read_dir}: ${res.body}`);
   }
+  // Case variants of a protected folder on a case-insensitive volume (macOS/Windows).
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    const variant = join(dirname(cfgDir), cfgDir.split('/').pop().toUpperCase());
+    const res = await spawn({ task: 'SCENARIO:plain', tools: ['read'], read_dir: variant });
+    assert.equal(res.statusCode, 400, `case variant ${variant}: ${res.body}`);
+    const sb = await import(join(backendDir, 'src/tools/core/file-sandbox.ts'));
+    assert.equal(sb.realPath(variant), cfgDir, 'realPath returns the on-disk case');
+    assert.equal(sb.isInsideIgnoringCase('/Users/x/.ssh', '/Users/x/.SSH/id'), true);
+  }
   const trees = small.smallAgentProtectedTrees();
   for (const d of ['.config', '.aws', '.kube', '.docker', '.gnupg', '.ssh', 'Library', '.codex', '.claude']) {
     assert.ok(trees.includes(join(dir, d)), `~/${d} protected`);

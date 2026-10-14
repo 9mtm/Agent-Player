@@ -124,7 +124,7 @@ test('the always-deny list holds inside the workspace and with a wider read root
   }
   // Even when trusted code widens the read root to the whole folder,
   // .env, the DB and the encryption keys stay unreadable.
-  for (const p of ['.env', '.data/agent-player.db', '.data/encryption/master.key']) {
+  for (const p of ['.env', '.data/agent-player.db', '.data/encryption/master.key', '.ENV', '.DATA/Encryption/master.key', '.Data/AGENT-PLAYER.DB']) {
     const r = await read('d1', p, { fileReadRoot: dir });
     assert.ok(r.error, `read ${p} must be denied`);
     assert.match(r.content[0].text, /denied/i);

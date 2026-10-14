@@ -55,7 +55,7 @@ import {
   type DrawerRef,
 } from '../memory/drawers.js';
 import { redactSecrets } from './secret-redact.js';
-import { denyReason, isInside } from '../tools/core/file-sandbox.js';
+import { canonicalPath, denyReason, isInside, isInsideIgnoringCase, realPath } from '../tools/core/file-sandbox.js';
 import { cliConfigDir } from './instance-identity.js';
 import { createRun, getRun, getSteps, elapsedMs, type TaskRunRow, type TaskRunStatus } from './task-runs.js';
 
@@ -232,9 +232,8 @@ export function resolveSmallAgentDrawers(requested: unknown): { drawers: DrawerR
 // Read directory (MCP-01b)
 // ---------------------------------------------------------------------------
 
-function realOrResolved(p: string): string {
-  try { return fs.realpathSync(p); } catch { return path.resolve(p); }
-}
+/** One implementation with the file-tool sandbox: on-disk case (realpath.native). */
+const realOrResolved = canonicalPath;
 
 /** Credential / config folders under the home directory that a read_dir may never overlap. */
 const HOME_CREDENTIAL_DIRS = ['.config', '.aws', '.kube', '.docker', '.gnupg', '.ssh', 'Library', '.codex', '.npmrc', '.netrc', '.git-credentials', '.azure', '.gcloud'];
@@ -278,13 +277,13 @@ export function validateSmallAgentReadDir(input: unknown): string {
   if (!path.isAbsolute(input)) throw new SmallAgentInputError('read_dir must be an absolute directory path');
   let real: string;
   try {
-    real = fs.realpathSync(input);
+    real = realPath(input);
     if (!fs.statSync(real).isDirectory()) throw new Error('not a directory');
   } catch {
     throw new SmallAgentInputError('read_dir must be an existing directory');
   }
   if (real === path.parse(real).root) throw new SmallAgentInputError('read_dir cannot be the filesystem root');
-  if (real === realOrResolved(os.homedir())) throw new SmallAgentInputError('read_dir cannot be the whole home directory; name a project folder');
+  if (isInsideIgnoringCase(real, realOrResolved(os.homedir())) && isInsideIgnoringCase(realOrResolved(os.homedir()), real)) throw new SmallAgentInputError('read_dir cannot be the whole home directory; name a project folder');
   const allowed = configuredReadRoots();
   if (!allowed.length) {
     throw new SmallAgentInputError('read_dir is off: the owner has not set SMALL_AGENT_READ_ROOTS (allowed folders) in the backend environment');
@@ -293,7 +292,7 @@ export function validateSmallAgentReadDir(input: unknown): string {
     throw new SmallAgentInputError('read_dir is outside the directories allowed by SMALL_AGENT_READ_ROOTS');
   }
   for (const t of smallAgentProtectedTrees()) {
-    if (isInside(t, real) || isInside(real, t)) throw new SmallAgentInputError('read_dir cannot be or contain the Agent Player backend, data, config or credential folders');
+    if (isInsideIgnoringCase(t, real) || isInsideIgnoringCase(real, t)) throw new SmallAgentInputError('read_dir cannot be or contain the Agent Player backend, data, config or credential folders');
   }
   if (denyReason('', real)) throw new SmallAgentInputError('read_dir points to a protected location');
   return real;

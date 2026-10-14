@@ -64,7 +64,7 @@ export function ensureAgentWorkspace(agentId: string | undefined | null): string
   const st = fs.lstatSync(dir);
   if (st.isSymbolicLink() || !st.isDirectory()) throw new FileSandboxError('agent workspace is not a directory', 'invalid_path');
   try { fs.chmodSync(dir, 0o700); } catch { /* best effort (e.g. Windows) */ }
-  return fs.realpathSync(dir);
+  return realPath(dir);
 }
 
 // eslint-disable-next-line no-control-regex
@@ -77,11 +77,46 @@ function validatePathInput(p: unknown): string {
   return p;
 }
 
-/** Separator-aware containment: true when `target` is `root` or inside it. */
-export function isInside(root: string, target: string): boolean {
+/** True on file systems that are case-insensitive by default (macOS APFS/HFS+, Windows NTFS). */
+export const CASE_INSENSITIVE_FS = process.platform === 'darwin' || process.platform === 'win32';
+
+/**
+ * Real path with the on-disk letter case (`fs.realpathSync.native`; the JS
+ * `fs.realpathSync` keeps the caller's case on case-insensitive volumes, so
+ * `~/.SSH` would not match `~/.ssh`). Throws when the path does not exist.
+ */
+export function realPath(p: string): string {
+  return fs.realpathSync.native(path.resolve(p));
+}
+
+/** realPath, or the resolved path when it does not exist. */
+export function canonicalPath(p: string): string {
+  try { return realPath(p); } catch { return path.resolve(p); }
+}
+
+function relInside(root: string, target: string): boolean {
   const rel = path.relative(root, target);
   if (rel === '') return true;
   return !rel.startsWith('..') && !path.isAbsolute(rel) && rel.split(path.sep)[0] !== '..';
+}
+
+/**
+ * Separator-aware containment: true when `target` is `root` or inside it.
+ * Exact comparison: use it on canonical paths (realPath) for "allowed"
+ * decisions, so two different folders on a case-sensitive volume never merge.
+ */
+export function isInside(root: string, target: string): boolean {
+  return relInside(root, target);
+}
+
+/**
+ * Like isInside, but case-insensitive on darwin/win32. Use it for "denied"
+ * decisions (protected trees), so a different spelling of a protected folder
+ * (e.g. `~/.SSH`, `.DATA`) is still caught.
+ */
+export function isInsideIgnoringCase(root: string, target: string): boolean {
+  if (!CASE_INSENSITIVE_FS) return relInside(root, target);
+  return relInside(root.toLowerCase(), target.toLowerCase());
 }
 
 const SSH_KEY_NAME = /^id_(rsa|dsa|ecdsa|ed25519)(_sk)?(\.pub)?$/i;
@@ -131,7 +166,7 @@ export function denyReason(relFromRoot: string, absolute?: string): string | nul
 
 function realRootOf(root: string): string {
   try {
-    return fs.realpathSync(root);
+    return realPath(root);
   } catch {
     throw new FileSandboxError('workspace does not exist', 'not_found');
   }
@@ -153,7 +188,7 @@ export function resolveReadPath(root: string, input: unknown): { real: string; r
   const { target } = lexicalTarget(realRoot, p);
   let real: string;
   try {
-    real = fs.realpathSync(target);
+    real = realPath(target);
   } catch {
     throw new FileSandboxError(`File not found: ${p}`, 'not_found');
   }
@@ -209,13 +244,13 @@ export function sandboxedWriteFile(root: string, input: unknown, content: unknow
     if (!st) {
       fs.mkdirSync(next, { mode: 0o700 });
     } else if (st.isSymbolicLink()) {
-      const real = fs.realpathSync(next);
+      const real = realPath(next);
       if (!isInside(realRoot, real)) throw new FileSandboxError(`Path "${p}" points outside the workspace`, 'outside_workspace');
       if (!fs.statSync(real).isDirectory()) throw new FileSandboxError('A parent path is not a directory', 'not_a_file');
     } else if (!st.isDirectory()) {
       throw new FileSandboxError('A parent path is not a directory', 'not_a_file');
     }
-    current = fs.realpathSync(next);
+    current = realPath(next);
     if (!isInside(realRoot, current)) throw new FileSandboxError(`Path "${p}" points outside the workspace`, 'outside_workspace');
   }
   const finalPath = path.join(current, path.basename(target));
