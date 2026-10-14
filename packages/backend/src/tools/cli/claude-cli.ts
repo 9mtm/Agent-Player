@@ -26,7 +26,7 @@ import {
   minimalChildEnv,
   safeChildCwd,
 } from '../exec-policy.js';
-import { safeErrorFields } from '../../services/safe-error-log.js';
+import { cliFailureText, safeErrorFields } from '../../services/safe-error-log.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -206,9 +206,9 @@ export const claudeCliTool: Tool = {
         details: { model: model || 'default', workdir: cwd },
       };
     } catch (err: any) {
-      const msg = err.killed
-        ? `Claude CLI timed out after ${timeout}ms`
-        : err.stderr || err.message;
+      // SECURITY (FU-02): stderr and the message never reach the client; the
+      // reply names only the exit code or signal (and a timeout note).
+      const msg = cliFailureText('Claude', err, timeout);
 
       // SECURITY (FU-01): stderr and the message can hold the prompt, paths or tokens.
       console.error('[ClaudeCLI] ❌ Error', safeErrorFields(err, startedAt));
@@ -220,7 +220,7 @@ export const claudeCliTool: Tool = {
         : '';
 
       return {
-        content: [{ type: 'text', text: `❌ Claude CLI error: ${msg}${hint}` }],
+        content: [{ type: 'text', text: `❌ ${msg}${hint}` }],
         error: msg,
       };
     }

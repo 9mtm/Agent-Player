@@ -20,7 +20,7 @@ import * as fs from 'node:fs/promises';
 import type { Tool, ToolResult } from '../types.js';
 import { execToolRefusal, isExecToolsEnabled, minimalChildEnv } from '../exec-policy.js';
 import { getEnvProviderApiKey } from '../../credentials/authority.js';
-import { safeErrorFields } from '../../services/safe-error-log.js';
+import { cliFailureText, safeErrorFields } from '../../services/safe-error-log.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -142,9 +142,9 @@ export const geminiCliTool: Tool = {
         details: { model: model || 'default', promptLength: prompt.length },
       };
     } catch (err: any) {
-      const msg = err.killed
-        ? `Gemini CLI timed out after ${timeout}ms`
-        : err.stderr || err.message;
+      // SECURITY (FU-02): stderr and the message never reach the client; the
+      // reply names only the exit code or signal (and a timeout note).
+      const msg = cliFailureText('Gemini', err, timeout);
 
       // SECURITY (FU-01): stderr and the message can hold the prompt, paths or tokens.
       console.error('[GeminiCLI] ❌ Error', safeErrorFields(err, startedAt));
@@ -156,7 +156,7 @@ export const geminiCliTool: Tool = {
         : '';
 
       return {
-        content: [{ type: 'text', text: `❌ Gemini CLI error: ${msg}${hint}` }],
+        content: [{ type: 'text', text: `❌ ${msg}${hint}` }],
         error: msg,
       };
     }

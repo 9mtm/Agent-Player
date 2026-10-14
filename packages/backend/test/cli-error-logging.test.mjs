@@ -1,6 +1,8 @@
 // FU-01: the Gemini CLI and Claude CLI bridge error paths log safe fields only
 // (error name, exit code / status, duration). stderr, the prompt and the error
-// message never reach the server log. Client replies are unchanged.
+// message never reach the server log.
+// FU-02: they never reach the client either. A non-zero exit returns
+// "❌ <Label> CLI failed (exit N)." and a timeout returns a timeout note only.
 // The "CLIs" are throwaway shell scripts in a temp dir (no real binary, no
 // network). Throwaway DB/keys.
 // Run: node --import tsx --test test/cli-error-logging.test.mjs
@@ -58,7 +60,7 @@ db.prepare(`INSERT INTO agents_config (id, name, provider, model) VALUES ('c-cla
 
 const { geminiCliTool } = await import(join(backendDir, 'src/tools/cli/gemini-cli.ts'));
 const { claudeCliTool } = await import(join(backendDir, 'src/tools/cli/claude-cli.ts'));
-const { safeErrorFields } = await import(join(backendDir, 'src/services/safe-error-log.ts'));
+const { safeErrorFields, cliFailureText } = await import(join(backendDir, 'src/services/safe-error-log.ts'));
 const { generateToken } = await import(join(backendDir, 'src/auth/jwt.ts'));
 const { buildServer } = await import(join(backendDir, 'src/api/app.ts'));
 const app = await buildServer({ logger: false });
@@ -120,8 +122,51 @@ for (const [agentId, tag, label] of [['c-gemini', '[GeminiCLI] ❌ Error', 'Gemi
     assert.equal(fields.code, 3, 'exit code logged');
     assert.equal(typeof fields.durationMs, 'number', 'duration logged');
     assertNoLeak(logged);
+    // FU-02: the client gets the exit code only, never stderr or the prompt.
+    const text = frames.map((f) => f.content ?? '').join('');
+    assert.equal(text, `❌ ${label} CLI failed (exit 3).`);
+    assertNoLeak([res.body]);
   });
 }
+
+for (const [tool, label] of [[geminiCliTool, 'Gemini'], [claudeCliTool, 'Claude']]) {
+  test(`${label} CLI bridge: a non-zero exit returns a generic result without stderr`, async () => {
+    logged.length = 0;
+    const result = await muted(() => tool.execute({ prompt: PROMPT_SECRET }));
+    assert.equal(result.content[0].text, `❌ ${label} CLI failed (exit 3).`);
+    assert.equal(result.error, `${label} CLI failed (exit 3).`);
+    assertNoLeak([JSON.stringify(result), ...logged]);
+  });
+}
+
+test('cliFailureText names only the exit code, signal or a timeout', () => {
+  const base = { stderr: STDERR_SECRET, stdout: PROMPT_SECRET, message: STDERR_SECRET, cmd: PROMPT_SECRET };
+  assert.equal(cliFailureText('Gemini', { ...base, code: 3 }), 'Gemini CLI failed (exit 3).');
+  assert.equal(cliFailureText('Claude', { ...base, killed: true, signal: 'SIGTERM' }, 1500), 'Claude CLI timed out after 1500ms (SIGTERM).');
+  assert.equal(cliFailureText('Claude', { ...base, code: null, signal: 'SIGKILL' }), 'Claude CLI failed (SIGKILL).');
+  assert.equal(cliFailureText('Gemini', { ...base, code: 'ENOENT' }), 'Gemini CLI was not found.');
+  assert.equal(cliFailureText('Gemini', { ...base, code: STDERR_SECRET, signal: STDERR_SECRET }), 'Gemini CLI failed.');
+  assert.equal(cliFailureText('Gemini', new Error(STDERR_SECRET)), 'Gemini CLI failed.');
+});
+
+test('a CLI killed by the timeout returns a timeout note only', async () => {
+  const slow = join(dir, 'slow-bin');
+  mkdirSync(slow);
+  const script = `#!/bin/sh\necho "${STDERR_SECRET}" >&2\nsleep 5\n`;
+  for (const p of [join(dir, 'gemini'), join(slow, 'gemini')]) { writeFileSync(p, script); chmodSync(p, 0o755); }
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${slow}:${savedPath}`;
+  logged.length = 0;
+  try {
+    const result = await muted(() => geminiCliTool.execute({ prompt: PROMPT_SECRET, timeout: 300 }));
+    assert.match(result.content[0].text, /^❌ Gemini CLI timed out after 300ms( \(SIG[A-Z]+\))?\.$/);
+    assertNoLeak([JSON.stringify(result), ...logged]);
+  } finally {
+    process.env.PATH = savedPath;
+    const fast = `#!/bin/sh\necho "${STDERR_SECRET}" >&2\necho "$@" >&2\nexit 3\n`;
+    writeFileSync(join(dir, 'gemini'), fast); chmodSync(join(dir, 'gemini'), 0o755);
+  }
+});
 
 for (const [agentId, tool, tag, reply] of [
   ['c-gemini', geminiCliTool, '[Chat] Gemini CLI error', '❌ Gemini CLI request failed'],

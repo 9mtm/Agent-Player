@@ -40,3 +40,24 @@ export function safeErrorFields(err: unknown, startedAt?: number): SafeErrorFiel
   if (typeof startedAt === 'number') out.durationMs = Math.max(0, Date.now() - startedAt);
   return out;
 }
+
+/**
+ * Client-safe text for a failed CLI bridge call (FU-02).
+ *
+ * stderr and the error message can hold the prompt, paths or tokens, so the
+ * reply names only the exit code or signal, plus a timeout note when the
+ * process was killed after `timeoutMs`.
+ */
+export function cliFailureText(label: string, err: unknown, timeoutMs?: number): string {
+  const f = safeErrorFields(err);
+  if (f.killed && typeof timeoutMs === 'number') {
+    return `${label} CLI timed out after ${timeoutMs}ms${f.signal ? ` (${f.signal})` : ''}.`;
+  }
+  if (f.code === 'ENOENT') return `${label} CLI was not found.`;
+  const parts: string[] = [];
+  if (typeof f.code === 'number') parts.push(`exit ${f.code}`);
+  else if (typeof f.code === 'string') parts.push(f.code);
+  if (f.signal) parts.push(f.signal);
+  if (f.killed) parts.push('killed');
+  return `${label} CLI failed${parts.length ? ` (${parts.join(', ')})` : ''}.`;
+}
