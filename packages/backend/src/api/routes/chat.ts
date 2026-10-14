@@ -576,7 +576,8 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       // SECURITY: Don't expose error details in stream (H-09)
       // FU-01: safe fields only; the error can carry stderr, the prompt or paths.
       console.error('[Chat] Gemini CLI error', safeErrorFields(err, startedAt));
-      reply.raw.write(`data: ${JSON.stringify({ content: '❌ Gemini CLI request failed', done: true })}\n\n`);
+      // BUG-02 (CHAT-01): the typed terminal error frame, never text plus done.
+      reply.raw.write(`data: ${JSON.stringify({ type: 'error', error: 'Chat request failed' })}\n\n`);
     }
     reply.raw.end();
     return reply;
@@ -609,7 +610,8 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       // SECURITY: Don't expose error details in stream (H-09)
       // FU-01: safe fields only; the error can carry stderr, the prompt or paths.
       console.error('[Chat] Claude CLI error', safeErrorFields(err, startedAt));
-      reply.raw.write(`data: ${JSON.stringify({ content: '❌ Claude CLI request failed', done: true })}\n\n`);
+      // BUG-02 (CHAT-01): the typed terminal error frame, never text plus done.
+      reply.raw.write(`data: ${JSON.stringify({ type: 'error', error: 'Chat request failed' })}\n\n`);
     }
     reply.raw.end();
     return reply;

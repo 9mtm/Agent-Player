@@ -1,7 +1,8 @@
 // FU-01: the Gemini CLI and Claude CLI bridge error paths log safe fields only
 // (error name, exit code / status, duration). stderr, the prompt and the error
 // message never reach the server log.
-// FU-02: they never reach the client either. A non-zero exit returns
+// FU-02: they never reach the client either (BUG-02: a thrown bridge error
+// sends the typed {type:'error'} frame, never text plus done). A non-zero exit returns
 // "❌ <Label> CLI failed (exit N)." and a timeout returns a timeout note only.
 // FU-03: an exit 0 with empty stdout returns "<Label> CLI returned no output.",
 // never stderr.
@@ -170,11 +171,11 @@ test('a CLI killed by the timeout returns a timeout note only', async () => {
   }
 });
 
-for (const [agentId, tool, tag, reply] of [
-  ['c-gemini', geminiCliTool, '[Chat] Gemini CLI error', '❌ Gemini CLI request failed'],
-  ['c-claude', claudeCliTool, '[Chat] Claude CLI error', '❌ Claude CLI request failed'],
+for (const [agentId, tool, tag] of [
+  ['c-gemini', geminiCliTool, '[Chat] Gemini CLI error'],
+  ['c-claude', claudeCliTool, '[Chat] Claude CLI error'],
 ]) {
-  test(`${tag}: a thrown bridge error logs safe fields; the client reply is unchanged`, async () => {
+  test(`${tag}: a thrown bridge error logs safe fields; the client gets the typed error frame (BUG-02)`, async () => {
     const original = tool.execute;
     tool.execute = async (params) => {
       throw Object.assign(new Error(`spawn failed ${STDERR_SECRET} ${params.prompt}`), { name: 'BridgeError', code: 'EACCES', stderr: STDERR_SECRET });
@@ -184,8 +185,15 @@ for (const [agentId, tool, tag, reply] of [
       const res = await chat(agentId);
       assert.equal(res.statusCode, 200);
       const frames = dataFrames(res.body);
-      assert.equal(frames.at(-1).content, reply, 'the client reply is the same generic text');
-      assert.equal(frames.at(-1).done, true);
+      // BUG-02 (CHAT-01): the terminal frame is {type:'error', error}, with no
+      // text content and no `done` anywhere (the UI must not show "complete").
+      const last = frames.at(-1);
+      assert.equal(last.type, 'error');
+      assert.equal(last.error, 'Chat request failed');
+      assert.equal('content' in last, false);
+      assert.equal('done' in last, false);
+      assert.equal(frames.some((f) => 'done' in f), false, 'no done frame after a bridge error');
+      assertNoLeak([res.body]);
       const errLine = logged.find((l) => l.startsWith(tag));
       assert.ok(errLine, 'the route logged its error line');
       const fields = JSON.parse(errLine.slice(tag.length + 1));
