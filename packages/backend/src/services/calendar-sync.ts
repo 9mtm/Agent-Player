@@ -3,7 +3,9 @@
  * Handles syncing with Google Calendar and importing from iCal/WebCal URLs
  */
 
-import { getDatabase } from '../db/index.js';
+import { nowText } from '../db/pg/dialect.js';
+import { isoUtc } from '../api/timestamps.js';
+import { dialect, one, q, run, sql, type Step } from '../repositories/sql-steps.js';
 import { randomUUID } from 'crypto';
 import https from 'https';
 import http from 'http';
@@ -23,20 +25,18 @@ interface CalendarSource {
  * Sync a calendar source (Google, iCal, WebCal)
  */
 export async function syncCalendarSource(sourceId: string): Promise<void> {
-  const db = getDatabase();
-
   try {
-    const source = db.prepare('SELECT * FROM calendar_sources WHERE id = ?').get(sourceId) as CalendarSource | undefined;
+    const source = await q.one<CalendarSource>('SELECT * FROM calendar_sources WHERE id = ?', sourceId);
     if (!source) {
       throw new Error('Calendar source not found');
     }
 
     // Create sync log entry
     const logId = randomUUID();
-    db.prepare(`
+    await q.run(`
       INSERT INTO calendar_sync_log (id, calendar_source_id, status)
-      VALUES (?, ?, 'running')
-    `).run(logId, sourceId);
+      VALUES (?, ?, 'running')`,
+      logId, sourceId);
 
     let eventsAdded = 0;
     let eventsUpdated = 0;
@@ -57,49 +57,51 @@ export async function syncCalendarSource(sourceId: string): Promise<void> {
         throw new Error(`Unsupported calendar type: ${source.type}`);
       }
 
-      // Update sync log
-      db.prepare(`
-        UPDATE calendar_sync_log
-        SET
-          status = 'success',
-          completed_at = datetime('now'),
-          events_added = ?,
-          events_updated = ?,
-          events_deleted = ?
-        WHERE id = ?
-      `).run(eventsAdded, eventsUpdated, eventsDeleted, logId);
-
-      // Update source
-      db.prepare(`
-        UPDATE calendar_sources
-        SET
-          sync_status = 'success',
-          last_synced_at = datetime('now'),
-          sync_error = NULL,
-          updated_at = datetime('now')
-        WHERE id = ?
-      `).run(sourceId);
+      // Update sync log and source (TEXT timestamps on both drivers)
+      await sql().tx(function* () {
+        const now = nowText(yield* dialect());
+        yield* run(`
+          UPDATE calendar_sync_log
+          SET
+            status = 'success',
+            completed_at = ${now},
+            events_added = ?,
+            events_updated = ?,
+            events_deleted = ?
+          WHERE id = ?`,
+          eventsAdded, eventsUpdated, eventsDeleted, logId);
+        yield* run(`
+          UPDATE calendar_sources
+          SET
+            sync_status = 'success',
+            last_synced_at = ${now},
+            sync_error = NULL,
+            updated_at = ${now}
+          WHERE id = ?`,
+          sourceId);
+      });
 
     } catch (error: any) {
-      // Update sync log with error
-      db.prepare(`
-        UPDATE calendar_sync_log
-        SET
-          status = 'error',
-          completed_at = datetime('now'),
-          error_message = ?
-        WHERE id = ?
-      `).run(error.message, logId);
-
-      // Update source with error
-      db.prepare(`
-        UPDATE calendar_sources
-        SET
-          sync_status = 'error',
-          sync_error = ?,
-          updated_at = datetime('now')
-        WHERE id = ?
-      `).run(error.message, sourceId);
+      // Update sync log and source with the error
+      await sql().tx(function* () {
+        const now = nowText(yield* dialect());
+        yield* run(`
+          UPDATE calendar_sync_log
+          SET
+            status = 'error',
+            completed_at = ${now},
+            error_message = ?
+          WHERE id = ?`,
+          error.message, logId);
+        yield* run(`
+          UPDATE calendar_sources
+          SET
+            sync_status = 'error',
+            sync_error = ?,
+            updated_at = ${now}
+          WHERE id = ?`,
+          error.message, sourceId);
+      });
 
       throw error;
     }
@@ -113,7 +115,6 @@ export async function syncCalendarSource(sourceId: string): Promise<void> {
  * Sync Google Calendar
  */
 async function syncGoogleCalendar(source: CalendarSource): Promise<{ added: number; updated: number; deleted: number }> {
-  const db = getDatabase();
 
   // Check if access token is expired
   if (source.google_token_expiry && new Date(source.google_token_expiry) < new Date()) {
@@ -144,107 +145,112 @@ async function syncGoogleCalendar(source: CalendarSource): Promise<{ added: numb
     return { added: 0, updated: 0, deleted: 0 };
   }
 
-  let added = 0;
-  let updated = 0;
+  return applyGoogleEvents(source, data.items);
+}
 
-  for (const googleEvent of data.items) {
-    // Check if event already exists
-    const existing = db.prepare('SELECT id FROM calendar_events WHERE external_id = ? AND calendar_source_id = ?')
-      .get(googleEvent.id, source.id) as { id: string } | undefined;
+/**
+ * Upsert fetched Google events of a source (by external_id), in one
+ * transaction (B2.2d-12: on the process driver; exported for tests).
+ */
+export function applyGoogleEvents(source: Pick<CalendarSource, 'id' | 'user_id'>, items: any[]): Promise<{ added: number; updated: number; deleted: number }> {
+  return sql().tx(function* (): Step<{ added: number; updated: number; deleted: number }> {
+    const now = nowText(yield* dialect());
+    let added = 0;
+    let updated = 0;
 
-    const eventData = {
-      title: googleEvent.summary || 'Untitled Event',
-      description: googleEvent.description || null,
-      location: googleEvent.location || null,
-      start_time: googleEvent.start.dateTime || googleEvent.start.date,
-      end_time: googleEvent.end.dateTime || googleEvent.end.date,
-      is_all_day: googleEvent.start.date ? 1 : 0,
-      timezone: googleEvent.start.timeZone || 'UTC',
-      external_id: googleEvent.id,
-      external_url: googleEvent.htmlLink,
-      external_etag: googleEvent.etag,
-      status: googleEvent.status || 'confirmed',
-      organizer: googleEvent.organizer?.email || null,
-      attendees: googleEvent.attendees ? JSON.stringify(googleEvent.attendees.map((a: any) => ({
-        email: a.email,
-        name: a.displayName,
-        status: a.responseStatus,
-      }))) : null,
-    };
+    for (const googleEvent of items) {
+      // Check if event already exists
+      const existing = yield* one<{ id: string }>('SELECT id FROM calendar_events WHERE external_id = ? AND calendar_source_id = ?', googleEvent.id, source.id);
 
-    if (existing) {
-      // Update existing event
-      db.prepare(`
-        UPDATE calendar_events
-        SET
-          title = ?,
-          description = ?,
-          location = ?,
-          start_time = ?,
-          end_time = ?,
-          is_all_day = ?,
-          timezone = ?,
-          external_url = ?,
-          external_etag = ?,
-          status = ?,
-          organizer = ?,
-          attendees = ?,
-          updated_at = datetime('now')
-        WHERE id = ?
-      `).run(
-        eventData.title,
-        eventData.description,
-        eventData.location,
-        eventData.start_time,
-        eventData.end_time,
-        eventData.is_all_day,
-        eventData.timezone,
-        eventData.external_url,
-        eventData.external_etag,
-        eventData.status,
-        eventData.organizer,
-        eventData.attendees,
-        existing.id
-      );
-      updated++;
-    } else {
-      // Insert new event
-      db.prepare(`
-        INSERT INTO calendar_events (
-          id, user_id, calendar_source_id, title, description, location,
-          start_time, end_time, is_all_day, timezone, external_id, external_url,
-          external_etag, status, organizer, attendees
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        randomUUID(),
-        source.user_id,
-        source.id,
-        eventData.title,
-        eventData.description,
-        eventData.location,
-        eventData.start_time,
-        eventData.end_time,
-        eventData.is_all_day,
-        eventData.timezone,
-        eventData.external_id,
-        eventData.external_url,
-        eventData.external_etag,
-        eventData.status,
-        eventData.organizer,
-        eventData.attendees
-      );
-      added++;
+      const eventData = {
+        title: googleEvent.summary || 'Untitled Event',
+        description: googleEvent.description || null,
+        location: googleEvent.location || null,
+        start_time: googleEvent.start.dateTime || googleEvent.start.date,
+        end_time: googleEvent.end.dateTime || googleEvent.end.date,
+        is_all_day: googleEvent.start.date ? 1 : 0,
+        timezone: googleEvent.start.timeZone || 'UTC',
+        external_id: googleEvent.id,
+        external_url: googleEvent.htmlLink ?? null,
+        external_etag: googleEvent.etag ?? null,
+        status: googleEvent.status || 'confirmed',
+        organizer: googleEvent.organizer?.email || null,
+        attendees: googleEvent.attendees ? JSON.stringify(googleEvent.attendees.map((a: any) => ({
+          email: a.email,
+          name: a.displayName,
+          status: a.responseStatus,
+        }))) : null,
+      };
+
+      if (existing) {
+        // Update existing event
+        yield* run(`
+          UPDATE calendar_events
+          SET
+            title = ?,
+            description = ?,
+            location = ?,
+            start_time = ?,
+            end_time = ?,
+            is_all_day = ?,
+            timezone = ?,
+            external_url = ?,
+            external_etag = ?,
+            status = ?,
+            organizer = ?,
+            attendees = ?,
+            updated_at = ${now}
+          WHERE id = ?`,
+          eventData.title,
+          eventData.description,
+          eventData.location,
+          eventData.start_time,
+          eventData.end_time,
+          eventData.is_all_day,
+          eventData.timezone,
+          eventData.external_url,
+          eventData.external_etag,
+          eventData.status,
+          eventData.organizer,
+          eventData.attendees,
+          existing.id);
+        updated++;
+      } else {
+        // Insert new event
+        yield* run(`
+          INSERT INTO calendar_events (
+            id, user_id, calendar_source_id, title, description, location,
+            start_time, end_time, is_all_day, timezone, external_id, external_url,
+            external_etag, status, organizer, attendees
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          randomUUID(),
+          source.user_id,
+          source.id,
+          eventData.title,
+          eventData.description,
+          eventData.location,
+          eventData.start_time,
+          eventData.end_time,
+          eventData.is_all_day,
+          eventData.timezone,
+          eventData.external_id,
+          eventData.external_url,
+          eventData.external_etag,
+          eventData.status,
+          eventData.organizer,
+          eventData.attendees);
+        added++;
+      }
     }
-  }
 
-  return { added, updated, deleted: 0 };
+    return { added, updated, deleted: 0 };
+  });
 }
 
 /**
  * Sync iCal/WebCal calendar
  */
 async function syncICalCalendar(source: CalendarSource): Promise<{ added: number; updated: number; deleted: number }> {
-  const db = getDatabase();
 
   if (!source.url) {
     throw new Error('Calendar URL is required for iCal sync');
@@ -261,73 +267,82 @@ async function syncICalCalendar(source: CalendarSource): Promise<{ added: number
   // Parse iCal (basic parsing - you can use a library like 'ical' for production)
   const events = parseICalBasic(icalData);
 
-  let added = 0;
-  let updated = 0;
+  return applyICalEvents(source, events);
+}
 
-  for (const event of events) {
-    // Check if event already exists
-    const existing = db.prepare('SELECT id FROM calendar_events WHERE external_id = ? AND calendar_source_id = ?')
-      .get(event.uid, source.id) as { id: string } | undefined;
+/**
+ * Upsert parsed iCal events of a source (by UID), in one transaction
+ * (B2.2d-12: on the process driver; exported for tests).
+ */
+export function applyICalEvents(
+  source: Pick<CalendarSource, 'id' | 'user_id'>,
+  events: Array<{ uid: string; summary?: string; description?: string; location?: string; dtstart: string; dtend: string; isAllDay?: boolean }>
+): Promise<{ added: number; updated: number; deleted: number }> {
+  return sql().tx(function* (): Step<{ added: number; updated: number; deleted: number }> {
+    const now = nowText(yield* dialect());
+    let added = 0;
+    let updated = 0;
 
-    const eventData = {
-      title: event.summary || 'Untitled Event',
-      description: event.description || null,
-      location: event.location || null,
-      start_time: event.dtstart,
-      end_time: event.dtend,
-      is_all_day: event.isAllDay ? 1 : 0,
-      timezone: 'UTC',
-      external_id: event.uid,
-    };
+    for (const event of events) {
+      // Check if event already exists
+      const existing = yield* one<{ id: string }>('SELECT id FROM calendar_events WHERE external_id = ? AND calendar_source_id = ?', event.uid, source.id);
 
-    if (existing) {
-      // Update existing event
-      db.prepare(`
-        UPDATE calendar_events
-        SET
-          title = ?,
-          description = ?,
-          location = ?,
-          start_time = ?,
-          end_time = ?,
-          is_all_day = ?,
-          updated_at = datetime('now')
-        WHERE id = ?
-      `).run(
-        eventData.title,
-        eventData.description,
-        eventData.location,
-        eventData.start_time,
-        eventData.end_time,
-        eventData.is_all_day,
-        existing.id
-      );
-      updated++;
-    } else {
-      // Insert new event
-      db.prepare(`
-        INSERT INTO calendar_events (
-          id, user_id, calendar_source_id, title, description, location,
-          start_time, end_time, is_all_day, timezone, external_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        randomUUID(),
-        source.user_id,
-        source.id,
-        eventData.title,
-        eventData.description,
-        eventData.location,
-        eventData.start_time,
-        eventData.end_time,
-        eventData.is_all_day,
-        eventData.timezone,
-        eventData.external_id
-      );
-      added++;
+      const eventData = {
+        title: event.summary || 'Untitled Event',
+        description: event.description || null,
+        location: event.location || null,
+        start_time: event.dtstart,
+        end_time: event.dtend,
+        is_all_day: event.isAllDay ? 1 : 0,
+        timezone: 'UTC',
+        external_id: event.uid,
+      };
+
+      if (existing) {
+        // Update existing event
+        yield* run(`
+          UPDATE calendar_events
+          SET
+            title = ?,
+            description = ?,
+            location = ?,
+            start_time = ?,
+            end_time = ?,
+            is_all_day = ?,
+            updated_at = ${now}
+          WHERE id = ?`,
+          eventData.title,
+          eventData.description,
+          eventData.location,
+          eventData.start_time,
+          eventData.end_time,
+          eventData.is_all_day,
+          existing.id);
+        updated++;
+      } else {
+        // Insert new event
+        yield* run(`
+          INSERT INTO calendar_events (
+            id, user_id, calendar_source_id, title, description, location,
+            start_time, end_time, is_all_day, timezone, external_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          randomUUID(),
+          source.user_id,
+          source.id,
+          eventData.title,
+          eventData.description,
+          eventData.location,
+          eventData.start_time,
+          eventData.end_time,
+          eventData.is_all_day,
+          eventData.timezone,
+          eventData.external_id);
+        added++;
+      }
     }
-  }
 
-  return { added, updated, deleted: 0 };
+    return { added, updated, deleted: 0 };
+  });
 }
 
 /**
@@ -467,20 +482,20 @@ function parseICalDate(dateStr: string): string {
  * Start automatic sync scheduler (runs every X minutes)
  */
 export function startCalendarSyncScheduler() {
-  const db = getDatabase();
-
-  setInterval(() => {
+  setInterval(async () => {
     try {
       // Get all sources that need syncing
-      const sources = db.prepare(`
+      const sources = await q.all<{ id: string; sync_interval: number; last_synced_at: string | null }>(`
         SELECT id, sync_interval, last_synced_at
         FROM calendar_sources
-        WHERE sync_enabled = 1 AND is_enabled = 1
-      `).all() as Array<{ id: string; sync_interval: number; last_synced_at: string | null }>;
+        WHERE sync_enabled = 1 AND is_enabled = 1`);
 
       for (const source of sources) {
         const now = new Date();
-        const lastSynced = source.last_synced_at ? new Date(source.last_synced_at) : null;
+        // last_synced_at is 'YYYY-MM-DD HH:MM:SS' UTC; isoUtc reads it as UTC
+        // (new Date() of that text is local time and shifted the due time).
+        const synced = isoUtc(source.last_synced_at);
+        const lastSynced = synced ? new Date(synced) : null;
 
         // Check if sync is due
         if (!lastSynced || (now.getTime() - lastSynced.getTime()) >= source.sync_interval * 1000) {
