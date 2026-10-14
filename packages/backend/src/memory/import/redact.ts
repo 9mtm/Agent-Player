@@ -91,7 +91,8 @@ const RULES: Rule[] = [
   { type: 'slack_token', re: /\bxox[abposre]-[A-Za-z0-9-]{10,}/g },
   { type: 'stripe_key', re: /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}|\bwhsec_[A-Za-z0-9]{20,}/g },
   { type: 'aws_access_key', re: /\b(?:AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA|AIPA|ABIA|ACCA)[A-Z0-9]{16}\b/g },
-  { type: 'aws_secret_key', re: /(\baws_?secret_?(?:access_?)?key["']?\s*[:=]\s*["']?)([A-Za-z0-9/+=]{40})\b/gi, replace: (_m, p) => `${p}${marker('aws_secret_key')}` },
+  // The value can end in '+', '/' or '=', so the end is "no further key character", not \b.
+  { type: 'aws_secret_key', re: /(\baws_?secret_?(?:access_?)?key["']?\s*[:=]\s*["']?)([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])/gi, replace: (_m, p) => `${p}${marker('aws_secret_key')}` },
   { type: 'gcp_api_key', re: /\bAIza[0-9A-Za-z_-]{35}/g },
   { type: 'gcp_oauth_token', re: /\bya29\.[0-9A-Za-z_-]{20,}/g },
   { type: 'gcp_client_secret', re: /\bGOCSPX-[0-9A-Za-z_-]{20,}/g },

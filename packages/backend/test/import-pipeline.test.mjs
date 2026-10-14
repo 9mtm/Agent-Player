@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 const backendDir = process.cwd();
 const dir = mkdtempSync(join(tmpdir(), 'ap-import-'));
@@ -72,9 +72,18 @@ const preview = (files, extra = {}) => call('POST', '/api/memory/import/preview'
 const opKey = () => randomBytes(16).toString('hex');
 const memCount = () => db.prepare('SELECT COUNT(*) AS n FROM memories').get().n;
 
-// Random, test-only secret values (never real).
+// Test-only secret values (never real), from a seeded generator so every run
+// sees the same values (FU-01: unseeded values made a redaction miss show up
+// in ~3% of runs). Set IMPORT_TEST_SEED to try other values.
+const SEED = process.env.IMPORT_TEST_SEED || 'cli-02-import-pipeline';
+let seedCounter = 0;
+const seededBytes = (n) => {
+  const out = [];
+  while (out.length < n) out.push(...createHash('sha256').update(`${SEED}:${seedCounter++}`).digest());
+  return out.slice(0, n);
+};
 const AL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-const rnd = (n, chars = AL) => Array.from(randomBytes(n), (b) => chars[b % chars.length]).join('');
+const rnd = (n, chars = AL) => Array.from(seededBytes(n), (b) => chars[b % chars.length]).join('');
 const UP = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 const HEX = '0123456789abcdef';
 const B64 = AL + '+/';
@@ -87,7 +96,7 @@ const SECRETS = {
   slack_webhook: `https://hooks.slack.com/services/T${rnd(8, UP)}/B${rnd(8, UP)}/${rnd(24)}`,
   stripe_key: `sk_live_${rnd(24)}`,
   aws_access_key: `AKIA${rnd(16, UP)}`,
-  aws_secret_key: rnd(40, B64),
+  aws_secret_key: `${rnd(39, B64)}/`, // ends in a non-word character on purpose
   gcp_api_key: `AIza${rnd(35)}`,
   gcp_oauth_token: `ya29.${rnd(40)}`,
   azure_storage_key: `${rnd(86, B64)}==`,
@@ -280,6 +289,12 @@ test('redact: pure function edge cases, idempotent, placeholders kept', () => {
   assert.equal(R.redactImportText('max_tokens: 4096').total, 0);
   assert.equal(R.redactImportText('password=123456').text, 'password=[REDACTED:password]', 'numeric password');
   assert.equal(R.redactImportText('My PIN is 4321').text, 'My PIN is [REDACTED:password]');
+  // An AWS secret key can end in '+', '/' or '=' (no word boundary after it).
+  for (const end of ['+', '/', '=', 'Q']) {
+    const key = `${'A1b2C3d4E5'.repeat(4).slice(0, 39)}${end}`;
+    assert.equal(R.redactImportText(`aws_secret_access_key = ${key}\nnext`).text, 'aws_secret_access_key = [REDACTED:aws_secret_key]\nnext', `ends in ${end}`);
+  }
+  assert.equal(R.redactImportText(`aws_secret_access_key = ${'A'.repeat(41)}`).text.includes('[REDACTED:aws_secret_key]'), false, '41 characters is not an AWS secret key');
   const contact = 'Mail owner@example.test or call +49 170 1234567 on 2026-10-14.';
   assert.equal(R.redactImportText(contact).total, 0, 'contacts kept by default');
   const red = R.redactImportText(contact, { emails: true, phones: true });
