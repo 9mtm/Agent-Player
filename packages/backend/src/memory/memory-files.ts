@@ -41,8 +41,11 @@ const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const MEMORY_ID = /^[A-Za-z0-9_.@-]{1,200}$/;
 const OTHER_TYPE = /^[a-z][a-z_-]{0,31}$/;
 
+/** Machine codes on decision errors (UI-IP-04): `already_decided`, `stale`, `review_changed`, `review_hash_required`. */
+export type MemoryFileErrorCode = 'already_decided' | 'stale' | 'review_changed' | 'review_hash_required';
+
 export class MemoryFileError extends Error {
-  constructor(message: string, readonly status: 400 | 404 | 409 = 400) { super(message); }
+  constructor(message: string, readonly status: 400 | 404 | 409 = 400, readonly code?: MemoryFileErrorCode) { super(message); }
 }
 
 interface Entry { type: string; importance: number; content: string }
@@ -73,6 +76,12 @@ export interface MemoryProposal {
   reasons: string[];
   /** Import batch that created it (CLI-02), else null. */
   importBatchId: string | null;
+  /**
+   * sha256 of the reviewed content (proposal id, drawer, base revision, base
+   * hash, source, changes). Approve/reject must send it back as
+   * `expectedReviewHash`, so a decision only applies to what was shown.
+   */
+  reviewHash: string;
 }
 
 /** Proposals reviewed against the whole drawer (hash) vs. against each changed memory. */
@@ -370,17 +379,29 @@ export async function readDrawerFile(userId: string, agentId: string, drawer: Dr
   return fs.readFile(file, 'utf-8');
 }
 
+/** Canonical hash of what a reviewer sees in a proposal (see MemoryProposal.reviewHash). */
+export function proposalReviewHash(p: Pick<MemoryProposal, 'id' | 'drawerId' | 'baseRevision' | 'baseHash' | 'source' | 'changes'>): string {
+  return createHash('sha256')
+    .update(JSON.stringify(['memory-proposal-review/v1', p.id, p.drawerId, p.baseRevision, p.baseHash, p.source, p.changes]))
+    .digest('hex');
+}
+
 function rowToProposal(row: any): MemoryProposal {
   const drawer = normalizeDrawer(row.drawer_key ? { kind: row.drawer_kind, key: row.drawer_key } : { kind: row.drawer_kind });
+  const changes: MemoryChange[] = JSON.parse(row.changes);
+  const reviewHash = proposalReviewHash({
+    id: row.id, drawerId: drawerId(drawer), baseRevision: row.base_revision, baseHash: row.base_hash, source: row.source, changes,
+  });
   return {
     id: row.id, userId: row.user_id, agentId: row.agent_id, drawer, drawerId: drawerId(drawer),
-    baseHash: row.base_hash, baseRevision: row.base_revision, changes: JSON.parse(row.changes),
+    baseHash: row.base_hash, baseRevision: row.base_revision, changes,
     status: row.status, source: row.source, note: row.note ?? null,
     // BE-UI-01: ISO-8601 UTC with Z for the API.
     createdBy: row.created_by, createdAt: isoUtc(row.created_at) as string,
     decidedBy: row.decided_by ?? null, decidedAt: isoUtc(row.decided_at), appliedRevision: row.applied_revision ?? null,
     reasons: parseReasons(row.reasons),
     importBatchId: row.import_batch_id ?? null,
+    reviewHash,
   };
 }
 
@@ -481,15 +502,55 @@ function layerFor(importance: number): { memoryLayer: MultiTierLayer; expiryTime
 
 export interface ApplyResult { proposal: MemoryProposal; revision: number; applied: { added: string[]; updated: string[]; deleted: string[] } }
 
+const REVIEW_HASH = /^[0-9a-f]{64}$/;
+
 /**
- * Approve: apply the proposal in one transaction as drawer revision n+1.
- * Refused (proposal marked stale, 409) when the drawer changed after the
- * proposal was made. Only pending proposals of this user.
+ * The checks every decision makes on a proposal row: it exists for this user,
+ * is still pending, and the caller reviewed exactly its current content.
+ * Run before the slow work and again inside the deciding transaction.
  */
-export async function approveProposal(userId: string, id: string, decidedBy: string): Promise<ApplyResult> {
+function decidable(userId: string, id: string, expectedReviewHash: unknown): MemoryProposal {
   const proposal = getProposal(userId, id);
   if (!proposal) throw new MemoryFileError('Proposal not found', 404);
-  if (proposal.status !== 'pending') throw new MemoryFileError(`Proposal is already ${proposal.status}`, 409);
+  if (proposal.status !== 'pending') throw new MemoryFileError(`Proposal is already ${proposal.status}`, 409, 'already_decided');
+  if (typeof expectedReviewHash !== 'string' || !REVIEW_HASH.test(expectedReviewHash)) {
+    throw new MemoryFileError('expectedReviewHash is required (the reviewHash of the proposal you reviewed)', 400, 'review_hash_required');
+  }
+  if (expectedReviewHash !== proposal.reviewHash) {
+    throw new MemoryFileError('The proposal changed since it was reviewed; open it again', 409, 'review_changed');
+  }
+  return proposal;
+}
+
+/** Atomically move a pending proposal to its decided status; 409 if another decision won. */
+function claimDecision(userId: string, id: string, status: 'approved' | 'rejected' | 'stale', decidedBy: string, note: string | null = null): void {
+  const res = getDatabase().prepare(`
+    UPDATE memory_file_proposals SET status = ?, decided_by = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), note = COALESCE(?, note)
+    WHERE id = ? AND user_id = ? AND status = 'pending'
+  `).run(status, decidedBy, note, id, userId) as { changes: number };
+  if (res.changes !== 1) throw new MemoryFileError('Proposal was already decided', 409, 'already_decided');
+}
+
+/** Post-commit file work never fails a decision that is already committed. */
+async function bestEffort(what: string, fn: () => Promise<unknown>): Promise<void> {
+  try { await fn(); } catch (err: any) {
+    console.warn(`[memory-files] ${what} failed after commit (the database is canonical): ${err?.code ?? err?.name ?? 'error'}`);
+  }
+}
+
+/**
+ * Approve: apply the proposal in one transaction as drawer revision n+1.
+ * Refused (proposal marked stale, 409 `stale`) when the drawer changed after
+ * the proposal was made. Only pending proposals of this user, and only with
+ * the reviewHash the caller reviewed (409 `review_changed`).
+ *
+ * Embeddings are computed first (async). The transaction then re-checks the
+ * proposal and claims it with a conditional status update; when a concurrent
+ * approve/reject won meanwhile, the claim fails, the transaction rolls back
+ * and nothing is written (409 `already_decided`).
+ */
+export async function approveProposal(userId: string, id: string, decidedBy: string, expectedReviewHash: unknown): Promise<ApplyResult> {
+  const proposal = decidable(userId, id, expectedReviewHash);
   const storage = getMemoryStorage();
   const db = getDatabase().getDb();
   const drawer = proposal.drawer;
@@ -522,18 +583,23 @@ export async function approveProposal(userId: string, id: string, decidedBy: str
   };
 
   db.transaction(() => {
+    // Re-check now (a decision may have happened during the embedding await).
+    decidable(userId, id, expectedReviewHash);
     const current = storage.getByDrawers(userId, [drawer]);
     const byId = new Map(current.map((m) => [m.id, m]));
     if (isFileProposal(proposal)) {
-      if (drawerHash(current) !== proposal.baseHash) { stale = true; return; }
+      if (drawerHash(current) !== proposal.baseHash) stale = true;
     } else {
       // CORE-05: each changed memory must still be exactly what was reviewed.
       for (const c of proposal.changes) {
         if (c.op === 'add') continue;
         const now = byId.get(c.id);
-        if (!now || JSON.stringify(entryOf(now)) !== JSON.stringify(c.before)) { stale = true; return; }
+        if (!now || JSON.stringify(entryOf(now)) !== JSON.stringify(c.before)) { stale = true; break; }
       }
     }
+    if (stale) { claimDecision(userId, id, 'stale', decidedBy); return; }
+    // The claim: exactly one decision moves the row out of 'pending'.
+    claimDecision(userId, id, 'approved', decidedBy);
     const prev = drawerRevision(userId, drawer);
     revision = prev + 1;
     for (const [i, c] of proposal.changes.entries()) {
@@ -552,7 +618,7 @@ export async function approveProposal(userId: string, id: string, decidedBy: str
         written.push(mem);
       } else if (c.op === 'update') {
         const old = byId.get(c.id);
-        if (!old) throw new MemoryFileError('Proposal does not match the drawer', 409);
+        if (!old) throw new MemoryFileError('Proposal does not match the drawer', 409, 'stale');
         recordBaseline(old, prev);
         const mem: Memory = {
           ...old, type: c.after.type as MemoryType, content: c.after.content,
@@ -566,7 +632,7 @@ export async function approveProposal(userId: string, id: string, decidedBy: str
         if (old.type !== mem.type) removed.push(old);
       } else {
         const old = byId.get(c.id);
-        if (!old) throw new MemoryFileError('Proposal does not match the drawer', 409);
+        if (!old) throw new MemoryFileError('Proposal does not match the drawer', 409, 'stale');
         recordBaseline(old, prev);
         db.prepare('DELETE FROM memories WHERE id = ? AND user_id = ?').run(old.id, userId);
         record(old.id, 'delete', null, revision);
@@ -574,36 +640,26 @@ export async function approveProposal(userId: string, id: string, decidedBy: str
         removed.push(old);
       }
     }
-    db.prepare(`
-      UPDATE memory_file_proposals SET status = 'approved', decided_by = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), applied_revision = ?
-      WHERE id = ? AND status = 'pending'
-    `).run(decidedBy, revision, proposal.id);
+    db.prepare('UPDATE memory_file_proposals SET applied_revision = ? WHERE id = ? AND user_id = ?').run(revision, proposal.id, userId);
   })();
 
-  if (stale) {
-    db.prepare(`UPDATE memory_file_proposals SET status = 'stale', decided_by = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'pending'`)
-      .run(decidedBy, proposal.id);
-    throw new MemoryFileError('The memory changed after this proposal was made; it was marked stale', 409);
-  }
+  if (stale) throw new MemoryFileError('The memory changed after this proposal was made; it was marked stale', 409, 'stale');
 
-  // Readable copies follow the database (best effort; the DB is canonical).
-  for (const m of removed) await storage.removeMarkdownCopy(m);
-  for (const m of written) await storage.writeMarkdownCopy(m).catch(() => {});
-  try { await exportDrawerFile(userId, proposal.agentId, drawer); } catch { /* re-export later */ }
+  // Readable copies follow the database (best effort; the DB is canonical and
+  // the approval is committed, so a file problem never fails the response).
+  for (const m of removed) await bestEffort('removing a memory copy', () => storage.removeMarkdownCopy(m));
+  for (const m of written) await bestEffort('writing a memory copy', () => storage.writeMarkdownCopy(m));
+  await bestEffort('re-exporting the drawer', () => exportDrawerFile(userId, proposal.agentId, drawer));
 
   return { proposal: getProposal(userId, proposal.id)!, revision, applied };
 }
 
-/** Reject: nothing in the memory changes. */
-export function rejectProposal(userId: string, id: string, decidedBy: string, note?: unknown): MemoryProposal {
-  const proposal = getProposal(userId, id);
-  if (!proposal) throw new MemoryFileError('Proposal not found', 404);
-  if (proposal.status !== 'pending') throw new MemoryFileError(`Proposal is already ${proposal.status}`, 409);
-  getDatabase().prepare(`
-    UPDATE memory_file_proposals SET status = 'rejected', decided_by = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-      note = COALESCE(?, note)
-    WHERE id = ? AND status = 'pending'
-  `).run(decidedBy, typeof note === 'string' && note ? note.slice(0, 500) : null, id);
+/** Reject: nothing in the memory changes. Same checks and claim as approve. */
+export function rejectProposal(userId: string, id: string, decidedBy: string, expectedReviewHash: unknown, note?: unknown): MemoryProposal {
+  getDatabase().getDb().transaction(() => {
+    decidable(userId, id, expectedReviewHash);
+    claimDecision(userId, id, 'rejected', decidedBy, typeof note === 'string' && note ? note.slice(0, 500) : null);
+  })();
   return getProposal(userId, id)!;
 }
 

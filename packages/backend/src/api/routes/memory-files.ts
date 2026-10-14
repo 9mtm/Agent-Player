@@ -11,9 +11,12 @@
  *   POST /api/memory/files/:drawer/proposal      { content? , note? } edited text, or
  *                                                the exported file as saved on disk
  *   GET  /api/memory/proposals?status=           proposals, newest first
- *   GET  /api/memory/proposals/:id               one proposal with its diff
- *   POST /api/memory/proposals/:id/approve       apply as a new version (audited)
- *   POST /api/memory/proposals/:id/reject        { note? } nothing changes (audited)
+ *   GET  /api/memory/proposals/:id               one proposal with its diff and reviewHash
+ *   POST /api/memory/proposals/:id/approve       { expectedReviewHash } apply as a new version (audited)
+ *   POST /api/memory/proposals/:id/reject        { expectedReviewHash, note? } nothing changes (audited)
+ *
+ * Decision errors carry a machine `code`: 400 `review_hash_required`,
+ * 409 `already_decided` | `stale` | `review_changed`.
  *
  * `:drawer` is `owner`, `experience`, `project:<slug>`, `task:<id>` or
  * `people:<id>`. `agentId` (query or body) picks the agent folder; default
@@ -51,7 +54,7 @@ function body(request: FastifyRequest): Record<string, unknown> {
 }
 
 function fail(reply: FastifyReply, err: unknown) {
-  if (err instanceof MemoryFileError) return reply.code(err.status).send({ error: err.message });
+  if (err instanceof MemoryFileError) return reply.code(err.status).send({ error: err.message, ...(err.code ? { code: err.code } : {}) });
   if (err instanceof DrawerInputError) return reply.code(400).send({ error: err.message });
   if (err instanceof ScopeError) return reply.code(err.status).send({ error: err.message });
   throw err;
@@ -159,7 +162,7 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
     const ownerId = ownerOf(request, reply);
     if (ownerId === null) return reply;
     try {
-      const result = await repositories.memory.approveProposal(actorOf(request), request.params.id);
+      const result = await repositories.memory.approveProposal(actorOf(request), request.params.id, body(request).expectedReviewHash);
       audit(request, ownerId, 'memory_proposal.approve', true, request.params.id, {
         drawer: result.proposal.drawerId, revision: result.revision,
         added: result.applied.added.length, updated: result.applied.updated.length, deleted: result.applied.deleted.length,
@@ -167,7 +170,7 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
       return result;
     } catch (err) {
       if (err instanceof MemoryFileError && err.status !== 404) {
-        audit(request, ownerId, 'memory_proposal.approve', false, request.params.id, {}, err.message);
+        audit(request, ownerId, 'memory_proposal.approve', false, request.params.id, err.code ? { code: err.code } : {}, err.message);
       }
       return fail(reply, err);
     }
@@ -177,12 +180,12 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
     const ownerId = ownerOf(request, reply);
     if (ownerId === null) return reply;
     try {
-      const proposal = await repositories.memory.rejectProposal(actorOf(request), request.params.id, body(request).note);
+      const proposal = await repositories.memory.rejectProposal(actorOf(request), request.params.id, body(request).expectedReviewHash, body(request).note);
       audit(request, ownerId, 'memory_proposal.reject', true, proposal.id, { drawer: proposal.drawerId });
       return proposal;
     } catch (err) {
       if (err instanceof MemoryFileError && err.status !== 404) {
-        audit(request, ownerId, 'memory_proposal.reject', false, request.params.id, {}, err.message);
+        audit(request, ownerId, 'memory_proposal.reject', false, request.params.id, err.code ? { code: err.code } : {}, err.message);
       }
       return fail(reply, err);
     }

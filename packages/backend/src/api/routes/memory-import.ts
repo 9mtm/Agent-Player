@@ -51,7 +51,7 @@ const memory = () => repositories.memory;
 function fail(reply: FastifyReply, err: unknown) {
   if (err instanceof ScopeError) return reply.code(err.status).send({ error: err.message });
   if (err instanceof ImportError) return reply.code(err.status).send({ error: err.message, code: err.code });
-  if (err instanceof MemoryFileError) return reply.code(err.status).send({ error: err.message });
+  if (err instanceof MemoryFileError) return reply.code(err.status).send({ error: err.message, ...(err.code ? { code: err.code } : {}) });
   // Never echo an unexpected error (it could quote input text).
   return reply.code(500).send({ error: 'Import failed' });
 }

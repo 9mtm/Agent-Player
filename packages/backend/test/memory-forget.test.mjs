@@ -74,6 +74,10 @@ test.after(async () => {
 const auth = (id) => ({ authorization: `Bearer ${generateToken(id, 1)}` });
 const quietly = async (fn) => { const l = console.log; const w = console.warn; console.log = () => {}; console.warn = () => {}; try { return await fn(); } finally { console.log = l; console.warn = w; } };
 const call = (method, url, who = 'mg-owner', payload) => quietly(() => app.inject({ method, url, headers: auth(who), payload }));
+
+// UI-IP-04: approve/reject send back the reviewHash of the proposal as reviewed.
+const reviewHashOf = async (id, who = 'mg-owner') => { const r = await call('GET', `/api/memory/proposals/${id}`, who); return r.statusCode === 200 ? r.json().reviewHash : undefined; };
+const decide = async (id, action, who = 'mg-owner', payload = {}) => call('POST', `/api/memory/proposals/${id}/${action}`, who, { expectedReviewHash: await reviewHashOf(id, who), ...payload });
 const create = async (who, content, extra = {}) => {
   const res = await call('POST', '/api/memory', who, { type: 'fact', content, importance: 7, ...extra });
   assert.equal(res.statusCode, 200, res.body);
@@ -174,7 +178,7 @@ test('forget: gone from search, index, copies, exports, versions, proposals, sum
   const p = (await call('GET', `/api/memory/proposals/${proposalId}`)).json();
   assert.equal(p.status, 'cancelled');
   assert.deepEqual(p.changes, [{ op: 'update', id: target.id, redacted: true }]);
-  assert.equal((await call('POST', `/api/memory/proposals/${proposalId}/approve`)).statusCode, 409);
+  assert.equal((await decide(proposalId, 'approve')).statusCode, 409);
   const sum = (await call('GET', '/api/memory/weekly-summary')).json().summary;
   assert.ok(!sum.text.includes(SECRET) && sum.modelText === null);
 

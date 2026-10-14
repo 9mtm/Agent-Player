@@ -60,6 +60,12 @@ test.after(async () => {
 const auth = (id) => ({ authorization: `Bearer ${generateToken(id, 1)}` });
 const quietly = async (fn) => { const l = console.log; const w = console.warn; console.log = () => {}; console.warn = () => {}; try { return await fn(); } finally { console.log = l; console.warn = w; } };
 const call = (method, url, payload, who = 'im-owner') => quietly(() => app.inject({ method, url, headers: auth(who), payload }));
+
+// UI-IP-04: approve/reject send back the reviewHash of the proposal as reviewed.
+const decide = async (id, action, payload = {}) => {
+  const r = await call('GET', `/api/memory/proposals/${id}`);
+  return call('POST', `/api/memory/proposals/${id}/${action}`, { expectedReviewHash: r.json().reviewHash, ...payload });
+};
 const b64 = (s) => Buffer.from(s, 'utf8').toString('base64');
 const file = (name, text) => ({ name, contentBase64: b64(text) });
 const preview = (files, extra = {}) => call('POST', '/api/memory/import/preview', { files, ...extra });
@@ -256,7 +262,7 @@ test('redact: many secret formats become [REDACTED:<type>]; the originals are st
   // Commit, approve one: still nothing of the originals anywhere (DB tables, raw DB/WAL files, exports).
   const c = await call('POST', `/api/memory/import/${v.batchId}/commit`, { version: v.version, contentHash: v.contentHash, operationKey: opKey(), confirm: true });
   assert.equal(c.statusCode, 201, c.body);
-  const ap = await call('POST', `/api/memory/proposals/${c.json().proposals[0].proposalId}/approve`, {});
+  const ap = await decide(c.json().proposals[0].proposalId, 'approve');
   assert.equal(ap.statusCode, 200, ap.body);
   db.prepare('PRAGMA wal_checkpoint(FULL)').get();
   for (const [k, value] of Object.entries(SECRETS)) assert.deepEqual(storedEverywhere(value), [], `${k} stored`);
@@ -382,8 +388,21 @@ test('preview: chunked by heading, proposed drawers/types, duplicates flagged; h
   assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM memory_file_proposals WHERE import_batch_id = ?`).get(v1.batchId).n, 4, 'no second batch of proposals');
   assert.equal((await call('POST', `${base}/revise`, { version: 2, contentHash: v2.contentHash, includeAll: true })).statusCode, 409, 'committed: no new versions');
 
+  // UI-IP-04 (CORE-04b): a decision needs the reviewHash of what was reviewed.
+  const pid0 = receipt.proposals[0].proposalId;
+  const shown = (await call('GET', `/api/memory/proposals/${pid0}`)).json();
+  assert.match(shown.reviewHash, /^[0-9a-f]{64}$/);
+  const noHash = await call('POST', `/api/memory/proposals/${pid0}/approve`, {});
+  assert.equal(noHash.statusCode, 400);
+  assert.equal(noHash.json().code, 'review_hash_required');
+  const mismatch = await call('POST', `/api/memory/proposals/${pid0}/approve`, { expectedReviewHash: '0'.repeat(64) });
+  assert.equal(mismatch.statusCode, 409);
+  assert.equal(mismatch.json().code, 'review_changed');
+  assert.equal(memCount(), before, 'a refused decision writes no memory');
+  assert.equal(db.prepare('SELECT status FROM memory_file_proposals WHERE id = ?').get(pid0).status, 'pending');
+
   // The owner approves one into memory (CORE-04/05 pipeline).
-  const ok = await call('POST', `/api/memory/proposals/${receipt.proposals[0].proposalId}/approve`, {});
+  const ok = await decide(receipt.proposals[0].proposalId, 'approve');
   assert.equal(ok.statusCode, 200, ok.body);
   const memId = ok.json().applied.added[0];
   const m = db.prepare('SELECT * FROM memories WHERE id = ?').get(memId);

@@ -78,6 +78,10 @@ test.after(async () => {
 const auth = (id) => ({ authorization: `Bearer ${generateToken(id, 1)}` });
 const quietly = async (fn) => { const l = console.log; const w = console.warn; console.log = () => {}; console.warn = () => {}; try { return await fn(); } finally { console.log = l; console.warn = w; } };
 const call = (method, url, who = 'ml-owner', payload) => quietly(() => app.inject({ method, url, headers: auth(who), payload }));
+
+// UI-IP-04: approve/reject send back the reviewHash of the proposal as reviewed.
+const reviewHashOf = async (id, who = 'ml-owner') => { const r = await call('GET', `/api/memory/proposals/${id}`, who); return r.statusCode === 200 ? r.json().reviewHash : undefined; };
+const decide = async (id, action, who = 'ml-owner', payload = {}) => call('POST', `/api/memory/proposals/${id}/${action}`, who, { expectedReviewHash: await reviewHashOf(id, who), ...payload });
 const mem = (id) => db.prepare('SELECT * FROM memories WHERE id = ?').get(id);
 const memByContent = (content, userId = 'ml-owner') => db.prepare('SELECT * FROM memories WHERE content = ? AND user_id = ?').get(content, userId);
 const versions = (id) => db.prepare('SELECT version, change, content, created_by, reason FROM memory_versions WHERE memory_id = ? ORDER BY version').all(id).map((r) => ({ ...r }));
@@ -150,14 +154,14 @@ test('extraction: routine facts saved automatically, important ones wait for app
   pendingPref = byReason('owner-preference').id;
 
   // Approve -> saved as a new version; reject -> nothing.
-  const ok = await call('POST', `/api/memory/proposals/${pendingPref}/approve`);
+  const ok = await decide(pendingPref, 'approve');
   assert.equal(ok.statusCode, 200, ok.body);
   const saved = memByContent('Prefers replies in Iraqi dialect');
   assert.ok(saved);
   assert.equal(saved.drawer_kind, 'owner');
   assert.deepEqual(versions(saved.id).map((v) => [v.change, v.created_by, v.reason]), [['create', 'ml-owner', 'proposal:learning']]);
   const money = byReason('money').id;
-  assert.equal((await call('POST', `/api/memory/proposals/${money}/reject`)).statusCode, 200);
+  assert.equal((await decide(money, 'reject')).statusCode, 200);
   assert.equal(memByContent('Pays rent of 900 dollars monthly'), undefined);
 
   // The same fact again is a duplicate: nothing saved twice.
@@ -227,10 +231,10 @@ test('memory_edit / memory_delete: versioned; important memories go through prop
   assert.equal(mem(pref.id).content, 'Prefers replies in Iraqi dialect');
   // A second edit proposal of the same memory goes stale once the first is approved.
   const e3 = await run(memoryEditTool, { id: pref.id, content: 'Prefers replies in German' }, ownerCtx);
-  assert.equal((await call('POST', `/api/memory/proposals/${e2.data.proposalId}/approve`)).statusCode, 200);
+  assert.equal((await decide(e2.data.proposalId, 'approve')).statusCode, 200);
   assert.equal(mem(pref.id).content, 'Prefers replies in English');
   assert.deepEqual(versions(pref.id).map((v) => v.change), ['create', 'update']);
-  assert.equal((await call('POST', `/api/memory/proposals/${e3.data.proposalId}/approve`)).statusCode, 409);
+  assert.equal((await decide(e3.data.proposalId, 'approve')).statusCode, 409);
   assert.equal(mem(pref.id).content, 'Prefers replies in English');
 
   // Delete: important -> proposal; routine -> deleted, history kept.
@@ -320,4 +324,36 @@ test('weekly summary job: in-process, owner-scoped, created once per owner', asy
   const out = await J.runMemoryJob({ job: 'weekly-summary', userId: 'ml-owner' });
   assert.ok(out.summaryId);
   assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM memory_weekly_summaries WHERE user_id = 'ml-owner'`).get().n, n + 1);
+});
+
+// UI-IP-04 review (CORE-04b): an add-only learning/agent proposal approved twice at once
+// (both requests past the first checks, waiting on the embedding) adds exactly one memory.
+test('concurrent double approve of an add-only learning proposal: one memory, one 409 already_decided', async () => {
+  const MF = await import(join(backendDir, 'src/memory/memory-files.ts'));
+  const { getMemoryStorage } = await import(join(backendDir, 'src/memory/storage.ts'));
+  const content = 'Prefers the quarterly report in Arabic and English';
+  for (const source of ['learning', 'agent']) {
+    const text = `${content} (${source})`;
+    const p = MF.createChangeProposal({
+      userId: 'ml-owner', agentId: 'ml-agent', drawer: { kind: 'owner' }, source, reasons: ['owner-preference'], createdBy: 'test',
+      changes: [{ op: 'add', after: { type: 'preference', importance: 8, content: text } }],
+    });
+    const storage = getMemoryStorage();
+    const orig = storage.embed;
+    let release; let entered = 0;
+    const gate = new Promise((r) => { release = r; });
+    storage.embed = async (t) => { entered++; await gate; return orig.call(storage, t); };
+    let results;
+    try {
+      const send = () => call('POST', `/api/memory/proposals/${p.id}/approve`, 'ml-owner', { expectedReviewHash: p.reviewHash });
+      const both = [send(), send()];
+      while (entered < 2) await new Promise((r) => setImmediate(r));
+      release();
+      results = await Promise.all(both);
+    } finally { storage.embed = orig; }
+    assert.deepEqual(results.map((r) => r.statusCode).sort(), [200, 409], source);
+    assert.equal(results.find((r) => r.statusCode === 409).json().code, 'already_decided');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memories WHERE content = ? AND user_id = ?').get(text, 'ml-owner').n, 1, `${source}: exactly one memory`);
+    assert.equal(db.prepare(`SELECT status FROM memory_file_proposals WHERE id = ?`).get(p.id).status, 'approved');
+  }
 });

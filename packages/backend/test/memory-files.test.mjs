@@ -41,6 +41,7 @@ const { registerAuthGate } = await import(join(backendDir, 'src/auth/auth-gate.t
 const { memoryRoutes } = await import(join(backendDir, 'src/api/routes/memory.ts'));
 const { memoryFilesRoutes } = await import(join(backendDir, 'src/api/routes/memory-files.ts'));
 const MF = await import(join(backendDir, 'src/memory/memory-files.ts'));
+const { getMemoryStorage } = await import(join(backendDir, 'src/memory/storage.ts'));
 const { generateToken } = await import(join(backendDir, 'src/auth/jwt.ts'));
 const { default: Fastify } = await import('fastify');
 
@@ -62,6 +63,10 @@ test.after(async () => {
 const auth = (id) => ({ authorization: `Bearer ${generateToken(id, 1)}` });
 const quietly = async (fn) => { const l = console.log; const w = console.warn; console.log = () => {}; console.warn = () => {}; try { return await fn(); } finally { console.log = l; console.warn = w; } };
 const call = (method, url, who = 'mf-owner', payload) => quietly(() => app.inject({ method, url, headers: auth(who), payload }));
+
+// UI-IP-04: approve/reject send back the reviewHash of the proposal as reviewed.
+const reviewHashOf = async (id, who = 'mf-owner') => { const r = await call('GET', `/api/memory/proposals/${id}`, who); return r.statusCode === 200 ? r.json().reviewHash : undefined; };
+const decide = async (id, action, who = 'mf-owner', payload = {}) => call('POST', `/api/memory/proposals/${id}/${action}`, who, { expectedReviewHash: await reviewHashOf(id, who), ...payload });
 const memRows = (userId = 'mf-owner') => db.prepare(`SELECT id, type, content, importance_score, drawer_kind, drawer_key FROM memories WHERE user_id = ? ORDER BY created_at, id`).all(userId).map((r) => ({ ...r }));
 const ownerFile = () => join(dir, '.data', 'agents', 'mf-agent', 'memory', 'mf-owner', 'project--alpha.md');
 
@@ -180,7 +185,7 @@ test('edit file -> proposal (diff against the DB) -> approve -> new version', as
   assert.deepEqual(list.map((p) => [p.id, p.counts]), [[proposalId, { add: 1, update: 2, delete: 0 }]]);
   assert.equal((await call('GET', `/api/memory/proposals/${proposalId}`)).json().changes.length, 3);
 
-  const ok = await call('POST', `/api/memory/proposals/${proposalId}/approve`);
+  const ok = await decide(proposalId, 'approve');
   assert.equal(ok.statusCode, 200, ok.body);
   const result = ok.json();
   assert.equal(result.revision, 1);
@@ -209,8 +214,8 @@ test('edit file -> proposal (diff against the DB) -> approve -> new version', as
   const auditRow = db.prepare(`SELECT user_id, action, success, resource_id FROM audit_logs WHERE action = 'memory_proposal.approve'`).get();
   assert.deepEqual({ ...auditRow }, { user_id: 'mf-owner', action: 'memory_proposal.approve', success: 1, resource_id: proposalId });
   // Decided once only.
-  assert.equal((await call('POST', `/api/memory/proposals/${proposalId}/approve`)).statusCode, 409);
-  assert.equal((await call('POST', `/api/memory/proposals/${proposalId}/reject`)).statusCode, 409);
+  assert.equal((await decide(proposalId, 'approve')).statusCode, 409);
+  assert.equal((await decide(proposalId, 'reject')).statusCode, 409);
 });
 
 test('reject -> memory unchanged; delete via file; stale proposals refused', async () => {
@@ -227,7 +232,7 @@ test('reject -> memory unchanged; delete via file; stale proposals refused', asy
   assert.equal(p1.json().source, 'upload');
 
   const before = memRows();
-  const rej = await call('POST', `/api/memory/proposals/${p1.json().id}/reject`, 'mf-owner', { note: 'keep it' });
+  const rej = await decide(p1.json().id, 'reject', 'mf-owner', { note: 'keep it' });
   assert.equal(rej.statusCode, 200, rej.body);
   assert.equal(rej.json().status, 'rejected');
   assert.deepEqual(memRows(), before, 'reject changes nothing');
@@ -236,11 +241,11 @@ test('reject -> memory unchanged; delete via file; stale proposals refused', asy
   // Two proposals from the same base: approving one makes the other stale.
   const p2 = (await call('POST', '/api/memory/files/project:alpha/proposal', 'mf-owner', { content: removedA2 })).json();
   const p3 = (await call('POST', '/api/memory/files/project:alpha/proposal', 'mf-owner', { content: fresh.replace('EDITED ON DISK', 'third edit') })).json();
-  assert.equal((await call('POST', `/api/memory/proposals/${p2.id}/approve`)).statusCode, 200);
+  assert.equal((await decide(p2.id, 'approve')).statusCode, 200);
   assert.ok(!memRows().some((r) => r.id === ids.a2), 'deleted');
   const del = (await call('GET', '/api/memory/files/project:alpha/versions')).json().versions.find((v) => v.memoryId === ids.a2 && v.change === 'delete');
   assert.ok(del, 'deletion recorded; the baseline keeps the old text');
-  const staleRes = await call('POST', `/api/memory/proposals/${p3.id}/approve`);
+  const staleRes = await decide(p3.id, 'approve');
   assert.equal(staleRes.statusCode, 409);
   assert.equal((await call('GET', `/api/memory/proposals/${p3.id}`)).json().status, 'stale');
   assert.ok(!memRows().some((r) => r.content.startsWith('third edit')));
@@ -281,6 +286,143 @@ test('proposals are per user: another account never sees or decides them', async
   addUser('mf-owner2', 'owner');
   const res = await call('GET', `/api/memory/proposals/${proposalId}`, 'mf-owner2');
   assert.equal(res.statusCode, 404);
-  assert.equal((await call('POST', `/api/memory/proposals/${proposalId}/reject`, 'mf-owner2')).statusCode, 404);
+  assert.equal((await decide(proposalId, 'reject', 'mf-owner2')).statusCode, 404);
   assert.deepEqual((await call('GET', '/api/memory/proposals', 'mf-owner2')).json().proposals, []);
+});
+
+// UI-IP-04 review (CORE-04b): decisions are atomic and bound to the reviewed content.
+const raw = (method, url, payload, who = 'mf-owner') => quietly(() => app.inject({ method, url, headers: auth(who), payload }));
+const proposalRow = (id) => ({ ...db.prepare('SELECT status, decided_by, applied_revision FROM memory_file_proposals WHERE id = ?').get(id) });
+/** A file proposal on the owner drawer that edits o1 (an update: approve awaits an embedding). */
+const ownerEdit = async (text) => {
+  const fresh = (await call('GET', '/api/memory/files/owner')).json().content;
+  const lines = fresh.split('\n');
+  const at = lines.findIndex((l) => l.startsWith(`### m:${ids.o1} `));
+  lines[at + 1] = text;
+  const res = await call('POST', '/api/memory/files/owner/proposal', 'mf-owner', { content: lines.join('\n') });
+  assert.equal(res.statusCode, 201, res.body);
+  return res.json();
+};
+/** Hold storage.embed until release(); resolves `entered` when the first call starts. */
+const gateEmbed = () => {
+  const storage = getMemoryStorage();
+  const orig = storage.embed;
+  let release; let entered;
+  const gate = new Promise((r) => { release = r; });
+  const started = new Promise((r) => { entered = r; });
+  storage.embed = async (text) => { entered(); await gate; return orig.call(storage, text); };
+  return { started, release: () => release(), restore: () => { storage.embed = orig; } };
+};
+
+test('reviewHash: on list and detail, stable, and required to decide; status filter', async () => {
+  const p = await ownerEdit('owner edit for hash check');
+  const detail = (await call('GET', `/api/memory/proposals/${p.id}`)).json();
+  assert.match(detail.reviewHash, /^[0-9a-f]{64}$/);
+  assert.equal(detail.reviewHash, p.reviewHash, 'create and detail agree');
+  assert.equal(detail.reviewHash, MF.proposalReviewHash(detail), 'canonical: id, drawer, revision, base, source, changes');
+  const listed = (await call('GET', '/api/memory/proposals?status=pending')).json().proposals;
+  assert.ok(listed.every((x) => x.status === 'pending'));
+  assert.equal(listed.find((x) => x.id === p.id).reviewHash, detail.reviewHash);
+  assert.ok((await call('GET', '/api/memory/proposals?status=approved')).json().proposals.every((x) => x.status === 'approved'));
+  assert.equal((await call('GET', '/api/memory/proposals?status=bogus')).statusCode, 400);
+
+  const before = memRows();
+  for (const [action, payload] of [['approve', {}], ['reject', { note: 'x' }], ['approve', { expectedReviewHash: 'nope' }]]) {
+    const res = await raw('POST', `/api/memory/proposals/${p.id}/${action}`, payload);
+    assert.equal(res.statusCode, 400, res.body);
+    assert.equal(res.json().code, 'review_hash_required');
+  }
+  const wrong = 'f'.repeat(64);
+  for (const action of ['approve', 'reject']) {
+    const res = await raw('POST', `/api/memory/proposals/${p.id}/${action}`, { expectedReviewHash: wrong });
+    assert.equal(res.statusCode, 409, res.body);
+    assert.equal(res.json().code, 'review_changed');
+  }
+  assert.deepEqual(memRows(), before, 'nothing written');
+  assert.equal(proposalRow(p.id).status, 'pending', 'still pending');
+  // The reviewed content changed under the reviewer (stored diff rewritten) -> refused.
+  db.prepare('UPDATE memory_file_proposals SET changes = ? WHERE id = ?').run(JSON.stringify(detail.changes.map((c) => ({ ...c, after: { ...c.after, content: 'swapped' } }))), p.id);
+  const swapped = await raw('POST', `/api/memory/proposals/${p.id}/approve`, { expectedReviewHash: detail.reviewHash });
+  assert.equal(swapped.statusCode, 409);
+  assert.equal(swapped.json().code, 'review_changed');
+  assert.deepEqual(memRows(), before);
+  const rej = await raw('POST', `/api/memory/proposals/${p.id}/reject`, { expectedReviewHash: (await call('GET', `/api/memory/proposals/${p.id}`)).json().reviewHash });
+  assert.equal(rej.statusCode, 200, rej.body);
+  // Decided proposals answer with a machine code.
+  const again = await raw('POST', `/api/memory/proposals/${p.id}/approve`, { expectedReviewHash: rej.json().reviewHash });
+  assert.equal(again.statusCode, 409);
+  assert.equal(again.json().code, 'already_decided');
+});
+
+test('concurrent approve + reject: the reject wins during the embedding, approve writes nothing', async () => {
+  const p = await ownerEdit('owner edit raced by a reject');
+  const before = memRows();
+  const g = gateEmbed();
+  try {
+    const approving = raw('POST', `/api/memory/proposals/${p.id}/approve`, { expectedReviewHash: p.reviewHash });
+    await g.started; // approve passed its first checks and is awaiting the embedding
+    const rej = await raw('POST', `/api/memory/proposals/${p.id}/reject`, { expectedReviewHash: p.reviewHash });
+    assert.equal(rej.statusCode, 200, rej.body);
+    g.release();
+    const ap = await approving;
+    assert.equal(ap.statusCode, 409, ap.body);
+    assert.equal(ap.json().code, 'already_decided');
+  } finally { g.restore(); }
+  assert.deepEqual(memRows(), before, 'no memory written for a rejected proposal');
+  assert.equal(proposalRow(p.id).status, 'rejected');
+  assert.equal(proposalRow(p.id).applied_revision, null);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memory_versions WHERE proposal_id = ?').get(p.id).n, 0, 'no history rows');
+});
+
+test('concurrent double approve of a file proposal: exactly one applies', async () => {
+  const p = await ownerEdit('owner edit approved twice');
+  const g = gateEmbed();
+  let results;
+  try {
+    const a = raw('POST', `/api/memory/proposals/${p.id}/approve`, { expectedReviewHash: p.reviewHash });
+    const b = raw('POST', `/api/memory/proposals/${p.id}/approve`, { expectedReviewHash: p.reviewHash });
+    await g.started;
+    await sleep(20);
+    g.release();
+    results = await Promise.all([a, b]);
+  } finally { g.restore(); }
+  assert.deepEqual(results.map((r) => r.statusCode).sort(), [200, 409]);
+  assert.equal(results.find((r) => r.statusCode === 409).json().code, 'already_decided');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memory_versions WHERE proposal_id = ? AND change = ?').get(p.id, 'update').n, 1, 'one new version only');
+  assert.ok(memRows().find((r) => r.id === ids.o1).content.startsWith('owner edit approved twice\n'));
+});
+
+test('stale approve answers code "stale" and marks the proposal stale', async () => {
+  const p1 = await ownerEdit('first of two from one base');
+  const p2 = await ownerEdit('second of two from one base');
+  assert.equal((await decide(p1.id, 'approve')).statusCode, 200);
+  const res = await raw('POST', `/api/memory/proposals/${p2.id}/approve`, { expectedReviewHash: p2.reviewHash });
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.json().code, 'stale');
+  assert.equal(proposalRow(p2.id).status, 'stale');
+  assert.ok(memRows().find((r) => r.id === ids.o1).content.startsWith('first of two from one base\n'));
+});
+
+test('post-commit file cleanup failure never fails a committed approve', async () => {
+  // Delete o1 via the owner file: approve removes its readable copy after commit.
+  const fresh = (await call('GET', '/api/memory/files/owner')).json().content;
+  const lines = fresh.split('\n');
+  const start = lines.findIndex((l) => l.startsWith(`### m:${ids.o1} `));
+  let end = lines.findIndex((l, i) => i > start && l.startsWith('### '));
+  if (end < 0) end = lines.length;
+  const p = (await call('POST', '/api/memory/files/owner/proposal', 'mf-owner', { content: [...lines.slice(0, start), ...lines.slice(end)].join('\n') })).json();
+  assert.deepEqual(p.changes.map((c) => c.op), ['delete']);
+  const storage = getMemoryStorage();
+  const orig = { remove: storage.removeMarkdownCopy, write: storage.writeMarkdownCopy };
+  let calls = 0;
+  storage.removeMarkdownCopy = async () => { calls++; throw Object.assign(new Error('disk says no'), { code: 'EACCES' }); };
+  storage.writeMarkdownCopy = async () => { throw new Error('disk says no'); };
+  let res;
+  try { res = await raw('POST', `/api/memory/proposals/${p.id}/approve`, { expectedReviewHash: p.reviewHash }); }
+  finally { storage.removeMarkdownCopy = orig.remove; storage.writeMarkdownCopy = orig.write; }
+  assert.equal(calls, 1, 'cleanup was attempted');
+  assert.equal(res.statusCode, 200, res.body);
+  assert.equal(res.json().proposal.status, 'approved');
+  assert.deepEqual(res.json().applied.deleted, [ids.o1]);
+  assert.ok(!memRows().some((r) => r.id === ids.o1), 'the committed change stays');
 });

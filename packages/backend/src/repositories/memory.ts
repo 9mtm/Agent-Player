@@ -78,8 +78,9 @@ export interface MemoryRepository extends MemoryRecallRepository, MemoryOwnerRep
   createProposal(actor: Actor | null | undefined, input: { agentId: string; drawer: DrawerRef; text: string; source: 'upload' | 'file'; note: string | null }): Promise<MemoryProposal>;
   proposals(actor: Actor | null | undefined, status?: string): Promise<MemoryProposal[]>;
   proposal(actor: Actor | null | undefined, id: string): Promise<MemoryProposal>;
-  approveProposal(actor: Actor | null | undefined, id: string): Promise<ApplyResult>;
-  rejectProposal(actor: Actor | null | undefined, id: string, note?: unknown): Promise<MemoryProposal>;
+  /** `expectedReviewHash` = the reviewHash the caller reviewed (UI-IP-04). */
+  approveProposal(actor: Actor | null | undefined, id: string, expectedReviewHash: unknown): Promise<ApplyResult>;
+  rejectProposal(actor: Actor | null | undefined, id: string, expectedReviewHash: unknown, note?: unknown): Promise<MemoryProposal>;
 }
 
 function memoryRowOwner(id: string): string | null {
@@ -211,13 +212,13 @@ export const sqliteMemory: MemoryRepository = {
     return p;
   },
 
-  async approveProposal(actor, id) {
+  async approveProposal(actor, id, expectedReviewHash) {
     const userId = owner(actor);
-    return approveProposal(userId, id, userId);
+    return approveProposal(userId, id, userId, expectedReviewHash);
   },
 
-  async rejectProposal(actor, id, note) {
+  async rejectProposal(actor, id, expectedReviewHash, note) {
     const userId = owner(actor);
-    return rejectProposal(userId, id, userId, note);
+    return rejectProposal(userId, id, userId, expectedReviewHash, note);
   },
 };
