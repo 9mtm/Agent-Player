@@ -8,6 +8,7 @@ import type { FastifyRequest } from 'fastify';
 import { dbDriver } from '../db/pg/config.js';
 import { pgRun, outsidePgTransaction } from '../db/pg/pool.js';
 import { safeErrorFields } from './safe-error-log.js';
+import { all, dialect, run, sql } from '../repositories/sql-steps.js';
 
 export type AuditEventType =
     // Authentication events
@@ -372,8 +373,13 @@ export function logExtensionEvent(
     });
 }
 
+/** A bound ISO time compared with audit_logs.created_at: text on SQLite (as before), timestamptz on PostgreSQL. */
+function createdAtArg(d: 'sqlite' | 'postgres'): string {
+    return d === 'postgres' ? '(?)::timestamptz' : '?';
+}
+
 /**
- * Query audit logs
+ * Query audit logs (B2.2c: on the process driver)
  * @param filters Optional filters
  * @param limit Max results (default 100, max 1000)
  * @returns Array of audit log entries
@@ -386,46 +392,48 @@ export function queryAuditLogs(filters?: {
     start_date?: string;
     end_date?: string;
     limit?: number;
-}): any[] {
-    const db = getDatabase();
+}): Promise<any[]> {
+    return sql().read((function* () {
+        const d = yield* dialect();
+        let q = 'SELECT * FROM audit_logs WHERE 1=1';
+        const params: Array<string | number> = [];
 
-    let sql = 'SELECT * FROM audit_logs WHERE 1=1';
-    const params: any[] = [];
+        if (filters?.user_id) {
+            q += ' AND user_id = ?';
+            params.push(filters.user_id);
+        }
 
-    if (filters?.user_id) {
-        sql += ' AND user_id = ?';
-        params.push(filters.user_id);
-    }
+        if (filters?.event_type) {
+            q += ' AND event_type = ?';
+            params.push(filters.event_type);
+        }
 
-    if (filters?.event_type) {
-        sql += ' AND event_type = ?';
-        params.push(filters.event_type);
-    }
+        if (filters?.event_category) {
+            q += ' AND event_category = ?';
+            params.push(filters.event_category);
+        }
 
-    if (filters?.event_category) {
-        sql += ' AND event_category = ?';
-        params.push(filters.event_category);
-    }
+        if (filters?.severity) {
+            q += ' AND severity = ?';
+            params.push(filters.severity);
+        }
 
-    if (filters?.severity) {
-        sql += ' AND severity = ?';
-        params.push(filters.severity);
-    }
+        if (filters?.start_date) {
+            q += ` AND created_at >= ${createdAtArg(d)}`;
+            params.push(filters.start_date);
+        }
 
-    if (filters?.start_date) {
-        sql += ' AND created_at >= ?';
-        params.push(filters.start_date);
-    }
+        if (filters?.end_date) {
+            q += ` AND created_at <= ${createdAtArg(d)}`;
+            params.push(filters.end_date);
+        }
 
-    if (filters?.end_date) {
-        sql += ' AND created_at <= ?';
-        params.push(filters.end_date);
-    }
+        // id breaks created_at ties (same order on both drivers)
+        q += ' ORDER BY created_at DESC, id DESC LIMIT ?';
+        params.push(Math.min(filters?.limit || 100, 1000));
 
-    sql += ' ORDER BY created_at DESC LIMIT ?';
-    params.push(Math.min(filters?.limit || 100, 1000));
-
-    return db.queryAll(sql, ...params);
+        return yield* all(q, ...params);
+    })());
 }
 
 /**
@@ -433,9 +441,7 @@ export function queryAuditLogs(filters?: {
  * Removes logs older than retention period (default 90 days)
  * SECURITY: Uses parameterized date calculation to prevent SQL injection (C-06)
  */
-export function cleanupAuditLogs(retentionDays: number = 90): number {
-    const db = getDatabase();
-
+export async function cleanupAuditLogs(retentionDays: number = 90): Promise<number> {
     // SECURITY: Validate retentionDays is a positive integer (C-06)
     const safeDays = Math.max(1, Math.floor(Math.abs(retentionDays)));
 
@@ -443,10 +449,10 @@ export function cleanupAuditLogs(retentionDays: number = 90): number {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - safeDays);
 
-    const result = db.execute(
-        `DELETE FROM audit_logs WHERE created_at < ?`,
-        cutoffDate.toISOString()
-    );
+    const result = await sql().read((function* () {
+        const d = yield* dialect();
+        return yield* run(`DELETE FROM audit_logs WHERE created_at < ${createdAtArg(d)}`, cutoffDate.toISOString());
+    })());
 
     return result.changes || 0;
 }

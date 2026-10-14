@@ -8,11 +8,11 @@
  *               SAVEPOINT, so a failed audit row cannot abort the caller's
  *               transaction.
  *   reads       the security event log (status, stats, query, recent, get,
- *               export, config, cleanup) lives in its own store
- *               (audit/audit-storage.ts, `.data/audit/audit.db`), not in the
- *               main database, so it is not part of migrations-pg. These
- *               methods delegate to the SQLite audit repository with the same
- *               scope checks; moving that store is a separate B2 decision.
+ *               export, config, cleanup): the same methods and scope checks
+ *               as the SQLite repository. B2.2c: audit/audit-storage.ts puts
+ *               that store in the main PostgreSQL database
+ *               (security_audit_events, migrations-pg r007) when the process
+ *               driver is PostgreSQL.
  */
 
 import { requireActor } from '../scope.js';

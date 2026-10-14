@@ -11,7 +11,10 @@
  *
  * Agent runs and channel turns can write entries but never read the log.
  * SQLite implementation over services/audit-logger.ts (`audit_logs`) and
- * audit/ (security events store).
+ * audit/ (security events store). B2.2c: the security event store follows the
+ * process driver itself (audit/audit-storage.ts: its own SQLite file, or the
+ * security_audit_events table in the main PostgreSQL database), so these read
+ * methods serve both drivers.
  */
 
 import type { FastifyRequest } from 'fastify';
@@ -52,7 +55,7 @@ export type AuditRecord = Omit<AuditLogEntry, 'ip_address' | 'user_agent' | 'req
 
 export interface AuditRepository {
   record(actor: Actor | null | undefined, entry: AuditRecord, meta?: RequestMeta): Promise<void>;
-  status(actor: Actor | null | undefined): Promise<ReturnType<typeof getAuditStatus>>;
+  status(actor: Actor | null | undefined): Promise<Awaited<ReturnType<typeof getAuditStatus>>>;
   stats(actor: Actor | null | undefined): Promise<AuditStats>;
   query(actor: Actor | null | undefined, filters: AuditQuery): Promise<AuditEvent[]>;
   recent(actor: Actor | null | undefined, limit: number): Promise<AuditEvent[]>;

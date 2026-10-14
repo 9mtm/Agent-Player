@@ -1,6 +1,23 @@
 /**
  * Audit Storage System
- * Persistent storage for audit events using SQLite
+ * Persistent storage for security audit events.
+ *
+ * B2.2c, where the store lives:
+ *   SQLite      its own better-sqlite3 file (AUDIT_DB_PATH, default
+ *               <data>/audit/audit.db), table audit_events, as before.
+ *               Methods are synchronous and return plain values.
+ *   PostgreSQL  the main PostgreSQL database, table security_audit_events
+ *               (migrations-pg r007, from scripts/pg/runtime/
+ *               r007_security_audit_events.sql = auditEventsSchemaSql(
+ *               'security_audit_events')). One backup and one restore cover
+ *               it with everything else, it needs no second database or
+ *               file next to a PostgreSQL deployment, and the name keeps it
+ *               apart from audit_logs (the request audit trail). Methods
+ *               return promises; the event insert runs outside any open
+ *               transaction of the caller (a rollback never removes a
+ *               security event), and the size cleanup runs under a
+ *               transaction-scoped lock so two processes never both trim.
+ * The SQL is one copy for both (encryption/row-store.ts).
  */
 
 import { dataPathOr } from '../config/data-root.js';
@@ -17,46 +34,26 @@ import {
   DEFAULT_AUDIT_CONFIG,
 } from './types.js';
 import { validateColumnName, validateSortDirection } from '../db/sql-utils.js';
+import { dbDriver } from '../db/pg/config.js';
+import { likeCi } from '../db/pg/dialect.js';
+import { outsidePgTransaction } from '../db/pg/pool.js';
+import { mapAll, mapMaybe, pgRowStore, requirePgTable, sqliteRowStore, type Maybe, type RowStore } from '../encryption/row-store.js';
 
-export class AuditStorage {
-  private db: Database.Database | null = null;
-  private config: AuditConfig;
-  private dbPath: string;
+/** The security event table on each driver. */
+export function auditEventsTableFor(driver: 'sqlite' | 'postgres'): string {
+  return driver === 'postgres' ? 'security_audit_events' : 'audit_events';
+}
 
-  constructor(dbPath: string = dataPathOr('./.data/audit/audit.db', 'audit', 'audit.db'), config: Partial<AuditConfig> = {}) {
-    this.dbPath = dbPath;
-    this.config = { ...DEFAULT_AUDIT_CONFIG, ...config };
-  }
-
-  /**
-   * Initialize the storage
-   */
-  async initialize(): Promise<void> {
-    // Ensure directory exists
-    const dir = dirname(this.dbPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-
-    // Open database
-    this.db = new Database(this.dbPath);
-    this.db.pragma('journal_mode = WAL');
-
-    // Create tables
-    this.createTables();
-
-    // Create indexes
-    this.createIndexes();
-
-    console.log('[Audit Storage] Initialized at:', this.dbPath);
-  }
-
-  /**
-   * Create database tables
-   */
-  private createTables(): void {
-    this.db!.exec(`
-      CREATE TABLE IF NOT EXISTS audit_events (
+/**
+ * DDL of the event table and its indexes. SQLite: `audit_events` with the
+ * idx_audit_* names, as before. PostgreSQL: `security_audit_events` with
+ * idx_security_audit_* (the main database already has idx_audit_* on
+ * audit_logs).
+ */
+export function auditEventsSchemaSql(table: string = 'audit_events'): string {
+  const idx = table === 'audit_events' ? 'idx_audit' : `idx_${table.replace(/_events$/, '')}`;
+  return `
+      CREATE TABLE IF NOT EXISTS ${table} (
         id TEXT PRIMARY KEY,
         timestamp TEXT NOT NULL,
         category TEXT NOT NULL,
@@ -78,51 +75,79 @@ export class AuditStorage {
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE INDEX IF NOT EXISTS ${idx}_timestamp ON ${table}(timestamp);
+      CREATE INDEX IF NOT EXISTS ${idx}_category ON ${table}(category);
+      CREATE INDEX IF NOT EXISTS ${idx}_severity ON ${table}(severity);
+      CREATE INDEX IF NOT EXISTS ${idx}_actor ON ${table}(actor_id);
+      CREATE INDEX IF NOT EXISTS ${idx}_result ON ${table}(result);
+      CREATE INDEX IF NOT EXISTS ${idx}_session ON ${table}(session_id);
+    `;
+}
+
+/** SQLite only (its own file): a stats cache table, unused by the code; kept as before. */
+const SQLITE_STATS_CACHE_SQL = `
       CREATE TABLE IF NOT EXISTS audit_stats_cache (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
       );
-    `);
+    `;
+
+export class AuditStorage {
+  private db: Database.Database | null = null;
+  private store_: RowStore | null = null;
+  private table = 'audit_events';
+  private config: AuditConfig;
+  private dbPath: string;
+
+  constructor(dbPath: string = dataPathOr('./.data/audit/audit.db', 'audit', 'audit.db'), config: Partial<AuditConfig> = {}) {
+    this.dbPath = dbPath;
+    this.config = { ...DEFAULT_AUDIT_CONFIG, ...config };
   }
 
   /**
-   * Create indexes for efficient querying
+   * Initialize the storage
    */
-  private createIndexes(): void {
-    this.db!.exec(`
-      CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_events(timestamp);
-      CREATE INDEX IF NOT EXISTS idx_audit_category ON audit_events(category);
-      CREATE INDEX IF NOT EXISTS idx_audit_severity ON audit_events(severity);
-      CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_events(actor_id);
-      CREATE INDEX IF NOT EXISTS idx_audit_result ON audit_events(result);
-      CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_events(session_id);
-    `);
+  async initialize(): Promise<void> {
+    if (dbDriver() === 'postgres') {
+      // The table comes from the PostgreSQL migrations (no runtime DDL there).
+      this.table = auditEventsTableFor('postgres');
+      await requirePgTable(this.table, 'migrations-pg r007');
+      this.store_ = pgRowStore;
+      console.log('[Audit Storage] Initialized in the main PostgreSQL database:', this.table);
+      return;
+    }
+
+    // Ensure directory exists
+    const dir = dirname(this.dbPath);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+
+    // Open database
+    this.db = new Database(this.dbPath);
+    this.db.pragma('journal_mode = WAL');
+
+    // Create tables and indexes
+    this.db.exec(auditEventsSchemaSql('audit_events'));
+    this.db.exec(SQLITE_STATS_CACHE_SQL);
+    this.store_ = sqliteRowStore(this.db);
+
+    console.log('[Audit Storage] Initialized at:', this.dbPath);
+  }
+
+  private get rows(): RowStore {
+    if (!this.store_) throw new Error('Storage not initialized');
+    return this.store_;
   }
 
   /**
-   * Store an audit event
+   * Store an audit event (a duplicate id is ignored). PostgreSQL: outside
+   * any open transaction of the caller.
    */
-  store(event: AuditEvent): void {
-    if (!this.db) throw new Error('Storage not initialized');
-
-    const stmt = this.db.prepare(`
-      INSERT INTO audit_events (
-        id, timestamp, category, action, severity,
-        actor_type, actor_id, actor_name, actor_ip,
-        target_type, target_id, target_name,
-        result, error, details, request,
-        session_id, correlation_id
-      ) VALUES (
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?,
-        ?, ?, ?,
-        ?, ?, ?, ?,
-        ?, ?
-      )
-    `);
-
-    stmt.run(
+  store(event: AuditEvent): Maybe<void> {
+    const rows = this.rows;
+    const params = [
       event.id,
       event.timestamp.toISOString(),
       event.category,
@@ -140,36 +165,56 @@ export class AuditStorage {
       event.details ? JSON.stringify(event.details) : null,
       event.request ? JSON.stringify(event.request) : null,
       event.sessionId || null,
-      event.correlationId || null
-    );
-
-    // Cleanup old events if needed
-    this.cleanupIfNeeded();
+      event.correlationId || null,
+    ];
+    // (A promise result flattens: Maybe<Maybe<void>> is Maybe<void> at run time.)
+    const insert = (): Maybe<void> => mapMaybe(rows.run(`
+      INSERT INTO ${this.table} (
+        id, timestamp, category, action, severity,
+        actor_type, actor_id, actor_name, actor_ip,
+        target_type, target_id, target_name,
+        result, error, details, request,
+        session_id, correlation_id
+      ) VALUES (
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?
+      ) ON CONFLICT (id) DO NOTHING
+    `, ...params), () => this.cleanupIfNeeded()) as Maybe<void>;
+    if (rows.dialect === 'postgres') return outsidePgTransaction(insert);
+    return insert();
   }
 
   /**
    * Store multiple events
    */
-  storeBatch(events: AuditEvent[]): void {
-    if (!this.db || events.length === 0) return;
+  storeBatch(events: AuditEvent[]): Maybe<void> {
+    if (!this.store_ || events.length === 0) return;
 
-    const insert = this.db.transaction((evts: AuditEvent[]) => {
-      for (const event of evts) {
-        this.store(event);
-      }
-    });
-
-    insert(events);
+    if (this.db) {
+      const insert = this.db.transaction((evts: AuditEvent[]) => {
+        for (const event of evts) {
+          this.store(event);
+        }
+      });
+      insert(events);
+      return;
+    }
+    return (async () => {
+      for (const event of events) await this.store(event);
+    })();
   }
 
   /**
    * Query audit events
    */
-  query(filters: AuditQuery = {}): AuditEvent[] {
-    if (!this.db) throw new Error('Storage not initialized');
+  query(filters: AuditQuery = {}): Maybe<AuditEvent[]> {
+    const rowsStore = this.rows;
 
-    let sql = 'SELECT * FROM audit_events WHERE 1=1';
-    const params: unknown[] = [];
+    let sql = `SELECT * FROM ${this.table} WHERE 1=1`;
+    const params: Array<string | number | null> = [];
 
     // Date range
     if (filters.startDate) {
@@ -216,7 +261,8 @@ export class AuditStorage {
 
     // Search in details
     if (filters.search) {
-      sql += ' AND (details LIKE ? OR error LIKE ? OR action LIKE ?)';
+      const like = likeCi(rowsStore.dialect); // case-insensitive on both drivers
+      sql += ` AND (details ${like} ? OR error ${like} ? OR action ${like} ?)`;
       const searchPattern = `%${filters.search}%`;
       params.push(searchPattern, searchPattern, searchPattern);
     }
@@ -237,125 +283,95 @@ export class AuditStorage {
       params.push(filters.offset);
     }
 
-    const rows = this.db.prepare(sql).all(...params) as any[];
-    return rows.map(this.rowToEvent);
+    return mapMaybe(rowsStore.all(sql, ...params), (rows: any[]) => rows.map(this.rowToEvent));
   }
 
   /**
    * Get a single event by ID
    */
-  getById(id: string): AuditEvent | null {
-    if (!this.db) throw new Error('Storage not initialized');
-
-    const row = this.db.prepare('SELECT * FROM audit_events WHERE id = ?').get(id) as any;
-    return row ? this.rowToEvent(row) : null;
+  getById(id: string): Maybe<AuditEvent | null> {
+    return mapMaybe(this.rows.one(`SELECT * FROM ${this.table} WHERE id = ?`, id), (row: any) => (row ? this.rowToEvent(row) : null));
   }
 
   /**
    * Get audit statistics
    */
-  getStats(): AuditStats {
-    if (!this.db) throw new Error('Storage not initialized');
-
-    // Total events
-    const totalRow = this.db.prepare('SELECT COUNT(*) as count FROM audit_events').get() as any;
-    const totalEvents = totalRow.count;
-
-    // By category
-    const categoryRows = this.db.prepare(`
-      SELECT category, COUNT(*) as count FROM audit_events GROUP BY category
-    `).all() as any[];
-    const byCategory = {} as Record<AuditCategory, number>;
-    for (const row of categoryRows) {
-      byCategory[row.category as AuditCategory] = row.count;
-    }
-
-    // By severity
-    const severityRows = this.db.prepare(`
-      SELECT severity, COUNT(*) as count FROM audit_events GROUP BY severity
-    `).all() as any[];
-    const bySeverity = {} as Record<AuditSeverity, number>;
-    for (const row of severityRows) {
-      bySeverity[row.severity as AuditSeverity] = row.count;
-    }
-
-    // By result
-    const resultRows = this.db.prepare(`
-      SELECT result, COUNT(*) as count FROM audit_events GROUP BY result
-    `).all() as any[];
-    const byResult = {} as Record<string, number>;
-    for (const row of resultRows) {
-      byResult[row.result] = row.count;
-    }
-
-    // Recent critical (last 24h)
+  getStats(): Maybe<AuditStats> {
+    const rows = this.rows;
+    const t = this.table;
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const criticalRow = this.db.prepare(`
-      SELECT COUNT(*) as count FROM audit_events
-      WHERE severity = 'critical' AND timestamp >= ?
-    `).get(oneDayAgo) as any;
-
-    // Failed logins (last 24h)
-    const failedLoginRow = this.db.prepare(`
-      SELECT COUNT(*) as count FROM audit_events
-      WHERE action = 'login_failed' AND timestamp >= ?
-    `).get(oneDayAgo) as any;
-
-    // Blocked executions (last 24h)
-    const blockedRow = this.db.prepare(`
-      SELECT COUNT(*) as count FROM audit_events
-      WHERE action = 'execute_blocked' AND timestamp >= ?
-    `).get(oneDayAgo) as any;
-
-    return {
-      totalEvents,
-      byCategory,
-      bySeverity,
-      byResult,
-      recentCritical: criticalRow.count,
-      failedLogins24h: failedLoginRow.count,
-      blockedExecutions24h: blockedRow.count,
-    };
+    return mapAll([
+      rows.one(`SELECT COUNT(*) as count FROM ${t}`),
+      rows.all(`SELECT category, COUNT(*) as count FROM ${t} GROUP BY category`),
+      rows.all(`SELECT severity, COUNT(*) as count FROM ${t} GROUP BY severity`),
+      rows.all(`SELECT result, COUNT(*) as count FROM ${t} GROUP BY result`),
+      // Recent critical, failed logins and blocked executions (last 24h)
+      rows.one(`SELECT COUNT(*) as count FROM ${t} WHERE severity = 'critical' AND timestamp >= ?`, oneDayAgo),
+      rows.one(`SELECT COUNT(*) as count FROM ${t} WHERE action = 'login_failed' AND timestamp >= ?`, oneDayAgo),
+      rows.one(`SELECT COUNT(*) as count FROM ${t} WHERE action = 'execute_blocked' AND timestamp >= ?`, oneDayAgo),
+    ] as const, ([totalRow, categoryRows, severityRows, resultRows, criticalRow, failedLoginRow, blockedRow]: any[]) => {
+      const byCategory = {} as Record<AuditCategory, number>;
+      for (const row of categoryRows) byCategory[row.category as AuditCategory] = row.count;
+      const bySeverity = {} as Record<AuditSeverity, number>;
+      for (const row of severityRows) bySeverity[row.severity as AuditSeverity] = row.count;
+      const byResult = {} as Record<string, number>;
+      for (const row of resultRows) byResult[row.result] = row.count;
+      return {
+        totalEvents: totalRow.count,
+        byCategory,
+        bySeverity,
+        byResult,
+        recentCritical: criticalRow.count,
+        failedLogins24h: failedLoginRow.count,
+        blockedExecutions24h: blockedRow.count,
+      };
+    });
   }
 
   /**
    * Get recent events
    */
-  getRecent(limit: number = 50): AuditEvent[] {
+  getRecent(limit: number = 50): Maybe<AuditEvent[]> {
     return this.query({ limit, orderBy: 'timestamp', orderDir: 'desc' });
   }
 
   /**
    * Delete events older than retention period
    */
-  cleanup(): number {
-    if (!this.db) return 0;
+  cleanup(): Maybe<number> {
+    if (!this.store_) return 0;
 
     const cutoffDate = new Date(
       Date.now() - this.config.retentionDays * 24 * 60 * 60 * 1000
     ).toISOString();
 
-    const result = this.db.prepare('DELETE FROM audit_events WHERE timestamp < ?').run(cutoffDate);
-    return result.changes;
+    return mapMaybe(this.store_.run(`DELETE FROM ${this.table} WHERE timestamp < ?`, cutoffDate), (r) => r.changes);
   }
 
   /**
-   * Cleanup if exceeding max events
+   * Cleanup if exceeding max events (PostgreSQL: one trimmer at a time)
    */
-  private cleanupIfNeeded(): void {
-    if (!this.db) return;
-
-    const countRow = this.db.prepare('SELECT COUNT(*) as count FROM audit_events').get() as any;
-
-    if (countRow.count > this.config.maxEvents) {
-      // Delete oldest 10% of events
-      const deleteCount = Math.floor(this.config.maxEvents * 0.1);
-      this.db.prepare(`
-        DELETE FROM audit_events WHERE id IN (
-          SELECT id FROM audit_events ORDER BY timestamp ASC LIMIT ?
-        )
-      `).run(deleteCount);
-    }
+  private cleanupIfNeeded(): Maybe<void> {
+    const rows = this.store_;
+    if (!rows) return;
+    const t = this.table;
+    const trim = (): Maybe<void> => mapMaybe(rows.one(`SELECT COUNT(*) as count FROM ${t}`), (countRow: any): Maybe<void> => {
+      if (countRow.count > this.config.maxEvents) {
+        // Delete oldest 10% of events
+        const deleteCount = Math.floor(this.config.maxEvents * 0.1);
+        return mapMaybe(rows.run(`
+          DELETE FROM ${t} WHERE id IN (
+            SELECT id FROM ${t} ORDER BY timestamp ASC LIMIT ?
+          )
+        `, deleteCount), () => undefined);
+      }
+      return undefined;
+    }) as Maybe<void>;
+    if (rows.dialect !== 'postgres') return trim();
+    return rows.transaction(async () => {
+      await rows.one('SELECT pg_advisory_xact_lock(hashtextextended(?, 0))', `${t}:cleanup`);
+      await trim();
+    });
   }
 
   /**
@@ -391,9 +407,8 @@ export class AuditStorage {
   /**
    * Export events to JSON
    */
-  exportToJson(filters: AuditQuery = {}): string {
-    const events = this.query(filters);
-    return JSON.stringify(events, null, 2);
+  exportToJson(filters: AuditQuery = {}): Maybe<string> {
+    return mapMaybe(this.query(filters), (events) => JSON.stringify(events, null, 2));
   }
 
   /**
@@ -404,6 +419,7 @@ export class AuditStorage {
       this.db.close();
       this.db = null;
     }
+    this.store_ = null; // PostgreSQL: the process pool is closed by its owner
   }
 }
 

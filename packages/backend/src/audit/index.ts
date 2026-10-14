@@ -26,10 +26,9 @@ export async function initializeAudit(config?: Partial<AuditConfig>): Promise<{
   // Initialize storage
   await storage.initialize();
 
-  // Connect logger to storage
-  logger.onEvent((event) => {
-    storage.store(event);
-  });
+  // Connect logger to storage (B2.2c: a promise on PostgreSQL; the logger
+  // awaits handlers and logs their errors)
+  logger.onEvent((event) => storage.store(event));
 
   // Start logger
   logger.start();
@@ -43,16 +42,16 @@ export async function initializeAudit(config?: Partial<AuditConfig>): Promise<{
 /**
  * Get audit system status
  */
-export function getAuditStatus(): {
+export async function getAuditStatus(): Promise<{
   initialized: boolean;
   stats: AuditStats | null;
   config: AuditConfig;
-} {
+}> {
   const logger = getAuditLogger();
 
   return {
     initialized,
-    stats: initialized ? getAuditStorage().getStats() : null,
+    stats: initialized ? await getAuditStorage().getStats() : null,
     config: logger.getConfig(),
   };
 }
@@ -60,14 +59,14 @@ export function getAuditStatus(): {
 /**
  * Shutdown audit system
  */
-export function shutdownAudit(): void {
+export async function shutdownAudit(): Promise<void> {
   const logger = getAuditLogger();
   const storage = getAuditStorage();
 
   // Flush remaining events
   const events = logger.flush();
   if (events.length > 0) {
-    storage.storeBatch(events);
+    await storage.storeBatch(events);
   }
 
   // Stop logger and close storage

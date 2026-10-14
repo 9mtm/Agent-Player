@@ -235,11 +235,9 @@ export async function initializeBackend(fastify: FastifyInstance): Promise<Start
     // Initialize Extension Storage Stats Scheduler (hourly updates)
     const { updateAllExtensionStorageStats } = await import('../services/extension-analytics.js');
     setInterval(() => {
-      try {
-        updateAllExtensionStorageStats();
-      } catch (err) {
+      updateAllExtensionStorageStats().catch((err) => {
         console.error('[Extension Analytics] Failed to update storage stats:', err);
-      }
+      });
     }, 60 * 60 * 1000); // Every 60 minutes
     console.log('[Server] ✅ Extension analytics scheduler started (hourly storage updates)\n');
 

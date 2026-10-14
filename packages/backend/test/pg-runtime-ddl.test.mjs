@@ -28,6 +28,8 @@ const { keysSchemaSql, keysTableFor } = await import(join(backendDir, 'src/encry
 const teams = await import(join(backendDir, 'src/repositories/teams.ts'));
 const audit = await import(join(backendDir, 'src/services/audit-logger.ts'));
 const { INDEXER_TABLES_SQL, INDEXER_FTS_SQL } = await import(join(backendDir, 'src/memory/indexer.ts'));
+const { APP_SETTINGS_SQL } = await import(join(backendDir, 'src/settings/settings-manager.ts'));
+const auditStorage = await import(join(backendDir, 'src/audit/audit-storage.ts'));
 
 test.after(() => {
   process.chdir(backendDir);
@@ -79,6 +81,50 @@ test('r004/r005 equal the hybrid index DDL indexer.ts runs on SQLite; r005 is th
   assert.match(fts, /ADD COLUMN IF NOT EXISTS fts tsvector\s+GENERATED ALWAYS AS \(to_tsvector\('simple', /);
   assert.match(fts, /CREATE INDEX IF NOT EXISTS idx_memory_index_fts ON memory_index USING gin \(fts\)/);
   assert.doesNotMatch(statements(fts).join(';'), /CREATE EXTENSION|VIRTUAL|fts5/i, 'no extension, no FTS5 on PostgreSQL');
+});
+
+test('B2.2c: r006 equals the settings manager DDL; r007 equals the security event store DDL for PostgreSQL', () => {
+  assert.deepEqual(statements(runtime('r006_app_settings.sql')), statements(APP_SETTINGS_SQL));
+  assert.equal(auditStorage.auditEventsTableFor('postgres'), 'security_audit_events');
+  assert.equal(auditStorage.auditEventsTableFor('sqlite'), 'audit_events');
+  assert.deepEqual(statements(runtime('r007_security_audit_events.sql')), statements(auditStorage.auditEventsSchemaSql('security_audit_events')));
+  // SQLite keeps its table and index names in its own file.
+  const sqliteDdl = auditStorage.auditEventsSchemaSql();
+  assert.match(sqliteDdl, /CREATE TABLE IF NOT EXISTS audit_events \(/);
+  assert.match(sqliteDdl, /CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_events\(timestamp\)/);
+  const pg = (f) => readFileSync(join(backendDir, 'src', 'db', 'migrations-pg', f), 'utf8');
+  assert.match(pg('r006_app_settings.sql'), /CREATE TABLE IF NOT EXISTS app_settings \(/);
+  assert.match(pg('r007_security_audit_events.sql'), /CREATE TABLE IF NOT EXISTS security_audit_events \(/);
+  assert.doesNotMatch(pg('r007_security_audit_events.sql'), /idx_audit_/, 'no clash with the audit_logs indexes');
+});
+
+test('B2.2c: the SQLite security event store (own file) stores, queries, counts and cleans up synchronously', async () => {
+  const store = new auditStorage.AuditStorage(join(dir, 'audit-test', 'audit.db'), { retentionDays: 1, maxEvents: 1000 });
+  const s = { ...console };
+  console.log = () => {};
+  try { await store.initialize(); } finally { Object.assign(console, s); }
+  const ev = (id, ms, action = 'login_failed') => ({
+    id, timestamp: new Date(ms), category: 'auth', action, severity: 'medium',
+    actor: { type: 'user', id: 'u1' }, result: 'failure', details: { note: `Note ${id}` },
+  });
+  try {
+    assert.equal(store.store(ev('e1', Date.now())), undefined, 'synchronous on SQLite');
+    store.store(ev('e1', Date.now())); // a duplicate id is ignored
+    store.store(ev('e2', Date.now() - 3 * 86_400_000, 'execute_blocked'));
+    const q = store.query({ search: 'NOTE E1' });
+    assert.ok(Array.isArray(q), 'plain array on SQLite');
+    assert.deepEqual(q.map((e) => e.id), ['e1'], 'search ignores case');
+    assert.equal(store.getById('e1').actor.id, 'u1');
+    assert.equal(store.getById('missing'), null);
+    const st = store.getStats();
+    assert.equal(st.totalEvents, 2);
+    assert.equal(st.failedLogins24h, 1);
+    assert.equal(st.blockedExecutions24h, 0);
+    assert.equal(store.cleanup(), 1, 'older than the retention removed');
+    assert.deepEqual(JSON.parse(store.exportToJson()).map((e) => e.id), ['e1']);
+  } finally {
+    store.close();
+  }
 });
 
 test('invitationRow: PostgreSQL timestamptz text becomes the ISO string; SQLite rows are unchanged', () => {
