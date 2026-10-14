@@ -21,6 +21,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { repositories } from '../../repositories/index.js';
 import type { Actor } from '../../repositories/actor.js';
 import { memoryMember, sendMemoryError, boundedInt } from './memory-access.js';
+import { sendInternalError } from '../error-handler.js';
 
 export default async function memorySharingRoutes(fastify: FastifyInstance) {
     const memory = () => repositories.memory;
@@ -39,7 +40,7 @@ export default async function memorySharingRoutes(fastify: FastifyInstance) {
         } catch (error: any) {
             const sent = sendMemoryError(reply, error);
             if (sent) return sent;
-            return reply.status(500).send({ error: failure, message: error?.message });
+            return sendInternalError(reply, `[MemorySharing] ${request.method} ${request.routeOptions?.url ?? 'unknown'}`, error);
         }
     }
 

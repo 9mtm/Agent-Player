@@ -18,6 +18,7 @@ import {
   getAgentFiles,
   initializeAgentDir
 } from '../../services/agent-files.js';
+import { sendInternalError } from '../error-handler.js';
 
 export async function agentFilesRoutes(fastify: FastifyInstance) {
   /**
@@ -35,10 +36,7 @@ export async function agentFilesRoutes(fastify: FastifyInstance) {
           content
         };
       } catch (err: any) {
-        return reply.code(500).send({
-          success: false,
-          error: err.message
-        });
+        return sendInternalError(reply, '[AgentFiles] GET /api/agents/:id/personality', err);
       }
     }
   );
@@ -66,10 +64,7 @@ export async function agentFilesRoutes(fastify: FastifyInstance) {
           message: 'Personality updated'
         };
       } catch (err: any) {
-        return reply.code(500).send({
-          success: false,
-          error: err.message
-        });
+        return sendInternalError(reply, '[AgentFiles] PUT /api/agents/:id/personality', err);
       }
     }
   );
@@ -89,10 +84,7 @@ export async function agentFilesRoutes(fastify: FastifyInstance) {
           content
         };
       } catch (err: any) {
-        return reply.code(500).send({
-          success: false,
-          error: err.message
-        });
+        return sendInternalError(reply, '[AgentFiles] GET /api/agents/:id/memory', err);
       }
     }
   );
@@ -120,10 +112,7 @@ export async function agentFilesRoutes(fastify: FastifyInstance) {
           message: 'Memory updated'
         };
       } catch (err: any) {
-        return reply.code(500).send({
-          success: false,
-          error: err.message
-        });
+        return sendInternalError(reply, '[AgentFiles] PUT /api/agents/:id/memory', err);
       }
     }
   );
@@ -151,10 +140,7 @@ export async function agentFilesRoutes(fastify: FastifyInstance) {
           message: 'Memory appended'
         };
       } catch (err: any) {
-        return reply.code(500).send({
-          success: false,
-          error: err.message
-        });
+        return sendInternalError(reply, '[AgentFiles] POST /api/agents/:id/memory/append', err);
       }
     }
   );
@@ -174,10 +160,7 @@ export async function agentFilesRoutes(fastify: FastifyInstance) {
           files
         };
       } catch (err: any) {
-        return reply.code(500).send({
-          success: false,
-          error: err.message
-        });
+        return sendInternalError(reply, '[AgentFiles] GET /api/agents/:id/knowledge', err);
       }
     }
   );
@@ -230,10 +213,7 @@ export async function agentFilesRoutes(fastify: FastifyInstance) {
           message: 'File saved'
         };
       } catch (err: any) {
-        return reply.code(500).send({
-          success: false,
-          error: err.message
-        });
+        return sendInternalError(reply, '[AgentFiles] PUT /api/agents/:id/knowledge', err);
       }
     }
   );
@@ -261,10 +241,7 @@ export async function agentFilesRoutes(fastify: FastifyInstance) {
           message: 'File deleted'
         };
       } catch (err: any) {
-        return reply.code(500).send({
-          success: false,
-          error: err.message
-        });
+        return sendInternalError(reply, '[AgentFiles] DELETE /api/agents/:id/knowledge', err);
       }
     }
   );
@@ -284,10 +261,7 @@ export async function agentFilesRoutes(fastify: FastifyInstance) {
           ...files
         };
       } catch (err: any) {
-        return reply.code(500).send({
-          success: false,
-          error: err.message
-        });
+        return sendInternalError(reply, '[AgentFiles] GET /api/agents/:id/files', err);
       }
     }
   );
@@ -307,10 +281,7 @@ export async function agentFilesRoutes(fastify: FastifyInstance) {
           message: 'Agent directory initialized'
         };
       } catch (err: any) {
-        return reply.code(500).send({
-          success: false,
-          error: err.message
-        });
+        return sendInternalError(reply, '[AgentFiles] POST /api/agents/:id/initialize', err);
       }
     }
   );

@@ -18,6 +18,8 @@ import { encryptAccountCredentials } from '../../services/email-encryption.js';
 import { oauthService } from '../../services/oauth-service.js';
 import { imapService } from '../../services/imap-service.js';
 import { emailSyncService } from '../../services/email-sync-service.js';
+import { sendInternalError } from '../error-handler.js';
+import { safeErrorFields } from '../../services/safe-error-log.js';
 
 export default async function emailAccountsRoutes(fastify: FastifyInstance) {
     const db = getDatabase();
@@ -43,8 +45,7 @@ export default async function emailAccountsRoutes(fastify: FastifyInstance) {
 
             return { success: true, accounts };
         } catch (error: any) {
-            console.error('❌ [EmailAccounts] List failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailAccounts] GET /api/email/accounts', error);
         }
     });
 
@@ -73,8 +74,7 @@ export default async function emailAccountsRoutes(fastify: FastifyInstance) {
 
             return { success: true, account };
         } catch (error: any) {
-            console.error('❌ [EmailAccounts] Get failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailAccounts] GET /api/email/accounts/:id', error);
         }
     });
 
@@ -197,7 +197,7 @@ export default async function emailAccountsRoutes(fastify: FastifyInstance) {
 
             // Start initial sync in background
             emailSyncService.syncAccount(accountId).catch(err => {
-                console.error('❌ [EmailAccounts] Initial sync failed:', err);
+                console.error('❌ [EmailAccounts] Initial sync failed:', safeErrorFields(err));
             });
 
             // Start auto-sync if enabled
@@ -213,8 +213,7 @@ export default async function emailAccountsRoutes(fastify: FastifyInstance) {
                 accountId,
             };
         } catch (error: any) {
-            console.error('❌ [EmailAccounts] Add failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailAccounts] POST /api/email/accounts', error);
         }
     });
 
@@ -300,8 +299,7 @@ export default async function emailAccountsRoutes(fastify: FastifyInstance) {
 
             return { success: true, message: 'Account updated successfully' };
         } catch (error: any) {
-            console.error('❌ [EmailAccounts] Update failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailAccounts] PUT /api/email/accounts/:id', error);
         }
     });
 
@@ -332,8 +330,7 @@ export default async function emailAccountsRoutes(fastify: FastifyInstance) {
 
             return { success: true, message: 'Account deleted successfully' };
         } catch (error: any) {
-            console.error('❌ [EmailAccounts] Delete failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailAccounts] DELETE /api/email/accounts/:id', error);
         }
     });
 
@@ -358,13 +355,12 @@ export default async function emailAccountsRoutes(fastify: FastifyInstance) {
 
             // Trigger sync (don't wait for it to complete)
             emailSyncService.syncAccount(id).catch(err => {
-                console.error('❌ [EmailAccounts] Sync failed:', err);
+                console.error('❌ [EmailAccounts] Sync failed:', safeErrorFields(err));
             });
 
             return { success: true, message: 'Sync started' };
         } catch (error: any) {
-            console.error('❌ [EmailAccounts] Sync trigger failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailAccounts] POST /api/email/accounts/:id/sync', error);
         }
     });
 
@@ -397,8 +393,7 @@ export default async function emailAccountsRoutes(fastify: FastifyInstance) {
                 },
             };
         } catch (error: any) {
-            console.error('❌ [EmailAccounts] Status check failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailAccounts] GET /api/email/accounts/:id/status', error);
         }
     });
 
@@ -420,8 +415,7 @@ export default async function emailAccountsRoutes(fastify: FastifyInstance) {
 
             return { success: true, url };
         } catch (error: any) {
-            console.error('❌ [EmailAccounts] Gmail auth URL failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailAccounts] GET /api/email/accounts/gmail/auth-url', error);
         }
     });
 
@@ -443,8 +437,7 @@ export default async function emailAccountsRoutes(fastify: FastifyInstance) {
 
             return { success: true, url };
         } catch (error: any) {
-            console.error('❌ [EmailAccounts] Outlook auth URL failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailAccounts] GET /api/email/accounts/outlook/auth-url', error);
         }
     });
 
@@ -533,7 +526,7 @@ export default async function emailAccountsRoutes(fastify: FastifyInstance) {
 
             // Start initial sync
             emailSyncService.syncAccount(accountId).catch(err => {
-                console.error('❌ [EmailAccounts] Initial sync failed:', err);
+                console.error('❌ [EmailAccounts] Initial sync failed:', safeErrorFields(err));
             });
 
             // Start auto-sync
@@ -547,8 +540,7 @@ export default async function emailAccountsRoutes(fastify: FastifyInstance) {
                 accountId,
             };
         } catch (error: any) {
-            console.error('❌ [EmailAccounts] Gmail OAuth failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailAccounts] POST /api/email/accounts/gmail', error);
         }
     });
 
@@ -637,7 +629,7 @@ export default async function emailAccountsRoutes(fastify: FastifyInstance) {
 
             // Start initial sync
             emailSyncService.syncAccount(accountId).catch(err => {
-                console.error('❌ [EmailAccounts] Initial sync failed:', err);
+                console.error('❌ [EmailAccounts] Initial sync failed:', safeErrorFields(err));
             });
 
             // Start auto-sync
@@ -651,8 +643,7 @@ export default async function emailAccountsRoutes(fastify: FastifyInstance) {
                 accountId,
             };
         } catch (error: any) {
-            console.error('❌ [EmailAccounts] Outlook OAuth failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailAccounts] POST /api/email/accounts/outlook', error);
         }
     });
 }

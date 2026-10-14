@@ -13,6 +13,7 @@ import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { v4 as uuidv4 } from 'uuid';
+import { sendInternalError } from '../error-handler.js';
 
 export default async function emailDraftsRoutes(fastify: FastifyInstance) {
     const db = getDatabase();
@@ -50,8 +51,7 @@ export default async function emailDraftsRoutes(fastify: FastifyInstance) {
 
                 return { success: true, drafts };
             } catch (error: any) {
-                console.error('❌ [EmailDrafts] List failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailDrafts] GET /api/email/accounts/:accountId/drafts', error);
             }
         }
     );
@@ -80,8 +80,7 @@ export default async function emailDraftsRoutes(fastify: FastifyInstance) {
 
                 return { success: true, draft };
             } catch (error: any) {
-                console.error('❌ [EmailDrafts] Get failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailDrafts] GET /api/email/drafts/:draftId', error);
             }
         }
     );
@@ -159,8 +158,7 @@ export default async function emailDraftsRoutes(fastify: FastifyInstance) {
                 draftId,
             };
         } catch (error: any) {
-            console.error('❌ [EmailDrafts] Create failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailDrafts] POST /api/email/accounts/:accountId/drafts', error);
         }
     });
 
@@ -258,8 +256,7 @@ export default async function emailDraftsRoutes(fastify: FastifyInstance) {
 
             return { success: true, message: 'Draft saved successfully' };
         } catch (error: any) {
-            console.error('❌ [EmailDrafts] Update failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailDrafts] PUT /api/email/drafts/:draftId', error);
         }
     });
 
@@ -292,8 +289,7 @@ export default async function emailDraftsRoutes(fastify: FastifyInstance) {
 
                 return { success: true, message: 'Draft deleted successfully' };
             } catch (error: any) {
-                console.error('❌ [EmailDrafts] Delete failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailDrafts] DELETE /api/email/drafts/:draftId', error);
             }
         }
     );
@@ -328,8 +324,7 @@ export default async function emailDraftsRoutes(fastify: FastifyInstance) {
                     count: result.changes,
                 };
             } catch (error: any) {
-                console.error('❌ [EmailDrafts] Delete all failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailDrafts] DELETE /api/email/accounts/:accountId/drafts', error);
             }
         }
     );

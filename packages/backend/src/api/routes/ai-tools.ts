@@ -12,6 +12,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { OLLAMA_URL } from '../../llm/ollama.js';
+import { sendInternalError } from '../error-handler.js';
 
 // ─── Tool Definitions ─────────────────────────────────────────────────────────
 
@@ -440,7 +441,7 @@ export async function aiToolsRoutes(fastify: FastifyInstance): Promise<void> {
           return reply.status(500).send({ error: 'Python not found. Install Python first.' });
         }
       } catch (err: any) {
-        return reply.status(500).send({ error: err.message });
+        return sendInternalError(reply, '[AiTools] POST /api/ai-tools/:id/install', err);
       }
     }
   );

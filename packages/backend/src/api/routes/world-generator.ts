@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { getEnvProviderApiKey } from '../../credentials/authority.js';
+import { sendInternalError } from '../error-handler.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -183,11 +184,7 @@ Generate the 3D world JSON description:`,
         },
       });
     } catch (error: any) {
-      fastify.log.error('Error generating world:', error);
-      return reply.status(500).send({
-        error: 'Failed to generate world',
-        message: error.message,
-      });
+      return sendInternalError(reply, '[WorldGenerator] POST /api/world-generator/ai', error);
     }
   });
 }

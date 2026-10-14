@@ -13,6 +13,7 @@ import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { v4 as uuidv4 } from 'uuid';
+import { sendInternalError } from '../error-handler.js';
 
 export default async function emailFoldersRoutes(fastify: FastifyInstance) {
     const db = getDatabase();
@@ -49,8 +50,7 @@ export default async function emailFoldersRoutes(fastify: FastifyInstance) {
 
                 return { success: true, folders };
             } catch (error: any) {
-                console.error('❌ [EmailFolders] List failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailFolders] GET /api/email/accounts/:accountId/folders', error);
             }
         }
     );
@@ -85,8 +85,7 @@ export default async function emailFoldersRoutes(fastify: FastifyInstance) {
 
                 return { success: true, folder };
             } catch (error: any) {
-                console.error('❌ [EmailFolders] Get failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailFolders] GET /api/email/accounts/:accountId/folders/:folderId', error);
             }
         }
     );
@@ -157,8 +156,7 @@ export default async function emailFoldersRoutes(fastify: FastifyInstance) {
                 folderId,
             };
         } catch (error: any) {
-            console.error('❌ [EmailFolders] Create failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailFolders] POST /api/email/accounts/:accountId/folders', error);
         }
     });
 
@@ -236,8 +234,7 @@ export default async function emailFoldersRoutes(fastify: FastifyInstance) {
 
             return { success: true, message: 'Folder updated successfully' };
         } catch (error: any) {
-            console.error('❌ [EmailFolders] Update failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailFolders] PUT /api/email/accounts/:accountId/folders/:folderId', error);
         }
     });
 
@@ -280,8 +277,7 @@ export default async function emailFoldersRoutes(fastify: FastifyInstance) {
 
                 return { success: true, message: 'Folder deleted successfully' };
             } catch (error: any) {
-                console.error('❌ [EmailFolders] Delete failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailFolders] DELETE /api/email/accounts/:accountId/folders/:folderId', error);
             }
         }
     );

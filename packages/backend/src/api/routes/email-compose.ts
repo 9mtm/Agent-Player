@@ -15,6 +15,7 @@ import { getUserIdFromRequest } from '../../auth/jwt.js';
 import nodemailer from 'nodemailer';
 import { decryptAccountCredentials } from '../../services/email-encryption.js';
 import { v4 as uuidv4 } from 'uuid';
+import { sendInternalError } from '../error-handler.js';
 
 export default async function emailComposeRoutes(fastify: FastifyInstance) {
     const db = getDatabase();
@@ -202,8 +203,7 @@ export default async function emailComposeRoutes(fastify: FastifyInstance) {
                 messageId: info.messageId,
             };
         } catch (error: any) {
-            console.error('❌ [EmailCompose] Send failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailCompose] POST /api/email/accounts/:accountId/send', error);
         }
     });
 
@@ -265,8 +265,7 @@ export default async function emailComposeRoutes(fastify: FastifyInstance) {
                 },
             });
         } catch (error: any) {
-            console.error('❌ [EmailCompose] Reply failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailCompose] POST /api/email/accounts/:accountId/reply/:emailId', error);
         }
     });
 
@@ -347,8 +346,7 @@ export default async function emailComposeRoutes(fastify: FastifyInstance) {
                 },
             });
         } catch (error: any) {
-            console.error('❌ [EmailCompose] Reply-all failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailCompose] POST /api/email/accounts/:accountId/reply-all/:emailId', error);
         }
     });
 
@@ -413,8 +411,7 @@ export default async function emailComposeRoutes(fastify: FastifyInstance) {
                 },
             });
         } catch (error: any) {
-            console.error('❌ [EmailCompose] Forward failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailCompose] POST /api/email/accounts/:accountId/forward/:emailId', error);
         }
     });
 }

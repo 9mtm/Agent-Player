@@ -16,6 +16,8 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 import { getDatabase } from '../../db/index.js';
+import { sendInternalError } from '../error-handler.js';
+import { safeErrorFields } from '../../services/safe-error-log.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -94,8 +96,8 @@ export async function claudeLocalRoutes(fastify: FastifyInstance): Promise<void>
       const stats = JSON.parse(raw);
       return reply.send({ available: true, stats });
     } catch (err: any) {
-      fastify.log.error('[ClaudeLocal] stats error:', err.message);
-      return reply.send({ available: false, error: err.message });
+      console.error('[ClaudeLocal] GET /api/claude-local/stats failed', safeErrorFields(err));
+      return reply.send({ available: false, error: 'Stats could not be read' });
     }
   });
 
@@ -157,8 +159,7 @@ export async function claudeLocalRoutes(fastify: FastifyInstance): Promise<void>
         projects: projects.filter(Boolean),
       });
     } catch (err: any) {
-      fastify.log.error('[ClaudeLocal] sessions error:', err.message);
-      return reply.status(500).send({ error: err.message });
+      return sendInternalError(reply, '[ClaudeLocal] GET /api/claude-local/sessions', err);
     }
   });
 
@@ -261,8 +262,7 @@ export async function claudeLocalRoutes(fastify: FastifyInstance): Promise<void>
 
       return reply.send({ available: true, plans });
     } catch (err: any) {
-      fastify.log.error('[ClaudeLocal] plans error:', err.message);
-      return reply.status(500).send({ error: err.message });
+      return sendInternalError(reply, '[ClaudeLocal] GET /api/claude-local/plans', err);
     }
   });
 
@@ -381,8 +381,7 @@ export async function claudeLocalRoutes(fastify: FastifyInstance): Promise<void>
           messageCount: importedMessages.length,
         });
       } catch (err: any) {
-        fastify.log.error('[ClaudeLocal] Import error:', err.message);
-        return reply.status(500).send({ error: `Import failed: ${err.message}` });
+        return sendInternalError(reply, '[ClaudeLocal] POST /api/claude-local/import/:slug/:id', err);
       }
     }
   );

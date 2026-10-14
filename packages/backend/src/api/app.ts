@@ -99,6 +99,7 @@ import { registerHostCheck } from '../middleware/host-check.js';
 import type { FastifyInstance, FastifyServerOptions } from 'fastify';
 import { registerAuthGate } from '../auth/auth-gate.js';
 import { isPublicStaticPath } from './static-access.js';
+import { registerGlobalErrorHandler } from './error-handler.js';
 
 export interface BuildServerOptions {
   logger?: FastifyServerOptions['logger'];
@@ -118,6 +119,11 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       }
     }
   });
+
+  // SECURITY (H-ERR-01): one global error handler, set before any plugin so
+  // every encapsulated route context inherits it. Unknown / 5xx errors get
+  // the fixed internal-error body; 4xx errors keep Fastify's default reply.
+  registerGlobalErrorHandler(fastify);
 
   // Register CORS — SECURITY: Restrict to allowed origins only
   const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:41521').split(',').map(o => o.trim());

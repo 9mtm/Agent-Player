@@ -8,6 +8,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { repositories } from '../../repositories/index.js';
 import type { Actor } from '../../repositories/actor.js';
 import { memoryMember, sendMemoryError, boundedInt } from './memory-access.js';
+import { sendInternalError } from '../error-handler.js';
 
 /**
  * SECURITY (S0-Q.17): every route needs a valid token of an active member
@@ -32,8 +33,7 @@ export default async function memoryQualityRoutes(fastify: FastifyInstance) {
         } catch (err: any) {
             const sent = sendMemoryError(reply, err, { success: false });
             if (sent) return sent;
-            console.error(`${failure}:`, err);
-            return reply.status(500).send({ success: false, error: err?.message || failure });
+            return sendInternalError(reply, `[MemoryQuality] ${request.method} ${request.routeOptions?.url ?? 'unknown'}`, err);
         }
     }
 

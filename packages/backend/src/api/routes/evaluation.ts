@@ -14,6 +14,7 @@ import { getToolUsageSummary } from '../../services/tool-accuracy-analyzer.js';
 import { getSafetyIssuesSummary } from '../../services/safety-analyzer.js';
 import { getPerformanceSummary } from '../../services/performance-analyzer.js';
 import { getDatabase } from '../../db/index.js';
+import { sendInternalError } from '../error-handler.js';
 
 export default async function evaluationRoutes(fastify: FastifyInstance) {
     const db = getDatabase();
@@ -39,10 +40,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
             const result = await evaluateAgent(agentId, config);
             return reply.send(result);
         } catch (error: any) {
-            return reply.status(500).send({
-                error: 'Evaluation failed',
-                message: error.message,
-            });
+            return sendInternalError(reply, '[Evaluation] POST /api/evaluation/:agentId/evaluate', error);
         }
     });
 
@@ -61,10 +59,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
             const history = getEvaluationHistory(agentId, limit);
             return reply.send({ history });
         } catch (error: any) {
-            return reply.status(500).send({
-                error: 'Failed to fetch history',
-                message: error.message,
-            });
+            return sendInternalError(reply, '[Evaluation] GET /api/evaluation/:agentId/history', error);
         }
     });
 
@@ -87,10 +82,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
             }
             return reply.send(latest);
         } catch (error: any) {
-            return reply.status(500).send({
-                error: 'Failed to fetch evaluation',
-                message: error.message,
-            });
+            return sendInternalError(reply, '[Evaluation] GET /api/evaluation/:agentId/latest', error);
         }
     });
 
@@ -114,10 +106,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
 
             return reply.send({ scores });
         } catch (error: any) {
-            return reply.status(500).send({
-                error: 'Failed to fetch scores',
-                message: error.message,
-            });
+            return sendInternalError(reply, '[Evaluation] GET /api/evaluation/:agentId/scores', error);
         }
     });
 
@@ -141,10 +130,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
 
             return reply.send({ sessions });
         } catch (error: any) {
-            return reply.status(500).send({
-                error: 'Failed to fetch sessions',
-                message: error.message,
-            });
+            return sendInternalError(reply, '[Evaluation] GET /api/evaluation/:agentId/sessions', error);
         }
     });
 
@@ -170,10 +156,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
 
             return reply.send({ scores });
         } catch (error: any) {
-            return reply.status(500).send({
-                error: 'Failed to fetch reasoning scores',
-                message: error.message,
-            });
+            return sendInternalError(reply, '[Evaluation] GET /api/evaluation/:agentId/reasoning', error);
         }
     });
 
@@ -192,10 +175,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
             const summary = getToolUsageSummary(agentId, periodDays);
             return reply.send({ summary });
         } catch (error: any) {
-            return reply.status(500).send({
-                error: 'Failed to fetch tool accuracy',
-                message: error.message,
-            });
+            return sendInternalError(reply, '[Evaluation] GET /api/evaluation/:agentId/tool-accuracy', error);
         }
     });
 
@@ -214,10 +194,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
             const summary = getSafetyIssuesSummary(agentId, periodDays);
             return reply.send({ summary });
         } catch (error: any) {
-            return reply.status(500).send({
-                error: 'Failed to fetch safety summary',
-                message: error.message,
-            });
+            return sendInternalError(reply, '[Evaluation] GET /api/evaluation/:agentId/safety', error);
         }
     });
 
@@ -236,10 +213,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
             const summary = getPerformanceSummary(agentId, periodDays);
             return reply.send({ summary });
         } catch (error: any) {
-            return reply.status(500).send({
-                error: 'Failed to fetch performance summary',
-                message: error.message,
-            });
+            return sendInternalError(reply, '[Evaluation] GET /api/evaluation/:agentId/performance', error);
         }
     });
 
@@ -269,10 +243,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
                 performance,
             });
         } catch (error: any) {
-            return reply.status(500).send({
-                error: 'Failed to fetch dashboard data',
-                message: error.message,
-            });
+            return sendInternalError(reply, '[Evaluation] GET /api/evaluation/:agentId/dashboard', error);
         }
     });
 
@@ -316,10 +287,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
 
             return reply.send({ overview });
         } catch (error: any) {
-            return reply.status(500).send({
-                error: 'Failed to fetch overview',
-                message: error.message,
-            });
+            return sendInternalError(reply, '[Evaluation] GET /api/evaluation/overview', error);
         }
     });
 }

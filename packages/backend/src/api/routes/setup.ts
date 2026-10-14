@@ -6,6 +6,8 @@ import { join } from 'path';
 import { getDatabase } from '../../db/index.js';
 import bcrypt from 'bcryptjs';
 import { OWNER_EXISTS_SQL, isPublishedDefaultPassword } from '../../auth/default-accounts.js';
+import { sendInternalError } from '../error-handler.js';
+import { safeErrorFields } from '../../services/safe-error-log.js';
 
 const execAsync = promisify(exec);
 
@@ -76,7 +78,7 @@ export default async function setupRoutes(fastify: FastifyInstance) {
         const { stdout } = await execAsync('node --version');
         checks.node = stdout.trim().length > 0;
       } catch (error) {
-        console.error('Node.js check failed:', error);
+        console.error('[Setup] Node.js check failed', safeErrorFields(error));
       }
 
       // Check Python (uses centralized python-env for portable/system detection)
@@ -88,7 +90,7 @@ export default async function setupRoutes(fastify: FastifyInstance) {
         (checks as any).pythonSource = pyStatus.source;
         (checks as any).pythonSetupComplete = pyStatus.setupComplete;
       } catch (error) {
-        console.error('Python check failed:', error);
+        console.error('[Setup] Python check failed', safeErrorFields(error));
         checks.python = false;
       }
 
@@ -123,16 +125,12 @@ export default async function setupRoutes(fastify: FastifyInstance) {
 
         checks.directories = true;
       } catch (error) {
-        console.error('Directory creation failed:', error);
+        console.error('[Setup] directory creation failed', safeErrorFields(error));
       }
 
       return reply.send(checks);
     } catch (error: any) {
-      console.error('System check error:', error);
-      return reply.status(500).send({
-        error: 'System check failed',
-        message: error.message
-      });
+      return sendInternalError(reply, '[Setup] GET /api/setup/check', error);
     }
   });
 
@@ -140,7 +138,6 @@ export default async function setupRoutes(fastify: FastifyInstance) {
   fastify.post('/api/setup/database', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const dataDir = join(process.cwd(), '.data');
-      const dbPath = join(dataDir, 'agent-player.db');
 
       // Ensure .data directory exists
       if (!existsSync(dataDir)) {
@@ -159,15 +156,10 @@ export default async function setupRoutes(fastify: FastifyInstance) {
 
       return reply.send({
         success: true,
-        message: 'Database initialized successfully',
-        dbPath
+        message: 'Database initialized successfully'
       });
     } catch (error: any) {
-      console.error('Database initialization error:', error);
-      return reply.status(500).send({
-        error: 'Database initialization failed',
-        message: error.message
-      });
+      return sendInternalError(reply, '[Setup] POST /api/setup/database', error);
     }
   });
 
@@ -268,11 +260,7 @@ export default async function setupRoutes(fastify: FastifyInstance) {
         }
       });
     } catch (error: any) {
-      console.error('Admin account creation error:', error);
-      return reply.status(500).send({
-        error: 'Admin account creation failed',
-        message: error.message
-      });
+      return sendInternalError(reply, '[Setup] POST /api/setup/admin', error);
     }
   });
 
@@ -306,11 +294,7 @@ export default async function setupRoutes(fastify: FastifyInstance) {
         message: 'Setup completed successfully'
       });
     } catch (error: any) {
-      console.error('Setup completion error:', error);
-      return reply.status(500).send({
-        error: 'Setup completion failed',
-        message: error.message
-      });
+      return sendInternalError(reply, '[Setup] POST /api/setup/complete', error);
     }
   });
 
@@ -324,11 +308,7 @@ export default async function setupRoutes(fastify: FastifyInstance) {
         message: 'Python environment installed successfully'
       });
     } catch (error: any) {
-      console.error('Python setup error:', error);
-      return reply.status(500).send({
-        error: 'Python setup failed',
-        message: error.message
-      });
+      return sendInternalError(reply, '[Setup] POST /api/setup/python', error);
     }
   });
 }

@@ -11,6 +11,7 @@
 import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
+import { sendInternalError } from '../error-handler.js';
 
 export default async function emailSearchRoutes(fastify: FastifyInstance) {
     const db = getDatabase();
@@ -162,8 +163,7 @@ export default async function emailSearchRoutes(fastify: FastifyInstance) {
                 },
             };
         } catch (error: any) {
-            console.error('❌ [EmailSearch] Search failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailSearch] GET /api/email/accounts/:accountId/search', error);
         }
     });
 
@@ -214,8 +214,7 @@ export default async function emailSearchRoutes(fastify: FastifyInstance) {
                     },
                 };
             } catch (error: any) {
-                console.error('❌ [EmailSearch] Suggestions failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailSearch] GET /api/email/accounts/:accountId/search/suggestions', error);
             }
         }
     );
@@ -259,8 +258,7 @@ export default async function emailSearchRoutes(fastify: FastifyInstance) {
                     },
                 };
             } catch (error: any) {
-                console.error('❌ [EmailSearch] Stats failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailSearch] GET /api/email/accounts/:accountId/search/stats', error);
             }
         }
     );

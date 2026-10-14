@@ -6,6 +6,8 @@
 import { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
+import { sendInternalError } from '../error-handler.js';
+import { safeErrorFields } from '../../services/safe-error-log.js';
 
 export async function worldBuilderRoutes(fastify: FastifyInstance) {
   // ────────────────────────────────────────────────────────────────────
@@ -52,7 +54,7 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
             }
           }
         } catch (err) {
-          fastify.log.error('Error loading world objects:', err);
+          console.error('[WorldBuilder] loading world objects failed', safeErrorFields(err));
         }
       }
 
@@ -67,7 +69,7 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
         },
       });
     } catch (error: any) {
-      fastify.log.error('Error getting world:', error);
+      console.error('[WorldBuilder] GET /api/world-builder/:id failed', safeErrorFields(error));
       return reply.status(500).send({ error: 'Failed to get world' });
     }
   });
@@ -191,10 +193,7 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
 
       return reply.send(response);
     } catch (error: any) {
-      fastify.log.error('[World Builder API] ❌ POST Error:', error);
-      fastify.log.error('[World Builder API] ❌ Error message:', error.message);
-      fastify.log.error('[World Builder API] ❌ Error stack:', error.stack);
-      return reply.status(500).send({ error: 'Failed to create world', details: error.message });
+      return sendInternalError(reply, '[WorldBuilder] POST /api/world-builder', error);
     }
   });
 
@@ -292,10 +291,7 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
 
       return reply.send(response);
     } catch (error: any) {
-      fastify.log.error('[World Builder API] ❌ PUT Error:', error);
-      fastify.log.error('[World Builder API] ❌ Error message:', error.message);
-      fastify.log.error('[World Builder API] ❌ Error stack:', error.stack);
-      return reply.status(500).send({ error: 'Failed to update world', details: error.message });
+      return sendInternalError(reply, '[WorldBuilder] PUT /api/world-builder/:id', error);
     }
   });
 }

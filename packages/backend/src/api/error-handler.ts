@@ -2,12 +2,12 @@
  * Centralized Error Handling Utility
  *
  * SECURITY: Prevents information disclosure via verbose error messages (H-09)
- * - Logs detailed errors server-side for debugging
+ * - Logs only safe error fields server-side (name, code, status; H-ERR-01)
  * - Returns sanitized generic messages to clients
  * - Includes error tracking IDs for support
  */
 
-import type { FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { randomUUID } from 'crypto';
 import { getTranslator } from '../i18n/index.js';
 import { safeErrorFields } from '../services/safe-error-log.js';
@@ -86,14 +86,10 @@ export function handleError(
   // Generate unique error ID for tracking
   const errorId = randomUUID();
 
-  // SECURITY: Log detailed error server-side only (H-09)
-  const errorMessage = error instanceof Error ? error.message : String(error);
-  const errorStack = error instanceof Error ? error.stack : undefined;
-
-  console.error(`${context} Error [${errorId}]:`, errorMessage);
-  if (errorStack && category === 'internal') {
-    console.error(`${context} Stack:`, errorStack);
-  }
+  // SECURITY (H-09, H-ERR-01): the log gets only safe fields (name, code,
+  // status). The message and stack can hold SQL, paths, tokens or the
+  // prompt, so they reach neither the client nor the log.
+  console.error(`${context} Error [${errorId}]:`, safeErrorFields(error));
 
   // SECURITY: Return sanitized error to client (H-09)
   // i18n: Translate error message based on request locale
@@ -181,4 +177,39 @@ export const INTERNAL_ERROR_BODY = Object.freeze({ error: 'Internal error', code
 export function sendInternalError(reply: FastifyReply, route: string, error: unknown): FastifyReply {
   console.error(`${route} internal error`, safeErrorFields(error));
   return reply.status(500).send({ ...INTERNAL_ERROR_BODY });
+}
+
+/** The HTTP status an error carries (statusCode, else status), or undefined. */
+function errorStatusOf(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const e = error as { statusCode?: unknown; status?: unknown };
+  const s = e.statusCode ?? e.status;
+  return typeof s === 'number' && Number.isInteger(s) ? s : undefined;
+}
+
+/**
+ * Global Fastify error handler (H-ERR-01).
+ *
+ * - An error that carries a 4xx status (Fastify schema validation, FST_*
+ *   codes, rate-limit 429, typed route errors) goes to Fastify's default
+ *   handler, so its status, body and log stay exactly as before.
+ * - Anything else (5xx or no status) answers the fixed INTERNAL_ERROR_BODY.
+ *   The log line names the method and the route pattern (never the URL with
+ *   its query string) plus safe error fields only.
+ *
+ * Register it on the root instance before any route plugin: encapsulated
+ * child contexts inherit the handler unless they set their own.
+ */
+export function registerGlobalErrorHandler(fastify: FastifyInstance): void {
+  const fastifyDefault = fastify.errorHandler;
+  fastify.setErrorHandler(function globalErrorHandler(error, request, reply) {
+    const status = errorStatusOf(error);
+    if (status !== undefined && status >= 400 && status < 500) {
+      return fastifyDefault.call(this, error, request, reply);
+    }
+    const route = `${request.method} ${request.routeOptions?.url ?? 'unknown route'}`;
+    console.error(`[API] ${route} internal error`, safeErrorFields(error));
+    const code = status !== undefined && status >= 500 && status <= 599 ? status : 500;
+    return reply.status(code).send({ ...INTERNAL_ERROR_BODY });
+  });
 }

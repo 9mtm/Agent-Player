@@ -12,6 +12,8 @@ import { FastifyInstance } from 'fastify';
 import { OnboardingWizard } from '../../onboarding/index.js';
 import type { OnboardingState } from '../../onboarding/index.js';
 import { requireActiveRole } from '../../auth/route-guards.js';
+import { sendInternalError } from '../error-handler.js';
+import { safeErrorFields } from '../../services/safe-error-log.js';
 
 export async function onboardingRoutes(fastify: FastifyInstance) {
   let wizard: OnboardingWizard | null = null;
@@ -29,7 +31,7 @@ export async function onboardingRoutes(fastify: FastifyInstance) {
       wizard.start().then(() => {
         fastify.log.info('Onboarding wizard completed');
       }).catch((err) => {
-        fastify.log.error('Onboarding wizard error:', err);
+        console.error('[Onboarding] wizard failed', safeErrorFields(err));
       });
 
       return {
@@ -37,10 +39,7 @@ export async function onboardingRoutes(fastify: FastifyInstance) {
         message: 'Onboarding wizard started. Please follow the prompts in your terminal.'
       };
     } catch (err: any) {
-      return reply.code(500).send({
-        success: false,
-        error: err.message
-      });
+      return sendInternalError(reply, '[Onboarding] POST /api/onboarding/start', err);
     }
   });
 
@@ -72,7 +71,7 @@ export async function onboardingRoutes(fastify: FastifyInstance) {
       wizard.resume().then(() => {
         fastify.log.info('Onboarding wizard resumed');
       }).catch((err) => {
-        fastify.log.error('Resume onboarding error:', err);
+        console.error('[Onboarding] resume failed', safeErrorFields(err));
       });
 
       return {
@@ -80,10 +79,7 @@ export async function onboardingRoutes(fastify: FastifyInstance) {
         message: 'Resuming onboarding wizard...'
       };
     } catch (err: any) {
-      return reply.code(500).send({
-        success: false,
-        error: err.message
-      });
+      return sendInternalError(reply, '[Onboarding] POST /api/onboarding/resume', err);
     }
   });
 
@@ -99,10 +95,7 @@ export async function onboardingRoutes(fastify: FastifyInstance) {
         message: 'Onboarding skipped'
       };
     } catch (err: any) {
-      return reply.code(500).send({
-        success: false,
-        error: err.message
-      });
+      return sendInternalError(reply, '[Onboarding] POST /api/onboarding/skip', err);
     }
   });
 }

@@ -14,6 +14,7 @@
 import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
+import { sendInternalError } from '../error-handler.js';
 
 export default async function emailMessagesRoutes(fastify: FastifyInstance) {
     const db = getDatabase();
@@ -130,8 +131,7 @@ export default async function emailMessagesRoutes(fastify: FastifyInstance) {
                 },
             };
         } catch (error: any) {
-            console.error('❌ [EmailMessages] List failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailMessages] GET /api/email/accounts/:accountId/emails', error);
         }
     });
 
@@ -165,8 +165,7 @@ export default async function emailMessagesRoutes(fastify: FastifyInstance) {
 
                 return { success: true, email };
             } catch (error: any) {
-                console.error('❌ [EmailMessages] Get failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailMessages] GET /api/email/accounts/:accountId/emails/:emailId', error);
             }
         }
     );
@@ -213,8 +212,7 @@ export default async function emailMessagesRoutes(fastify: FastifyInstance) {
 
             return { success: true, message: `Email marked as ${is_read ? 'read' : 'unread'}` };
         } catch (error: any) {
-            console.error('❌ [EmailMessages] Mark read failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailMessages] PUT /api/email/emails/:emailId/read', error);
         }
     });
 
@@ -251,8 +249,7 @@ export default async function emailMessagesRoutes(fastify: FastifyInstance) {
 
             return { success: true, message: `Email ${is_starred ? 'starred' : 'unstarred'}` };
         } catch (error: any) {
-            console.error('❌ [EmailMessages] Star failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailMessages] PUT /api/email/emails/:emailId/star', error);
         }
     });
 
@@ -300,8 +297,7 @@ export default async function emailMessagesRoutes(fastify: FastifyInstance) {
                     return { success: true, message: 'Email permanently deleted' };
                 }
             } catch (error: any) {
-                console.error('❌ [EmailMessages] Delete failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailMessages] DELETE /api/email/emails/:emailId', error);
             }
         }
     );
@@ -367,8 +363,7 @@ export default async function emailMessagesRoutes(fastify: FastifyInstance) {
 
             return { success: true, message: 'Email moved successfully' };
         } catch (error: any) {
-            console.error('❌ [EmailMessages] Move failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailMessages] POST /api/email/emails/:emailId/move', error);
         }
     });
 
@@ -420,8 +415,7 @@ export default async function emailMessagesRoutes(fastify: FastifyInstance) {
 
             return { success: true, message: `${email_ids.length} emails marked as ${is_read ? 'read' : 'unread'}` };
         } catch (error: any) {
-            console.error('❌ [EmailMessages] Bulk read failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailMessages] POST /api/email/bulk/read', error);
         }
     });
 
@@ -461,8 +455,7 @@ export default async function emailMessagesRoutes(fastify: FastifyInstance) {
 
             return { success: true, message: `${email_ids.length} emails ${is_starred ? 'starred' : 'unstarred'}` };
         } catch (error: any) {
-            console.error('❌ [EmailMessages] Bulk star failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailMessages] POST /api/email/bulk/star', error);
         }
     });
 
@@ -521,8 +514,7 @@ export default async function emailMessagesRoutes(fastify: FastifyInstance) {
 
             return { success: true, message: `${emails.length} emails deleted` };
         } catch (error: any) {
-            console.error('❌ [EmailMessages] Bulk delete failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailMessages] POST /api/email/bulk/delete', error);
         }
     });
 
@@ -572,8 +564,7 @@ export default async function emailMessagesRoutes(fastify: FastifyInstance) {
 
             return { success: true, message: `${emails.length} emails moved` };
         } catch (error: any) {
-            console.error('❌ [EmailMessages] Bulk move failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailMessages] POST /api/email/bulk/move', error);
         }
     });
 }

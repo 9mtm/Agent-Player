@@ -16,6 +16,7 @@ import type { Actor } from '../../repositories/actor.js';
 import { actorOrReply, requireOwner } from '../../repositories/scope.js';
 import { getGateway } from '../../gateway/index.js';
 import { WebChannelAdapter } from '../../gateway/adapters/web-adapter.js';
+import { sendInternalError } from '../error-handler.js';
 
 /** The owner account's actor (central rule), else 401/403 sent and null. */
 function ownerOf(request: FastifyRequest, reply: FastifyReply): Actor | null {
@@ -91,9 +92,7 @@ export async function gatewayRoutes(fastify: FastifyInstance) {
           }
         };
       } catch (err: any) {
-        return reply.status(500).send({
-          error: err.message
-        });
+        return sendInternalError(reply, '[Gateway] GET /api/gateway/sessions/:userId', err);
       }
     }
   );
@@ -128,9 +127,7 @@ export async function gatewayRoutes(fastify: FastifyInstance) {
           total: session.conversationHistory.length
         };
       } catch (err: any) {
-        return reply.status(500).send({
-          error: err.message
-        });
+        return sendInternalError(reply, '[Gateway] GET /api/gateway/sessions/:userId/history', err);
       }
     }
   );
@@ -192,10 +189,7 @@ export async function gatewayRoutes(fastify: FastifyInstance) {
         sessionId: finalSessionId
       };
     } catch (err: any) {
-      fastify.log.error('Error processing gateway message:', err);
-      return reply.status(500).send({
-        error: err.message
-      });
+      return sendInternalError(reply, '[Gateway] POST /api/gateway/message', err);
     }
   });
 

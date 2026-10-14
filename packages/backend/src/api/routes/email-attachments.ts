@@ -15,6 +15,7 @@ import { getStorageManager } from '../../services/storage-manager.js';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs/promises';
+import { sendInternalError } from '../error-handler.js';
 
 export default async function emailAttachmentsRoutes(fastify: FastifyInstance) {
     const db = getDatabase();
@@ -52,8 +53,7 @@ export default async function emailAttachmentsRoutes(fastify: FastifyInstance) {
 
                 return { success: true, attachments };
             } catch (error: any) {
-                console.error('❌ [EmailAttachments] List failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailAttachments] GET /api/email/emails/:emailId/attachments', error);
             }
         }
     );
@@ -103,8 +103,7 @@ export default async function emailAttachmentsRoutes(fastify: FastifyInstance) {
                     message: 'Attachment not yet downloaded. Download from IMAP is not implemented yet.',
                 });
             } catch (error: any) {
-                console.error('❌ [EmailAttachments] Download failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailAttachments] GET /api/email/attachments/:attachmentId/download', error);
             }
         }
     );
@@ -175,8 +174,7 @@ export default async function emailAttachmentsRoutes(fastify: FastifyInstance) {
                 },
             };
         } catch (error: any) {
-            console.error('❌ [EmailAttachments] Upload failed:', error.message);
-            return reply.status(500).send({ success: false, message: error.message });
+            return sendInternalError(reply, '[EmailAttachments] POST /api/email/attachments/upload', error);
         }
     });
 
@@ -213,8 +211,7 @@ export default async function emailAttachmentsRoutes(fastify: FastifyInstance) {
 
                 return { success: true, message: 'Attachment deleted successfully' };
             } catch (error: any) {
-                console.error('❌ [EmailAttachments] Delete failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailAttachments] DELETE /api/email/attachments/:attachmentId', error);
             }
         }
     );
@@ -253,8 +250,7 @@ export default async function emailAttachmentsRoutes(fastify: FastifyInstance) {
 
                 return reply.status(404).send({ success: false, message: 'Attachment not found' });
             } catch (error: any) {
-                console.error('❌ [EmailAttachments] Get metadata failed:', error.message);
-                return reply.status(500).send({ success: false, message: error.message });
+                return sendInternalError(reply, '[EmailAttachments] GET /api/email/attachments/:attachmentId', error);
             }
         }
     );
