@@ -133,7 +133,9 @@ test('driver: credentials, vault and key manager run on PostgreSQL; no SQLite en
     assert.equal((await one('SELECT to_regclass(?) IS NOT NULL AS ok', t)).ok, true, t);
   }
   const applied = (await all(`SELECT id FROM migrations WHERE id LIKE 'r%' ORDER BY id`)).map((r) => r.id);
-  assert.deepEqual(applied, ['r001', 'r002', 'r003']);
+  // r001-r003 (B2.2b-2); r004/r005 (B2.2b-4, the memory hybrid index) come later.
+  assert.deepEqual(applied.slice(0, 3), ['r001', 'r002', 'r003']);
+  assert.ok(applied.every((id) => /^r\d{3}$/.test(id)));
   assert.equal(existsSync(join(dir, '.data', 'encryption')), false, 'no keys.db / credentials.db on PostgreSQL');
   // The SQLite main database never got the credentials rows either.
   assert.equal(m.repos.repositoriesFor('sqlite').credentials === m.pgCredentials, false);

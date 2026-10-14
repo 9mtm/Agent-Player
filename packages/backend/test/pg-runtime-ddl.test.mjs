@@ -1,6 +1,7 @@
 // B2.2b-2 (SQLite mode, no PostgreSQL needed):
 //  - the runtime DDL sources of migrations-pg r001-r003 (scripts/pg/runtime)
-//    equal the DDL the TypeScript runs on SQLite, so the two cannot drift;
+//    equal the DDL the TypeScript runs on SQLite, so the two cannot drift
+//    (B2.2b-4: r004/r005, the memory hybrid index and its FTS5 table, too);
 //  - the SQLite DDL of the vault/key tables is unchanged ('credentials', 'keys');
 //  - team invitation rows have one expires_at shape on both drivers;
 //  - the shutdown audit flush is bounded and never rejects.
@@ -26,6 +27,7 @@ const { vaultSchemaSql, vaultTableFor } = await import(join(backendDir, 'src/enc
 const { keysSchemaSql, keysTableFor } = await import(join(backendDir, 'src/encryption/key-manager.ts'));
 const teams = await import(join(backendDir, 'src/repositories/teams.ts'));
 const audit = await import(join(backendDir, 'src/services/audit-logger.ts'));
+const { INDEXER_TABLES_SQL, INDEXER_FTS_SQL } = await import(join(backendDir, 'src/memory/indexer.ts'));
 
 test.after(() => {
   process.chdir(backendDir);
@@ -63,6 +65,20 @@ test('the generated migrations-pg r001-r003 exist and name the PostgreSQL tables
   assert.match(pg('r002_vault_credentials.sql'), /CREATE TABLE IF NOT EXISTS vault_credentials \(/);
   assert.match(pg('r003_vault_keys.sql'), /CREATE TABLE IF NOT EXISTS vault_keys \(/);
   assert.doesNotMatch(pg('r002_vault_credentials.sql') + pg('r003_vault_keys.sql'), /PRAGMA|datetime\(/i);
+});
+
+test('r004/r005 equal the hybrid index DDL indexer.ts runs on SQLite; r005 is the tsvector override', () => {
+  assert.deepEqual(statements(runtime('r004_memory_index.sql')), statements(INDEXER_TABLES_SQL));
+  assert.deepEqual(statements(runtime('r005_memory_fts.sql')), statements(INDEXER_FTS_SQL));
+  assert.match(INDEXER_FTS_SQL, /CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5\(/);
+  const pg = (f) => readFileSync(join(backendDir, 'src', 'db', 'migrations-pg', f), 'utf8');
+  assert.match(pg('r004_memory_index.sql'), /CREATE TABLE IF NOT EXISTS memory_index \(/);
+  assert.match(pg('r004_memory_index.sql'), /embedding bytea/);
+  const fts = pg('r005_memory_fts.sql');
+  assert.match(fts, /HAND-WRITTEN override: scripts\/pg\/overrides\/r005_memory_fts\.sql/);
+  assert.match(fts, /ADD COLUMN IF NOT EXISTS fts tsvector\s+GENERATED ALWAYS AS \(to_tsvector\('simple', /);
+  assert.match(fts, /CREATE INDEX IF NOT EXISTS idx_memory_index_fts ON memory_index USING gin \(fts\)/);
+  assert.doesNotMatch(statements(fts).join(';'), /CREATE EXTENSION|VIRTUAL|fts5/i, 'no extension, no FTS5 on PostgreSQL');
 });
 
 test('invitationRow: PostgreSQL timestamptz text becomes the ISO string; SQLite rows are unchanged', () => {

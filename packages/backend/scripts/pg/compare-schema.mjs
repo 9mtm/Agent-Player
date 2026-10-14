@@ -52,9 +52,17 @@ export function buildSqlite(path) {
   return db;
 }
 
-function sqliteSchema(db) {
-  const tables = db.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all();
-  const out = { tables: {}, triggers: db.prepare(`SELECT name, tbl_name AS tbl FROM sqlite_master WHERE type = 'trigger'`).all() };
+/** FTS5 shadow tables of a virtual table `vt` (SQLite creates them itself). */
+const FTS_SHADOW = ['data', 'idx', 'content', 'docsize', 'config'];
+
+export function sqliteSchema(db) {
+  const all = db.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all();
+  // B2.2b-4: FTS5 virtual tables have no PostgreSQL table; they become a
+  // tsvector column with a GIN index (hand-written override). Listed apart.
+  const virtual = all.filter((t) => /^CREATE\s+VIRTUAL\s+TABLE/i.test(t.sql || '')).map((t) => t.name);
+  const shadow = new Set(virtual.flatMap((v) => FTS_SHADOW.map((x) => `${v}_${x}`)));
+  const tables = all.filter((t) => !virtual.includes(t.name) && !shadow.has(t.name));
+  const out = { tables: {}, virtual, triggers: db.prepare(`SELECT name, tbl_name AS tbl FROM sqlite_master WHERE type = 'trigger'`).all() };
   for (const t of tables) {
     const cols = db.prepare(`SELECT * FROM pragma_table_info(?)`).all(t.name);
     const pk = cols.filter((c) => c.pk > 0).sort((a, b) => a.pk - b.pk).map((c) => c.name);
@@ -212,7 +220,11 @@ export function compare(sq, pg, expectedFkDrops) {
       const b = p.identity ? 'identity' : classifyPgDefault(p.default);
       if (a !== b) add(`${t}.${c.name}: default sqlite=${c.dflt_value} (${a}) pg=${p.default} (${b})`);
     }
-    for (const p of P.cols) if (!S.cols.some((c) => c.name === p.name)) add(`${t}.${p.name}: extra column in PostgreSQL`);
+    for (const p of P.cols) {
+      if (S.cols.some((c) => c.name === p.name)) continue;
+      if (p.type === 'tsvector' && (sq.virtual || []).length) expected.push(`${t}.${p.name}: tsvector column in PostgreSQL (full text for the SQLite FTS5 table(s) ${sq.virtual.join(', ')})`);
+      else add(`${t}.${p.name}: extra column in PostgreSQL`);
+    }
     const sqOrder = S.cols.map((c) => c.name).join(',');
     const pgOrder = P.cols.map((c) => c.name).join(',');
     if (sqOrder !== pgOrder && S.cols.length === P.cols.length) add(`${t}: column order differs`);
@@ -255,7 +267,11 @@ export function compare(sq, pg, expectedFkDrops) {
       if (i.cols.join(', ') !== pc) add(`${t}: index ${i.name} columns sqlite=(${i.cols.join(', ')}) pg=(${pc})`);
       if (normPred(i.pred, false) !== normPred(p.pred, true)) add(`${t}: index ${i.name} WHERE sqlite=${i.pred} pg=${p.pred}`);
     }
-    for (const name of pgIdx.keys()) add(`${t}: extra index in PostgreSQL: ${name}`);
+    for (const [name, p] of pgIdx) {
+      const tsv = P.cols.filter((c) => c.type === 'tsvector').map((c) => c.name);
+      if (/ USING gin /i.test(p.def) && pgIndexCols(p.def).every((c) => tsv.includes(c))) expected.push(`${t}: GIN index ${name} on the tsvector column (FTS5 replacement)`);
+      else add(`${t}: extra index in PostgreSQL: ${name}`);
+    }
 
     // CHECK constraints (count)
     const pgChecks = P.cons.filter((c) => c.type === 'c').length;
@@ -270,6 +286,7 @@ export function compare(sq, pg, expectedFkDrops) {
     if (!p) add(`trigger ${tr.name} on ${tr.tbl} missing in PostgreSQL`);
   }
   for (const p of pg.triggers) if (!sq.triggers.some((x) => x.name === p.name)) add(`extra trigger in PostgreSQL: ${p.name}`);
+  for (const v of sq.virtual || []) expected.push(`SQLite FTS5 virtual table ${v} (and its shadow tables) has no PostgreSQL table: replaced by a tsvector column + GIN index`);
   if (pkQuirk.length) expected.push(`${pkQuirk.length} non-INTEGER PRIMARY KEY columns are nullable in SQLite (legacy quirk) and NOT NULL in PostgreSQL: ${pkQuirk.join(', ')}`);
   return { diffs, expected, stats };
 }

@@ -18,6 +18,76 @@ import type {
 import { DEFAULT_MEMORY_CONFIG } from './types.js';
 import { getEmbeddingService } from './embedding.js';
 
+/**
+ * Tables of the hybrid index file (SQLite DDL). The same DDL is the source of
+ * migrations-pg r004 (scripts/pg/runtime/r004_memory_index.sql, kept equal by
+ * test/pg-runtime-ddl.test.mjs): on PostgreSQL the tables live in the main
+ * database (memory/indexer-pg.ts).
+ */
+export const INDEXER_TABLES_SQL = `
+-- Memory index table
+CREATE TABLE IF NOT EXISTS memory_index (
+  id TEXT PRIMARY KEY,
+  memory_id TEXT NOT NULL,
+  content TEXT NOT NULL,
+  embedding BLOB,
+  layer TEXT NOT NULL,
+  importance INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  last_accessed TEXT,
+  access_count INTEGER DEFAULT 0,
+  tags TEXT,
+  embedding_model TEXT,
+  UNIQUE(memory_id)
+);
+
+-- Chunks table for large memories
+CREATE TABLE IF NOT EXISTS memory_chunks (
+  id TEXT PRIMARY KEY,
+  memory_id TEXT NOT NULL,
+  content TEXT NOT NULL,
+  embedding BLOB,
+  position INTEGER NOT NULL,
+  offset_start INTEGER NOT NULL,
+  offset_end INTEGER NOT NULL,
+  embedding_model TEXT,
+  FOREIGN KEY (memory_id) REFERENCES memory_index(memory_id) ON DELETE CASCADE
+);
+
+-- Relations table
+CREATE TABLE IF NOT EXISTS memory_relations (
+  source_id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  relation_type TEXT NOT NULL,
+  strength REAL NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (source_id, target_id, relation_type)
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_memory_layer ON memory_index(layer);
+CREATE INDEX IF NOT EXISTS idx_memory_importance ON memory_index(importance);
+CREATE INDEX IF NOT EXISTS idx_memory_created ON memory_index(created_at);
+CREATE INDEX IF NOT EXISTS idx_chunks_memory ON memory_chunks(memory_id);
+`;
+
+/**
+ * The FTS5 full-text table (SQLite only). Source of migrations-pg r005
+ * (scripts/pg/runtime/r005_memory_fts.sql); PostgreSQL has no FTS5, so r005
+ * is a hand-written override (scripts/pg/overrides/r005_memory_fts.sql): a
+ * generated tsvector column on memory_index with a GIN index
+ * (memory/indexer-pg.ts explains the design and the differences).
+ */
+export const INDEXER_FTS_SQL = `
+-- Full-text search index
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+  memory_id,
+  content,
+  tags,
+  tokenize='porter unicode61'
+);
+`;
+
 export class MemoryIndexer implements IMemoryIndexer {
   private db: Database.Database;
   private config: MemoryConfig;
@@ -44,58 +114,8 @@ export class MemoryIndexer implements IMemoryIndexer {
    * Create database tables
    */
   private createTables(): void {
-    this.db.exec(`
-      -- Memory index table
-      CREATE TABLE IF NOT EXISTS memory_index (
-        id TEXT PRIMARY KEY,
-        memory_id TEXT NOT NULL,
-        content TEXT NOT NULL,
-        embedding BLOB,
-        layer TEXT NOT NULL,
-        importance INTEGER NOT NULL,
-        created_at TEXT NOT NULL,
-        last_accessed TEXT,
-        access_count INTEGER DEFAULT 0,
-        tags TEXT,
-        UNIQUE(memory_id)
-      );
-
-      -- Chunks table for large memories
-      CREATE TABLE IF NOT EXISTS memory_chunks (
-        id TEXT PRIMARY KEY,
-        memory_id TEXT NOT NULL,
-        content TEXT NOT NULL,
-        embedding BLOB,
-        position INTEGER NOT NULL,
-        offset_start INTEGER NOT NULL,
-        offset_end INTEGER NOT NULL,
-        FOREIGN KEY (memory_id) REFERENCES memory_index(memory_id) ON DELETE CASCADE
-      );
-
-      -- Relations table
-      CREATE TABLE IF NOT EXISTS memory_relations (
-        source_id TEXT NOT NULL,
-        target_id TEXT NOT NULL,
-        relation_type TEXT NOT NULL,
-        strength REAL NOT NULL,
-        created_at TEXT NOT NULL,
-        PRIMARY KEY (source_id, target_id, relation_type)
-      );
-
-      -- Full-text search index
-      CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
-        memory_id,
-        content,
-        tags,
-        tokenize='porter unicode61'
-      );
-
-      -- Indexes
-      CREATE INDEX IF NOT EXISTS idx_memory_layer ON memory_index(layer);
-      CREATE INDEX IF NOT EXISTS idx_memory_importance ON memory_index(importance);
-      CREATE INDEX IF NOT EXISTS idx_memory_created ON memory_index(created_at);
-      CREATE INDEX IF NOT EXISTS idx_chunks_memory ON memory_chunks(memory_id);
-    `);
+    this.db.exec(INDEXER_TABLES_SQL);
+    this.db.exec(INDEXER_FTS_SQL);
     // CORE-06: model of each stored vector; vectors of other models are not compared.
     for (const table of ['memory_index', 'memory_chunks']) {
       const cols = (this.db.prepare(`PRAGMA table_info(${table})`).all() as any[]).map((c) => c.name);
