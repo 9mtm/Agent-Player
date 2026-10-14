@@ -67,11 +67,8 @@ export async function csrfProtection(
         // Exact match
         if (requestOrigin === allowed) return true;
 
-        // Wildcard match (e.g., *.example.com)
-        if (allowed.includes('*')) {
-            const pattern = allowed.replace(/\*/g, '.*');
-            return new RegExp(`^${pattern}$`).test(requestOrigin);
-        }
+        // Wildcard match (e.g., http://*.example.com)
+        if (allowed.includes('*')) return wildcardOriginMatches(allowed, requestOrigin);
 
         return false;
     });
@@ -83,6 +80,26 @@ export async function csrfProtection(
     }
 
     // Origin is valid, continue processing
+}
+
+/**
+ * Match an origin against an allowed pattern with a wildcard (CHAT-01).
+ * Everything except `*` is literal (regex metacharacters are escaped, so
+ * `.` matches only a dot). `*` stands for exactly one host label
+ * (`[A-Za-z0-9-]+`) and is allowed only as the whole leftmost label of the
+ * host, e.g. `http://*.example.com` or `http://*.example.com:3000`. Any
+ * other use of `*` (scheme, port, partial or inner label) never matches.
+ */
+export function wildcardOriginMatches(pattern: string, origin: string): boolean {
+    const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/:]+)(:\d+)?$/i.exec(pattern);
+    if (!m) return false;
+    const [, scheme, host, port = ''] = m;
+    const labels = host.split('.');
+    // Only the leftmost label may be `*`, as a whole label, with a literal rest.
+    if (labels.length < 2 || labels[0] !== '*' || labels.slice(1).some((l) => l.includes('*') || !l)) return false;
+    const escape = (x: string) => x.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
+    const hostRe = labels.map((l) => (l === '*' ? '[A-Za-z0-9-]+' : escape(l))).join('\\.');
+    return new RegExp(`^${escape(scheme)}${hostRe}${escape(port)}$`, 'i').test(origin);
 }
 
 /**

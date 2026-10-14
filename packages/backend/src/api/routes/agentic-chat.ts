@@ -18,6 +18,10 @@ import { loadClaudeProjectMemory } from './claude-local.js';
 import { buildAiToolsContext } from './ai-tools.js';
 import { getJsonRenderPrompt } from './json-render-prompt.js';
 import { buildDynamicSystemPrompt, detectChatContext, type ChatContext } from './system-prompts.js';
+import { chunkText, openSseStream } from '../../services/chat-sse.js';
+
+/** UTF-8 text per final-answer frame: a 256 KiB answer needs about 64 frames. */
+export const ANSWER_FRAME_BYTES = 4 * 1024;
 
 // ─── OS detection (runs once at module load) ──────────────────────────────────
 
@@ -100,13 +104,9 @@ export async function streamChatClaude(
   console.log('[Chat]   Messages:', messages.length);
   console.log('[Chat]   Tools offered:', tools.length);
 
-  // Set up SSE headers
-  reply.raw.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'Transfer-Encoding': 'chunked',
-  });
+  // SSE headers + heartbeat (a no-op when the route already opened the
+  // stream). The heartbeat covers tool steps and rate-limit waits (CHAT-01).
+  openSseStream(reply.raw);
 
   try {
     const claude = new ClaudeClient(apiKey, model);
@@ -359,10 +359,8 @@ export async function streamChatClaude(
       // Silently ignore — indicator may already be hidden or desktop_control unavailable
     }
 
-    // Stream final content to client in chunks
-    const CHUNK_SIZE = 20;
-    for (let i = 0; i < finalContent.length; i += CHUNK_SIZE) {
-      const chunk = finalContent.slice(i, i + CHUNK_SIZE);
+    // Stream final content to client in bounded chunks (never splits an emoji)
+    for (const chunk of chunkText(finalContent, ANSWER_FRAME_BYTES)) {
       reply.raw.write(`data: ${JSON.stringify({ type: 'text', content: chunk })}\n\n`);
     }
 

@@ -6,6 +6,7 @@
 
 import { beginChatTurn, instrumentChatReply, parseIdempotencyKey, replayChatOutcome, requestFingerprint } from '../../services/chat-idempotency.js';
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { chunkText, openSseStream } from '../../services/chat-sse.js';
 import { handleError } from '../error-handler.js';
 import { AgentRuntime, type Message, type Skill } from '../../agent/index.js';
 import { getSettingsManager } from '../../settings/index.js';
@@ -209,7 +210,16 @@ export async function chatRoutes(fastify: FastifyInstance) {
     if (idemKey === 'invalid') {
       return reply.status(400).send({ error: 'Idempotency-Key must be 8-128 characters (A-Z, a-z, 0-9, _ - . :)', code: 'invalid_idempotency_key' });
     }
-    const turn = beginChatTurn(userId, idemKey, requestFingerprint({ agentId, sessionId, stream, messages }));
+    // The fingerprint covers the whole request that defines the turn (CHAT-01).
+    const turn = beginChatTurn(userId, idemKey, requestFingerprint({
+      agentId, sessionId, stream, messages, model, temperature, maxTokens,
+      systemPrompt, systemPromptAppend, memoryContext: bodyMemoryContext, memoryScope, chatContext,
+    }));
+    if (turn.kind === 'busy') {
+      // Every remembered key is still running: refuse rather than forget one.
+      reply.header('Retry-After', '30');
+      return reply.status(429).send({ error: 'Too Many Requests', code: 'rate_limited', message: 'Too many chat turns are running; try again shortly' });
+    }
     if (turn.kind === 'mismatch') {
       return reply.status(422).send({ error: 'This Idempotency-Key was already used for a different request', code: 'idempotency_key_reused' });
     }
@@ -219,7 +229,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
     if (turn.kind === 'replay') return replayChatOutcome(reply, turn.ids, turn.outcome);
     instrumentChatReply(reply, turn.ids, turn.entry);
 
-    console.log('[Chat] 📦 Received chatContext:', JSON.stringify(chatContext));
+    // Ids and sizes only: no chat context, prompts or message content in logs.
+    console.log('[Chat] Turn accepted', { runId: turn.ids.runId, agentId: agentId ?? null, messages: messages.length, stream });
 
     // SECURITY (S0-Q.8): a channel-originated turn (Telegram/Discord/Agent Connect sender)
     // gets the restricted channel tool policy. It is bound to a server-created token,
@@ -305,26 +316,54 @@ export async function chatRoutes(fastify: FastifyInstance) {
       : '';
 
     console.log('[Chat] Agent:', agentConfig?.name || 'none (fallback)', '| Provider:', resolvedProvider, '| Model:', resolvedModel);
-    if (memoryContext) console.log('[Chat] 🧠 Memory context injected:', memoryContext.slice(0, 80) + '...');
+    if (memoryContext) console.log('[Chat] Memory context injected', { chars: String(memoryContext).length });
 
     // CLI bridge providers run a separate local agent with its own tools; never for channel turns.
     if (toolPolicy && (resolvedProvider === 'gemini-cli' || resolvedProvider === 'claude-cli')) {
       return reply.status(403).send({ error: 'This agent provider is not available for channel messages' });
     }
 
+    // CHAT-01: a stream turn sends its SSE headers (and starts the heartbeat)
+    // as soon as it is accepted, before any model is contacted.
+    if (stream) openSseStream(reply.raw);
+
     try {
       if (stream) {
-        return streamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id, memoryDrawers);
+        return await streamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id, memoryDrawers);
       } else {
         const out = await nonStreamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id, memoryDrawers);
         // A plain result object goes through reply.send so it gets the turn ids.
         return (out as unknown) === reply ? reply : reply.send(out);
       }
     } catch (error: any) {
+      if (reply.raw.headersSent) {
+        // The stream is open: end it with the one typed error event (H-09).
+        console.error('[Chat] Chat request failed:', error?.name || 'Error');
+        if (!reply.raw.writableEnded) {
+          reply.raw.write(`data: ${JSON.stringify({ type: 'error', error: 'Chat request failed' })}\n\n`);
+          reply.raw.end();
+        }
+        return reply;
+      }
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Chat] Chat request failed');
     }
   });
+}
+
+/** Text per answer frame for one-shot answers (CLI bridges). */
+const ANSWER_FRAME_BYTES = 4 * 1024;
+
+/** The model could not be reached or refused: one generic error, no upstream text (H-09). */
+function modelUnavailable(reply: FastifyReply): FastifyReply {
+  if (reply.raw.headersSent) {
+    if (!reply.raw.writableEnded) {
+      reply.raw.write(`data: ${JSON.stringify({ type: 'error', error: 'Chat request failed', code: 'model_unavailable' })}\n\n`);
+      reply.raw.end();
+    }
+    return reply;
+  }
+  return reply.status(502).send({ error: 'Model unavailable', code: 'model_unavailable' });
 }
 
 // Streaming chat response
@@ -358,7 +397,7 @@ async function streamChat(
     content: m.content,
   }));
 
-  console.log('[Chat]   Last message:', userMessage.slice(0, 50) + '...');
+  console.log('[Chat]   Last message length:', typeof userMessage === 'string' ? userMessage.length : 'multimodal');
 
   // 🧠 Use Agent System to build smart prompt
   let agentResponse;
@@ -513,11 +552,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
   // Gemini CLI provider: pipe message through local gemini binary
   if (provider === 'gemini-cli') {
     console.log('[Chat] 🖥️ Using Gemini CLI bridge');
-    reply.raw.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    });
+    openSseStream(reply.raw);
     try {
       // Build Gemini prompt: system instructions + json-render + user message
       const geminiSystemParts = [customSystemPrompt, getJsonRenderPrompt()].filter(Boolean).join('\n\n---\n\n');
@@ -528,7 +563,9 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       const text = result.content?.[0]?.text || '(no response)';
       const geminiModel = (result.details as any)?.model || 'gemini-2.0-flash';
       console.log(`[Chat] ✅ Gemini CLI responded | model: ${geminiModel} | length: ${text.length}`);
-      reply.raw.write(`data: ${JSON.stringify({ content: text, done: false, model: geminiModel, provider: 'gemini-cli' })}\n\n`);
+      for (const part of chunkText(text, ANSWER_FRAME_BYTES)) {
+        reply.raw.write(`data: ${JSON.stringify({ content: part, done: false, model: geminiModel, provider: 'gemini-cli' })}\n\n`);
+      }
       reply.raw.write(`data: ${JSON.stringify({ content: '', done: true })}\n\n`);
     } catch (err: any) {
       // SECURITY: Don't expose error details in stream (H-09)
@@ -542,11 +579,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
   // Claude CLI provider: pipe message through local claude CLI binary
   if (provider === 'claude-cli') {
     console.log('[Chat] 🔧 Using Claude Code CLI bridge');
-    reply.raw.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    });
+    openSseStream(reply.raw);
     try {
       // Build Claude CLI prompt: system instructions + user message
       // NOTE: Skip json-render prompt for CLI to keep under Windows CMD length limit
@@ -561,7 +594,9 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       const text = result.content?.[0]?.text || '(no response)';
       const claudeModel = (result.details as any)?.model || model || 'claude-sonnet-4-5-20250929';
       console.log(`[Chat] ✅ Claude CLI responded | model: ${claudeModel} | length: ${text.length}`);
-      reply.raw.write(`data: ${JSON.stringify({ content: text, done: false, model: claudeModel, provider: 'claude-cli' })}\n\n`);
+      for (const part of chunkText(text, ANSWER_FRAME_BYTES)) {
+        reply.raw.write(`data: ${JSON.stringify({ content: part, done: false, model: claudeModel, provider: 'claude-cli' })}\n\n`);
+      }
       reply.raw.write(`data: ${JSON.stringify({ content: '', done: true })}\n\n`);
     } catch (err: any) {
       // SECURITY: Don't expose error details in stream (H-09)
@@ -574,40 +609,39 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
 
   // Default: use Ollama
   console.log('[Chat] 🤖 Using Ollama (local)');
-  const response = await fetch(`${OLLAMA_URL}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      messages: ollamaMessages,
-      stream: true,
-      ...ollamaThinkOption(),
-      tools: tools.length > 0 ? tools : undefined, // Add tools support
-      options: {
-        temperature,
-        ...(maxTokens && { num_predict: maxTokens })
-      }
-    })
-  });
+  // CHAT-01: headers go out before Ollama is contacted, so a cold model load
+  // cannot trip a pre-header timeout; the heartbeat keeps the stream alive.
+  openSseStream(reply.raw);
+  let response: Response;
+  try {
+    response = await fetch(`${OLLAMA_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: ollamaMessages,
+        stream: true,
+        ...ollamaThinkOption(),
+        tools: tools.length > 0 ? tools : undefined, // Add tools support
+        options: {
+          temperature,
+          ...(maxTokens && { num_predict: maxTokens })
+        }
+      })
+    });
+  } catch (err: any) {
+    console.error('[Chat] ❌ Ollama unreachable:', err?.name || 'Error');
+    return modelUnavailable(reply);
+  }
 
   if (!response.ok) {
-    const error = await response.text();
-    console.error('[Chat] ❌ Ollama error:', error);
-    return reply.status(502).send({
-      error: 'Ollama error',
-      message: error
-    });
+    // SECURITY (H-09): the upstream body is never read, logged or relayed.
+    console.error('[Chat] ❌ Ollama request failed', { status: response.status });
+    try { await response.body?.cancel(); } catch { /* ignore */ }
+    return modelUnavailable(reply);
   }
 
   console.log('[Chat] ✅ Ollama connected, streaming...');
-
-  // Set up SSE headers
-  reply.raw.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'Transfer-Encoding': 'chunked'
-  });
 
   const reader = response.body?.getReader();
   if (!reader) {
@@ -668,7 +702,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
         reply.raw.write(`data: ${JSON.stringify({ content: json.message.content, done: false })}\n\n`);
 
         if (chunkCount === 1) {
-          console.log('[Chat] 📡 First chunk:', json.message.content.slice(0, 30));
+          console.log('[Chat] 📡 First chunk received');
         }
       }
 
@@ -680,7 +714,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
     } catch (e) {
       // Skip invalid JSON lines
       if (trimmed.length > 0) {
-        console.log('[Chat] ⚠️ Invalid JSON line:', trimmed.slice(0, 50));
+        console.log('[Chat] ⚠️ Invalid JSON line', { chars: trimmed.length });
       }
     }
   }
@@ -717,7 +751,7 @@ async function nonStreamChat(
     content: m.content,
   }));
 
-  console.log('[Chat]   Last message:', userMessage.slice(0, 50) + '...');
+  console.log('[Chat]   Last message length:', typeof userMessage === 'string' ? userMessage.length : 'multimodal');
 
   // 🧠 Use Agent System to build smart prompt
   let agentResponse;
@@ -808,9 +842,10 @@ async function nonStreamChat(
   });
 
   if (!response.ok) {
-    const error = await response.text();
-    console.error('[Chat] ❌ Ollama error:', error);
-    return reply.status(502).send({ error: 'Ollama error', message: error });
+    // SECURITY (H-09): the upstream body is never read, logged or relayed.
+    console.error('[Chat] ❌ Ollama request failed', { status: response.status });
+    try { await response.body?.cancel(); } catch { /* ignore */ }
+    return reply.status(502).send({ error: 'Model unavailable', code: 'model_unavailable' });
   }
 
   const data = await response.json() as {
