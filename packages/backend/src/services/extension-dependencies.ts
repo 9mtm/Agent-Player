@@ -1,9 +1,11 @@
 /**
  * Extension Dependencies Service
- * Handles dependency resolution, validation, and conflict detection
+ * Handles dependency resolution, validation, and conflict detection.
+ * B2.2d-11: on the process driver; the *Step forms join the caller's
+ * transaction (marketplace install/uninstall).
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, one, run, sql, type Step } from '../repositories/sql-steps.js';
 import { compareVersions } from './extension-update-manager.js';
 
 export interface ExtensionDependency {
@@ -30,19 +32,13 @@ export interface DependencyResolution {
 /**
  * Get dependencies for an extension
  */
-export function getExtensionDependencies(extensionId: string): ExtensionDependency[] {
-  const db = getDatabase();
-
-  const deps = db
-    .prepare(
-      `
+export function* dependenciesStep(extensionId: string): Step<ExtensionDependency[]> {
+  const deps = yield* all<any>(`
     SELECT ed.*, er.name as depends_on_name
     FROM extension_dependencies ed
     LEFT JOIN extension_registry er ON ed.depends_on_id = er.id
-    WHERE ed.extension_id = ?
-  `
-    )
-    .all(extensionId) as any[];
+    WHERE ed.extension_id = ?`,
+    extensionId);
 
   return deps.map((d) => ({
     ...d,
@@ -50,17 +46,16 @@ export function getExtensionDependencies(extensionId: string): ExtensionDependen
   }));
 }
 
+export function getExtensionDependencies(extensionId: string): Promise<ExtensionDependency[]> {
+  return sql().read(dependenciesStep(extensionId));
+}
+
 /**
  * Check if all dependencies are met for an extension
  */
-export function checkDependencies(
-  extensionId: string,
-  userId: string
-): DependencyResolution {
-  const db = getDatabase();
-
+export function* checkDependenciesStep(extensionId: string, userId: string): Step<DependencyResolution> {
   // Get extension's dependencies
-  const dependencies = getExtensionDependencies(extensionId);
+  const dependencies = yield* dependenciesStep(extensionId);
 
   const missing: Array<{ id: string; name: string; min_version?: string }> = [];
   const conflicts: Array<{
@@ -73,16 +68,12 @@ export function checkDependencies(
     if (!dep.required) continue; // Skip optional dependencies
 
     // Check if dependency is installed
-    const installed = db
-      .prepare(
-        `
+    const installed = yield* one<{ installed_version: string; name: string }>(`
       SELECT ei.installed_version, er.name
       FROM extension_installations ei
       JOIN extension_registry er ON ei.extension_id = er.id
-      WHERE ei.extension_id = ? AND ei.user_id = ?
-    `
-      )
-      .get(dep.depends_on_id, userId) as any;
+      WHERE ei.extension_id = ? AND ei.user_id = ?`,
+      dep.depends_on_id, userId);
 
     if (!installed) {
       missing.push({
@@ -114,7 +105,7 @@ export function checkDependencies(
   }
 
   // Calculate install order (topological sort)
-  const installOrder = calculateInstallOrder(extensionId, userId);
+  const installOrder = yield* installOrderStep(extensionId, userId);
 
   return {
     success: missing.length === 0 && conflicts.length === 0,
@@ -124,16 +115,19 @@ export function checkDependencies(
   };
 }
 
+export function checkDependencies(extensionId: string, userId: string): Promise<DependencyResolution> {
+  return sql().read(checkDependenciesStep(extensionId, userId));
+}
+
 /**
  * Calculate installation order using topological sort
  */
-function calculateInstallOrder(extensionId: string, userId: string): string[] {
-  const db = getDatabase();
+function* installOrderStep(extensionId: string, userId: string): Step<string[]> {
   const order: string[] = [];
   const visited = new Set<string>();
   const visiting = new Set<string>();
 
-  function visit(id: string): boolean {
+  function* visit(id: string): Step<boolean> {
     if (visited.has(id)) return true;
     if (visiting.has(id)) {
       console.warn(`[Dependencies] Circular dependency detected involving ${id}`);
@@ -143,29 +137,21 @@ function calculateInstallOrder(extensionId: string, userId: string): string[] {
     visiting.add(id);
 
     // Get dependencies
-    const deps = db
-      .prepare(
-        `
+    const deps = yield* all<{ depends_on_id: string }>(`
       SELECT depends_on_id FROM extension_dependencies
-      WHERE extension_id = ? AND required = 1
-    `
-      )
-      .all(id) as any[];
+      WHERE extension_id = ? AND required = 1`,
+      id);
 
     // Check if each dependency is installed
     for (const dep of deps) {
-      const installed = db
-        .prepare(
-          `
-        SELECT 1 FROM extension_installations
-        WHERE extension_id = ? AND user_id = ?
-      `
-        )
-        .get(dep.depends_on_id, userId);
+      const installed = yield* one(`
+        SELECT 1 AS ok FROM extension_installations
+        WHERE extension_id = ? AND user_id = ?`,
+        dep.depends_on_id, userId);
 
       if (!installed) {
         // Need to install dependency first
-        if (!visit(dep.depends_on_id)) {
+        if (!(yield* visit(dep.depends_on_id))) {
           return false; // Circular dependency or error
         }
       }
@@ -182,7 +168,7 @@ function calculateInstallOrder(extensionId: string, userId: string): string[] {
     return true;
   }
 
-  visit(extensionId);
+  yield* visit(extensionId);
 
   return order;
 }
@@ -190,16 +176,8 @@ function calculateInstallOrder(extensionId: string, userId: string): string[] {
 /**
  * Get reverse dependencies (extensions that depend on this one)
  */
-export function getReverseDependencies(extensionId: string, userId: string): Array<{
-  id: string;
-  name: string;
-  installed: boolean;
-}> {
-  const db = getDatabase();
-
-  const reverseDeps = db
-    .prepare(
-      `
+function* reverseDependenciesStep(extensionId: string, userId: string): Step<Array<{ id: string; name: string; installed: boolean }>> {
+  const reverseDeps = yield* all<any>(`
     SELECT DISTINCT
       ed.extension_id as id,
       er.name,
@@ -207,10 +185,8 @@ export function getReverseDependencies(extensionId: string, userId: string): Arr
     FROM extension_dependencies ed
     JOIN extension_registry er ON ed.extension_id = er.id
     LEFT JOIN extension_installations ei ON ed.extension_id = ei.extension_id AND ei.user_id = ?
-    WHERE ed.depends_on_id = ? AND ed.required = 1
-  `
-    )
-    .all(userId, extensionId) as any[];
+    WHERE ed.depends_on_id = ? AND ed.required = 1`,
+    userId, extensionId);
 
   return reverseDeps.map((d) => ({
     ...d,
@@ -218,14 +194,19 @@ export function getReverseDependencies(extensionId: string, userId: string): Arr
   }));
 }
 
+export function getReverseDependencies(extensionId: string, userId: string): Promise<Array<{
+  id: string;
+  name: string;
+  installed: boolean;
+}>> {
+  return sql().read(reverseDependenciesStep(extensionId, userId));
+}
+
 /**
  * Validate extension can be uninstalled (no active reverse dependencies)
  */
-export function canUninstall(extensionId: string, userId: string): {
-  canUninstall: boolean;
-  blockedBy: string[];
-} {
-  const reverseDeps = getReverseDependencies(extensionId, userId);
+export function* canUninstallStep(extensionId: string, userId: string): Step<{ canUninstall: boolean; blockedBy: string[] }> {
+  const reverseDeps = yield* reverseDependenciesStep(extensionId, userId);
   const installed = reverseDeps.filter((d) => d.installed);
 
   return {
@@ -234,52 +215,55 @@ export function canUninstall(extensionId: string, userId: string): {
   };
 }
 
+export function canUninstall(extensionId: string, userId: string): Promise<{
+  canUninstall: boolean;
+  blockedBy: string[];
+}> {
+  return sql().read(canUninstallStep(extensionId, userId));
+}
+
 /**
  * Add dependency relationship
  */
-export function addDependency(
+export async function addDependency(
   extensionId: string,
   dependsOnId: string,
   minVersion?: string,
   maxVersion?: string,
   required = true
-): { success: boolean; error?: string } {
+): Promise<{ success: boolean; error?: string }> {
   try {
-    const db = getDatabase();
-
-    // Check if both extensions exist
-    const ext1 = db.prepare('SELECT 1 FROM extension_registry WHERE id = ?').get(extensionId);
-    const ext2 = db.prepare('SELECT 1 FROM extension_registry WHERE id = ?').get(dependsOnId);
-
-    if (!ext1 || !ext2) {
-      return { success: false, error: 'One or both extensions not found' };
-    }
-
     // Prevent self-dependency
     if (extensionId === dependsOnId) {
       return { success: false, error: 'Extension cannot depend on itself' };
     }
 
-    // Add dependency
-    db.prepare(
-      `
-      INSERT INTO extension_dependencies (id, extension_id, depends_on_id, min_version, max_version, required)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(extension_id, depends_on_id) DO UPDATE SET
-        min_version = excluded.min_version,
-        max_version = excluded.max_version,
-        required = excluded.required
-    `
-    ).run(
-      `${extensionId}-${dependsOnId}`,
-      extensionId,
-      dependsOnId,
-      minVersion || null,
-      maxVersion || null,
-      required ? 1 : 0
-    );
+    return await sql().tx(function* (): Step<{ success: boolean; error?: string }> {
+      // Check if both extensions exist
+      const ext1 = yield* one('SELECT 1 AS ok FROM extension_registry WHERE id = ?', extensionId);
+      const ext2 = yield* one('SELECT 1 AS ok FROM extension_registry WHERE id = ?', dependsOnId);
 
-    return { success: true };
+      if (!ext1 || !ext2) {
+        return { success: false, error: 'One or both extensions not found' };
+      }
+
+      // Add dependency
+      yield* run(`
+        INSERT INTO extension_dependencies (id, extension_id, depends_on_id, min_version, max_version, required)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(extension_id, depends_on_id) DO UPDATE SET
+          min_version = excluded.min_version,
+          max_version = excluded.max_version,
+          required = excluded.required`,
+        `${extensionId}-${dependsOnId}`,
+        extensionId,
+        dependsOnId,
+        minVersion || null,
+        maxVersion || null,
+        required ? 1 : 0);
+
+      return { success: true };
+    });
   } catch (error: any) {
     return { success: false, error: error.message };
   }
@@ -288,16 +272,12 @@ export function addDependency(
 /**
  * Remove dependency relationship
  */
-export function removeDependency(
+export async function removeDependency(
   extensionId: string,
   dependsOnId: string
-): { success: boolean; error?: string } {
+): Promise<{ success: boolean; error?: string }> {
   try {
-    const db = getDatabase();
-
-    const result = db
-      .prepare('DELETE FROM extension_dependencies WHERE extension_id = ? AND depends_on_id = ?')
-      .run(extensionId, dependsOnId);
+    const result = await sql().read(run('DELETE FROM extension_dependencies WHERE extension_id = ? AND depends_on_id = ?', extensionId, dependsOnId));
 
     if (result.changes === 0) {
       return { success: false, error: 'Dependency not found' };
