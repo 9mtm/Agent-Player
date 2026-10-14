@@ -30,7 +30,7 @@
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { authenticateActiveUser, type UserRole } from './route-guards.js';
+import { authenticateActiveUser, authenticateActiveUserAsync, type UserRole } from './route-guards.js';
 import { CHANNEL_TURN_HEADER, channelTurnFromHeaders } from '../tools/channel-policy.js';
 import { serviceActor, userActor, type Actor } from '../repositories/actor.js';
 
@@ -308,7 +308,16 @@ export function actorOf(request: FastifyRequest): Actor | null {
   return request.actor;
 }
 
-/** The onRequest hook. Exported for tests. */
+/**
+ * The onRequest hook. Exported for tests.
+ *
+ * B2.2b: async on both drivers. The token check (token_version, status, role)
+ * is awaited on the configured driver (authenticateActiveUserAsync); Fastify
+ * waits for the returned promise before any later hook or the handler runs,
+ * and a reply sent here ends the request. A database error rejects the
+ * promise: Fastify skips the route and the global error handler answers the
+ * generic 500 (error-handler.ts). It never lets the request through.
+ */
 export async function authGate(request: FastifyRequest, reply: FastifyReply) {
   request.authUser = null;
   request.actor = null;
@@ -327,7 +336,7 @@ export async function authGate(request: FastifyRequest, reply: FastifyReply) {
 
   if (access === 'optional') {
     if (!hasBearer) return;
-    const user = authenticateActiveUser(request);
+    const user = await authenticateActiveUserAsync(request);
     if (!user) return deny(reply, 401, 'Authentication required');
     if (user.role === 'guest' && !guestMayUse(request.method, url)) {
       return deny(reply, 403, 'Guest accounts can only use public rooms');
@@ -346,7 +355,7 @@ export async function authGate(request: FastifyRequest, reply: FastifyReply) {
     return;
   }
 
-  const user = hasBearer ? authenticateActiveUser(request) : null;
+  const user = hasBearer ? await authenticateActiveUserAsync(request) : null;
   if (!user) return deny(reply, 401, 'Authentication required');
 
   if (user.role === 'guest') {

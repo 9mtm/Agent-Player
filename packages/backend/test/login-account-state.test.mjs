@@ -18,6 +18,7 @@ const { getDatabase, closeDatabase } = await import('../src/db/database.ts');
 const { default: Fastify } = await import('fastify');
 const { authRoutes } = await import('../src/api/routes/auth.ts');
 const throttle = await import('../src/auth/account-lockout.ts');
+const throttleStore = await import('../src/repositories/login-throttle.ts');
 const { getRepositories } = await import('../src/db/index.ts');
 const bcrypt = (await import('bcryptjs')).default;
 
@@ -154,7 +155,7 @@ test('prune: removes attempts older than 30 days and expired device tokens, keep
 
 test('startLoginRecordPruning runs once immediately, returns an unref\'d timer and never throws', () => {
   db.prepare(`INSERT INTO login_attempts (email, success, ip_address, attempted_at) VALUES ('gone@prune.test', 0, '10.0.0.1', datetime('now', '-40 days'))`).run();
-  const timer = throttle.startLoginRecordPruning(60 * 60 * 1000);
+  const timer = throttleStore.startLoginRecordPruning(throttleStore.sqliteLoginThrottle, 60 * 60 * 1000);
   try {
     assert.equal(timer.hasRef(), false);
     assert.equal(db.prepare(`SELECT COUNT(*) AS c FROM login_attempts WHERE email = 'gone@prune.test'`).get().c, 0);

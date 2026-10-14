@@ -119,7 +119,8 @@ test('identity: create account, user lookup and SQLite-shaped rows', { skip }, a
   assert.equal(p.bio, 'hello');
   assert.equal(p.timezone, 'Europe/Berlin');
   assert.equal(p.full_name, 'PG Owner');
-  await assert.rejects(id.teams(admin), m.pgIdentity.NotOnPostgresError);
+  // B2.2b: teams are on PostgreSQL now (pg-auth-teams.integration.test.mjs covers them).
+  assert.deepEqual(await id.teams(admin), []);
 });
 
 test('identity: signIn ok / wrong password / unknown; endSessions bumps token_version', { skip }, async () => {

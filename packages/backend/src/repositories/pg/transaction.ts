@@ -7,8 +7,11 @@
  *
  * repositories/transaction.ts (SQLite) is unchanged and still what
  * `withTransaction` exports: while B2 is partial, the SQLite repositories
- * (teams, agents-config, ...) need their SQLite transaction. B2.2b switches
- * `withTransaction` by driver once every repository it wraps is ported.
+ * (agents-config, ...) need their SQLite transaction even on 'postgres', so
+ * a global switch would drop their atomicity. Ported repositories choose by
+ * driver through their runner instead (B2.2b-1: teams via sql-runner.ts
+ * batch -> this function on PostgreSQL). `withTransaction` itself switches
+ * once every repository it wraps is ported.
  */
 
 import type { Actor } from '../actor.js';

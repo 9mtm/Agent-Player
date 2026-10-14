@@ -191,7 +191,8 @@ async function start() {
 
     // S0-Q.21: prune old sign-in attempts (30 days) and expired device
     // tokens now and daily (unref'd timer, errors logged, never thrown).
-    const { startLoginRecordPruning } = await import('../auth/account-lockout.js');
+    // B2.2b: through the selected driver's throttle store (loginThrottle.prune).
+    const { startLoginRecordPruning } = await import('../repositories/index.js');
     startLoginRecordPruning();
 
     // Scheduled notifications — check every minute

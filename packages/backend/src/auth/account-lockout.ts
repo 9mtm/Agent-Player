@@ -318,22 +318,5 @@ export function cleanupOldAttempts(): void {
   pruneLoginRecords();
 }
 
-/**
- * S0-Q.21: prune once now and then every PRUNE_INTERVAL_MS. Errors are
- * logged (message only; the tables hold no secrets in clear) and never
- * thrown. The timer is unref'd so it never keeps the process alive.
- */
-export function startLoginRecordPruning(intervalMs: number = PRUNE_INTERVAL_MS): ReturnType<typeof setInterval> {
-  const run = () => {
-    try {
-      const { attempts, devices } = pruneLoginRecords();
-      if (attempts || devices) console.log(`[Auth] Pruned ${attempts} old sign-in attempts and ${devices} expired device tokens`);
-    } catch (err) {
-      console.warn('[Auth] Sign-in record prune failed:', (err as Error)?.message ?? 'unknown error');
-    }
-  };
-  run();
-  const timer = setInterval(run, intervalMs);
-  timer.unref();
-  return timer;
-}
+// The background prune timer (S0-Q.21) is repositories/login-throttle.ts
+// startLoginRecordPruning: it runs through the selected driver's throttle store.

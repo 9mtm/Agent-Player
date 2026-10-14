@@ -24,6 +24,8 @@
  */
 
 import { getDatabase } from '../db/index.js';
+import { dbDriver } from '../db/pg/config.js';
+import { pgOne } from '../db/pg/pool.js';
 import type { UserRole } from '../auth/route-guards.js';
 import type { DrawerRef } from '../memory/drawers.js';
 import type { ToolExecutionContext } from '../tools/types.js';
@@ -72,33 +74,66 @@ export function serviceActor(turn: { channel?: string; userId?: string }): Actor
 /** Server-internal code (recovery, schedulers). Never derived from a request. */
 export const SYSTEM_ACTOR: Actor = freeze({ kind: 'system' as const, role: 'none' as const });
 
-/** Role of an active account, or 'none' (missing, inactive or unknown role). */
+function roleOfRow(row: { role: string; status?: string | null } | undefined): ActorRole {
+  if (!row || row.status !== 'active' || !ROLES.has(row.role)) return 'none';
+  return row.role as UserRole;
+}
+
+/**
+ * Role of an active account, or 'none' (missing, inactive or unknown role).
+ * Synchronous: SQLite only. On PostgreSQL there is no synchronous lookup, so
+ * it fails closed ('none') instead of reading the SQLite file; callers that
+ * can await use activeRoleAsync.
+ */
 function activeRole(userId: string): ActorRole {
+  if (dbDriver() === 'postgres') return 'none';
   try {
-    const row = getDatabase().prepare('SELECT role, status FROM users WHERE id = ?').get(userId) as { role: string; status: string } | undefined;
-    if (!row || row.status !== 'active' || !ROLES.has(row.role)) return 'none';
-    return row.role as UserRole;
+    return roleOfRow(getDatabase().prepare('SELECT role, status FROM users WHERE id = ?').get(userId) as { role: string; status: string } | undefined);
   } catch {
     return 'none';
   }
 }
 
-/**
- * Actor of one tool call, from the run's trusted context only (the user,
- * agent, channel policy and drawers set by server code). Fails closed: no run
- * user -> no userId (every scoped repository call is refused).
- */
-export function actorFromToolContext(context?: ToolExecutionContext): Actor {
-  const userId = typeof context?.userId === 'string' && context.userId ? context.userId : undefined;
+/** activeRole on the configured driver (B2.2b). Any error -> 'none' (fails closed). */
+export async function activeRoleAsync(userId: string): Promise<ActorRole> {
+  if (dbDriver() !== 'postgres') return activeRole(userId);
+  try {
+    return roleOfRow(await pgOne<{ role: string; status: string }>('SELECT role, status FROM users WHERE id = ?', userId));
+  } catch {
+    return 'none';
+  }
+}
+
+function buildToolActor(context: ToolExecutionContext | undefined, userId: string | undefined, role: ActorRole): Actor {
   return freeze({
     kind: 'agent' as const,
-    role: userId ? activeRole(userId) : 'none' as const,
+    role,
     ...(userId ? { userId } : {}),
     ...(context?.agentId ? { agentId: context.agentId } : {}),
     ...(context?.toolPolicy ? { channel: context.toolPolicy.channel } : {}),
     drawers: Object.freeze([...toolMemoryDrawers(context)]),
     ...(context?.taskRun?.runId ? { runId: context.taskRun.runId } : {}),
   });
+}
+
+const contextUserId = (context?: ToolExecutionContext): string | undefined =>
+  typeof context?.userId === 'string' && context.userId ? context.userId : undefined;
+
+/**
+ * Actor of one tool call, from the run's trusted context only (the user,
+ * agent, channel policy and drawers set by server code). Fails closed: no run
+ * user -> no userId (every scoped repository call is refused).
+ * Synchronous (role lookup on SQLite only, see activeRole).
+ */
+export function actorFromToolContext(context?: ToolExecutionContext): Actor {
+  const userId = contextUserId(context);
+  return buildToolActor(context, userId, userId ? activeRole(userId) : 'none');
+}
+
+/** actorFromToolContext with the role read on the configured driver (B2.2b; the tools registry uses this). */
+export async function actorFromToolContextAsync(context?: ToolExecutionContext): Promise<Actor> {
+  const userId = contextUserId(context);
+  return buildToolActor(context, userId, userId ? await activeRoleAsync(userId) : 'none');
 }
 
 /** The tool call's actor: the one the registry attached, else built from the context. */

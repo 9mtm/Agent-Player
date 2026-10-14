@@ -11,7 +11,7 @@ export * as dialect from './dialect.js';
 export {
   loadPg, createPgPool, getPgPool, setPgPool, closePgPool,
   pgAll, pgOne, pgRun, pgInsert, pgExec,
-  withPgTransaction, inPgTransaction, PgTransactionError,
+  withPgTransaction, inPgTransaction, outsidePgTransaction, PgTransactionError,
 } from './pool.js';
 export type { Param } from './pool.js';
 export { runPgMigrations, listPgMigrations, STEADY_STATE, MIGRATION_LOCK_KEY, PgMigrationError } from './migrate.js';

@@ -3,7 +3,7 @@
  *
  *   record      writes audit_logs in PostgreSQL (same columns and values as
  *               services/audit-logger.ts logAudit, shared SQL). Like logAudit
- *               it never fails the caller: an error is logged (message only)
+ *               it never fails the caller: an error is logged (safe fields only)
  *               and swallowed. Inside a transaction the insert runs in a
  *               SAVEPOINT, so a failed audit row cannot abort the caller's
  *               transaction.
@@ -19,6 +19,7 @@ import { requireActor } from '../scope.js';
 import { sqliteAudit, type AuditRepository } from '../audit.js';
 import { AUDIT_INSERT_SQL, auditLogParams } from '../../services/audit-logger.js';
 import { pgRun, withPgTransaction, inPgTransaction } from '../../db/pg/pool.js';
+import { safeErrorFields } from '../../services/safe-error-log.js';
 
 export const pgAudit: AuditRepository = {
   ...sqliteAudit,
@@ -36,9 +37,9 @@ export const pgAudit: AuditRepository = {
     try {
       if (inPgTransaction()) await withPgTransaction(() => pgRun(AUDIT_INSERT_SQL, ...params));
       else await pgRun(AUDIT_INSERT_SQL, ...params);
-    } catch (error: any) {
+    } catch (error: unknown) {
       // SECURITY: never fail the main operation because of audit logging.
-      console.error('[AuditLogger] Failed to log audit event:', error?.message ?? 'unknown error');
+      console.error('[AuditLogger] Failed to log audit event:', safeErrorFields(error));
     }
   },
 };

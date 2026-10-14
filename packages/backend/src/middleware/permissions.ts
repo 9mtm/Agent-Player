@@ -4,7 +4,7 @@
  */
 
 import type { FastifyRequest, FastifyReply } from 'fastify';
-import { authenticateActiveUser } from '../auth/route-guards.js';
+import { authenticateActiveUser, authenticateActiveUserAsync } from '../auth/route-guards.js';
 
 export type Role = 'owner' | 'admin' | 'user' | 'guest';
 
@@ -118,12 +118,19 @@ export function getUserFromRequest(request: FastifyRequest): { id: string; role:
     return user;
 }
 
+/** Async form for hooks (B2.2b): the token check runs on the configured driver; DB errors reject. */
+export async function getUserFromRequestAsync(request: FastifyRequest): Promise<{ id: string; role: Role } | null> {
+    const user = await authenticateActiveUserAsync(request);
+    if (!user || !Object.prototype.hasOwnProperty.call(rolePermissions, user.role)) return null;
+    return user as { id: string; role: Role };
+}
+
 /**
  * Middleware factory to require specific permission
  */
 export function requirePermission(permission: Permission) {
     return async (request: FastifyRequest, reply: FastifyReply) => {
-        const user = getUserFromRequest(request);
+        const user = await getUserFromRequestAsync(request);
 
         if (!user) {
             return reply.code(401).send({
@@ -148,7 +155,7 @@ export function requirePermission(permission: Permission) {
  */
 export function requireAnyPermission(permissions: Permission[]) {
     return async (request: FastifyRequest, reply: FastifyReply) => {
-        const user = getUserFromRequest(request);
+        const user = await getUserFromRequestAsync(request);
 
         if (!user) {
             return reply.code(401).send({
@@ -173,7 +180,7 @@ export function requireAnyPermission(permissions: Permission[]) {
  */
 export function requireAllPermissions(permissions: Permission[]) {
     return async (request: FastifyRequest, reply: FastifyReply) => {
-        const user = getUserFromRequest(request);
+        const user = await getUserFromRequestAsync(request);
 
         if (!user) {
             return reply.code(401).send({
@@ -198,7 +205,7 @@ export function requireAllPermissions(permissions: Permission[]) {
  */
 export function requireRole(role: Role) {
     return async (request: FastifyRequest, reply: FastifyReply) => {
-        const user = getUserFromRequest(request);
+        const user = await getUserFromRequestAsync(request);
 
         if (!user) {
             return reply.code(401).send({

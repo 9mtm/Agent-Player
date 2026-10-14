@@ -12,7 +12,8 @@
 
 import * as sqlite from '../auth/account-lockout.js';
 import * as pg from './pg/login-throttle.js';
-import type { ThrottleStatus } from '../auth/account-lockout.js';
+import { PRUNE_INTERVAL_MS, type ThrottleStatus } from '../auth/account-lockout.js';
+import { safeErrorFields } from '../services/safe-error-log.js';
 
 export interface LoginThrottle {
   check(email: string, ipAddress?: string, deviceToken?: unknown, nowMs?: number): Promise<ThrottleStatus>;
@@ -38,3 +39,31 @@ export const pgLoginThrottle: LoginThrottle = {
   hasValidDevice: pg.hasValidDevice,
   prune: pg.pruneLoginRecords,
 };
+
+/**
+ * S0-Q.21: prune old sign-in attempts and expired device tokens once now and
+ * then every PRUNE_INTERVAL_MS, through `throttle.prune` (so on the selected
+ * driver; server.ts passes repositories/index.ts loginThrottle). Errors are
+ * logged with safe fields only and never thrown. The timer is unref'd so it
+ * never keeps the process alive. On SQLite the first prune has finished when
+ * this returns (the store is synchronous under the hood).
+ */
+export function startLoginRecordPruning(throttle: LoginThrottle, intervalMs: number = PRUNE_INTERVAL_MS): ReturnType<typeof setInterval> {
+  const run = () => {
+    let pending: Promise<{ attempts: number; devices: number }>;
+    try {
+      pending = throttle.prune();
+    } catch (err) {
+      pending = Promise.reject(err);
+    }
+    pending.then(({ attempts, devices }) => {
+      if (attempts || devices) console.log(`[Auth] Pruned ${attempts} old sign-in attempts and ${devices} expired device tokens`);
+    }, (err) => {
+      console.warn('[Auth] Sign-in record prune failed:', safeErrorFields(err));
+    });
+  };
+  run();
+  const timer = setInterval(run, intervalMs);
+  timer.unref();
+  return timer;
+}

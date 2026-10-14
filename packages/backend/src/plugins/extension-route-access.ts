@@ -15,12 +15,15 @@
  *                                  as ?token= (EventSource cannot send headers);
  *                                  the token is verified exactly like a header
  *
+ * The token check is async on the configured driver (B2.2b); a database
+ * error rejects the hook (generic 500), never a pass.
+ *
  * Public routes are matched against the route pattern Fastify dispatched to
  * (request.routeOptions.url), never against the raw URL string.
  */
 
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { authenticateActiveUser, authorizeActiveRole, OWNER_OR_ADMIN } from '../auth/route-guards.js';
+import { authenticateActiveUserAsync, authorizeActiveRoleAsync, OWNER_OR_ADMIN } from '../auth/route-guards.js';
 
 export type ExtensionRouteAccess = 'owner-admin' | 'authenticated';
 
@@ -62,13 +65,13 @@ export function createExtensionRouteGuard(
     }
 
     if (access === 'authenticated') {
-      const user = authenticateActiveUser(request);
+      const user = await authenticateActiveUserAsync(request);
       if (!user) return reply.code(401).send({ error: 'Authentication required' });
       (request as any).authUserId = user.id;
       return;
     }
 
-    const userId = authorizeActiveRole(request, reply, OWNER_OR_ADMIN);
+    const userId = await authorizeActiveRoleAsync(request, reply, OWNER_OR_ADMIN);
     if (userId === null) return reply;
     (request as any).authUserId = userId;
   };

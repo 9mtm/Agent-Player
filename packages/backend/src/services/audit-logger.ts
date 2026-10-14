@@ -5,6 +5,9 @@
 
 import { getDatabase } from '../db/index.js';
 import type { FastifyRequest } from 'fastify';
+import { dbDriver } from '../db/pg/config.js';
+import { pgRun, outsidePgTransaction } from '../db/pg/pool.js';
+import { safeErrorFields } from './safe-error-log.js';
 
 export type AuditEventType =
     // Authentication events
@@ -107,19 +110,50 @@ export function auditLogParams(entry: AuditLogEntry): Array<string | number | nu
     ];
 }
 
+const pendingAuditWrites = new Set<Promise<void>>();
+
+function auditWriteFailed(error: unknown): void {
+    // SECURITY: never fail the main operation because of audit logging. The
+    // log gets safe fields only (FU-01): the message can hold SQL or values.
+    console.error('[AuditLogger] Failed to log audit event:', safeErrorFields(error));
+}
+
 /**
  * Log an audit event
  * SECURITY: Creates immutable audit trail (L-02, L-08)
+ *
+ * Driver-aware and fire-and-forget (B2.2b). Never blocks the request and
+ * never throws into the caller:
+ *   SQLite      the insert runs synchronously, as before: the row exists when
+ *               logAudit returns (tests read it right after a request).
+ *   PostgreSQL  the insert is started and not awaited, outside any open
+ *               transaction of the caller (its own pool connection), so a
+ *               rollback of the caller does not remove the audit row and the
+ *               row never runs on a finished transaction's client. Errors are
+ *               caught and logged with safe fields only.
+ * flushAuditWrites() waits for the PostgreSQL inserts still running.
  */
 export function logAudit(entry: AuditLogEntry): void {
     try {
+        if (dbDriver() === 'postgres') {
+            const params = auditLogParams(entry);
+            const write: Promise<void> = outsidePgTransaction(() => pgRun(AUDIT_INSERT_SQL, ...params))
+                .then(() => undefined, auditWriteFailed)
+                .finally(() => { pendingAuditWrites.delete(write); });
+            pendingAuditWrites.add(write);
+            return;
+        }
         const db = getDatabase();
-
         db.execute(AUDIT_INSERT_SQL, ...auditLogParams(entry));
-    } catch (error: any) {
-        // SECURITY: Never fail the main operation due to audit logging
-        // But log to console for monitoring
-        console.error('[AuditLogger] Failed to log audit event:', error.message);
+    } catch (error: unknown) {
+        auditWriteFailed(error);
+    }
+}
+
+/** Resolves when every audit insert started so far has finished (PostgreSQL; SQLite has none pending). */
+export async function flushAuditWrites(): Promise<void> {
+    while (pendingAuditWrites.size > 0) {
+        await Promise.all([...pendingAuditWrites]);
     }
 }
 
@@ -304,7 +338,7 @@ export function logExtensionEvent(
             });
             resolve();
         } catch (error) {
-            console.error('[AuditLogger] Failed to log extension event:', error);
+            console.error('[AuditLogger] Failed to log extension event:', safeErrorFields(error));
             resolve(); // Don't reject to avoid breaking extension operations
         }
     });

@@ -123,6 +123,15 @@ export function inPgTransaction(): boolean {
   return !!f && !f.shared.closed;
 }
 
+/**
+ * Run `fn` outside any open transaction: its queries use the pool, not the
+ * caller's transaction client. For detached work (fire-and-forget audit
+ * rows, B2.2b) that may still be running when the caller's transaction ends.
+ */
+export function outsidePgTransaction<T>(fn: () => T): T {
+  return txStore.exit(fn);
+}
+
 type Queryable = Pick<pg.Pool, 'query'> | Pick<pg.PoolClient, 'query'>;
 
 function target(): Queryable | Promise<Queryable> {
