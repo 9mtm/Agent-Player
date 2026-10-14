@@ -23,12 +23,12 @@ export async function sessionsRoutes(fastify: FastifyInstance) {
   });
 
   /** True if the session exists and belongs to the caller. */
-  const owns = (request: FastifyRequest, id: string) => sessionsDb.ownerOf(id) === callerId(request);
+  const owns = async (request: FastifyRequest, id: string) => (await sessionsDb.ownerOf(id)) === callerId(request);
   const notFound = (reply: any) => reply.status(404).send({ error: 'Session not found' });
 
   // GET /api/sessions - List the caller's sessions
   fastify.get('/api/sessions', async (request) => {
-    const sessions = sessionsDb.list(callerId(request));
+    const sessions = await sessionsDb.list(callerId(request));
     return { sessions };
   });
 
@@ -37,7 +37,7 @@ export async function sessionsRoutes(fastify: FastifyInstance) {
     Body: { title?: string; model?: string; systemPrompt?: string }
   }>('/api/sessions', async (request) => {
     const { title, model, systemPrompt } = request.body || {};
-    const session = sessionsDb.create({ title, model, systemPrompt }, callerId(request));
+    const session = await sessionsDb.create({ title, model, systemPrompt }, callerId(request));
     return { session };
   });
 
@@ -45,16 +45,16 @@ export async function sessionsRoutes(fastify: FastifyInstance) {
   fastify.get<{
     Params: { id: string }
   }>('/api/sessions/:id', async (request, reply) => {
-    if (!owns(request, request.params.id)) return notFound(reply);
-    const session = sessionsDb.get(request.params.id);
+    if (!(await owns(request, request.params.id))) return notFound(reply);
+    const session = await sessionsDb.get(request.params.id);
     if (!session) return notFound(reply);
     return { session };
   });
 
   const update = async (request: FastifyRequest<{ Params: { id: string }; Body: { title?: string; model?: string } }>, reply: any) => {
-    if (!owns(request, request.params.id)) return notFound(reply);
+    if (!(await owns(request, request.params.id))) return notFound(reply);
     const { title, model } = request.body || {};
-    const session = sessionsDb.update(request.params.id, { title, model });
+    const session = await sessionsDb.update(request.params.id, { title, model });
     if (!session) return notFound(reply);
     return { session };
   };
@@ -69,8 +69,8 @@ export async function sessionsRoutes(fastify: FastifyInstance) {
   fastify.delete<{
     Params: { id: string }
   }>('/api/sessions/:id', async (request, reply) => {
-    if (!owns(request, request.params.id)) return notFound(reply);
-    const deleted = sessionsDb.delete(request.params.id);
+    if (!(await owns(request, request.params.id))) return notFound(reply);
+    const deleted = await sessionsDb.delete(request.params.id);
     if (!deleted) return notFound(reply);
     return { success: true };
   });
@@ -79,8 +79,8 @@ export async function sessionsRoutes(fastify: FastifyInstance) {
   fastify.get<{
     Params: { id: string }
   }>('/api/sessions/:id/messages', async (request, reply) => {
-    if (!owns(request, request.params.id)) return notFound(reply);
-    const messages = messagesDb.list(request.params.id);
+    if (!(await owns(request, request.params.id))) return notFound(reply);
+    const messages = await messagesDb.list(request.params.id);
     return { messages };
   });
 
@@ -89,12 +89,12 @@ export async function sessionsRoutes(fastify: FastifyInstance) {
     Params: { id: string };
     Body: { role: string; content: string; model?: string; tokens?: number }
   }>('/api/sessions/:id/messages', async (request, reply) => {
-    if (!owns(request, request.params.id)) return notFound(reply);
+    if (!(await owns(request, request.params.id))) return notFound(reply);
     const body = request.body || ({} as any);
     if (!['user', 'assistant', 'system'].includes(body.role) || typeof body.content !== 'string') {
       return reply.status(400).send({ error: 'role (user|assistant|system) and content are required' });
     }
-    const message = messagesDb.create(request.params.id, {
+    const message = await messagesDb.create(request.params.id, {
       role: body.role, content: body.content, model: body.model, tokens: body.tokens,
     });
     return { message };
@@ -104,8 +104,8 @@ export async function sessionsRoutes(fastify: FastifyInstance) {
   fastify.delete<{
     Params: { id: string }
   }>('/api/sessions/:id/messages', async (request, reply) => {
-    if (!owns(request, request.params.id)) return notFound(reply);
-    const count = messagesDb.clear(request.params.id);
+    if (!(await owns(request, request.params.id))) return notFound(reply);
+    const count = await messagesDb.clear(request.params.id);
     return { success: true, deleted: count };
   });
 }

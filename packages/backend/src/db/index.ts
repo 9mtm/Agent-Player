@@ -21,6 +21,8 @@ import { getDatabase } from './database.js';
 import { UsersRepository } from './repositories/users.js';
 import { SessionsRepository } from './repositories/sessions.js';
 import { SkillsRepository } from './repositories/skills.js';
+import type { ChatMessage, ChatSession } from './repositories/sessions.js';
+import * as chatSessions from '../repositories/chat-sessions.js';
 
 export interface Repositories {
   users: UsersRepository;
@@ -64,9 +66,8 @@ export async function initializeDatabase(): Promise<void> {
   return initializing;
 }
 
-// Backward compatibility: Legacy API for sessions and messages
-// These use the new repositories under the hood
-const repos = getRepositories();
+// Backward compatibility: Legacy API for sessions and messages.
+// B2.2d-8: on the process driver (repositories/chat-sessions.ts), async.
 
 export interface Session {
   id: string;
@@ -87,136 +88,85 @@ export interface Message {
   createdAt: string;
 }
 
-// Legacy Sessions API (uses SessionsRepository under the hood)
+function toSession(s: ChatSession): Session {
+  return {
+    id: s.id,
+    title: s.title,
+    model: s.model,
+    systemPrompt: s.system_prompt,
+    createdAt: s.created_at,
+    updatedAt: s.updated_at
+  };
+}
+
+function toMessage(m: ChatMessage, extra: { model?: string; tokens?: number } = {}): Message {
+  return {
+    id: m.id,
+    sessionId: m.session_id,
+    role: m.role,
+    content: m.content,
+    model: extra.model || null,
+    tokens: extra.tokens || null,
+    createdAt: m.created_at
+  };
+}
+
 export const sessionsDb = {
   /** Sessions of one user (S0-Q.11: the caller from the token). */
-  list(userId: string): Session[] {
-    const sessions = repos.sessions.findUserSessions(userId);
-    return sessions.map(s => ({
-      id: s.id,
-      title: s.title,
-      model: s.model,
-      systemPrompt: s.system_prompt,
-      createdAt: s.created_at,
-      updatedAt: s.updated_at
-    }));
+  async list(userId: string): Promise<Session[]> {
+    return (await chatSessions.listUserChatSessions(userId)).map(toSession);
   },
 
   /** Owner user id of a session, or null if it does not exist. */
-  ownerOf(id: string): string | null {
-    return repos.sessions.findSessionById(id)?.user_id ?? null;
+  async ownerOf(id: string): Promise<string | null> {
+    return (await chatSessions.findChatSession(id))?.user_id ?? null;
   },
 
-  get(id: string): Session | null {
-    const session = repos.sessions.findSessionById(id);
-    if (!session) return null;
-
-    return {
-      id: session.id,
-      title: session.title,
-      model: session.model,
-      systemPrompt: session.system_prompt,
-      createdAt: session.created_at,
-      updatedAt: session.updated_at
-    };
+  async get(id: string): Promise<Session | null> {
+    const session = await chatSessions.findChatSession(id);
+    return session ? toSession(session) : null;
   },
 
-  create(input: { title?: string; model?: string; systemPrompt?: string }, userId: string): Session {
-    const session = repos.sessions.createSession({
+  async create(input: { title?: string; model?: string; systemPrompt?: string }, userId: string): Promise<Session> {
+    return toSession(await chatSessions.createChatSession({
       user_id: userId,
       title: input.title,
       model: input.model || 'gpt-4',
       system_prompt: input.systemPrompt
-    });
-
-    return {
-      id: session.id,
-      title: session.title,
-      model: session.model,
-      systemPrompt: session.system_prompt,
-      createdAt: session.created_at,
-      updatedAt: session.updated_at
-    };
-  },
-
-  update(id: string, input: { title?: string; model?: string }): Session | null {
-    const session = repos.sessions.updateSession(id, {
-      title: input.title,
-      model: input.model
-    });
-
-    if (!session) return null;
-
-    return {
-      id: session.id,
-      title: session.title,
-      model: session.model,
-      systemPrompt: session.system_prompt,
-      createdAt: session.created_at,
-      updatedAt: session.updated_at
-    };
-  },
-
-  delete(id: string): boolean {
-    return repos.sessions.deleteSession(id);
-  },
-
-  touch(id: string): void {
-    repos.sessions.updateSession(id, {});
-  }
-};
-
-// Legacy Messages API (uses SessionsRepository under the hood)
-export const messagesDb = {
-  list(sessionId: string): Message[] {
-    const messages = repos.sessions.getSessionMessages(sessionId);
-    return messages.map(m => ({
-      id: m.id,
-      sessionId: m.session_id,
-      role: m.role,
-      content: m.content,
-      model: null,
-      tokens: null,
-      createdAt: m.created_at
     }));
   },
 
-  get(id: string): Message | null {
-    const message = repos.sessions.findMessageById(id);
-    if (!message) return null;
-
-    return {
-      id: message.id,
-      sessionId: message.session_id,
-      role: message.role,
-      content: message.content,
-      model: null,
-      tokens: null,
-      createdAt: message.created_at
-    };
+  async update(id: string, input: { title?: string; model?: string }): Promise<Session | null> {
+    const session = await chatSessions.updateChatSession(id, { title: input.title, model: input.model });
+    return session ? toSession(session) : null;
   },
 
-  create(sessionId: string, input: { role: string; content: string; model?: string; tokens?: number }): Message {
-    const message = repos.sessions.createMessage({
+  async delete(id: string): Promise<boolean> {
+    return chatSessions.deleteChatSession(id);
+  },
+
+  async touch(id: string): Promise<void> {
+    await chatSessions.updateChatSession(id, {});
+  }
+};
+
+export const messagesDb = {
+  async list(sessionId: string): Promise<Message[]> {
+    return (await chatSessions.listChatMessages(sessionId)).map((m) => toMessage(m));
+  },
+
+  async create(sessionId: string, input: { role: string; content: string; model?: string; tokens?: number }): Promise<Message> {
+    const message = await chatSessions.createChatMessage({
       session_id: sessionId,
-      role: input.role as 'user' | 'assistant' | 'system',
+      role: input.role as ChatMessage['role'],
       content: input.content
     });
-
-    return {
-      id: message.id,
-      sessionId: message.session_id,
-      role: message.role,
-      content: message.content,
-      model: input.model || null,
-      tokens: input.tokens || null,
-      createdAt: message.created_at
-    };
+    return toMessage(message, input);
   },
 
-  clear(sessionId: string): number {
-    repos.sessions.deleteSessionMessages(sessionId);
-    return 0;
+  /** Number of messages removed (it always answered 0 before). */
+  async clear(sessionId: string): Promise<number> {
+    return chatSessions.clearChatMessages(sessionId);
   }
 };
 
