@@ -5,11 +5,11 @@
 
 export { dbDriver, isPostgres, readPgConfig, parsePgUrl, isLoopbackHost, describePgTarget, PgConfigError } from './config.js';
 export type { DbDriver, PgConfig } from './config.js';
-export { parseInt8, parseTimestamp, getTypeParser, pgTypes, Int8RangeError, OID } from './types.js';
+export { parseInt8, parseTimestamp, ownTypeParser, makePgTypes, Int8RangeError, OID } from './types.js';
 export { convertPlaceholders, toPgPlaceholders, PlaceholderError } from './placeholders.js';
 export * as dialect from './dialect.js';
 export {
-  createPgPool, getPgPool, setPgPool, closePgPool,
+  loadPg, createPgPool, getPgPool, setPgPool, closePgPool,
   pgAll, pgOne, pgRun, pgInsert, pgExec,
   withPgTransaction, inPgTransaction, PgTransactionError,
 } from './pool.js';

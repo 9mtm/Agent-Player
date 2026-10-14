@@ -24,10 +24,10 @@
  * client).
  */
 
-import pg from 'pg';
+import type pg from 'pg';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { readPgConfig, PgConfigError, type PgConfig } from './config.js';
-import { pgTypes } from './types.js';
+import { makePgTypes, type FallbackTypeParser } from './types.js';
 import { convertPlaceholders, PlaceholderError } from './placeholders.js';
 import { runResult, type RunResult } from './dialect.js';
 
@@ -35,18 +35,35 @@ export type Param = string | number | bigint | boolean | null | undefined | Buff
 
 export class PgTransactionError extends Error {}
 
-let pool: pg.Pool | null = null;
+let pool: Promise<pg.Pool> | null = null;
+
+type PgModule = typeof import('pg');
+let pgModule: Promise<PgModule> | null = null;
+
+/**
+ * The 'pg' package, loaded on first use only. SQLite mode never calls this,
+ * so the app loads and runs without pg installed (no static runtime import
+ * of 'pg' anywhere reachable from the app; see test/pg-lazy-import.test.mjs).
+ */
+export function loadPg(): Promise<PgModule> {
+  if (!pgModule) {
+    pgModule = import('pg').then((m) => ((m as unknown as { default?: PgModule }).default ?? m) as PgModule);
+    pgModule.catch(() => { pgModule = null; });
+  }
+  return pgModule;
+}
 
 /** A pool for `cfg` (the caller owns it and must end() it). */
-export function createPgPool(cfg: PgConfig): pg.Pool {
-  const p = new pg.Pool({
+export async function createPgPool(cfg: PgConfig): Promise<pg.Pool> {
+  const pgm = await loadPg();
+  const p = new pgm.Pool({
     host: cfg.host,
     port: cfg.port,
     database: cfg.database,
     user: cfg.user,
     password: cfg.password,
     max: cfg.max,
-    types: pgTypes,
+    types: makePgTypes(pgm.types.getTypeParser as unknown as FallbackTypeParser),
     options: '-c TimeZone=UTC',
     application_name: 'agent-player',
     idleTimeoutMillis: 30_000,
@@ -57,25 +74,27 @@ export function createPgPool(cfg: PgConfig): pg.Pool {
   return p;
 }
 
-/** The process pool (AGENT_PLAYER_DB=postgres only). */
-export function getPgPool(): pg.Pool {
+/** The process pool (AGENT_PLAYER_DB=postgres only); created once, on first use. */
+export function getPgPool(): Promise<pg.Pool> {
   if (!pool) {
     const cfg = readPgConfig();
-    if (!cfg) throw new PgConfigError('PostgreSQL is not configured (AGENT_PLAYER_DB=postgres)');
+    if (!cfg) return Promise.reject(new PgConfigError('PostgreSQL is not configured (AGENT_PLAYER_DB=postgres)'));
     pool = createPgPool(cfg);
+    pool.catch(() => { pool = null; });
   }
   return pool;
 }
 
 /** Use `p` as the process pool (tests, the migration CLI). */
 export function setPgPool(p: pg.Pool | null): void {
-  pool = p;
+  pool = p ? Promise.resolve(p) : null;
 }
 
 export async function closePgPool(): Promise<void> {
   const p = pool;
   pool = null;
-  if (p) await p.end();
+  const real = p ? await p.catch(() => null) : null;
+  if (real) await real.end();
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +125,7 @@ export function inPgTransaction(): boolean {
 
 type Queryable = Pick<pg.Pool, 'query'> | Pick<pg.PoolClient, 'query'>;
 
-function target(): Queryable {
+function target(): Queryable | Promise<Queryable> {
   const f = txStore.getStore();
   if (!f) return getPgPool();
   if (f.shared.closed) throw new PgTransactionError('query after its transaction ended (missing await inside withTransaction?)');
@@ -129,7 +148,7 @@ function prepare(sql: string, params: readonly Param[]): { text: string; values:
 
 async function query(sql: string, params: readonly Param[]): Promise<pg.QueryResult> {
   const { text, values } = prepare(sql, params);
-  return target().query(text, values);
+  return (await target()).query(text, values);
 }
 
 /** All rows (better-sqlite3 .all()). */
@@ -158,7 +177,7 @@ export async function pgInsert(sql: string, idColumn: string, ...params: Param[]
 
 /** Several statements without parameters (better-sqlite3 .exec()). */
 export async function pgExec(sql: string): Promise<void> {
-  await target().query(sql);
+  await (await target()).query(sql);
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +225,7 @@ export async function withPgTransaction<T>(fn: () => T | Promise<T>): Promise<Aw
   const outer = txStore.getStore();
   if (outer && !outer.shared.closed) return inSavepoint(outer, fn);
 
-  const client = await getPgPool().connect();
+  const client = await (await getPgPool()).connect();
   const shared: TxShared = { client, stack: [], seq: 0, closed: false };
   let discard = false;
   try {

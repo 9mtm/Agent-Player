@@ -80,7 +80,7 @@ test('driver: repositories are on PostgreSQL; session is UTC; int8 overflow is r
 });
 
 test('runner: a second run applies nothing; ids match the files; steady-state indexes exist', { skip }, async () => {
-  const pool = m.pool.getPgPool();
+  const pool = await m.pool.getPgPool();
   // Two runners at once: the advisory lock serializes them, nothing is applied twice.
   const [a, b] = await Promise.all([m.migrate.runPgMigrations(pool), m.migrate.runPgMigrations(pool)]);
   for (const r of [a, b]) {

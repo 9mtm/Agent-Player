@@ -24,9 +24,15 @@
  *
  * The parsers are attached per pool (a `types` object), never through the
  * global pg.types registry, so no other pg user in the process is affected.
+ *
+ * No runtime import of 'pg' here (SQLite mode must load without pg
+ * installed): pool.ts loads pg lazily and passes its default parsers in.
  */
 
-import pg from 'pg';
+import type pg from 'pg';
+
+/** pg's own parser lookup (pg.types.getTypeParser), used for every other type. */
+export type FallbackTypeParser = (oid: number, format: 'text' | 'binary') => (value: string) => unknown;
 
 export const OID = { INT8: 20, TIMESTAMP: 1114, TIMESTAMPTZ: 1184, DATE: 1082 } as const;
 
@@ -68,15 +74,17 @@ function identity(text: string): string {
   return text;
 }
 
-/** Text-format parser for an OID: ours for the types above, pg's default otherwise. */
-export function getTypeParser(oid: number, format: 'text' | 'binary' = 'text'): (value: string) => unknown {
-  if (format === 'text') {
-    if (oid === OID.INT8) return parseInt8;
-    if (oid === OID.TIMESTAMPTZ || oid === OID.TIMESTAMP) return parseTimestamp;
-    if (oid === OID.DATE) return identity;
-  }
-  return (pg.types.getTypeParser as (o: number, f: string) => (v: string) => unknown)(oid, format);
+/** Our text-format parser for an OID, or null when pg's default applies. */
+export function ownTypeParser(oid: number, format: 'text' | 'binary' = 'text'): ((value: string) => unknown) | null {
+  if (format !== 'text') return null;
+  if (oid === OID.INT8) return parseInt8;
+  if (oid === OID.TIMESTAMPTZ || oid === OID.TIMESTAMP) return parseTimestamp;
+  if (oid === OID.DATE) return identity;
+  return null;
 }
 
-/** The `types` option for a pg Pool/Client. */
-export const pgTypes = { getTypeParser } as unknown as pg.CustomTypesConfig;
+/** The `types` option for a pg Pool/Client: ours first, then `fallback` (pg's defaults). */
+export function makePgTypes(fallback: FallbackTypeParser): pg.CustomTypesConfig {
+  const getTypeParser = (oid: number, format: 'text' | 'binary' = 'text') => ownTypeParser(oid, format) ?? fallback(oid, format);
+  return { getTypeParser } as unknown as pg.CustomTypesConfig;
+}

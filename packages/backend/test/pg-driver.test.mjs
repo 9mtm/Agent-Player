@@ -5,7 +5,10 @@ import assert from 'node:assert/strict';
 
 const { convertPlaceholders, toPgPlaceholders, PlaceholderError } = await import('../src/db/pg/placeholders.ts');
 const dialect = await import('../src/db/pg/dialect.ts');
-const { parseInt8, parseTimestamp, getTypeParser, Int8RangeError, OID } = await import('../src/db/pg/types.ts');
+const { parseInt8, parseTimestamp, ownTypeParser, makePgTypes, Int8RangeError, OID } = await import('../src/db/pg/types.ts');
+// Stand-in for pg's default parsers (this file needs no pg package).
+const fallbackCalls = [];
+const getTypeParser = makePgTypes((oid, format) => { fallbackCalls.push([oid, format]); return (v) => `pg-default:${v}`; }).getTypeParser;
 const { dbDriver, parsePgUrl, readPgConfig, isLoopbackHost, describePgTarget, PgConfigError } = await import('../src/db/pg/config.ts');
 const { listPgMigrations, STEADY_STATE } = await import('../src/db/pg/migrate.ts');
 
@@ -116,9 +119,11 @@ test('types: timestamps keep the SQLite string format in UTC', () => {
   assert.equal(parseTimestamp('-infinity'), '-infinity');
   assert.equal(getTypeParser(OID.TIMESTAMPTZ)('2026-01-02 03:04:05+00'), '2026-01-02 03:04:05');
   assert.equal(getTypeParser(OID.DATE)('2026-01-02'), '2026-01-02');
-  // Other types fall back to pg's own parsers (int4 -> number, bool -> boolean).
-  assert.equal(getTypeParser(23)('5'), 5);
-  assert.equal(getTypeParser(16)('t'), true);
+  // Other types (and binary format) fall back to pg's own parsers.
+  assert.equal(ownTypeParser(23), null);
+  assert.equal(ownTypeParser(OID.INT8, 'binary'), null);
+  assert.equal(getTypeParser(23)('5'), 'pg-default:5');
+  assert.deepEqual(fallbackCalls, [[23, 'text']]);
 });
 
 // ---------------------------------------------------------------------------

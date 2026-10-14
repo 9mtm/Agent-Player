@@ -23,7 +23,7 @@ try {
   console.error(err.message);
   process.exit(2);
 }
-const pool = createPgPool(cfg);
+const pool = await createPgPool(cfg);
 try {
   const started = Date.now();
   const report = await runPgMigrations(pool, { log: (line) => console.log(`  ${line}`) });
