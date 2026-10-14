@@ -1,0 +1,26 @@
+{
+  "name": "@agent-player/mcp-server",
+  "version": "0.1.0",
+  "description": "Agent Player MCP server: lets Claude Code / Codex hand light tasks to the small local agent",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "agent-player-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "node --import tsx --test test/*.test.mjs"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.16",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
