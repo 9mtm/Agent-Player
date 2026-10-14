@@ -6,7 +6,7 @@
  * short preview, and proposals waiting for review. Stored per user in
  * `memory_weekly_summaries` and read through GET /api/memory/weekly-summary.
  *
- * No paid calls. A local model (Ollama, `src/llm/ollama.ts`) only rewrites
+ * No paid calls. A local model (Ollama, through `src/llm/model-call.ts`) only rewrites
  * the digest as prose when MEMORY_SUMMARY_MODEL=ollama is set (or a
  * summarizer is passed in, as tests do); without it, or when the model
  * fails, the deterministic text is the summary.
@@ -16,7 +16,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDatabase } from '../db/index.js';
 import { getMemoryStorage } from './storage.js';
 import { drawerId, normalizeDrawer, type DrawerRef } from './drawers.js';
-import { DEFAULT_OLLAMA_MODEL, OLLAMA_URL, ollamaThinkOption } from '../llm/ollama.js';
+import { modelCall } from '../llm/model-call.js';
 
 export const SUMMARY_DAYS = 7;
 const MAX_ITEMS_PER_DRAWER = 20;
@@ -126,27 +126,19 @@ export function renderDigest(d: WeeklyDigest): string {
   return lines.join('\n');
 }
 
-/** Local Ollama summarizer (only used when MEMORY_SUMMARY_MODEL=ollama). */
+/**
+ * Local summarizer (only used when MEMORY_SUMMARY_MODEL=ollama). R2.2: a
+ * background call, so it goes through the model-call choke point (local
+ * model only: no paid model provider is configured for this purpose).
+ */
 export const ollamaSummarizer: Summarizer = async (digestText) => {
-  try {
-    const res = await fetch(`${OLLAMA_URL}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: DEFAULT_OLLAMA_MODEL,
-        prompt: `Rewrite this weekly memory digest as a short, friendly summary for the owner. Keep every number. Do not add facts.\n\n${digestText}`,
-        stream: false,
-        ...ollamaThinkOption(),
-      }),
-      signal: AbortSignal.timeout(120_000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json() as { response?: string };
-    const text = typeof data.response === 'string' ? data.response.trim() : '';
-    return text ? { text: text.slice(0, 20_000), model: `ollama:${DEFAULT_OLLAMA_MODEL}` } : null;
-  } catch {
-    return null;
-  }
+  const r = await modelCall({ actor: 'weekly-summary' }, {
+    purpose: 'weekly_summary',
+    prompt: `Rewrite this weekly memory digest as a short, friendly summary for the owner. Keep every number. Do not add facts.\n\n${digestText}`,
+    timeoutMs: 120_000,
+  });
+  const text = r.ok ? r.text.trim() : '';
+  return text ? { text: text.slice(0, 20_000), model: `${r.provider}:${r.model}` } : null;
 };
 
 function configuredSummarizer(): Summarizer | null {

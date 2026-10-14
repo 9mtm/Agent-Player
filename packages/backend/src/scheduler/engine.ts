@@ -3,6 +3,7 @@
  * Manages scheduled jobs using node-cron
  */
 
+import { isPaidProviderUrl } from '../llm/model-call.js';
 import cron from 'node-cron';
 import { EventEmitter } from 'events';
 import type {
@@ -270,6 +271,11 @@ export class CronEngine extends EventEmitter implements ICronEngine {
    * Execute API call
    */
   private async executeApiCall(action: ApiCallAction): Promise<any> {
+    // R2.2: a scheduled job runs without the owner present; it must not reach
+    // a paid model provider around the cost budget gate (src/llm/model-call.ts).
+    if (isPaidProviderUrl(String(action.url))) {
+      throw new Error('scheduled api_call to a paid model provider is refused (background model calls go through the cost budget gate)');
+    }
     const response = await fetch(action.url, {
       method: action.method,
       headers: action.headers || {},

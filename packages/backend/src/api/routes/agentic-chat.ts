@@ -11,6 +11,7 @@
 import * as os from 'node:os';
 import type { FastifyReply } from 'fastify';
 import { ClaudeClient } from '../../llm/claude-client.js';
+import { recordInteractiveUsage } from '../../llm/model-call.js';
 import { createToolsRegistry } from '../../tools/index.js';
 import type { ChannelToolPolicy } from '../../tools/channel-policy.js';
 import { loadClaudeProjectMemory } from './claude-local.js';
@@ -217,12 +218,15 @@ export async function streamChatClaude(
     // Call Claude with automatic retry on rate limit errors
     async function callWithRetry(msgs: any[], attempt = 0): Promise<any> {
       try {
-        return await claude.sendMessage(msgs, {
+        const r = await claude.sendMessage(msgs, {
           systemPrompt: agenticSystemPrompt,
           tools: tools.length > 0 ? tools : undefined,
           temperature,
           maxTokens: maxTokens ?? 4096,
         });
+        // R2.2: interactive owner chat is not gated; its paid usage is recorded for GET /api/budget.
+        recordInteractiveUsage({ provider: 'claude', model, usage: r.usage, outputText: r.content, purpose: 'interactive_chat' });
+        return r;
       } catch (err: any) {
         const isRateLimit = err.message?.includes('rate_limit_error') || err.message?.includes('rate limit');
         if (isRateLimit && attempt < 3) {

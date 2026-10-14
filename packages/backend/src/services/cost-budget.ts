@@ -20,7 +20,9 @@
  * provider billed it).
  *
  * Interactive chat with the owner (/api/chat and friends) does NOT go
- * through this gate; only autonomous runs (task runs, cron heartbeat) do.
+ * through this gate; autonomous and background calls do, through the
+ * choke point `src/llm/model-call.ts` (R2.2). Interactive paid usage is
+ * recorded separately (`interactive_usage`) and shown by budgetView().
  */
 
 import { getDatabase } from '../db/index.js';
@@ -262,6 +264,8 @@ export interface BudgetView {
   autonomousPaidCallsAllowed: boolean;
   callsToday: number;
   byProvider: Array<{ provider: string; cents: number; calls: number }>;
+  /** R2.2: interactive (owner present) paid usage today, not part of the cap. */
+  interactive: { cents: number; calls: number; byProvider: Array<{ provider: string; cents: number; calls: number }> };
   prices: PriceTable;
   pricesAreEstimates: boolean;
   scope: string;
@@ -278,6 +282,13 @@ export function budgetView(now = Date.now()): BudgetView {
       COALESCE(SUM(CASE WHEN status = 'reserved' THEN estimated_cents WHEN status = 'recorded' THEN cost_cents ELSE 0 END), 0) AS cents
     FROM paid_usage WHERE day = ? AND status != 'released' GROUP BY provider ORDER BY provider
   `).all(day) as Array<{ provider: string; calls: number; cents: number }>);
+  let interactiveBy: Array<{ provider: string; calls: number; cents: number }> = [];
+  try {
+    interactiveBy = db.prepare(`
+      SELECT provider, COUNT(*) AS calls, COALESCE(SUM(cost_cents), 0) AS cents
+      FROM interactive_usage WHERE day = ? GROUP BY provider ORDER BY provider
+    `).all(day) as Array<{ provider: string; calls: number; cents: number }>;
+  } catch { /* table missing on an old DB: nothing recorded yet */ }
   return {
     day,
     dailyCapCents: cap,
@@ -287,8 +298,13 @@ export function budgetView(now = Date.now()): BudgetView {
     autonomousPaidCallsAllowed: cap > 0 && spent < cap,
     callsToday: byProvider.reduce((n, p) => n + p.calls, 0),
     byProvider,
+    interactive: {
+      cents: Math.round(interactiveBy.reduce((n, p) => n + p.cents, 0) * 10_000) / 10_000,
+      calls: interactiveBy.reduce((n, p) => n + p.calls, 0),
+      byProvider: interactiveBy,
+    },
     prices: priceTable(),
     pricesAreEstimates: !process.env.MODEL_PRICES_JSON,
-    scope: 'Autonomous model calls only (task runs, cron heartbeat). Interactive chat with the owner is not metered or blocked by this cap.',
+    scope: 'The daily cap covers autonomous model calls (task runs, cron heartbeat, memory extraction, weekly summary; background work uses the free local model unless BACKGROUND_PAID_PURPOSES opts a purpose in). Interactive chat with the owner is not blocked by this cap; its paid usage is shown under interactive.',
   };
 }

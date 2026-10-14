@@ -32,7 +32,8 @@ import { ollamaToolChat } from '../llm/ollama-tool-chat.js';
 import { SMALL_AGENT_ID, smallAgentCard, smallAgentRunScope, smallAgentSystemPrompt } from './small-agent.js';
 import { intersectGrants, staticGrants } from '../tools/grants.js';
 import { toolMemoryDrawers } from '../tools/memory/scope.js';
-import { CostBudgetError, recordPaidCall, releasePaidCall, reservePaidCall } from './cost-budget.js';
+import { CostBudgetError } from './cost-budget.js';
+import { gatedModelCall } from '../llm/model-call.js';
 import { contractRunDrawers, retryFeedback, verifyResult, type TaskContract } from './task-contracts.js';
 import {
   BudgetExceededError,
@@ -250,11 +251,12 @@ function ollamaDriver(agent: AgentRow, systemPrompt: string, tools: any[]): Mode
  * (or the estimate) is recorded on the step and the run. Replayed steps
  * never get here, so they cost nothing.
  */
-async function gatedModelCall(driver: ModelDriver, messages: LoopMessage[], runId: string, stepIndex: number): Promise<StoredModelResponse> {
+async function gatedStepCall(driver: ModelDriver, messages: LoopMessage[], runId: string, stepIndex: number): Promise<StoredModelResponse> {
   const run = getRun(runId);
-  let ticket;
+  let gated;
   try {
-    ticket = reservePaidCall({
+    // R2.2: the shared gate of src/llm/model-call.ts (reserve -> call -> record / release).
+    gated = await gatedModelCall({
       provider: driver.provider,
       model: driver.model,
       payload: { messages, overhead: driver.overhead },
@@ -263,19 +265,12 @@ async function gatedModelCall(driver: ModelDriver, messages: LoopMessage[], runI
       runId,
       stepIndex,
       runLimitCents: run?.max_cost_cents ?? null,
-    });
+    }, () => driver.call(messages));
   } catch (err) {
     if (err instanceof CostBudgetError) throw new BudgetExceededError('cost', err.message);
     throw err;
   }
-  let response: StoredModelResponse;
-  try {
-    response = await driver.call(messages);
-  } catch (err) {
-    releasePaidCall(ticket);
-    throw err;
-  }
-  const used = recordPaidCall(ticket, response.usage, response.content ?? '');
+  const { response, used, ticket } = gated;
   try {
     recordStepUsage(runId, stepIndex, { provider: ticket.provider, model: driver.model, inputTokens: used.inputTokens, outputTokens: used.outputTokens, costCents: used.costCents, source: used.source });
   } catch { /* usage bookkeeping must not fail the step */ }
@@ -390,7 +385,7 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
           name: 'model',
           input: { messages: loopMessages },
           idempotent: true, // no external side effect: safe to call again
-          run: (_key, index) => gatedModelCall(driver, loopMessages, runId, index),
+          run: (_key, index) => gatedStepCall(driver, loopMessages, runId, index),
         });
 
         if (!response.toolCalls || response.toolCalls.length === 0) {

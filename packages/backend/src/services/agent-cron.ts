@@ -13,12 +13,11 @@ import path from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { getDatabase } from '../db/index.js';
 import { getOrchestrator } from '../multi-agent/index.js';
-import { ClaudeClient } from '../llm/claude-client.js';
 import { logActivity } from './activity-logger.js';
 import { resolveProviderApiKey } from '../credentials/authority.js';
 import { createRun } from './task-runs.js';
 import { contractPrompt, getTaskContract } from './task-contracts.js';
-import { CostBudgetError, recordPaidCall, releasePaidCall, reservePaidCall } from './cost-budget.js';
+import { backgroundPaidPurposes, modelCall, type PaidProviderConfig } from '../llm/model-call.js';
 import { executeTaskRun, type AgentRow } from './task-run-executor.js';
 
 const HEARTBEAT_OK_TOKEN = 'HEARTBEAT_OK';
@@ -52,14 +51,7 @@ function readHeartbeatFile(agentName: string): string | null {
  * Sends the HEARTBEAT.md checklist to the agent; logs an alert if the agent
  * returns anything other than a HEARTBEAT_OK acknowledgment.
  */
-async function runHeartbeat(agent: AgentRow, heartbeatContent: string): Promise<void> {
-  // SECURITY (S1.1): key from the credential authority (agent's own key, then
-  // the historical cron fallback row); never another agent's key.
-  const apiKey = await resolveProviderApiKey('claude', { agentId: agent.id, noGlobal: true, legacySettingsRow: 'claude_api_key' });
-
-  if (!apiKey || agent.provider !== 'claude') return;
-
-  const claude = new ClaudeClient(apiKey, agent.model);
+export async function runHeartbeat(agent: AgentRow, heartbeatContent: string): Promise<void> {
   const systemPrompt = agent.system_prompt ?? `You are ${agent.name}, an AI agent.`;
   const prompt =
     `Read the HEARTBEAT.md checklist below. Follow it strictly. ` +
@@ -67,32 +59,32 @@ async function runHeartbeat(agent: AgentRow, heartbeatContent: string): Promise<
     `If nothing needs attention, reply with exactly: HEARTBEAT_OK\n\n` +
     `## HEARTBEAT.md\n${heartbeatContent}`;
 
-  // R2 / D-BUDGET: a heartbeat is an autonomous paid call -> daily cap gate.
-  let ticket;
-  try {
-    ticket = reservePaidCall({ provider: 'claude', model: agent.model, payload: { prompt, systemPrompt }, maxOutputTokens: 1024, purpose: 'heartbeat' });
-  } catch (err: any) {
-    if (err instanceof CostBudgetError) {
-      console.log(`[AgentCron] 💤 Heartbeat for "${agent.name}" skipped: ${err.message}`);
-      return;
-    }
-    throw err;
+  // R2.2 / D-BUDGET / Q-16 (provisional): a heartbeat is a background call
+  // and runs on the free local model. The agent's own paid model provider is
+  // used only when the owner listed `heartbeat` in BACKGROUND_PAID_PURPOSES,
+  // and then through the daily cap (refused -> local model).
+  let paid: PaidProviderConfig | null = null;
+  if (agent.provider === 'claude' && backgroundPaidPurposes().has('heartbeat')) {
+    // SECURITY (S1.1): key from the credential authority (agent's own key,
+    // then the historical cron fallback row); never another agent's key.
+    const apiKey = await resolveProviderApiKey('claude', { agentId: agent.id, noGlobal: true, legacySettingsRow: 'claude_api_key' });
+    if (apiKey) paid = { provider: 'claude', model: agent.model, apiKey };
   }
-
-  let response: any;
-  try {
-    response = await claude.sendMessage(
-      [{ role: 'user', content: prompt }],
-      { systemPrompt, temperature: agent.temperature, maxTokens: 1024 },
-    );
-  } catch (err: any) {
-    releasePaidCall(ticket);
-    console.warn(`[AgentCron] ⚠️  Heartbeat API error for "${agent.name}": ${err.message}`);
+  const response = await modelCall({ actor: agent.id }, {
+    purpose: 'heartbeat',
+    prompt,
+    system: systemPrompt,
+    maxOutputTokens: 1024,
+    temperature: agent.temperature,
+    paid,
+  });
+  if (response.refused) console.log(`[AgentCron] 💤 Paid heartbeat for "${agent.name}" refused: ${response.refused}`);
+  if (!response.ok) {
+    console.warn(`[AgentCron] ⚠️  Heartbeat model error for "${agent.name}": ${response.error}`);
     return;
   }
-  recordPaidCall(ticket, response?.usage, response?.content ?? '');
 
-  const reply: string = (response.content ?? '').trim();
+  const reply: string = (response.text ?? '').trim();
 
   // Detect HEARTBEAT_OK at start or end
   const startsOk = reply.startsWith(HEARTBEAT_OK_TOKEN);

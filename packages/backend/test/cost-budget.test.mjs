@@ -247,7 +247,7 @@ test('GET /api/budget is owner only and shows today, the cap and the scope', asy
   assert.equal(b.autonomousPaidCallsAllowed, false);
   assert.ok(b.byProvider.some((p) => p.provider === 'claude'));
   assert.equal(b.prices.ollama.default.input, 0);
-  assert.match(b.scope, /Interactive chat .* not metered or blocked/);
+  assert.match(b.scope, /Interactive chat .* not blocked/);
   assert.ok(!res.body.includes('sk-ant-'), 'no keys in the budget view');
   delete process.env.DAILY_PAID_CAP_CENTS;
   const off = (await app.inject({ method: 'GET', url: '/api/budget', headers: bearer('cb-owner') })).json().budget;

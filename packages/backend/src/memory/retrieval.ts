@@ -2,8 +2,9 @@
  * Memory Retrieval
  *
  * Handles finding relevant memories and extracting new ones from conversations.
- * Uses Claude AI for intelligent extraction (any language, any content type).
- * Falls back to Ollama when no Claude key is configured.
+ * Extraction uses the local model by default (R2.2, src/llm/model-call.ts);
+ * a paid model provider only when the owner opted the purpose in and the
+ * daily cost cap allows it.
  */
 
 import { v4 as uuidv4 } from 'uuid';
@@ -19,7 +20,7 @@ import type {
   ImportanceLevel,
   MemoryLayer
 } from './types.js';
-import { OLLAMA_URL, DEFAULT_OLLAMA_MODEL } from '../llm/ollama.js';
+import { backgroundPaidPurposes, modelCall } from '../llm/model-call.js';
 import type { DrawerRef } from './drawers.js';
 
 const CLAUDE_KEY_PATTERN = /^sk-ant-/;
@@ -43,7 +44,7 @@ function getClaudeConfig(): { apiKey: string; model: string } | null {
   return config;
 }
 
-/** Call Claude to extract memories from conversation text */
+/** Extraction prompt (any model) */
 const EXTRACTION_PROMPT = (text: string) => `Analyze this conversation and extract important information worth remembering.
 Return a JSON array (no markdown, no explanation, just valid JSON).
 
@@ -64,84 +65,42 @@ Rules:
 Conversation:
 ${text}`;
 
-async function extractWithClaude(
-  text: string,
-  apiKey: string,
-  model: string
-): Promise<MemoryExtractionResult[]> {
-  const prompt = EXTRACTION_PROMPT(text);
-
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-    signal: AbortSignal.timeout(15000),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => '');
-    console.warn('[Memory] Claude API error:', res.status, errText.slice(0, 200));
-    return [];
-  }
-
-  const data = await res.json() as any;
-  const rawText = data.content?.[0]?.text?.trim() || '[]';
-
+/** Parse the model's JSON array of extraction items (markdown fences tolerated). */
+function parseExtractions(rawText: string): MemoryExtractionResult[] {
+  const cleaned = String(rawText || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim() || '[]';
   try {
-    const parsed = JSON.parse(rawText);
+    const parsed = JSON.parse(cleaned);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item: any) => item.type && item.content);
+    return parsed.filter((item: any) => item && item.type && item.content);
   } catch {
     return [];
   }
 }
 
-/** Call Ollama to extract memories — fallback when no Claude key is available */
-async function extractWithOllama(text: string): Promise<MemoryExtractionResult[]> {
+/**
+ * R2.2: extraction runs in the background (the chat UI posts each turn
+ * after the reply), so it goes through the model-call choke point: the
+ * local model by default; the configured paid model provider only when the
+ * owner listed `memory_extraction` in BACKGROUND_PAID_PURPOSES and the
+ * daily cap allows it. Q-16 (provisional): stays on local Qwen.
+ */
+async function extractWithModel(text: string, userId: string): Promise<MemoryExtractionResult[]> {
   const prompt = EXTRACTION_PROMPT(text);
-
-  try {
-    const res = await fetch(`${OLLAMA_URL}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: DEFAULT_OLLAMA_MODEL,
-        prompt,
-        stream: false,
-      }),
-      signal: AbortSignal.timeout(60000),  // 60s — LLM can be slow on CPU
-    });
-
-    if (!res.ok) {
-      console.warn('[Memory] Ollama API error:', res.status);
-      return [];
-    }
-
-    const data = await res.json() as any;
-    const rawText = (data.response || '').trim();
-
-    // Strip markdown fences if model wrapped response
-    const cleaned = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-
-    try {
-      const parsed = JSON.parse(cleaned);
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter((item: any) => item.type && item.content);
-    } catch {
-      return [];
-    }
-  } catch (err) {
-    console.warn('[Memory] Ollama extraction error:', (err as Error).message);
-    return [];
+  // The paid key is only read when the owner opted this purpose in.
+  const paidConfig = backgroundPaidPurposes().has('memory_extraction') ? getClaudeConfig() : null;
+  const paid = paidConfig ? { provider: 'claude' as const, model: paidConfig.model, apiKey: paidConfig.apiKey } : null;
+  const ctx = { actor: userId };
+  const first = await modelCall(ctx, { purpose: 'memory_extraction', prompt, maxOutputTokens: 1024, paid, timeoutMs: 60_000 });
+  if (!first.ok) console.warn(`[Memory] ${first.provider} extraction failed:`, first.error);
+  let extractions = first.ok ? parseExtractions(first.text) : [];
+  console.log(`[Memory] ${first.provider} extracted:`, extractions.length, 'items');
+  // A paid model that produced nothing: try the local model once.
+  if (extractions.length === 0 && first.paid) {
+    const local = await modelCall(ctx, { purpose: 'memory_extraction', prompt, maxOutputTokens: 1024, timeoutMs: 60_000 });
+    extractions = local.ok ? parseExtractions(local.text) : [];
+    console.log('[Memory] local extracted:', extractions.length, 'items');
   }
+  return extractions;
 }
 
 export class MemoryRetrieval implements IMemoryRetrieval {
@@ -172,9 +131,8 @@ export class MemoryRetrieval implements IMemoryRetrieval {
   }
 
   /**
-   * Extract learning candidates from conversation text using AI.
-   * Tries Claude first (only when a key is configured), falls back to the
-   * local Ollama model. Works for any language (Arabic, English, German, etc.).
+   * Extract learning candidates from conversation text using a model
+   * (local by default, see extractWithModel). Works for any language.
    *
    * Nothing is saved to memory here (CORE-05: the caller classifies each
    * candidate with memory/learning.ts). A shared secret goes to the encrypted
@@ -185,32 +143,7 @@ export class MemoryRetrieval implements IMemoryRetrieval {
   }>> {
     if (!text.trim()) return [];
 
-    let extractions: MemoryExtractionResult[] = [];
-
-    // Try Claude first
-    const claudeConfig = getClaudeConfig();
-    if (claudeConfig) {
-      console.log('[Memory] Extracting via Claude...');
-      try {
-        extractions = await extractWithClaude(text, claudeConfig.apiKey, claudeConfig.model);
-        console.log('[Memory] Claude extracted:', extractions.length, 'items');
-      } catch (err) {
-        console.warn('[Memory] Claude extraction failed:', (err as Error).message);
-      }
-    } else {
-      console.log('[Memory] No valid Claude key found');
-    }
-
-    // Fallback to Ollama if Claude produced no results
-    if (extractions.length === 0) {
-      console.log('[Memory] Trying Ollama extraction...');
-      try {
-        extractions = await extractWithOllama(text);
-        console.log('[Memory] Ollama extracted:', extractions.length, 'items');
-      } catch (err) {
-        console.warn('[Memory] Ollama extraction failed:', (err as Error).message);
-      }
-    }
+    const extractions = await extractWithModel(text, userId);
 
     const out: Array<{ content: string; type: string; importance: number; confidence?: number; origin: 'extraction'; credentialRef?: boolean }> = [];
     const credentialManager = getCredentialManager();

@@ -49,10 +49,13 @@ export class ClaudeClient {
       tools?: ClaudeTool[];
       maxTokens?: number;
       temperature?: number;
+      /** Abort the request after this many milliseconds (R2.2). */
+      timeoutMs?: number;
     }
   ): Promise<ClaudeResponse> {
     const response = await fetch(`${this.baseUrl}/messages`, {
       method: 'POST',
+      ...(options?.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': this.apiKey,
