@@ -18,7 +18,8 @@
  * forget.ts and memory-files.ts. Recall, learning and layers (search,
  * relevant, extract, save/edit/delete/reflect/stats tools) are in
  * memory-recall.ts; the owner's weekly summary, retention, embeddings,
- * forget-all and import pipeline in memory-owner.ts (B1.6).
+ * forget-all and import pipeline in memory-owner.ts (B1.6); quality, sharing
+ * and deduplication in memory-shared.ts (B1.7).
  */
 
 import type { Actor } from './actor.js';
@@ -26,6 +27,7 @@ import { ScopeError, drawerOpen, requireActor, requireMember } from './scope.js'
 import { memoryOwner, memoryUser, versionActor } from './memory-actor.js';
 import { sqliteMemoryRecall, type MemoryRecallRepository } from './memory-recall.js';
 import { sqliteMemoryOwner, type MemoryOwnerRepository } from './memory-owner.js';
+import { sqliteMemoryShared, type MemorySharedRepository } from './memory-shared.js';
 import { getDatabase } from '../db/index.js';
 import { getMemoryStorage } from '../memory/storage.js';
 import { defaultDrawerForType, normalizeDrawer, sameDrawer, type DrawerRef } from '../memory/drawers.js';
@@ -54,7 +56,7 @@ const PROPOSAL_NOT_FOUND = 'Proposal not found';
 export const DRAWER_CLOSED = 'that memory drawer is not open for this conversation';
 export const OUTSIDER_REFUSED = 'not available when answering someone else';
 
-export interface MemoryRepository extends MemoryRecallRepository, MemoryOwnerRepository {
+export interface MemoryRepository extends MemoryRecallRepository, MemoryOwnerRepository, MemorySharedRepository {
   list(actor: Actor | null | undefined): Promise<Memory[]>;
   drawers(actor: Actor | null | undefined): Promise<Array<DrawerRef & { count: number }>>;
   get(actor: Actor | null | undefined, id: string): Promise<Memory>;
@@ -99,6 +101,7 @@ const owner = memoryOwner;
 export const sqliteMemory: MemoryRepository = {
   ...sqliteMemoryRecall,
   ...sqliteMemoryOwner,
+  ...sqliteMemoryShared,
 
   async list(actor) {
     const { a, userId } = memoryUser(actor);
