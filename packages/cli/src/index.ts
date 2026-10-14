@@ -25,6 +25,7 @@ const load_loginCommand = async () => (await import('./commands/auth.js')).login
 const load_logoutCommand = async () => (await import('./commands/auth.js')).logoutCommand;
 const load_setupCommand = async () => (await import('./commands/setup.js')).setupCommand;
 const load_servicePrintCommand = async () => (await import('./commands/service.js')).servicePrintCommand;
+const load_importCommand = async () => (await import('./commands/import.js')).importCommand;
 
 const program = new Command();
 
@@ -105,6 +106,27 @@ program
   .description('Quick chat with your agent')
   .argument('[message]', 'Message to send')
   .action(async (message?: string) => (await load_chatCommand())(message));
+
+program
+  .command('import')
+  .description('Safely import selected Markdown/text files (e.g. assistant exports) as memory proposals: secrets are redacted, you review before anything is saved')
+  .argument('[files...]', 'Files to import (only these are read)')
+  .option('--from <source>', 'Where the files come from: claude-code, codex, chatgpt or text (default text)')
+  .option('--drawer <drawer>', 'Put every item in this drawer, e.g. project:<slug>, owner, experience')
+  .option('--dry-run', 'Show the redacted preview summary, then discard it')
+  .option('-r, --recursive', 'Also read text files inside named folders (same filters, no symlinks)')
+  .option('-y, --yes', 'Do not ask for confirmation')
+  .option('--redact-emails', 'Also redact e-mail addresses (default: your owner setting)')
+  .option('--redact-phones', 'Also redact phone numbers (default: your owner setting)')
+  .option('--rollback <batch>', 'Undo an import: discard its preview or remove its pending proposals')
+  .addHelpText('after', `
+Only the files you name are read; nothing in ~/.claude, ~/.codex or other folders is searched.
+  claude-code  e.g. a CLAUDE.md or memory .md file you choose
+  codex        e.g. an AGENTS.md you choose
+  chatgpt      readable export documents (.md/.txt); conversations.json comes in a later release`)
+  .action(async (files: string[], options: any) => {
+    process.exitCode = await (await load_importCommand())(files, options);
+  });
 
 program
   .command('doctor')

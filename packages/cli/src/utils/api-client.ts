@@ -181,6 +181,25 @@ export class ApiClient {
   }
 
   /**
+   * Safe import (CLI-02): the same owner-only pipeline the web UI uses.
+   */
+  async importPreview(body: {
+    files: Array<{ name: string; contentBase64: string }>;
+    source?: string; drawer?: string; redactEmails?: boolean; redactPhones?: boolean;
+  }): Promise<any> {
+    if (!getStoredToken()) throw new ApiError(NOT_SIGNED_IN, 401);
+    return this.request('POST', '/api/memory/import/preview', { body, timeoutMs: 120_000 });
+  }
+
+  async importCommit(batchId: string, body: { version: number; contentHash: string; operationKey: string; confirm: true }): Promise<any> {
+    return this.request('POST', `/api/memory/import/${encodeURIComponent(batchId)}/commit`, { body, timeoutMs: 120_000 });
+  }
+
+  async importCancel(batchId: string): Promise<any> {
+    return this.request('POST', `/api/memory/import/${encodeURIComponent(batchId)}/cancel`, { body: {} });
+  }
+
+  /**
    * Chat API (non-streaming). Returns the assistant's reply text.
    */
   async sendMessage(message: string, sessionId?: string): Promise<string> {
