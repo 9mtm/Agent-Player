@@ -7,7 +7,8 @@
 
 import type { Tool, ToolResult } from '../types.js';
 import { getDatabase } from '../../db/index.js';
-import { getCredentialManager } from '../../credentials/manager.js';
+import { repositories } from '../../repositories/index.js';
+import { toolActor } from '../../repositories/actor.js';
 import { CredentialType } from '../../credentials/types.js';
 
 /**
@@ -108,12 +109,18 @@ The credential will be encrypted using AES-256-GCM before storage.`,
     }
 
     try {
-      // Encrypted and owned by the user through the credential manager.
-      const manager = getCredentialManager();
-      const existing = await manager.getByName(name, userId);
+      // Encrypted and owned by the run's own user (B1-core: credentials
+      // repository, scope = the actor's own user only).
+      const { created } = await repositories.credentials.saveOwnByName(toolActor(context), {
+        name,
+        type: CredentialType.API_KEY,
+        value,
+        description: description || undefined,
+        // The service this credential is for (e.g. 'claude'); lets tools find it.
+        skillId: typeof service === 'string' && service ? service : 'custom',
+      });
 
-      if (existing) {
-        await manager.update(existing.id, { value, description: description || existing.description });
+      if (!created) {
 
         console.log(`[CredentialsSave] ✅ Updated existing credential: ${name}`);
 
@@ -130,16 +137,6 @@ The credential has been encrypted and saved securely. You can now use it with yo
           }],
         };
       } else {
-        await manager.create({
-          name,
-          type: CredentialType.API_KEY,
-          value,
-          description: description || undefined,
-          // The service this credential is for (e.g. 'claude'); lets tools find it.
-          skillId: typeof service === 'string' && service ? service : 'custom',
-          userId,
-        });
-
         console.log(`[CredentialsSave] ✅ Saved new credential: ${name}`);
 
         return {
