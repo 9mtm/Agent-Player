@@ -2,17 +2,23 @@
  * Sign-in throttle store (B2.2a): auth/account-lockout.ts behind an async
  * interface, so the login route runs on either driver.
  *
- *   sqliteLoginThrottle   auth/account-lockout.ts, unchanged (synchronous
+ *   sqliteLoginThrottle   auth/account-lockout.ts on SQLite (synchronous
  *                         under the hood: the rows are written by the time
  *                         the call returns)
- *   pgLoginThrottle       repositories/pg/login-throttle.ts
+ *   pgLoginThrottle       the same functions on PostgreSQL
+ *
+ * B2.2c: account-lockout.ts is one copy of the SQL (SQL steps), so both
+ * stores run the same steps, each on its own driver's runner; there is no
+ * SQLite-only path left.
  *
  * Not actor-scoped: it runs before there is a user (rules in account-lockout.ts).
  */
 
-import * as sqlite from '../auth/account-lockout.js';
+import { loginThrottleOn, PRUNE_INTERVAL_MS, type ThrottleStatus } from '../auth/account-lockout.js';
 import * as pg from './pg/login-throttle.js';
-import { PRUNE_INTERVAL_MS, type ThrottleStatus } from '../auth/account-lockout.js';
+import { sqliteSteps } from './sql-steps.js';
+
+const sqlite = loginThrottleOn(sqliteSteps);
 import { safeErrorFields } from '../services/safe-error-log.js';
 
 export interface LoginThrottle {
@@ -25,11 +31,11 @@ export interface LoginThrottle {
 }
 
 export const sqliteLoginThrottle: LoginThrottle = {
-  check: async (...a) => sqlite.checkLoginThrottle(...a),
-  failed: async (...a) => sqlite.handleFailedLogin(...a),
-  succeeded: async (...a) => sqlite.handleSuccessfulLogin(...a),
-  hasValidDevice: async (...a) => sqlite.hasValidDevice(...a),
-  prune: async (...a) => sqlite.pruneLoginRecords(...a),
+  check: sqlite.check,
+  failed: sqlite.failed,
+  succeeded: sqlite.succeeded,
+  hasValidDevice: sqlite.hasValidDevice,
+  prune: sqlite.prune,
 };
 
 export const pgLoginThrottle: LoginThrottle = {

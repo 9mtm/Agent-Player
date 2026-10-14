@@ -44,10 +44,26 @@
  * service binds 127.0.0.1). Exposing the backend remotely needs trustProxy
  * set to the known proxy hop so per-IP buckets see real client addresses.
  * A missing IP is one shared bucket, 'unknown'.
+ *
+ * B2.2c: one copy of the SQL for both drivers (SQL steps, chosen by the
+ * process driver; repositories/login-throttle.ts is the async interface the
+ * routes use). Column kinds (they decide the SQL form):
+ *   login_attempts.attempted_at     DATETIME / timestamptz: compared with a
+ *                                    bound ISO time via tsParam()
+ *   login_devices.expires_at,
+ *   last_failed_at, last_used_at,
+ *   created_at                      TEXT 'YYYY-MM-DD HH:MM:SS' (UTC) on both:
+ *                                    compared with a bound textTimestamp(ms),
+ *                                    written with nowText()
+ * strftime('%s', x) is epochSeconds(); the pair query's lower bound when
+ * there is no success is '0000-00-00 00:00:00' on SQLite (text) and
+ * '-infinity' on PostgreSQL. handleSuccessfulLogin is one transaction, so
+ * the device token rotation is atomic on both drivers.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { getDatabase } from '../db/index.js';
+import { epochSeconds, nowText, textTimestamp, tsParam, type Dialect } from '../db/pg/dialect.js';
+import { dialect, one, run, sql, type Step, type StepRunner } from '../repositories/sql-steps.js';
 
 /** Failures are counted over this window; older failures no longer count. */
 export const THROTTLE_WINDOW_MINUTES = 60;
@@ -107,17 +123,8 @@ export function remaining(row: Bucket, free: number, nowMs: number): number {
   return until > nowMs ? Math.ceil((until - nowMs) / 1000) : 0;
 }
 
-/**
- * Record a sign-in attempt. attempted_at stays CURRENT_TIMESTAMP (SQLite's
- * 'YYYY-MM-DD HH:MM:SS', UTC); every comparison goes through datetime(?).
- */
-export function recordLoginAttempt(
-  email: string,
-  success: boolean,
-  ipAddress?: string,
-  userAgent?: string
-): void {
-  getDatabase().execute(
+function* recordAttemptStep(email: string, success: boolean, ipAddress?: string, userAgent?: string): Step<void> {
+  yield* run(
     `INSERT INTO login_attempts (email, success, ip_address, user_agent, attempted_at)
      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
     normEmail(email),
@@ -125,6 +132,20 @@ export function recordLoginAttempt(
     normIp(ipAddress),
     userAgent || null
   );
+}
+
+/**
+ * Record a sign-in attempt. attempted_at stays CURRENT_TIMESTAMP (SQLite's
+ * 'YYYY-MM-DD HH:MM:SS', UTC; timestamptz on PostgreSQL); every comparison
+ * goes through tsParam().
+ */
+export function recordLoginAttempt(
+  email: string,
+  success: boolean,
+  ipAddress?: string,
+  userAgent?: string
+): Promise<void> {
+  return sql().read(recordAttemptStep(email, success, ipAddress, userAgent));
 }
 
 /** The `deviceToken` input if well-formed (string, <= 200 chars, base64url), else null. */
@@ -141,21 +162,75 @@ export function hashToken(token: string): string {
 type Device = { id: number; failed_count: number; last_failed: number | null };
 
 /** The unexpired device row for this token and email, or null. */
-function findDevice(email: string, deviceToken: unknown, nowMs: number): Device | null {
+function* findDevice(email: string, deviceToken: unknown, nowMs: number): Step<Device | null> {
   const token = parseDeviceToken(deviceToken);
   if (!token) return null;
-  const row = getDatabase().queryOne(
-    `SELECT id, failed_count, CAST(strftime('%s', last_failed_at) AS INTEGER) AS last_failed
+  const d = yield* dialect();
+  const row = yield* one<Device>(
+    `SELECT id, failed_count, ${epochSeconds(d, 'last_failed_at', 'text')} AS last_failed
        FROM login_devices
-      WHERE token_hash = ? AND email = ? AND expires_at > datetime(?)`,
-    hashToken(token), normEmail(email), new Date(nowMs).toISOString()
-  ) as Device | undefined;
+      WHERE token_hash = ? AND email = ? AND expires_at > ?`,
+    hashToken(token), normEmail(email), textTimestamp(nowMs)
+  );
   return row ?? null;
 }
 
 /** Whether `deviceToken` is a valid, unexpired device token for `email`. */
-export function hasValidDevice(email: string, deviceToken: unknown, nowMs: number = Date.now()): boolean {
-  return findDevice(email, deviceToken, nowMs) !== null;
+export async function hasValidDevice(email: string, deviceToken: unknown, nowMs: number = Date.now()): Promise<boolean> {
+  return (await sql().read(findDevice(email, deviceToken, nowMs))) !== null;
+}
+
+/** The pair query's lower bound when the pair never succeeded. */
+function noSuccessYet(d: Dialect): string {
+  return d === 'postgres' ? `'-infinity'::timestamptz` : `'0000-00-00 00:00:00'`;
+}
+
+function* checkStep(email: string, ipAddress: string | undefined, deviceToken: unknown, nowMs: number): Step<ThrottleStatus> {
+  const d = yield* dialect();
+  const e = normEmail(email);
+  const ip = normIp(ipAddress);
+  const cutoffMs = nowMs - THROTTLE_WINDOW_MINUTES * 60_000;
+  const cutoff = new Date(cutoffMs).toISOString();
+
+  const device = yield* findDevice(e, deviceToken, nowMs);
+  if (device) {
+    // Only this device's own failures count (inside the window).
+    const inWindow = device.last_failed != null && device.last_failed * 1000 > cutoffMs;
+    const wait = remaining(
+      { count: inWindow ? device.failed_count : 0, last: device.last_failed },
+      DEVICE_FREE_FAILURES,
+      nowMs
+    );
+    return { throttled: wait > 0, retryAfterSeconds: wait };
+  }
+
+  const bucket = `SELECT COUNT(*) AS count, ${epochSeconds(d, 'MAX(attempted_at)')} AS last FROM login_attempts`;
+  const pair = (yield* one<NonNullable<Bucket>>(
+    `${bucket}
+      WHERE email = ? AND ip_address = ? AND success = 0
+        AND attempted_at > ${tsParam(d)}
+        AND attempted_at > COALESCE(
+          (SELECT MAX(attempted_at) FROM login_attempts WHERE email = ? AND ip_address = ? AND success = 1),
+          ${noSuccessYet(d)})`,
+    e, ip, cutoff, e, ip
+  )) as Bucket;
+
+  const byIp = (yield* one<NonNullable<Bucket>>(
+    `${bucket} WHERE ip_address = ? AND success = 0 AND attempted_at > ${tsParam(d)}`,
+    ip, cutoff
+  )) as Bucket;
+
+  const byEmail = (yield* one<NonNullable<Bucket>>(
+    `${bucket} WHERE email = ? AND success = 0 AND attempted_at > ${tsParam(d)}`,
+    e, cutoff
+  )) as Bucket;
+
+  const wait = Math.max(
+    remaining(pair, PAIR_FREE_FAILURES, nowMs),
+    remaining(byIp, IP_FREE_FAILURES, nowMs),
+    remaining(byEmail, EMAIL_FREE_FAILURES, nowMs)
+  );
+  return { throttled: wait > 0, retryAfterSeconds: wait };
 }
 
 /**
@@ -168,56 +243,24 @@ export function checkLoginThrottle(
   ipAddress?: string,
   deviceToken?: unknown,
   nowMs: number = Date.now()
-): ThrottleStatus {
-  const db = getDatabase();
-  const e = normEmail(email);
-  const ip = normIp(ipAddress);
-  const cutoffMs = nowMs - THROTTLE_WINDOW_MINUTES * 60_000;
-  const cutoff = new Date(cutoffMs).toISOString();
+): Promise<ThrottleStatus> {
+  return sql().read(checkStep(email, ipAddress, deviceToken, nowMs));
+}
 
-  const device = findDevice(e, deviceToken, nowMs);
+function* failedStep(email: string, ipAddress: string | undefined, userAgent: string | undefined, deviceToken: unknown, nowMs: number): Step<void> {
+  const d = yield* dialect();
+  yield* recordAttemptStep(email, false, ipAddress, userAgent);
+  const device = yield* findDevice(email, deviceToken, nowMs);
   if (device) {
-    // Only this device's own failures count (inside the window).
-    const inWindow = device.last_failed != null && device.last_failed * 1000 > cutoffMs;
-    const wait = remaining(
-      { count: inWindow ? device.failed_count : 0, last: device.last_failed },
-      DEVICE_FREE_FAILURES,
-      nowMs
+    yield* run(
+      `UPDATE login_devices
+          SET failed_count = CASE WHEN last_failed_at IS NOT NULL AND last_failed_at > ? THEN failed_count + 1 ELSE 1 END,
+              last_failed_at = ${nowText(d)}
+        WHERE id = ?`,
+      textTimestamp(nowMs - THROTTLE_WINDOW_MINUTES * 60_000),
+      device.id
     );
-    return { throttled: wait > 0, retryAfterSeconds: wait };
   }
-
-  const pair = db.queryOne(
-    `SELECT COUNT(*) AS count, CAST(strftime('%s', MAX(attempted_at)) AS INTEGER) AS last
-       FROM login_attempts
-      WHERE email = ? AND ip_address = ? AND success = 0
-        AND attempted_at > datetime(?)
-        AND attempted_at > COALESCE(
-          (SELECT MAX(attempted_at) FROM login_attempts WHERE email = ? AND ip_address = ? AND success = 1),
-          '0000-00-00 00:00:00')`,
-    e, ip, cutoff, e, ip
-  ) as Bucket;
-
-  const byIp = db.queryOne(
-    `SELECT COUNT(*) AS count, CAST(strftime('%s', MAX(attempted_at)) AS INTEGER) AS last
-       FROM login_attempts
-      WHERE ip_address = ? AND success = 0 AND attempted_at > datetime(?)`,
-    ip, cutoff
-  ) as Bucket;
-
-  const byEmail = db.queryOne(
-    `SELECT COUNT(*) AS count, CAST(strftime('%s', MAX(attempted_at)) AS INTEGER) AS last
-       FROM login_attempts
-      WHERE email = ? AND success = 0 AND attempted_at > datetime(?)`,
-    e, cutoff
-  ) as Bucket;
-
-  const wait = Math.max(
-    remaining(pair, PAIR_FREE_FAILURES, nowMs),
-    remaining(byIp, IP_FREE_FAILURES, nowMs),
-    remaining(byEmail, EMAIL_FREE_FAILURES, nowMs)
-  );
-  return { throttled: wait > 0, retryAfterSeconds: wait };
 }
 
 /**
@@ -231,38 +274,48 @@ export function handleFailedLogin(
   userAgent?: string,
   deviceToken?: unknown,
   nowMs: number = Date.now()
-): void {
-  recordLoginAttempt(email, false, ipAddress, userAgent);
-  const device = findDevice(email, deviceToken, nowMs);
-  if (device) {
-    getDatabase().execute(
-      `UPDATE login_devices
-          SET failed_count = CASE WHEN last_failed_at IS NOT NULL AND last_failed_at > datetime(?) THEN failed_count + 1 ELSE 1 END,
-              last_failed_at = CURRENT_TIMESTAMP
-        WHERE id = ?`,
-      new Date(nowMs - THROTTLE_WINDOW_MINUTES * 60_000).toISOString(),
-      device.id
-    );
-  }
+): Promise<void> {
+  return sql().read(failedStep(email, ipAddress, userAgent, deviceToken, nowMs));
 }
 
 /** Issue a new device token for `email`; only its hash is stored. */
-function issueDeviceToken(email: string, nowMs: number): string {
+function* issueDeviceToken(email: string, nowMs: number): Step<string> {
+  const d = yield* dialect();
   const token = randomBytes(DEVICE_TOKEN_BYTES).toString('base64url');
-  getDatabase().execute(
+  yield* run(
     `INSERT INTO login_devices (email, token_hash, created_at, last_used_at, expires_at)
-     VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, datetime(?))`,
+     VALUES (?, ?, ${nowText(d)}, ${nowText(d)}, ?)`,
     normEmail(email),
     hashToken(token),
-    new Date(nowMs + DEVICE_TOKEN_DAYS * 86_400_000).toISOString()
+    textTimestamp(nowMs + DEVICE_TOKEN_DAYS * 86_400_000)
   );
   return token;
+}
+
+function* succeededStep(email: string, ipAddress: string | undefined, userAgent: string | undefined, deviceToken: unknown, nowMs: number): Step<string> {
+  const e = normEmail(email);
+  yield* recordAttemptStep(e, true, ipAddress, userAgent);
+  yield* run(
+    `UPDATE users SET locked_until = NULL, failed_attempts = 0
+      WHERE lower(email) = ? AND (locked_until IS NOT NULL OR failed_attempts != 0)`,
+    e
+  );
+  const device = yield* findDevice(e, deviceToken, nowMs);
+  if (device) yield* run(`DELETE FROM login_devices WHERE id = ?`, device.id);
+  yield* run(`DELETE FROM login_devices WHERE expires_at <= ?`, textTimestamp(nowMs));
+  const fresh = yield* issueDeviceToken(e, nowMs);
+  yield* run(
+    `DELETE FROM login_devices WHERE email = ? AND id NOT IN (
+       SELECT id FROM login_devices WHERE email = ? ORDER BY last_used_at DESC, id DESC LIMIT ?)`,
+    e, e, MAX_DEVICES_PER_EMAIL
+  );
+  return fresh;
 }
 
 /**
  * Record a successful sign-in: resets this (email, IP) counter, clears any
  * lock left by the old logic, retires the presented device token (if any)
- * and returns a fresh device token for the client to keep.
+ * and returns a fresh device token for the client to keep (one transaction).
  */
 export function handleSuccessfulLogin(
   email: string,
@@ -270,25 +323,8 @@ export function handleSuccessfulLogin(
   userAgent?: string,
   deviceToken?: unknown,
   nowMs: number = Date.now()
-): string {
-  const db = getDatabase();
-  const e = normEmail(email);
-  recordLoginAttempt(e, true, ipAddress, userAgent);
-  db.execute(
-    `UPDATE users SET locked_until = NULL, failed_attempts = 0
-      WHERE lower(email) = ? AND (locked_until IS NOT NULL OR failed_attempts != 0)`,
-    e
-  );
-  const device = findDevice(e, deviceToken, nowMs);
-  if (device) db.execute(`DELETE FROM login_devices WHERE id = ?`, device.id);
-  db.execute(`DELETE FROM login_devices WHERE expires_at <= datetime(?)`, new Date(nowMs).toISOString());
-  const fresh = issueDeviceToken(e, nowMs);
-  db.execute(
-    `DELETE FROM login_devices WHERE email = ? AND id NOT IN (
-       SELECT id FROM login_devices WHERE email = ? ORDER BY last_used_at DESC, id DESC LIMIT ?)`,
-    e, e, MAX_DEVICES_PER_EMAIL
-  );
-  return fresh;
+): Promise<string> {
+  return sql().tx(() => succeededStep(email, ipAddress, userAgent, deviceToken, nowMs));
 }
 
 /** Attempt rows are kept this long (far longer than THROTTLE_WINDOW_MINUTES). */
@@ -300,22 +336,39 @@ export const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
  * Delete `login_attempts` rows older than ATTEMPT_RETENTION_DAYS and expired
  * `login_devices` rows. Returns how many rows went from each table.
  */
-export function pruneLoginRecords(nowMs: number = Date.now()): { attempts: number; devices: number } {
-  const db = getDatabase();
-  const attempts = db.execute(
-    `DELETE FROM login_attempts WHERE attempted_at < datetime(?)`,
+function* pruneStep(nowMs: number): Step<{ attempts: number; devices: number }> {
+  const d = yield* dialect();
+  const attempts = yield* run(
+    `DELETE FROM login_attempts WHERE attempted_at < ${tsParam(d)}`,
     new Date(nowMs - ATTEMPT_RETENTION_DAYS * 86_400_000).toISOString()
   );
-  const devices = db.execute(
-    `DELETE FROM login_devices WHERE expires_at <= datetime(?)`,
-    new Date(nowMs).toISOString()
-  );
+  const devices = yield* run(`DELETE FROM login_devices WHERE expires_at <= ?`, textTimestamp(nowMs));
   return { attempts: attempts.changes, devices: devices.changes };
 }
 
-/** Remove attempts older than 30 days and expired device tokens. */
-export function cleanupOldAttempts(): void {
-  pruneLoginRecords();
+export function pruneLoginRecords(nowMs: number = Date.now()): Promise<{ attempts: number; devices: number }> {
+  return sql().read(pruneStep(nowMs));
+}
+
+/**
+ * The throttle functions on one runner (repositories/login-throttle.ts binds
+ * the SQLite and the PostgreSQL store to their own driver). The exported
+ * functions above use the process driver.
+ */
+export function loginThrottleOn(runner: StepRunner) {
+  return {
+    check: (email: string, ipAddress?: string, deviceToken?: unknown, nowMs: number = Date.now()) =>
+      runner.read(checkStep(email, ipAddress, deviceToken, nowMs)),
+    failed: (email: string, ipAddress?: string, userAgent?: string, deviceToken?: unknown, nowMs: number = Date.now()) =>
+      runner.read(failedStep(email, ipAddress, userAgent, deviceToken, nowMs)),
+    succeeded: (email: string, ipAddress?: string, userAgent?: string, deviceToken?: unknown, nowMs: number = Date.now()) =>
+      runner.tx(() => succeededStep(email, ipAddress, userAgent, deviceToken, nowMs)),
+    hasValidDevice: async (email: string, deviceToken: unknown, nowMs: number = Date.now()) =>
+      (await runner.read(findDevice(email, deviceToken, nowMs))) !== null,
+    prune: (nowMs: number = Date.now()) => runner.read(pruneStep(nowMs)),
+    record: (email: string, success: boolean, ipAddress?: string, userAgent?: string) =>
+      runner.read(recordAttemptStep(email, success, ipAddress, userAgent)),
+  };
 }
 
 // The background prune timer (S0-Q.21) is repositories/login-throttle.ts

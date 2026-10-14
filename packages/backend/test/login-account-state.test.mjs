@@ -134,7 +134,7 @@ test('a normal account with the right password still signs in', async () => {
   assert.equal(failures(email), 0);
 });
 
-test('prune: removes attempts older than 30 days and expired device tokens, keeps fresh ones', () => {
+test('prune: removes attempts older than 30 days and expired device tokens, keeps fresh ones', async () => {
   const now = Date.parse('2026-10-14T12:00:00Z');
   const at = (ms) => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
   db.prepare(`DELETE FROM login_attempts`).run();
@@ -147,10 +147,10 @@ test('prune: removes attempts older than 30 days and expired device tokens, keep
   insD.run('old@prune.test', 'a'.repeat(64), at(now - 70 * 86_400_000), at(now - 70 * 86_400_000), at(now - 1000));
   insD.run('fresh@prune.test', 'b'.repeat(64), at(now), at(now), at(now + 86_400_000));
 
-  assert.deepEqual(throttle.pruneLoginRecords(now), { attempts: 1, devices: 1 });
+  assert.deepEqual((await throttle.pruneLoginRecords(now)), { attempts: 1, devices: 1 });
   assert.deepEqual(db.prepare(`SELECT email FROM login_attempts ORDER BY email`).all().map((r) => r.email), ['fresh@prune.test', 'today@prune.test']);
   assert.deepEqual(db.prepare(`SELECT email FROM login_devices`).all().map((r) => r.email), ['fresh@prune.test']);
-  assert.deepEqual(throttle.pruneLoginRecords(now), { attempts: 0, devices: 0 });
+  assert.deepEqual((await throttle.pruneLoginRecords(now)), { attempts: 0, devices: 0 });
 });
 
 test('startLoginRecordPruning runs once immediately, returns an unref\'d timer and never throws', () => {

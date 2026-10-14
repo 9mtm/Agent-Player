@@ -105,22 +105,22 @@ test('delays grow per (email, IP) on repeated failures', async () => {
   addUser(email);
   const ip = '10.2.0.1';
   await fails(ip, email, throttle.PAIR_FREE_FAILURES);
-  const first = throttle.checkLoginThrottle(email, ip);
+  const first = (await throttle.checkLoginThrottle(email, ip));
   assert.ok(first.throttled);
   assert.ok(first.retryAfterSeconds > 25 && first.retryAfterSeconds <= 30, String(first.retryAfterSeconds));
 
   age(31);
   await fails(ip, email, 1);
-  const second = throttle.checkLoginThrottle(email, ip);
+  const second = (await throttle.checkLoginThrottle(email, ip));
   assert.ok(second.retryAfterSeconds > 55 && second.retryAfterSeconds <= 60, String(second.retryAfterSeconds));
 
   age(61);
   await fails(ip, email, 1);
-  const third = throttle.checkLoginThrottle(email, ip);
+  const third = (await throttle.checkLoginThrottle(email, ip));
   assert.ok(third.retryAfterSeconds > 115 && third.retryAfterSeconds <= 120, String(third.retryAfterSeconds));
 
   // Another IP for the same email is not affected.
-  assert.equal(throttle.checkLoginThrottle(email, '10.2.0.2').throttled, false);
+  assert.equal((await throttle.checkLoginThrottle(email, '10.2.0.2')).throttled, false);
   assert.equal((await login('10.2.0.2', email, strong)).statusCode, 200);
 });
 
@@ -130,17 +130,17 @@ test('delays grow per IP across different emails', async () => {
     // different (unknown) emails, so the pair bucket never fills
     assert.equal((await login(ip, `spray-${i}@throttle.test`, 'wrong-password-1')).statusCode, 401);
   }
-  const first = throttle.checkLoginThrottle('someone-else@throttle.test', ip);
+  const first = (await throttle.checkLoginThrottle('someone-else@throttle.test', ip));
   assert.ok(first.throttled);
   assert.ok(first.retryAfterSeconds <= 30);
   assert.equal((await login(ip, 'yet-another@throttle.test', 'x')).statusCode, 429);
 
   age(31);
   assert.equal((await login(ip, 'spray-next@throttle.test', 'wrong-password-1')).statusCode, 401);
-  const second = throttle.checkLoginThrottle('someone-else@throttle.test', ip);
+  const second = (await throttle.checkLoginThrottle('someone-else@throttle.test', ip));
   assert.ok(second.retryAfterSeconds > 30 && second.retryAfterSeconds <= 60, String(second.retryAfterSeconds));
   // A different IP is unaffected.
-  assert.equal(throttle.checkLoginThrottle('someone-else@throttle.test', '10.3.0.2').throttled, false);
+  assert.equal((await throttle.checkLoginThrottle('someone-else@throttle.test', '10.3.0.2')).throttled, false);
 });
 
 test('unknown email and wrong password for a known email get identical replies; no user state for unknown', async () => {
@@ -186,7 +186,7 @@ test('after the delay a correct login from the throttled source succeeds and res
   assert.equal((await login(ip, email, strong)).statusCode, 200);
   // Counter reset: the next failures start from zero again.
   await fails(ip, email, throttle.PAIR_FREE_FAILURES - 1);
-  assert.equal(throttle.checkLoginThrottle(email, ip).throttled, false);
+  assert.equal((await throttle.checkLoginThrottle(email, ip)).throttled, false);
   assert.equal((await login(ip, email, strong)).statusCode, 200);
 });
 
@@ -202,9 +202,9 @@ test('a lock left by the old logic (users.locked_until in the future) does not b
 
 test('a missing IP is one shared bucket and email case does not split buckets', async () => {
   const email = 'NoIp@Throttle.test';
-  for (let i = 0; i < throttle.PAIR_FREE_FAILURES; i++) throttle.handleFailedLogin(email, undefined);
-  assert.ok(throttle.checkLoginThrottle('noip@throttle.test', '').throttled);
-  assert.ok(throttle.checkLoginThrottle(email, 'unknown').throttled);
+  for (let i = 0; i < throttle.PAIR_FREE_FAILURES; i++) await throttle.handleFailedLogin(email, undefined);
+  assert.ok((await throttle.checkLoginThrottle('noip@throttle.test', '')).throttled);
+  assert.ok((await throttle.checkLoginThrottle(email, 'unknown')).throttled);
   const row = db.prepare(`SELECT DISTINCT email, ip_address FROM login_attempts WHERE email = ?`).all('noip@throttle.test');
   assert.deepEqual(row.map((r) => ({ ...r })), [{ email: 'noip@throttle.test', ip_address: 'unknown' }]);
 });
@@ -231,8 +231,8 @@ test('all traffic from 127.0.0.1: attacker failures do not block an owner with a
   assert.equal(ok.statusCode, 200, ok.body);
   const t2 = ok.json().deviceToken;
   assert.ok(t2 && t2 !== t1, 'token rotates on success');
-  assert.equal(throttle.hasValidDevice(email, t1), false, 'old token retired');
-  assert.equal(throttle.hasValidDevice(email, t2), true);
+  assert.equal((await throttle.hasValidDevice(email, t1)), false, 'old token retired');
+  assert.equal((await throttle.hasValidDevice(email, t2)), true);
   assert.equal((await login(LOOP, email, strong, t1)).statusCode, 429, 'retired token gives no exemption');
 });
 
@@ -242,7 +242,7 @@ test('without a token, the owner\'s earlier success from 127.0.0.1 does not exem
   addUser(email);
   assert.equal((await login(LOOP, email, strong)).statusCode, 200);
   distributed(email);
-  const st = throttle.checkLoginThrottle(email, LOOP);
+  const st = (await throttle.checkLoginThrottle(email, LOOP));
   assert.ok(st.throttled, 'a loopback IP is never a known source');
   assert.equal((await login(LOOP, email, 'guess-1')).statusCode, 429);
 });
@@ -261,7 +261,7 @@ test('invalid, expired or other-email tokens give no exemption', async () => {
   distributed(email);
 
   for (const token of [randomBytes(32).toString('base64url'), expired, theirs, mine]) {
-    assert.equal(throttle.hasValidDevice(email, token), false);
+    assert.equal((await throttle.hasValidDevice(email, token)), false);
     assert.equal((await login(LOOP, email, strong, token)).statusCode, 429);
   }
   assert.equal((await login(LOOP, email, strong, valid)).statusCode, 200);
@@ -275,18 +275,18 @@ test('failures under a valid token are throttled with growing delay', async () =
   for (let i = 0; i < throttle.DEVICE_FREE_FAILURES; i++) {
     assert.equal((await login(LOOP, email, 'wrong-password-1', tok)).statusCode, 401);
   }
-  const st = throttle.checkLoginThrottle(email, LOOP, tok);
+  const st = (await throttle.checkLoginThrottle(email, LOOP, tok));
   assert.ok(st.throttled && st.retryAfterSeconds <= 30);
   assert.equal((await login(LOOP, email, strong, tok)).statusCode, 429);
   age(31);
   assert.equal((await login(LOOP, email, 'wrong-password-1', tok)).statusCode, 401);
-  const st2 = throttle.checkLoginThrottle(email, LOOP, tok);
+  const st2 = (await throttle.checkLoginThrottle(email, LOOP, tok));
   assert.ok(st2.retryAfterSeconds > 30 && st2.retryAfterSeconds <= 60, String(st2.retryAfterSeconds));
   age(61);
   const ok = await login(LOOP, email, strong, tok);
   assert.equal(ok.statusCode, 200);
   tok = ok.json().deviceToken;
-  assert.equal(throttle.checkLoginThrottle(email, LOOP, tok).throttled, false, 'fresh token, fresh counter');
+  assert.equal((await throttle.checkLoginThrottle(email, LOOP, tok)).throttled, false, 'fresh token, fresh counter');
 });
 
 test('only a hash of the device token is stored, and never in login_attempts', async () => {
