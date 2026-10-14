@@ -15,7 +15,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { v4 as uuidv4 } from 'uuid';
-import { getDatabase } from '../../db/index.js';
+import { textTimestamp } from '../../db/pg/dialect.js';
+import { orderedId } from '../../repositories/ordered-id.js';
+import { run, sql } from '../../repositories/sql-steps.js';
 import { sendInternalError } from '../error-handler.js';
 import { safeErrorFields } from '../../services/safe-error-log.js';
 
@@ -337,7 +339,11 @@ export async function claudeLocalRoutes(fastify: FastifyInstance): Promise<void>
 
         if (!content) continue;
 
-        const ts = obj.timestamp ?? obj.created_at ?? new Date().toISOString();
+        // The file's timestamp when it parses, else now; stored in the
+        // 'YYYY-MM-DD HH:MM:SS' UTC form that CURRENT_TIMESTAMP rows use
+        // (SQLite compares it as text; PostgreSQL casts it to timestamptz).
+        const parsed = Date.parse(String(obj.timestamp ?? obj.created_at ?? ''));
+        const ts = textTimestamp(Number.isFinite(parsed) ? parsed : Date.now());
         importedMessages.push({ role: role as 'user' | 'assistant', content, ts });
       }
 
@@ -351,27 +357,31 @@ export async function claudeLocalRoutes(fastify: FastifyInstance): Promise<void>
         ? `[Claude Code] ${firstUserMsg.content.slice(0, 60)}${firstUserMsg.content.length > 60 ? '…' : ''}`
         : `[Claude Code] ${slug}`;
 
-      // Insert into Agent Player's database
-      const db = getDatabase().getDb();
+      // Insert into Agent Player's database (process driver, one transaction).
+      // B2.2d-9: the session belongs to the signed-in owner (the auth gate
+      // allows owners only here); it used a fixed 'default' user, which the
+      // owner-scoped sessions API never shows and the users FK refuses.
+      const ownerId = (req as any).authUser?.id as string | undefined;
+      if (!ownerId) return reply.status(401).send({ error: 'Authentication required' });
       const sessionId = uuidv4();
-      const now = new Date().toISOString();
+      const now = textTimestamp(Date.now());
 
       try {
-        // Create session
-        db.prepare(`
-          INSERT INTO chat_sessions (id, user_id, title, model, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).run(sessionId, 'default', title, 'claude-sonnet-4-5-20250929', now, now);
+        await sql().tx(function* () {
+          yield* run(`
+            INSERT INTO chat_sessions (id, user_id, title, model, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)`,
+            sessionId, ownerId, title, 'claude-sonnet-4-5-20250929', now, now);
 
-        // Insert all messages preserving original timestamps
-        const insertMsg = db.prepare(`
-          INSERT INTO chat_messages (id, session_id, role, content, created_at)
-          VALUES (?, ?, ?, ?, ?)
-        `);
-
-        for (const m of importedMessages) {
-          insertMsg.run(uuidv4(), sessionId, m.role, m.content, m.ts);
-        }
+          // Messages keep their original timestamps; time-ordered ids keep
+          // the file order for equal timestamps.
+          for (const m of importedMessages) {
+            yield* run(`
+              INSERT INTO chat_messages (id, session_id, role, content, created_at)
+              VALUES (?, ?, ?, ?, ?)`,
+              orderedId(), sessionId, m.role, m.content, m.ts);
+          }
+        });
 
         fastify.log.info(`[ClaudeLocal] Imported ${importedMessages.length} messages as session ${sessionId}`);
         return reply.send({
