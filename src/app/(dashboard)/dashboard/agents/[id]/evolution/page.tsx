@@ -12,6 +12,8 @@ import { InsightCard } from '@/components/evolution/InsightCard';
 import { EvolutionTimeline } from '@/components/evolution/EvolutionTimeline';
 import { ConfigPanel } from '@/components/evolution/ConfigPanel';
 import { ManualControls } from '@/components/evolution/ManualControls';
+import { PendingProposals } from '@/components/evolution/PendingProposals';
+import { decisionNotice, suggestedCapabilities, type SuggestedCapability } from '@/lib/evolution/proposal-review';
 
 interface EvolutionStatus {
     agentId: string;
@@ -32,6 +34,9 @@ export default function AgentEvolutionPage() {
     const [analyzing, setAnalyzing] = useState(false);
     const [evolving, setEvolving] = useState(false);
     const [rolling, setRolling] = useState(false);
+    // FU-01: an evolve cycle files proposals; reload the pending list after it.
+    const [proposalsKey, setProposalsKey] = useState(0);
+    const [suggested, setSuggested] = useState<SuggestedCapability[]>([]);
 
     const loadStatus = async () => {
         setLoading(true);
@@ -72,9 +77,11 @@ export default function AgentEvolutionPage() {
                 headers: { 'Content-Type': 'application/json' },
             });
 
-            if (!res.ok) throw new Error('Failed to evolve agent');
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(res.status === 403 ? decisionNotice(403) : 'Failed to evolve agent');
 
-            const data = await res.json();
+            setSuggested(suggestedCapabilities(data));
+            setProposalsKey((k) => k + 1);
             await loadStatus();
         } finally {
             setEvolving(false);
@@ -191,6 +198,13 @@ export default function AgentEvolutionPage() {
                 onEvolve={handleEvolve}
                 analyzing={analyzing}
                 evolving={evolving}
+            />
+
+            {/* Pending proposals (FU-01) */}
+            <PendingProposals
+                agentId={agentId}
+                refreshKey={proposalsKey}
+                suggestedCapabilities={suggested}
             />
 
             {/* Performance Metrics */}
