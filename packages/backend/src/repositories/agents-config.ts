@@ -27,6 +27,12 @@
  * only: personality changes are owner actions). Without role and personality
  * nothing is seeded (the agent reads as defaults, as before). Personality
  * never grants tools or permissions.
+ *
+ * CORE-01d: updateConfig also takes `role` / `department` (same validation as
+ * create, 400 `invalid_role`); a change never touches the personality (the
+ * role only picks the default preset of new agents). duplicateConfig copies
+ * role and department, not personality versions (the copy starts with none,
+ * as a duplicate always did).
  */
 
 import { randomBytes } from 'node:crypto';
@@ -75,7 +81,7 @@ export type AgentConfigInput = Partial<Omit<AgentConfigRow, 'capabilities' | 'ro
   capabilities?: object | string;
   language?: unknown;
   expectedVersion?: unknown;
-  /** Creation only (CORE-01c): picks the default personality preset. */
+  /** Create (CORE-01c: picks the default personality preset) and update (CORE-01d: metadata only). */
   role?: unknown;
   department?: unknown;
   /** Creation only, owner only: explicit { preset?, traits?, dialect?, lockedTraits?, note? } (wins over the role default). */
@@ -128,6 +134,25 @@ function adminFor(actor: Actor | null | undefined, id: string): Actor {
   return a;
 }
 
+/**
+ * role / department as sent (create and update share the rules): role is one
+ * of AGENT_ROLES, or null / '' for none; department is normalized lowercase,
+ * at most 64 characters, or null. 400 code `invalid_role` otherwise.
+ */
+function roleAndDepartment(body: { role?: unknown; department?: unknown }): { role: AgentRole | null; department: string | null } {
+  try {
+    let role: AgentRole | null = null;
+    if (body.role !== undefined && body.role !== null && body.role !== '') {
+      if (!isAgentRole(body.role)) throw new PersonalityInputError(`role must be one of: ${AGENT_ROLES.join(', ')}`);
+      role = body.role;
+    }
+    return { role, department: normalizeDepartment(body.department) };
+  } catch (err) {
+    if (err instanceof PersonalityInputError) throw new AgentConfigInputError(err.message, 'invalid_role');
+    throw err;
+  }
+}
+
 export const sqliteAgentConfigs: AgentConfigsRepository = {
   async listConfigs(actor) {
     requireMember(actor);
@@ -148,19 +173,8 @@ export const sqliteAgentConfigs: AgentConfigsRepository = {
   async createConfig(actor, body) {
     const a = requireAdmin(actor);
     // CORE-01c: role/department pick the default personality; explicit personality is the owner's.
-    let role: AgentRole | null = null;
-    let department: string | null = null;
+    const { role, department } = roleAndDepartment(body);
     let explicit: SaveInput | null = null;
-    try {
-      if (body.role !== undefined && body.role !== null && body.role !== '') {
-        if (!isAgentRole(body.role)) throw new PersonalityInputError(`role must be one of: ${AGENT_ROLES.join(', ')}`);
-        role = body.role;
-      }
-      department = normalizeDepartment(body.department);
-    } catch (err) {
-      if (err instanceof PersonalityInputError) throw new AgentConfigInputError(err.message, 'invalid_role');
-      throw err;
-    }
     try {
       if (body.personality !== undefined && body.personality !== null) {
         if (typeof body.personality !== 'object' || Array.isArray(body.personality)) throw new PersonalityInputError('personality must be an object');
@@ -251,6 +265,13 @@ export const sqliteAgentConfigs: AgentConfigsRepository = {
     for (const problem of [text('description'), text('emoji'), text('system_prompt'), text('model'), text('provider'), num('temperature'), num('max_tokens')]) {
       if (problem) throw new AgentConfigInputError(problem);
     }
+    // CORE-01d: role / department (same rules as create). Changing them never
+    // touches the personality; the role only picks defaults for new agents.
+    if (body.role !== undefined || body.department !== undefined) {
+      const parsed = roleAndDepartment(body);
+      if (body.role !== undefined) { sets.push('role = ?'); args.push(parsed.role); }
+      if (body.department !== undefined) { sets.push('department = ?'); args.push(parsed.department); }
+    }
     if (body.capabilities !== undefined) {
       sets.push('capabilities = ?');
       args.push(typeof body.capabilities === 'object' && body.capabilities !== null ? JSON.stringify(body.capabilities) : String(body.capabilities));
@@ -305,8 +326,8 @@ export const sqliteAgentConfigs: AgentConfigsRepository = {
     await withTransaction(a, () => {
       reserveAgentName(suggestion.name, newId, { reason: 'duplicate', language: suggestion.language, reservedBy: a.userId });
       getDatabase().prepare(`
-        INSERT INTO agents_config (id, name, description, emoji, system_prompt, model, provider, temperature, max_tokens, capabilities)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO agents_config (id, name, description, emoji, system_prompt, model, provider, temperature, max_tokens, capabilities, role, department)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         newId,
         suggestion.name,
@@ -318,6 +339,8 @@ export const sqliteAgentConfigs: AgentConfigsRepository = {
         original.temperature,
         original.max_tokens,
         original.capabilities,
+        original.role ?? null,
+        original.department ?? null,
       );
     });
     return row(newId) as AgentConfigRow;

@@ -226,6 +226,7 @@ const OWNER_ONLY = [
   // CORE-01c: drift proposals are reviewed and decided by the owner only
   ['GET', '/api/agents/:id/personality/proposals'], ['GET', '/api/agents/:id/personality/proposals/:pid'],
   ['POST', '/api/agents/:id/personality/proposals/:pid/approve'], ['POST', '/api/agents/:id/personality/proposals/:pid/reject'],
+  ['POST', '/api/evolution/:agentId/personality-proposal'], // CORE-01d: run the Evolution drift rule on demand
   // CORE-04: memory files + reviewed proposals
   ['GET', '/api/memory/files'], ['GET', '/api/memory/files/:drawer'], ['GET', '/api/memory/files/:drawer/versions'],
   ['POST', '/api/memory/files/:drawer/export'], ['POST', '/api/memory/files/:drawer/proposal'],
@@ -269,6 +270,7 @@ const OWNER_OR_ADMIN = [
   ['POST', '/api/agents'], ['PUT', '/api/agents/:id'], ['POST', '/api/agents/:id/set-primary'],
   ['POST', '/api/agents/name-suggestion'], // CORE-02
   ['POST', '/api/agents/:id/personality/proposals'], // CORE-01c: propose drift (owner decides)
+  ['POST', '/api/agents/:id/personality/proposals/:pid/cancel'], // CORE-01d: owner, or the owner/admin who proposed it
   ['PUT', '/api/agents/:id/personality'], ['PUT', '/api/agents/:id/memory'], ['GET', '/api/agents/:id/memory'],
   ['POST', '/api/evolution/:agentId/evolve'], ['POST', '/api/multi-agent/agents'],
   ['PUT', '/api/heartbeat/config'], ['POST', '/api/cost-analytics/cleanup'], ['POST', '/api/inbox/cleanup'],

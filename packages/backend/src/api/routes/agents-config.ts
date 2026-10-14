@@ -139,8 +139,11 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
 
   // PUT /api/agents/:id — update agent (partial body; optimistic concurrency, BE-UI-01)
   //   body: any subset of { name, description, emoji, system_prompt, model, provider,
-  //         temperature, max_tokens, capabilities, api_key } + optional expectedVersion
-  //   or header If-Match: "<version>". Only the fields sent are written.
+  //         temperature, max_tokens, capabilities, api_key, role, department }
+  //   + optional expectedVersion or header If-Match: "<version>". Only the fields
+  //   sent are written. role: main | manager | specialist | evaluator | null;
+  //   department: <= 64 chars, stored lowercase, or null (400 code invalid_role).
+  //   A role change never changes the personality (CORE-01d).
   //   409 { code: 'version_conflict', currentVersion, agent } when the version moved on.
   fastify.put<{ Params: { id: string }; Body: unknown }>('/api/agents/:id', async (req, reply) => {
     const actor = admin(req, reply);

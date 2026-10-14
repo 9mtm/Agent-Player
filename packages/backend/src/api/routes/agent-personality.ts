@@ -19,9 +19,11 @@
  *        { expectedReviewHash } -> { proposal, version }
  *   POST /api/agents/:id/personality/proposals/:pid/reject  owner
  *        { expectedReviewHash, note? } -> proposal
+ *   POST /api/agents/:id/personality/proposals/:pid/cancel  owner, or the owner/admin
+ *        { expectedReviewHash } -> proposal (status 'cancelled')  who created it (CORE-01d)
  * Every proposal carries `reviewHash`. Error codes: 400 `review_hash_required`
  * | `no_change`, 409 `personality_locked` | `already_decided` | `stale` |
- * `review_changed`, 429 `too_many_pending`. created_by / decided_by come
+ * `review_changed`, 403 (cancel by someone else), 429 `too_many_pending`. created_by / decided_by come
  * from the request actor, never from the body. Agents and Evolution file
  * proposals through repositories.agents.proposePersonalityDrift (no route).
  *
@@ -252,6 +254,27 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
       const handled = proposalError(err, reply);
       if (handled) {
         if (err instanceof PersonalityProposalError) proposalAudit(request, ownerId, 'agent_personality.proposal.reject', false, agentId, { proposalId: pid, code: err.code }, err.message);
+        return handled;
+      }
+      throw err;
+    }
+  });
+
+  fastify.post<ProposalParams>('/api/agents/:id/personality/proposals/:pid/cancel', { config: adminConfig }, async (request, reply) => {
+    const userId = adminOf(request, reply);
+    if (userId === null) return reply;
+    const { id: agentId, pid } = request.params;
+    if (!AGENT_ID.test(agentId) || !PROPOSAL_ID.test(pid)) return reply.code(404).send({ error: 'Proposal not found' });
+    try {
+      const proposal = await repositories.agents.cancelPersonalityProposal(actorOf(request), agentId, pid, bodyOf(request).expectedReviewHash);
+      proposalAudit(request, userId, 'agent_personality.proposal.cancel', true, agentId, summary(proposal));
+      return proposal;
+    } catch (err) {
+      const handled = proposalError(err, reply);
+      if (handled) {
+        if (err instanceof PersonalityProposalError || err instanceof ScopeError) {
+          proposalAudit(request, userId, 'agent_personality.proposal.cancel', false, agentId, { proposalId: pid, code: err.code }, err.message);
+        }
         return handled;
       }
       throw err;

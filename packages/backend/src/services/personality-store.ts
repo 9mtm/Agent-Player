@@ -303,9 +303,9 @@ export type ProposalSource = 'agent' | 'evolution' | 'owner';
 export const PROPOSAL_STATUSES = ['pending', 'approved', 'rejected', 'stale', 'cancelled'] as const;
 export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 
-/** Machine codes: `personality_locked`, `no_change`, `too_many_pending`, `already_decided`, `stale`, `review_changed`, `review_hash_required`. */
+/** Machine codes: `personality_locked`, `no_change`, `too_many_pending`, `pending_exists`, `already_decided`, `stale`, `review_changed`, `review_hash_required`. */
 export type ProposalErrorCode =
-  | 'personality_locked' | 'no_change' | 'too_many_pending'
+  | 'personality_locked' | 'no_change' | 'too_many_pending' | 'pending_exists'
   | 'already_decided' | 'stale' | 'review_changed' | 'review_hash_required';
 
 export class PersonalityProposalError extends Error {
@@ -461,6 +461,8 @@ export function listPersonalityProposals(agentId: string, status?: ProposalStatu
  * Each trait moves at most MAX_DRIFT_STEP points from the current version;
  * locked traits are left out; a locked personality is refused (409
  * `personality_locked`). Body: { traits | delta, reason, evidence? }.
+ * Source 'evolution' with a pending Evolution proposal already open for the
+ * agent: 409 `pending_exists` (dedup, CORE-01d).
  * Callers pass a trusted `source`/`createdBy` (the repository decides them
  * from the actor, never from the body).
  */
@@ -483,6 +485,13 @@ export function createPersonalityProposal(agentId: string, raw: unknown, source:
     const proposedTraits = boundedDrift(current.traits, target, current.lockedTraits, MAX_DRIFT_STEP);
     if (TRAIT_NAMES.every((n) => proposedTraits[n] === current.traits[n])) {
       throw new PersonalityProposalError(400, 'Nothing would change (same values, or only locked traits)', 'no_change');
+    }
+    // CORE-01d: Evolution keeps at most one pending proposal per agent (the
+    // owner decides it before Evolution suggests the next one). Checked inside
+    // the transaction, so two cycles cannot both insert.
+    if (source === 'evolution') {
+      const open = db.prepare(`SELECT id FROM personality_proposals WHERE agent_id = ? AND source = 'evolution' AND status = 'pending' LIMIT 1`).get(agentId);
+      if (open) throw new PersonalityProposalError(409, 'Evolution already has a pending proposal for this agent', 'pending_exists');
     }
     const pending = (db.prepare(`SELECT COUNT(*) AS n FROM personality_proposals WHERE agent_id = ? AND status = 'pending'`).get(agentId) as { n: number }).n;
     if (pending >= MAX_PENDING_PROPOSALS) {
@@ -515,7 +524,7 @@ function decidable(agentId: string, id: string, expectedReviewHash: unknown): Pe
 }
 
 /** The claim: exactly one decision moves the row out of 'pending'. */
-function claimDecision(agentId: string, id: string, status: 'approved' | 'rejected' | 'stale', decidedBy: string, note: string | null): void {
+function claimDecision(agentId: string, id: string, status: 'approved' | 'rejected' | 'stale' | 'cancelled', decidedBy: string, note: string | null): void {
   const res = getDatabase().prepare(`
     UPDATE personality_proposals SET status = ?, decided_by = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), decision_note = ?
     WHERE id = ? AND agent_id = ? AND status = 'pending'
@@ -582,6 +591,31 @@ export function rejectPersonalityProposal(
     claimDecision(agentId, id, 'rejected', decidedBy, decisionNote);
   });
   return getPersonalityProposal(agentId, id)!;
+}
+
+/**
+ * Withdraw a pending proposal (CORE-01d): status 'cancelled', nothing in the
+ * personality changes. Same checks and atomic claim as approve/reject
+ * (pending only, reviewHash, `changes === 1`). Who may cancel is decided by
+ * the repository (the owner, or the owner/admin account that created it).
+ */
+export function cancelPersonalityProposal(
+  agentId: string, id: string, decidedBy: string, expectedReviewHash: unknown,
+): PersonalityProposal {
+  getDatabase().transaction(() => {
+    decidable(agentId, id, expectedReviewHash);
+    claimDecision(agentId, id, 'cancelled', decidedBy, null);
+  });
+  return getPersonalityProposal(agentId, id)!;
+}
+
+/** Pending proposal of this agent from this source, newest first (dedup for Evolution). */
+export function pendingProposalFrom(agentId: string, source: ProposalSource): PersonalityProposal | null {
+  const row = getDatabase().prepare(`
+    SELECT * FROM personality_proposals WHERE agent_id = ? AND source = ? AND status = 'pending'
+    ORDER BY created_at DESC, rowid DESC LIMIT 1
+  `).get(agentId, source) as ProposalRow | undefined;
+  return row ? proposalFromRow(row) : null;
 }
 
 /** Write the readable copy of the current version into PERSONALITY.md. */

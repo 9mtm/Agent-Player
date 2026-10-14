@@ -18,6 +18,9 @@
  *   approve / rejectPersonalityProposal  the owner account only (not even
  *                                        system: drift never applies without
  *                                        the owner's decision)
+ *   cancelPersonalityProposal            the owner account, or the owner/admin
+ *                                        account that created the proposal
+ *                                        (CORE-01d)
  *
  * Personality never grants tools; grants are permissions. agents_config
  * CRUD and naming live in agents-config.ts (same repository, B1.6).
@@ -26,7 +29,7 @@
  */
 
 import type { Actor } from './actor.js';
-import { ScopeError, MSG, requireActor, requireAdmin, requireOwner } from './scope.js';
+import { ScopeError, MSG, isOwner, requireActor, requireAdmin, requireOwner } from './scope.js';
 import type { Tool } from '../tools/types.js';
 import { getAgentGrantView, setAgentGrants, type GrantView } from '../tools/grants.js';
 import {
@@ -40,6 +43,8 @@ import {
   getPersonalityProposal,
   listPersonalityProposals,
   rejectPersonalityProposal,
+  cancelPersonalityProposal,
+  PersonalityProposalError,
   type PersonalityProposal,
   type PersonalityVersion,
   type ProposalStatus,
@@ -70,6 +75,7 @@ export interface AgentsRepository extends AgentConfigsRepository {
   proposePersonalityDrift(actor: Actor | null | undefined, agentId: string, input: { traits?: unknown; delta?: unknown; reason: unknown; evidence?: unknown }): Promise<PersonalityProposal>;
   approvePersonalityProposal(actor: Actor | null | undefined, agentId: string, id: string, expectedReviewHash: unknown): Promise<{ proposal: PersonalityProposal; version: PersonalityVersion }>;
   rejectPersonalityProposal(actor: Actor | null | undefined, agentId: string, id: string, expectedReviewHash: unknown, note?: unknown): Promise<PersonalityProposal>;
+  cancelPersonalityProposal(actor: Actor | null | undefined, agentId: string, id: string, expectedReviewHash: unknown): Promise<PersonalityProposal>;
 }
 
 const by = (a: Actor) => a.userId ?? 'system';
@@ -170,5 +176,16 @@ export const sqliteAgents: AgentsRepository = {
   async rejectPersonalityProposal(actor, agentId, id, expectedReviewHash, note) {
     const a = ownerAccount(actor);
     return rejectPersonalityProposal(agentId, id, a.userId, expectedReviewHash, note);
+  },
+
+  async cancelPersonalityProposal(actor, agentId, id, expectedReviewHash) {
+    const a = requireAdmin(actor);
+    if (a.kind !== 'user' || !a.userId) throw new ScopeError(403, MSG.admin);
+    if (!isOwner(a)) {
+      const p = getPersonalityProposal(agentId, id);
+      if (!p) throw new PersonalityProposalError(404, 'Proposal not found');
+      if (p.createdBy !== a.userId) throw new ScopeError(403, 'Only the owner or the person who made this proposal can cancel it');
+    }
+    return cancelPersonalityProposal(agentId, id, a.userId, expectedReviewHash);
   },
 };

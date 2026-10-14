@@ -16,6 +16,11 @@ import {
   getEvolutionHistory
 } from '../../services/agent-evolution-orchestrator.js';
 import { updateEvolutionSchedule } from '../../services/agent-evolution-scheduler.js';
+import { actorOf } from '../../auth/auth-gate.js';
+import { actorOrReply, requireOwner } from '../../repositories/scope.js';
+import { proposeDriftFromOutcomes } from '../../services/personality-evolution.js';
+
+const AGENT_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 export default async function evolutionRoutes(fastify: FastifyInstance) {
   /**
@@ -94,6 +99,31 @@ export default async function evolutionRoutes(fastify: FastifyInstance) {
       console.error('[Evolution API] Error evolving agent:', error);
       return reply.status(500).send({ error: error.message });
     }
+  });
+
+  /**
+   * POST /api/evolution/:agentId/personality-proposal   owner (CORE-01d)
+   * body { windowDays? 1..90, default 30 }
+   * Runs the Evolution personality rule now (also part of every evolve
+   * cycle): verified task-run outcomes may file ONE pending drift proposal
+   * (source 'evolution'). Never approves and never writes a version; the
+   * owner decides it under /api/agents/:id/personality/proposals.
+   * -> 201 { status: 'proposed', proposal, stats }
+   * -> 200 { status: 'skipped', reason: no_signal | pending_exists |
+   *          personality_locked | no_change | too_many_pending, proposalId?, stats? }
+   * -> 404 agent not found
+   */
+  fastify.post('/api/evolution/:agentId/personality-proposal', { config: { access: 'owner' } }, async (request, reply) => {
+    if (!actorOrReply(reply, actorOf(request), requireOwner)) return reply;
+    const { agentId } = request.params as { agentId: string };
+    if (!AGENT_ID.test(agentId)) return reply.status(400).send({ error: 'Invalid agent id' });
+    const body = request.body && typeof request.body === 'object' && !Array.isArray(request.body) ? request.body as Record<string, unknown> : {};
+    if (body.windowDays !== undefined && (typeof body.windowDays !== 'number' || !Number.isInteger(body.windowDays) || body.windowDays < 1 || body.windowDays > 90)) {
+      return reply.status(400).send({ error: 'windowDays must be an integer from 1 to 90' });
+    }
+    const outcome = await proposeDriftFromOutcomes(agentId, { windowDays: body.windowDays });
+    if (outcome.status === 'skipped' && outcome.reason === 'agent_not_found') return reply.status(404).send({ error: 'Agent not found' });
+    return reply.status(outcome.status === 'proposed' ? 201 : 200).send(outcome);
   });
 
   /**

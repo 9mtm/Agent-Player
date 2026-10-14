@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { analyzeAgentPerformance } from './agent-performance-analyzer.js';
 import { extractLearningInsights, getAgentInsights, markInsightAsApplied } from './agent-learning-engine.js';
 import { writePersonality, readPersonality } from './agent-files.js';
+import { proposeDriftFromOutcomes } from './personality-evolution.js';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -34,6 +35,28 @@ export async function evolveAgent(agentId) {
 
   console.log(`[Evolution] Starting evolution cycle for agent: ${agentId}`);
 
+  // CORE-01d: personality drift is proposal-only. Verified task-run outcomes
+  // may file one pending proposal (system actor, source 'evolution'); the
+  // owner approves or rejects it. Nothing here writes a personality version.
+  const personalityProposal = await personalityDriftStep(agentId);
+  const result = await runConfigEvolution(agentId, config);
+  return { ...result, personalityProposal };
+}
+
+/** Never throws: a failed proposal must not break the evolution cycle. */
+async function personalityDriftStep(agentId) {
+  try {
+    const outcome = await proposeDriftFromOutcomes(agentId);
+    return outcome.status === 'proposed'
+      ? { status: 'proposed', proposalId: outcome.proposal.id, delta: outcome.proposal.delta }
+      : { status: 'skipped', reason: outcome.reason, ...(outcome.proposalId ? { proposalId: outcome.proposalId } : {}) };
+  } catch (error) {
+    console.error(`[Evolution] Personality proposal step failed for ${agentId}:`, error);
+    return { status: 'error', error: String(error?.message ?? error).slice(0, 200) };
+  }
+}
+
+async function runConfigEvolution(agentId, config) {
   try {
     // Step 1: Analyze performance
     const endDate = new Date();
