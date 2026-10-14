@@ -72,6 +72,17 @@ export function auditActorOf(actor: Actor, meta?: RequestMeta): AuditActor {
   return { type: 'api', id: actorLabel(actor), ...ip };
 }
 
+/**
+ * The security-audit actor of a request's actor (B1.7: routes that wrote the
+ * literal `api/admin`). Behind the auth gate these routes always have a
+ * signed-in account; without one (plugin mounted without the gate) the entry
+ * says `api/anonymous`, never a made-up admin.
+ */
+export function requestAuditActor(actor: Actor | null | undefined, meta?: RequestMeta): AuditActor {
+  if (actor) return auditActorOf(actor, meta);
+  return { type: 'api', id: 'anonymous', ...(meta?.ip ? { ip: meta.ip } : {}) };
+}
+
 export const sqliteAudit: AuditRepository = {
   // Synchronous insert inside: an un-awaited call has already written the row.
   async record(actor, entry, meta) {

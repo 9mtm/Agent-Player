@@ -12,6 +12,8 @@ import {
   type CredentialQuery,
 } from '../../encryption/index.js';
 import { getAuditLogger } from '../../audit/index.js';
+import { actorOf } from '../../auth/auth-gate.js';
+import { requestAuditActor, requestMeta } from '../../repositories/audit.js';
 import { handleError } from '../error-handler.js';
 import { maskSecret, isMaskedSecret } from '../../credentials/secret-mask.js';
 
@@ -73,7 +75,7 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
       // Audit log
       const audit = getAuditLogger();
       audit.logConfigChange(
-        { type: 'api', id: 'admin' },
+        requestAuditActor(actorOf(request), requestMeta(request)),
         { type: 'config', id: 'encryption-keys', name: 'Encryption Keys' },
         { after: { action: 'rotate', newKeyId: newKey.id } }
       );
@@ -328,7 +330,7 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
       const audit = getAuditLogger();
       audit.logAccess(
         'write',
-        { type: 'api', id: 'admin' },
+        requestAuditActor(actorOf(request), requestMeta(request)),
         { type: 'credential', id: credential.id, name: credential.name },
         'success',
         { action: 'update' }
@@ -370,7 +372,7 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
       const audit = getAuditLogger();
       audit.logAccess(
         'delete',
-        { type: 'api', id: 'admin' },
+        requestAuditActor(actorOf(request), requestMeta(request)),
         { type: 'credential', id, name: credential?.name },
         'success'
       );
@@ -394,7 +396,7 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
       // Audit log
       const audit = getAuditLogger();
       audit.logConfigChange(
-        { type: 'api', id: 'admin' },
+        requestAuditActor(actorOf(request), requestMeta(request)),
         { type: 'config', id: 'vault', name: 'Credential Vault' },
         { after: { action: 'reencrypt', credentialsUpdated: count } }
       );

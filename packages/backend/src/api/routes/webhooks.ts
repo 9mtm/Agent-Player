@@ -14,6 +14,8 @@ import {
   type InboundHandler,
 } from '../../webhooks/index.js';
 import { getAuditLogger } from '../../audit/index.js';
+import { actorOf } from '../../auth/auth-gate.js';
+import { requestAuditActor, requestMeta } from '../../repositories/audit.js';
 import { handleError } from '../error-handler.js';
 import { registerRawBodyParsers, verifyWebhookSignature } from '../../webhooks/verify.js';
 
@@ -109,7 +111,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
       const audit = getAuditLogger();
       audit.logAccess(
         'write',
-        { type: 'api', id: body.ownerId || 'admin' },
+        requestAuditActor(actorOf(request), requestMeta(request)),
         { type: 'config', id: webhook.id, name: webhook.name },
         'success',
         { action: 'create_webhook', events: body.events }
@@ -177,7 +179,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
       const audit = getAuditLogger();
       audit.logAccess(
         'write',
-        { type: 'api', id: 'admin' },
+        requestAuditActor(actorOf(request), requestMeta(request)),
         { type: 'config', id: webhook.id, name: webhook.name },
         'success',
         { action: 'update_webhook' }
@@ -222,7 +224,7 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
       const audit = getAuditLogger();
       audit.logAccess(
         'delete',
-        { type: 'api', id: 'admin' },
+        requestAuditActor(actorOf(request), requestMeta(request)),
         { type: 'config', id, name: webhook?.name },
         'success'
       );
