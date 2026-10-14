@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -14,6 +14,13 @@ import { ConfigPanel } from '@/components/evolution/ConfigPanel';
 import { ManualControls } from '@/components/evolution/ManualControls';
 import { PendingProposals } from '@/components/evolution/PendingProposals';
 import { decisionNotice, suggestedCapabilities, type SuggestedCapability } from '@/lib/evolution/proposal-review';
+import { configFromStatus, configToBackend, evolutionNotice, type EvolutionAction, type PanelEvolutionConfig } from '@/lib/evolution/evolution-requests';
+
+/** FU-02: the proxies keep the backend status; turn a failed reply into a short notice. */
+async function failure(action: EvolutionAction, res: Response): Promise<Error> {
+    const data = await res.json().catch(() => ({}));
+    return new Error(evolutionNotice(action, res.status, (data as { code?: unknown })?.code));
+}
 
 interface EvolutionStatus {
     agentId: string;
@@ -37,15 +44,22 @@ export default function AgentEvolutionPage() {
     // FU-01: an evolve cycle files proposals; reload the pending list after it.
     const [proposalsKey, setProposalsKey] = useState(0);
     const [suggested, setSuggested] = useState<SuggestedCapability[]>([]);
+    const [loadNotice, setLoadNotice] = useState<string | null>(null);
+    // The status route returns the snake_case config row; the panel edits
+    // camelCase (FU-02). Memoised so the panel keeps unsaved edits across renders.
+    const config = useMemo(() => configFromStatus(status?.config), [status]);
 
     const loadStatus = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`/api/evolution/${agentId}/status`);
-            if (!res.ok) throw new Error('Failed to load evolution status');
+            const res = await fetch(`/api/evolution/${encodeURIComponent(agentId)}/status`);
+            if (!res.ok) throw await failure('status', res);
             const data = await res.json();
             setStatus(data);
+            setLoadNotice(null);
         } catch (err: any) {
+            setStatus(null);
+            setLoadNotice(err.message || 'Failed to load evolution status');
             toast.error(err.message || 'Failed to load evolution status');
         } finally {
             setLoading(false);
@@ -55,13 +69,13 @@ export default function AgentEvolutionPage() {
     const handleAnalyze = async (periodDays: number) => {
         setAnalyzing(true);
         try {
-            const res = await fetch(`/api/evolution/${agentId}/analyze`, {
+            const res = await fetch(`/api/evolution/${encodeURIComponent(agentId)}/analyze`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ periodDays }),
             });
 
-            if (!res.ok) throw new Error('Failed to analyze performance');
+            if (!res.ok) throw await failure('analyze', res);
 
             await loadStatus();
         } finally {
@@ -72,7 +86,7 @@ export default function AgentEvolutionPage() {
     const handleEvolve = async () => {
         setEvolving(true);
         try {
-            const res = await fetch(`/api/evolution/${agentId}/evolve`, {
+            const res = await fetch(`/api/evolution/${encodeURIComponent(agentId)}/evolve`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
             });
@@ -93,12 +107,18 @@ export default function AgentEvolutionPage() {
 
         setRolling(true);
         try {
-            const res = await fetch(`/api/evolution/${agentId}/rollback/${evolutionId}`, {
+            const res = await fetch(`/api/evolution/${encodeURIComponent(agentId)}/rollback/${encodeURIComponent(evolutionId)}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                body: '{}',
             });
 
-            if (!res.ok) throw new Error('Failed to rollback');
+            // 403 owner only; 409 stale / rollback_unsupported / already_rolled_back.
+            if (!res.ok) {
+                const err = await failure('rollback', res);
+                if (res.status === 409) await loadStatus();
+                throw err;
+            }
 
             toast.success('Evolution rolled back');
             await loadStatus();
@@ -109,14 +129,15 @@ export default function AgentEvolutionPage() {
         }
     };
 
-    const handleSaveConfig = async (config: any) => {
-        const res = await fetch(`/api/evolution/${agentId}/config`, {
+    const handleSaveConfig = async (config: Partial<PanelEvolutionConfig>) => {
+        // The panel edits camelCase; the backend takes the snake_case fields (FU-02).
+        const res = await fetch(`/api/evolution/${encodeURIComponent(agentId)}/config`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(config),
+            body: JSON.stringify(configToBackend(config)),
         });
 
-        if (!res.ok) throw new Error('Failed to save configuration');
+        if (!res.ok) throw await failure('config', res);
 
         await loadStatus();
     };
@@ -141,7 +162,7 @@ export default function AgentEvolutionPage() {
             <div className="p-8">
                 <div className="mb-8">
                     <h1 className="text-3xl font-bold mb-2">Agent Evolution</h1>
-                    <p className="text-gray-600">Failed to load evolution status</p>
+                    <p className="text-gray-600">{loadNotice || 'Failed to load evolution status'}</p>
                 </div>
             </div>
         );
@@ -150,19 +171,6 @@ export default function AgentEvolutionPage() {
     const pendingInsights = (status.insights || []).filter((i) => !i.applied);
     const appliedInsights = (status.insights || []).filter((i) => i.applied);
 
-    // Default config if not available
-    const defaultConfig = {
-        enabled: false,
-        minConfidenceThreshold: 0.7,
-        minSampleSize: 10,
-        evolutionFrequency: 'daily' as const,
-        allowedEvolutions: ['prompt_update', 'capability_added'],
-        maxEvolutionsPerCycle: 3,
-        rollbackOnDegradation: true,
-        degradationThreshold: 0.1,
-    };
-
-    const config = status.config || defaultConfig;
 
     return (
         <div className="p-8 space-y-6">

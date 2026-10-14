@@ -2,8 +2,10 @@
  * Server-side proxy for the proposal review routes (FU-01). Same pattern as
  * the other /api/evolution proxies: signed-in users only, the caller's token
  * is forwarded with backendFetch (no cookies), and only the documented JSON
- * fields are sent. Unlike the older proxies, the backend status code is kept
- * so the page can tell 403 (owner only) and 409 (changed) apart.
+ * fields are sent. The backend status code is kept so the page can tell
+ * 403 (owner only) and 409 (changed) apart. FU-02 moved the older evolution
+ * proxies (status, history, insights, analyze, config, measure, rollback)
+ * onto the same helper.
  */
 
 import { NextResponse } from 'next/server';
@@ -24,7 +26,7 @@ export async function readJsonBody(req: Request): Promise<unknown> {
 /** Forward to `path` on the backend; `body` is sent as JSON when given. */
 export async function proxyProposalRequest(
     path: string,
-    init: { method?: 'GET' | 'POST'; body?: Record<string, unknown> } = {},
+    init: { method?: 'GET' | 'POST' | 'PUT'; body?: Record<string, unknown> } = {},
 ): Promise<NextResponse> {
     if (!(await getSessionUser())) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     try {
@@ -44,4 +46,9 @@ export async function proxyProposalRequest(
 
 export function invalidId(): NextResponse {
     return NextResponse.json({ error: 'Proposal not found', code: 'not_found' }, { status: 404 });
+}
+
+/** A malformed agent or evolution id (FU-02); nothing is sent to the backend. */
+export function invalidEvolutionId(): NextResponse {
+    return NextResponse.json({ error: 'Invalid id', code: 'invalid_input' }, { status: 400 });
 }
