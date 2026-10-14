@@ -23,7 +23,7 @@ type JwtPayload = z.infer<typeof JwtPayloadSchema>;
  */
 function getJwtSecret(): string {
     if (!process.env.JWT_SECRET) {
-        throw new Error('FATAL: JWT_SECRET environment variable is not set. Generate one with: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"');
+        throw new Error('FATAL: JWT_SECRET is not set. It is generated into .data/secrets.env on server start (or run "agent-player setup").');
     }
     return process.env.JWT_SECRET;
 }

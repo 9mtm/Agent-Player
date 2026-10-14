@@ -13,10 +13,32 @@ const SALT_LENGTH = 64;
 const TAG_LENGTH = 16;
 const KEY_LENGTH = 32;
 
-// Get encryption key from environment variable
+const deriveKey = (secret: string): Buffer =>
+    crypto.pbkdf2Sync(secret, 'email-salt', 100000, KEY_LENGTH, 'sha256');
+
+/**
+ * Key for new values: derived from ENCRYPTION_KEY (generated on first start,
+ * INST-02). There is no hard-coded fallback: without a key nothing is stored.
+ */
 const getEncryptionKey = (): Buffer => {
-    const secret = process.env.ENCRYPTION_KEY || process.env.JWT_SECRET || 'default-encryption-key-change-in-production';
-    return crypto.pbkdf2Sync(secret, 'email-salt', 100000, KEY_LENGTH, 'sha256');
+    const secret = process.env.ENCRYPTION_KEY;
+    if (!secret) {
+        throw new Error('ENCRYPTION_KEY is not set; email credentials cannot be encrypted.');
+    }
+    return deriveKey(secret);
+};
+
+/**
+ * Keys tried for reading: ENCRYPTION_KEY first, then JWT_SECRET, which older
+ * versions used when ENCRYPTION_KEY was missing (read-only legacy path).
+ */
+const getDecryptionKeys = (): Buffer[] => {
+    const secrets = [process.env.ENCRYPTION_KEY, process.env.JWT_SECRET]
+        .filter((s): s is string => typeof s === 'string' && s !== '');
+    if (secrets.length === 0) {
+        throw new Error('ENCRYPTION_KEY is not set; email credentials cannot be decrypted.');
+    }
+    return [...new Set(secrets)].map(deriveKey);
 };
 
 export interface EncryptedData {
@@ -46,29 +68,27 @@ export function encrypt(plaintext: string): string {
  * Decrypt sensitive data (passwords, tokens)
  */
 export function decrypt(ciphertext: string): string {
-    try {
-        const key = getEncryptionKey();
-        const parts = ciphertext.split(':');
-
-        if (parts.length !== 3) {
-            throw new Error('Invalid encrypted data format');
-        }
-
-        const iv = Buffer.from(parts[0], 'hex');
-        const tag = Buffer.from(parts[1], 'hex');
-        const encrypted = parts[2];
-
-        const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-        decipher.setAuthTag(tag);
-
-        let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-        decrypted += decipher.final('utf8');
-
-        return decrypted;
-    } catch (error) {
-        console.error('❌ [EmailEncryption] Decryption failed:', error);
+    const parts = ciphertext.split(':');
+    if (parts.length !== 3) {
         throw new Error('Failed to decrypt data');
     }
+    const iv = Buffer.from(parts[0], 'hex');
+    const tag = Buffer.from(parts[1], 'hex');
+    const encrypted = parts[2];
+
+    for (const key of getDecryptionKeys()) {
+        try {
+            const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+            decipher.setAuthTag(tag);
+            let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+            decrypted += decipher.final('utf8');
+            return decrypted;
+        } catch {
+            // wrong key: try the next one
+        }
+    }
+    console.error('❌ [EmailEncryption] Decryption failed (no configured key matches)');
+    throw new Error('Failed to decrypt data');
 }
 
 /**

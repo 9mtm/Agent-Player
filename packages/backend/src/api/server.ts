@@ -1,6 +1,6 @@
-// CRITICAL: Load .env FIRST before ANY imports (including type imports)
-import { config as loadEnv } from 'dotenv';
-loadEnv();
+// CRITICAL: must stay the first import. Loads .env, then the generated
+// secrets from .data/secrets.env (INST-02), before any other module runs.
+import '../config/load-env.js';
 
 // SECURITY: Default to production mode if NODE_ENV not set (L-04)
 if (!process.env.NODE_ENV) {
