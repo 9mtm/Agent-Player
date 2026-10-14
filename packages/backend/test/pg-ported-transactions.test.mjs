@@ -1,5 +1,5 @@
-// B2.2b-3: no ported module may reach a synchronous SQLite transaction (or
-// any raw better-sqlite3 call) on the PostgreSQL path. Their SQL runs through
+// B2.2b-3 / B2.2b-4: no ported module may reach a synchronous SQLite
+// transaction (or any raw better-sqlite3 call) on the PostgreSQL path. Their SQL runs through
 // repositories/sql-steps.ts, which is the only place that opens a SQLite
 // transaction for them (and only when the driver is SQLite).
 // Run: node --import tsx --test test/pg-ported-transactions.test.mjs
@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 const backend = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** Every module ported to the driver-neutral SQL steps in B2.2b-3. */
+/** Every module ported to the driver-neutral SQL steps (B2.2b-3, B2.2b-4 memory). */
 export const PORTED = [
   'src/repositories/agents.ts',
   'src/repositories/agents-config.ts',
@@ -40,7 +40,37 @@ export const PORTED = [
   'src/tools/approvals.ts',
   'src/credentials/authority.ts',
   'src/llm/model-call.ts',
+  // B2.2b-4: memory
+  'src/repositories/memory.ts',
+  'src/repositories/memory-recall.ts',
+  'src/repositories/memory-owner.ts',
+  'src/repositories/memory-shared.ts',
+  'src/memory/drawers.ts',
+  'src/memory/storage.ts',
+  'src/memory/versions.ts',
+  'src/memory/learning.ts',
+  'src/memory/memory-files.ts',
+  'src/memory/forget.ts',
+  'src/memory/retention.ts',
+  'src/memory/weekly-summary.ts',
+  'src/memory/reembed.ts',
+  'src/memory/retrieval.ts',
+  'src/memory/indexer-pg.ts',
+  'src/memory/import/pipeline.ts',
+  'src/services/memory-tiers.ts',
+  'src/services/memory-consolidation.ts',
+  'src/services/memory-deduplication.ts',
+  'src/services/memory-enrichment.ts',
+  'src/services/memory-quality-scorer.ts',
+  // B2.2b-4: remaining readers of ported tables
+  'src/api/routes/chat.ts',
+  'src/api/routes/multi-agent.ts',
+  'src/tools/tasks/task-create.tool.ts',
+  'src/tools/tasks/task-list.tool.ts',
 ];
+
+/** Ported modules without SQL of their own (they compose ported services). */
+const NO_SQL = new Set(['src/repositories/agents.ts', 'src/repositories/task-runs.ts', 'src/repositories/memory-owner.ts', 'src/memory/retrieval.ts']);
 
 const FORBIDDEN = [
   [/\bgetDatabase\s*\(/, 'getDatabase() (a raw SQLite handle)'],
@@ -54,6 +84,10 @@ const FORBIDDEN = [
   [/\bdatetime\s*\(/, "datetime( (use nowText / nowPlusText / tsParam)"],
   [/\bstrftime\s*\(/, 'strftime( (use nowIsoText / epochSeconds)'],
   [/\bINSERT\s+OR\s+(IGNORE|REPLACE)\b/i, 'INSERT OR ... (use insertOrIgnore / ON CONFLICT)'],
+  // B2.2b-4
+  [/\bjson_\w+\s*\(/, 'json_*() (SQLite JSON functions: do the JSON work in JS)'],
+  [/\bsqlite_master\b/, 'sqlite_master (use tableExists from sql-steps)'],
+  [/PRAGMA\s+table_info|pragma_table_info/i, 'PRAGMA table_info (use columnExists from sql-steps)'],
 ];
 
 function stripComments(src) {
@@ -73,8 +107,8 @@ test('ported modules never call SQLite directly or use SQLite-only SQL', () => {
 
 test('ported modules take their SQL helpers from sql-steps (one runner per driver)', () => {
   const missing = PORTED.filter((rel) => {
-    // Repositories that only compose the ported services (scope checks, no SQL of their own).
-    if (rel === 'src/repositories/agents.ts' || rel === 'src/repositories/task-runs.ts') return false;
+    // Modules that only compose the ported services (scope checks, no SQL of their own).
+    if (NO_SQL.has(rel)) return false;
     return !/from '\.{1,2}\/(?:\.\.\/)?(?:repositories\/)?sql-steps\.js'/.test(readFileSync(join(backend, rel), 'utf8'));
   });
   assert.deepEqual(missing, []);
@@ -130,5 +164,54 @@ test('rowid tie-breaks are replaced by time-ordered primary keys (same order on 
   // The row ids that break created_at ties come from orderedId().
   for (const rel of ['src/services/task-runs.ts', 'src/services/personality-store.ts', 'src/services/evolution-proposals.ts']) {
     assert.match(readFileSync(join(backend, rel), 'utf8'), /const id = orderedId\(\)/, rel);
+  }
+});
+
+test('B2.2b-4: MCP grant bindings are written and read with the grants (SQL steps, one transaction)', () => {
+  const grants = stripComments(readFileSync(join(backend, 'src/tools/grants.ts'), 'utf8'));
+  assert.match(grants, /yield\* writeMcpBindingsStep\(/, 'bindings written inside the grants step');
+  assert.match(grants, /yield\* isMcpGrantBoundStep\(/, 'bindings read inside the grants step');
+  assert.doesNotMatch(grants, /\bwriteMcpBindings\(|\bisMcpGrantBound\(/);
+  const gb = stripComments(readFileSync(join(backend, 'src/mcp-client/grant-binding.ts'), 'utf8'));
+  // Only the MCP discovery read (mcp_server_tools, SQLite until B2.2c) uses the raw handle.
+  const raw = gb.match(/getDatabase\(\)\.prepare\('([^']*)'/g) ?? [];
+  assert.equal(raw.length, 1);
+  assert.match(raw[0], /FROM mcp_server_tools/);
+  for (const fn of ['isMcpGrantBoundStep', 'writeMcpBindingsStep', 'revokeMcpGrantsStep']) {
+    const body = gb.slice(gb.indexOf(`function* ${fn}`), gb.indexOf('\n}\n', gb.indexOf(`function* ${fn}`)));
+    assert.ok(body.length > 0, fn);
+    assert.doesNotMatch(body, /getDatabase|\.prepare\(/, fn);
+  }
+});
+
+test('B2.2b-4: with AGENT_PLAYER_DB=postgres the memory paths take PostgreSQL', async () => {
+  const saved = { db: process.env.AGENT_PLAYER_DB, url: process.env.AGENT_PLAYER_PG_URL };
+  const { PgConfigError } = await import('../src/db/pg/config.ts');
+  const { closePgPool } = await import('../src/db/pg/pool.ts');
+  const { getMemoryStorage } = await import('../src/memory/storage.ts');
+  const versions = await import('../src/memory/versions.ts');
+  const forget = await import('../src/memory/forget.ts');
+  const files = await import('../src/memory/memory-files.ts');
+  const pipeline = await import('../src/memory/import/pipeline.ts');
+  const retention = await import('../src/memory/retention.ts');
+  const { MemoryTiersService } = await import('../src/services/memory-tiers.ts');
+  const pgErr = (e) => e instanceof PgConfigError;
+  try {
+    process.env.AGENT_PLAYER_DB = 'postgres';
+    delete process.env.AGENT_PLAYER_PG_URL;
+    await assert.rejects(() => getMemoryStorage().getOwned('u-1', 'm-1'), pgErr);
+    await assert.rejects(() => getMemoryStorage().getByDrawers('u-1', [{ kind: 'owner' }]), pgErr);
+    await assert.rejects(() => versions.memoryVersions('u-1', 'm-1'), pgErr);
+    await assert.rejects(() => forget.listTombstones('u-1'), pgErr);
+    await assert.rejects(() => forget.forgetMemory('u-1', 'm-1', 'u-1'), pgErr);
+    await assert.rejects(() => files.listProposals('u-1'), pgErr);
+    await assert.rejects(() => files.rejectProposal('u-1', 'p-1', 'u-1', 'a'.repeat(64)), pgErr);
+    await assert.rejects(() => pipeline.listImports('u-1'), pgErr);
+    await assert.rejects(() => retention.getRetentionConfig('u-1'), pgErr);
+    await assert.rejects(() => MemoryTiersService.getLayerStats('u-1'), pgErr);
+  } finally {
+    if (saved.db === undefined) delete process.env.AGENT_PLAYER_DB; else process.env.AGENT_PLAYER_DB = saved.db;
+    if (saved.url !== undefined) process.env.AGENT_PLAYER_PG_URL = saved.url;
+    await closePgPool();
   }
 });
