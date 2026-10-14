@@ -9,6 +9,7 @@ import { nowText } from '../../db/pg/dialect.js';
 import { dialect, one, q, run, sql, type SqlParam } from '../../repositories/sql-steps.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { randomUUID } from 'crypto';
+import { icalFetchUrl } from '../../services/calendar-sync.js';
 
 /**
  * Source columns the API returns. Never `*`: calendar_sources holds the
@@ -17,6 +18,21 @@ import { randomUUID } from 'crypto';
 const SOURCE_COLUMNS = `id, name, type, url, color, description, permission, allow_agent_access, is_enabled, is_primary,
           sync_enabled, sync_interval, last_synced_at, sync_status, sync_error,
           created_at, updated_at`;
+
+/**
+ * SEC-CAL-01: a remote calendar URL must be one the sync may fetch (https or
+ * webcal, default port, a host name — no IP literal). The DNS answers are
+ * checked again on every sync.
+ */
+function remoteUrlRefusal(url: unknown): string | null {
+  if (typeof url !== 'string' || url.trim() === '') return 'url is required for this calendar type';
+  try {
+    icalFetchUrl(url);
+    return null;
+  } catch {
+    return 'url must be an https:// or webcal:// address with a host name';
+  }
+}
 
 /** undefined → null, so an absent field binds as NULL (COALESCE keeps the column). */
 const opt = (v: unknown): SqlParam => (v === undefined ? null : (v as SqlParam));
@@ -76,8 +92,9 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ error: 'Invalid calendar type' });
       }
 
-      if ((type === 'ical' || type === 'webcal' || type === 'caldav') && !url) {
-        return reply.code(400).send({ error: 'url is required for this calendar type' });
+      if (type === 'ical' || type === 'webcal' || type === 'caldav') {
+        const refusal = remoteUrlRefusal(url);
+        if (refusal) return reply.code(400).send({ error: refusal });
       }
 
       const id = randomUUID();
@@ -123,6 +140,11 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
         permission?: string;
         allow_agent_access?: boolean;
       };
+
+      if (url !== undefined && url !== null) {
+        const refusal = remoteUrlRefusal(url);
+        if (refusal) return reply.code(400).send({ error: refusal });
+      }
 
       const updated = await sql().tx(function* () {
       // Verify ownership

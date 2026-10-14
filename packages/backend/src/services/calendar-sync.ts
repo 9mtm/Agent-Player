@@ -7,8 +7,7 @@ import { nowText } from '../db/pg/dialect.js';
 import { isoUtc } from '../api/timestamps.js';
 import { dialect, one, q, run, sql, type Step } from '../repositories/sql-steps.js';
 import { randomUUID } from 'crypto';
-import https from 'https';
-import http from 'http';
+import { checkUrl, safeDownload, SafeFetchError, type LookupFn, type TransportFn } from './net/safe-fetch.js';
 
 interface CalendarSource {
   id: string;
@@ -133,13 +132,12 @@ async function syncGoogleCalendar(source: CalendarSource): Promise<{ added: numb
 
   const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.google_calendar_id)}/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`;
 
-  const response = await fetchWithAuth(url, {
-    headers: {
-      'Authorization': `Bearer ${source.google_access_token}`,
-    },
-  });
-
-  const data = JSON.parse(response);
+  let data: any;
+  try {
+    data = await fetchGoogleJson(url, source.google_access_token);
+  } catch (error) {
+    throw fetchFailure(error);
+  }
 
   if (!data.items) {
     return { added: 0, updated: 0, deleted: 0 };
@@ -256,13 +254,13 @@ async function syncICalCalendar(source: CalendarSource): Promise<{ added: number
     throw new Error('Calendar URL is required for iCal sync');
   }
 
-  // Fetch iCal data
-  let url = source.url;
-  if (url.startsWith('webcal://')) {
-    url = url.replace('webcal://', 'https://');
+  // Fetch iCal data (SEC-CAL-01: through safe-fetch)
+  let icalData: string;
+  try {
+    icalData = await fetchICalText(source.url);
+  } catch (error) {
+    throw fetchFailure(error);
   }
-
-  const icalData = await fetchUrl(url);
 
   // Parse iCal (basic parsing - you can use a library like 'ical' for production)
   const events = parseICalBasic(icalData);
@@ -346,57 +344,57 @@ export function applyICalEvents(
 }
 
 /**
- * Fetch URL with authentication
+ * SEC-CAL-01: outbound calendar requests go through safe-fetch (https only,
+ * default port, no IP literal, every DNS answer public, connection pinned
+ * to the checked address, redirects only to the same host, size and
+ * content-type limits). The iCal host is the one the user saved, so the
+ * allow-list is that single name; Google is only www.googleapis.com.
+ * `net` is injectable so tests need no network.
  */
-function fetchWithAuth(url: string, options: any): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const protocol = url.startsWith('https') ? https : http;
-
-    protocol.get(url, options, (res) => {
-      let data = '';
-
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-
-      res.on('end', () => {
-        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-          resolve(data);
-        } else {
-          reject(new Error(`HTTP ${res.statusCode}: ${data}`));
-        }
-      });
-    }).on('error', (err) => {
-      reject(err);
-    });
-  });
+export interface CalendarNet {
+  lookup?: LookupFn;
+  transport?: TransportFn;
 }
 
-/**
- * Fetch URL (simple GET)
- */
-function fetchUrl(url: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const protocol = url.startsWith('https') ? https : http;
+const ICAL_TYPES = ['text/calendar', 'text/plain', 'application/octet-stream', 'application/ics'] as const;
+const ICAL_MAX_BYTES = 5 * 1024 * 1024;
+const GOOGLE_HOST = 'www.googleapis.com';
 
-    protocol.get(url, (res) => {
-      let data = '';
+/** The https URL an iCal/WebCal source is fetched from (webcal:// → https://), or a SafeFetchError. */
+export function icalFetchUrl(raw: string): URL {
+  const url = raw.trim().replace(/^webcals?:\/\//i, 'https://');
+  let host = '';
+  try { host = new URL(url).hostname.toLowerCase(); } catch { /* checkUrl reports it */ }
+  return checkUrl(url, host ? [host] : []);
+}
 
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-
-      res.on('end', () => {
-        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-          resolve(data);
-        } else {
-          reject(new Error(`HTTP ${res.statusCode}: ${data}`));
-        }
-      });
-    }).on('error', (err) => {
-      reject(err);
-    });
+export async function fetchICalText(raw: string, net: CalendarNet = {}): Promise<string> {
+  const url = icalFetchUrl(raw);
+  const { body } = await safeDownload(url.toString(), {
+    allowedHosts: [url.hostname.toLowerCase()],
+    allowedContentTypes: ICAL_TYPES,
+    maxBytes: ICAL_MAX_BYTES,
+    ...net,
   });
+  return body.toString('utf-8');
+}
+
+export async function fetchGoogleJson(url: string, accessToken: string, net: CalendarNet = {}): Promise<any> {
+  const { body } = await safeDownload(url, {
+    allowedHosts: [GOOGLE_HOST],
+    allowedContentTypes: ['application/json'],
+    maxBytes: 10 * 1024 * 1024,
+    headers: { Authorization: `Bearer ${accessToken}` },
+    ...net,
+  });
+  return JSON.parse(body.toString('utf-8'));
+}
+
+/** A sync error message that never carries an upstream body. */
+function fetchFailure(error: unknown): Error {
+  return error instanceof SafeFetchError
+    ? new Error(`Calendar fetch refused or failed (${error.code})`)
+    : new Error('Calendar fetch failed');
 }
 
 /**
