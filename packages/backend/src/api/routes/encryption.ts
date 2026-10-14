@@ -14,8 +14,29 @@ import {
 import { getAuditLogger } from '../../audit/index.js';
 import { actorOf } from '../../auth/auth-gate.js';
 import { requestAuditActor, requestMeta } from '../../repositories/audit.js';
+import type { Actor } from '../../repositories/actor.js';
+import { actorOrReply, isOwner, isSystem, requireOwnUser } from '../../repositories/scope.js';
 import { handleError } from '../error-handler.js';
 import { maskSecret, isMaskedSecret } from '../../credentials/secret-mask.js';
+
+type VaultPrincipal = { type: 'user' | 'agent' | 'system'; id: string };
+
+/**
+ * B1.8: the vault owner/requester of a request is its actor, never body ids.
+ * A user account owns as itself, an agent run as its agent, system as system.
+ */
+function vaultPrincipalOf(actor: Actor): VaultPrincipal {
+  if (actor.kind === 'agent') return { type: 'agent', id: actor.agentId ?? 'unknown' };
+  if (actor.kind === 'system') return { type: 'system', id: 'system' };
+  return { type: 'user', id: actor.userId ?? 'unknown' };
+}
+
+/** The owner (and system) reach every vault entry; anyone else only their own. */
+function canUseVaultEntry(actor: Actor, entry: { ownerId: string; ownerType: string }): boolean {
+  if (isSystem(actor) || isOwner(actor)) return true;
+  const me = vaultPrincipalOf(actor);
+  return entry.ownerType === me.type && entry.ownerId === me.id;
+}
 
 export async function encryptionRoutes(fastify: FastifyInstance) {
   /**
@@ -167,22 +188,31 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
    */
   fastify.post('/api/vault/credentials', async (request, reply) => {
     try {
-      const body = request.body as CredentialInput;
+      // B1.8: owner = the request's actor; body ownerId/ownerType are
+      // accepted for API compatibility but never trusted.
+      const actor = actorOrReply(reply, actorOf(request), requireOwnUser);
+      if (!actor) return reply;
+      const body = (request.body ?? {}) as Partial<CredentialInput>;
       const vault = getCredentialVault();
 
-      if (!body.name || !body.type || !body.data || !body.ownerId || !body.ownerType) {
+      if (!body.name || !body.type || !body.data) {
         return reply.status(400).send({
-          error: 'Missing required fields: name, type, data, ownerId, ownerType',
+          error: 'Missing required fields: name, type, data',
         });
       }
 
-      const credential = await vault.store(body);
+      const owner = vaultPrincipalOf(actor);
+      const credential = await vault.store({
+        ...(body as CredentialInput),
+        ownerId: owner.id,
+        ownerType: owner.type,
+      });
 
       // Audit log
       const audit = getAuditLogger();
       audit.logAccess(
         'write',
-        { type: body.ownerType, id: body.ownerId },
+        requestAuditActor(actor, requestMeta(request)),
         { type: 'credential', id: credential.id, name: body.name },
         'success',
         { credentialType: body.type, service: body.service }
@@ -247,13 +277,16 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
   fastify.post('/api/vault/credentials/:id/retrieve', async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
-      const body = request.body as { requesterId: string; requesterType: 'user' | 'agent' | 'system' };
+      // B1.8: requester = the request's actor; body requesterId/requesterType
+      // are accepted for API compatibility but never trusted.
+      const actor = actorOrReply(reply, actorOf(request), requireOwnUser);
+      if (!actor) return reply;
       const vault = getCredentialVault();
 
-      if (!body.requesterId || !body.requesterType) {
-        return reply.status(400).send({
-          error: 'Missing required fields: requesterId, requesterType',
-        });
+      // An entry outside the actor's scope looks like a missing one.
+      const entry = vault.getById(id);
+      if (!entry || !canUseVaultEntry(actor, entry)) {
+        return reply.status(404).send({ error: 'Credential not found' });
       }
 
       const result = await vault.retrieve(id);
@@ -265,7 +298,7 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
       const audit = getAuditLogger();
       audit.logAccess(
         'read',
-        { type: body.requesterType, id: body.requesterId },
+        requestAuditActor(actor, requestMeta(request)),
         { type: 'credential', id: result.credential.id, name: result.credential.name },
         'success',
         { credentialType: result.credential.type }
@@ -286,10 +319,9 @@ export async function encryptionRoutes(fastify: FastifyInstance) {
     } catch (error: any) {
       // Audit failed access
       const audit = getAuditLogger();
-      const body = request.body as any;
       audit.logAccess(
         'read',
-        { type: body?.requesterType || 'unknown', id: body?.requesterId || 'unknown' },
+        requestAuditActor(actorOf(request), requestMeta(request)),
         { type: 'credential', id: (request.params as any).id },
         'failure',
         { error: error instanceof Error ? error.message : String(error) }
