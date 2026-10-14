@@ -112,6 +112,8 @@ export function auditLogParams(entry: AuditLogEntry): Array<string | number | nu
 }
 
 const pendingAuditWrites = new Set<Promise<void>>();
+/** The last PostgreSQL audit insert started (the next one waits for it; it never rejects). */
+let auditWriteTail: Promise<void> = Promise.resolve();
 
 function auditWriteFailed(error: unknown): void {
     // SECURITY: never fail the main operation because of audit logging. The
@@ -132,15 +134,19 @@ function auditWriteFailed(error: unknown): void {
  *               rollback of the caller does not remove the audit row and the
  *               row never runs on a finished transaction's client. Errors are
  *               caught and logged with safe fields only.
- * flushAuditWrites() waits for the PostgreSQL inserts still running.
+ * flushAuditWrites() waits for the PostgreSQL inserts still running. The
+ * PostgreSQL inserts run one after another in call order (B2.2c part 2).
  */
 export function logAudit(entry: AuditLogEntry): void {
     try {
         if (dbDriver() === 'postgres') {
             const params = auditLogParams(entry);
-            const write: Promise<void> = outsidePgTransaction(() => pgRun(AUDIT_INSERT_SQL, ...params))
+            // One insert after the other, in call order (as on SQLite): two
+            // events logged back to back keep their order (id, created_at).
+            const write: Promise<void> = outsidePgTransaction(() => auditWriteTail.then(() => pgRun(AUDIT_INSERT_SQL, ...params)))
                 .then(() => undefined, auditWriteFailed)
                 .finally(() => { pendingAuditWrites.delete(write); });
+            auditWriteTail = write;
             pendingAuditWrites.add(write);
             return;
         }
