@@ -26,6 +26,7 @@ const load_logoutCommand = async () => (await import('./commands/auth.js')).logo
 const load_setupCommand = async () => (await import('./commands/setup.js')).setupCommand;
 const load_servicePrintCommand = async () => (await import('./commands/service.js')).servicePrintCommand;
 const load_importCommand = async () => (await import('./commands/import.js')).importCommand;
+const load_updateCommand = async () => (await import('./commands/update.js')).updateCommand;
 
 const program = new Command();
 
@@ -126,6 +127,19 @@ Only the files you name are read; nothing in ~/.claude, ~/.codex or other folder
   chatgpt      readable export documents (.md/.txt); conversations.json comes in a later release`)
   .action(async (files: string[], options: any) => {
     process.exitCode = await (await load_importCommand())(files, options);
+  });
+
+program
+  .command('update')
+  .description('Update a git checkout install: backup, fast-forward, migrate, health check; rolls back automatically on failure')
+  .option('--to <ref>', 'Target ref already present locally (default: the branch upstream)')
+  .option('--fetch', 'Download from the remote first (git fetch; uses the network)')
+  .option('--stop', 'Stop a running Agent Player first instead of refusing')
+  .addHelpText('after', `
+Backups go to packages/backend/.data/backups/update-<time>/ (0700, files 0600) and are never deleted.
+Without --fetch nothing is downloaded.`)
+  .action(async (options: { to?: string; fetch?: boolean; stop?: boolean }) => {
+    process.exitCode = await (await load_updateCommand())(options);
   });
 
 program
