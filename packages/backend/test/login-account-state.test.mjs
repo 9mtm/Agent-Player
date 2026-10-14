@@ -69,6 +69,8 @@ async function sameAsUnknown(email, password) {
   assert.equal(known.res.statusCode, 401, known.res.body);
   assert.equal(known.res.statusCode, unknown.res.statusCode);
   assert.deepEqual(known.res.json(), unknown.res.json());
+  assert.equal(known.res.body, unknown.res.body, 'byte-identical bodies');
+  assert.equal(known.res.json().code, 'invalid_credentials');
   assert.equal(known.res.headers['content-type'], unknown.res.headers['content-type']);
   assert.equal(known.res.headers['retry-after'], undefined);
   assert.equal(known.calls, 1, 'bcrypt ran for the known account');
@@ -82,7 +84,7 @@ test('inactive, unverified and system accounts with a wrong password look like a
   for (const email of ['suspended@state.test', 'unverified@state.test', 'system@agent-player.local']) {
     const before = failures(email);
     const res = await sameAsUnknown(email, 'wrong-password-1');
-    assert.equal(res.json().code, undefined);
+    assert.equal(res.json().code, 'invalid_credentials');
     assert.equal(failures(email), before + 1, `failure row for ${email}`);
   }
 });
@@ -112,7 +114,7 @@ test('published-password account: wrong password -> generic 401; the published p
   const email = 'mock@state.test';
   addUser(email, { hash: publishedHash });
   const wrong = await sameAsUnknown(email, 'wrong-password-1');
-  assert.equal(wrong.json().code, undefined);
+  assert.equal(wrong.json().code, 'invalid_credentials');
   assert.equal(failures(email), 1);
 
   const res = await login(email, 'mock-only');

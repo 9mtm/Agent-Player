@@ -92,6 +92,15 @@ test('login: published default password -> published_password', async () => {
   assert.equal(res.json().token, undefined);
 });
 
+test('login: unknown email and wrong password -> the same 401 invalid_credentials body', async () => {
+  const bad = await loginApp.inject({ method: 'POST', url: '/api/auth/login', remoteAddress: '10.0.7.1', payload: { email: 'mock@example.test', password: 'wrong-password-1' } });
+  const unknown = await loginApp.inject({ method: 'POST', url: '/api/auth/login', remoteAddress: '10.0.7.2', payload: { email: 'nobody@example.test', password: 'wrong-password-1' } });
+  assertCode(bad, 401, 'invalid_credentials');
+  assertCode(unknown, 401, 'invalid_credentials');
+  assert.equal(bad.body, unknown.body, 'byte-identical');
+  assert.equal(bad.json().message, 'Invalid email or password');
+});
+
 // S0-Q.20: no account-wide lock any more; a throttled source gets the generic
 // rate_limited reply (account_locked is no longer sent), other sources are unaffected.
 test('login: five wrong passwords throttle that source (rate_limited), even for the right password', async () => {
@@ -99,7 +108,7 @@ test('login: five wrong passwords throttle that source (rate_limited), even for 
   const from = (remoteAddress, password) =>
     loginApp.inject({ method: 'POST', url: '/api/auth/login', remoteAddress, payload: { email: 'lock@example.test', password } });
   for (let i = 0; i < 5; i++) {
-    assert.equal((await from('10.0.0.9', 'wrong-password-1')).statusCode, 401);
+    assertCode(await from('10.0.0.9', 'wrong-password-1'), 401, 'invalid_credentials');
   }
   assertCode(await from('10.0.0.9', strong), 429, 'rate_limited');
   assert.equal((await from('10.0.0.10', strong)).statusCode, 200);

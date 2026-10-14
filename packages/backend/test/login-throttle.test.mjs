@@ -152,6 +152,8 @@ test('unknown email and wrong password for a known email get identical replies; 
   assert.equal(a.statusCode, 401);
   assert.equal(b.statusCode, a.statusCode);
   assert.equal(b.body, a.body);
+  // CORE-01d: machine code, byte-identical for both branches.
+  assert.deepEqual(a.json(), { error: 'Unauthorized', code: 'invalid_credentials', message: 'Invalid email or password' });
   assert.equal(db.prepare(`SELECT COUNT(*) AS c FROM users`).get().c, usersBefore);
   assert.equal(db.prepare(`SELECT COUNT(*) AS c FROM users WHERE email = ?`).get('ghost@throttle.test').c, 0);
   assert.deepEqual({ ...userRow(known) }, { locked_until: null, failed_attempts: 0 });

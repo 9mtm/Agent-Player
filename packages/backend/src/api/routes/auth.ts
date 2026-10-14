@@ -178,7 +178,7 @@ export async function authRoutes(fastify: FastifyInstance) {
 
     try {
       const denied = { error: 'Forbidden', code: 'account_inactive', message: 'Account access denied' };
-      const invalid = { error: 'Unauthorized', message: 'Invalid email or password' };
+      const invalid = { error: 'Unauthorized', code: 'invalid_credentials', message: 'Invalid email or password' };
 
       const result = await identity().signIn(email, password);
       switch (result.status) {
