@@ -18,6 +18,11 @@
  *    but its paid usage is recorded (`recordInteractiveUsage`) so
  *    GET /api/budget can show it next to the autonomous spend.
  *
+ * Public rooms (`public_room`) and the world generator (`world_generator`)
+ * are not owner chat: they take the background path too (R2.3), so a
+ * visitor can never spend on a paid provider unless the owner opted that
+ * purpose in AND the daily cap allows it.
+ *
  * Nothing outside this file (and the provider client itself) may call a
  * paid model provider from a background path; test/model-call.test.mjs
  * checks that with a grep allow-list.
@@ -58,6 +63,8 @@ export interface PaidProviderConfig {
 export interface ModelCallRequest {
   purpose: ModelPurpose;
   prompt: string;
+  /** A whole conversation instead of `prompt` (public rooms, R2.3). */
+  messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
   system?: string;
   maxOutputTokens?: number;
   temperature?: number;
@@ -134,7 +141,7 @@ export async function modelCall(ctx: ModelCallContext, req: ModelCallRequest): P
   if (req.paid && (ctx.interactive || backgroundRoute(req.purpose, req.paid) === 'paid')) {
     const paid = req.paid;
     const client = new ClaudeClient(paid.apiKey, paid.model);
-    const send = () => client.sendMessage([{ role: 'user', content: req.prompt }], {
+    const send = () => client.sendMessage(req.messages?.length ? req.messages : [{ role: 'user', content: req.prompt }], {
       ...(req.system ? { systemPrompt: req.system } : {}),
       maxTokens: maxOutputTokens,
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
@@ -153,7 +160,7 @@ export async function modelCall(ctx: ModelCallContext, req: ModelCallRequest): P
       const { response, used } = await gatedModelCall({
         provider: paid.provider,
         model: paid.model,
-        payload: { prompt: req.prompt, system: req.system ?? '' },
+        payload: { prompt: req.messages?.length ? req.messages : req.prompt, system: req.system ?? '' },
         maxOutputTokens,
         purpose: req.purpose,
       }, send);
@@ -171,14 +178,16 @@ export async function modelCall(ctx: ModelCallContext, req: ModelCallRequest): P
   if (req.noLocal) {
     return { ok: false, text: '', provider: 'ollama', model, paid: false, usage: null, costCents: 0, ...(refused ? { refused } : {}), error: 'local model skipped' };
   }
+  const chat = !!req.messages?.length;
   try {
-    const res = await fetch(`${OLLAMA_URL}/api/generate`, {
+    const res = await fetch(`${OLLAMA_URL}/api/${chat ? 'chat' : 'generate'}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model,
-        prompt: req.prompt,
-        ...(req.system ? { system: req.system } : {}),
+        ...(chat
+          ? { messages: [...(req.system ? [{ role: 'system', content: req.system }] : []), ...req.messages!] }
+          : { prompt: req.prompt, ...(req.system ? { system: req.system } : {}) }),
         stream: false,
         ...ollamaThinkOption(),
         ...(req.temperature !== undefined ? { options: { temperature: req.temperature } } : {}),
@@ -188,10 +197,11 @@ export async function modelCall(ctx: ModelCallContext, req: ModelCallRequest): P
     if (!res.ok) {
       return { ok: false, text: '', provider: 'ollama', model, paid: false, usage: null, costCents: 0, ...(refused ? { refused } : {}), error: `local model HTTP ${res.status}` };
     }
-    const data = await res.json() as { response?: string; prompt_eval_count?: number; eval_count?: number };
+    const data = await res.json() as { response?: string; message?: { content?: string }; prompt_eval_count?: number; eval_count?: number };
+    const text = chat ? data.message?.content : data.response;
     const usage = Number.isFinite(data.prompt_eval_count) && Number.isFinite(data.eval_count)
       ? { inputTokens: Number(data.prompt_eval_count), outputTokens: Number(data.eval_count) } : null;
-    return { ok: true, text: typeof data.response === 'string' ? data.response : '', provider: 'ollama', model, paid: false, usage, costCents: 0, ...(refused ? { refused } : {}) };
+    return { ok: true, text: typeof text === 'string' ? text : '', provider: 'ollama', model, paid: false, usage, costCents: 0, ...(refused ? { refused } : {}) };
   } catch (err) {
     return { ok: false, text: '', provider: 'ollama', model, paid: false, usage: null, costCents: 0, ...(refused ? { refused } : {}), error: (err as Error).message };
   }

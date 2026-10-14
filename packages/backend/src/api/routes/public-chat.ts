@@ -10,7 +10,9 @@ import { randomUUID } from 'crypto';
 import { readPersonality, readMemory } from '../../services/agent-files.js';
 import { outsiderAgentMemoryEnabled } from '../../services/outsider-memory.js';
 import { handleError } from '../error-handler.js';
-import { OLLAMA_URL } from '../../llm/ollama.js';
+import { DEFAULT_OLLAMA_MODEL, OLLAMA_URL } from '../../llm/ollama.js';
+import { modelCall } from '../../llm/model-call.js';
+import { resolveProviderApiKey } from '../../credentials/authority.js';
 import { anonymousChatLimiter } from '../public-chat-limits.js';
 import { anonymousPublicRoomsEnabled } from '../../services/public-rooms.js';
 
@@ -108,42 +110,39 @@ async function streamPublicChatResponse(
   const assistantMessageId = randomUUID();
 
   try {
-    // Determine provider and model
-    const provider = room.model.startsWith('claude') ? 'anthropic' :
-                     room.model.startsWith('gpt') ? 'openai' :
-                     room.model.startsWith('gemini') ? 'google' : 'ollama';
-
-    // Use Claude API for Anthropic models
-    if (provider === 'anthropic') {
-      const { ClaudeClient } = await import('../../llm/claude-client.js');
-      const claudeClient = new ClaudeClient();
-
-      // Build messages array
-      const messages = history.map(msg => ({
-        role: msg.role,
-        content: msg.content,
-      }));
-
-      // Stream from Claude
-      const stream = claudeClient.streamMessage({
-        model: room.model,
-        systemPrompt,
-        messages,
-        maxTokens: 4096,
-      });
-
-      for await (const chunk of stream) {
-        if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'text_delta') {
-          const text = chunk.delta.text;
-          fullResponse += text;
-
-          // Send SSE event
-          reply.raw.write(`data: ${JSON.stringify({ type: 'content', content: text })}\n\n`);
+    // R2.3 (Q-32d): a room reply is never the owner's own chat (visitors,
+    // members, guests, and the owner in a shared room all count), so it takes
+    // the budget-gated background path, purpose `public_room`: the free local
+    // model by default; a paid model provider only when the owner listed
+    // `public_room` in BACKGROUND_PAID_PURPOSES and the daily paid cap
+    // (DAILY_PAID_CAP_CENTS, default 0) allows the reservation. A refusal
+    // falls back to the local model. Rate limits (S0-A.10, CL-06) run before.
+    const paidModel = /^(claude|gpt|gemini|o\d)/i.test(room.model);
+    let answered = false;
+    if (/^claude/i.test(room.model)) {
+      const apiKey = await resolveProviderApiKey('claude', { agentId: room.agent_id ?? undefined, allowEnv: true });
+      if (apiKey) {
+        const r = await modelCall({ actor: userId ?? 'anonymous' }, {
+          purpose: 'public_room',
+          prompt: '',
+          messages: history,
+          system: systemPrompt,
+          maxOutputTokens: 4096,
+          paid: { provider: 'claude', model: room.model, apiKey },
+          noLocal: true, // the local model streams below
+        });
+        if (r.paid && !r.ok) throw new Error(r.error || 'paid model call failed');
+        if (r.paid && r.ok) {
+          fullResponse = r.text;
+          reply.raw.write(`data: ${JSON.stringify({ type: 'content', content: r.text })}\n\n`);
+          answered = true;
         }
       }
-    } else if (provider === 'ollama') {
-      // Ollama streaming
+    }
 
+    if (!answered) {
+      // Local Ollama streaming. A room set to a paid model that was not
+      // allowed (or has no key) is answered by the default local model.
       const ollamaMessages = [
         { role: 'system', content: systemPrompt },
         ...history,
@@ -153,7 +152,7 @@ async function streamPublicChatResponse(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: room.model,
+          model: paidModel ? DEFAULT_OLLAMA_MODEL : room.model,
           messages: ollamaMessages,
           stream: true,
         }),
@@ -188,10 +187,6 @@ async function streamPublicChatResponse(
           }
         }
       }
-    } else {
-      // Fallback: simple response
-      fullResponse = 'AI provider not configured for this model.';
-      reply.raw.write(`data: ${JSON.stringify({ type: 'content', content: fullResponse })}\n\n`);
     }
 
     // Store AI response in database

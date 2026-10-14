@@ -6,7 +6,7 @@
 import { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
-import { ClaudeClient } from '../../llm/claude-client.js';
+import { modelCall } from '../../llm/model-call.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -80,31 +80,30 @@ Output ONLY valid JSON in this exact format:
 
 Create a simple but functional 3D world based on the prompt. Use basic geometric shapes.`;
 
-      // Get API key
+      // R2.3 (Q-32d): worlds ship later as an app (D-WORLDS-LATER); until
+      // then generation takes the budget-gated path, purpose
+      // `world_generator`: the free local model by default; the paid model
+      // provider only when the owner listed `world_generator` in
+      // BACKGROUND_PAID_PURPOSES and the daily paid cap allows it.
       const apiKey = getEnvProviderApiKey('claude'); // S1.1: via the credential authority
-      if (!apiKey) {
-        return reply.status(500).send({ error: 'Anthropic API key not configured' });
-      }
-
-      // Create Claude client
-      const claude = new ClaudeClient(apiKey, agent.model || 'claude-sonnet-4-5-20250929');
-
-      // Call Claude
-      const claudeResponse = await claude.sendMessage(
-        [
-          {
-            role: 'user',
-            content: `User prompt: ${prompt}
+      const result = await modelCall({ actor: userId }, {
+        purpose: 'world_generator',
+        prompt: `User prompt: ${prompt}
 
 Generate the 3D world JSON description:`,
-          },
-        ],
-        {
-          systemPrompt,
-          maxTokens: 4096,
-          temperature: 0.7,
-        }
-      );
+        system: systemPrompt,
+        maxOutputTokens: 4096,
+        temperature: 0.7,
+        paid: apiKey ? { provider: 'claude', model: agent.model || 'claude-sonnet-4-5-20250929', apiKey } : null,
+      });
+      if (!result.ok) {
+        return reply.status(503).send({
+          error: result.paid
+            ? 'World generation failed: the model provider did not answer'
+            : 'World generation is not available: the local model did not answer (a paid model is used only when world_generator is in BACKGROUND_PAID_PURPOSES and the daily paid cap allows it)',
+        });
+      }
+      const claudeResponse = { content: result.text };
 
       // Parse Claude's response
       let worldData;
