@@ -202,7 +202,7 @@ export async function initializeBackend(fastify: FastifyInstance): Promise<Start
   const storageManager = getStorageManager();
   await storageManager.initialize();
   if (background) {
-    const { deleted: expiredCleaned } = storageManager.cleanup();
+    const { deleted: expiredCleaned } = await storageManager.cleanup();
     if (expiredCleaned > 0) console.log(`[StorageManager] 🧹 Cleaned ${expiredCleaned} expired files on startup`);
   }
   console.log('[Server] ✅ Storage system initialized\n');

@@ -285,7 +285,7 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
       // 5. Delete extension storage files
       const { getStorageManager } = await import('../../services/storage-manager.js');
       const storageManager = getStorageManager();
-      const storageFiles = storageManager.search({
+      const storageFiles = await storageManager.search({
         zone: 'cdn',
         category: `extensions/${id}`,
         limit: 10000,
@@ -293,7 +293,7 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
 
       let deletedFiles = 0;
       for (const file of storageFiles) {
-        storageManager.delete(file.id);
+        await storageManager.delete(file.id);
         deletedFiles++;
       }
 

@@ -210,7 +210,7 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
    */
   fastify.get('/api/dashboard/widgets/storage-usage', async (request, reply) => {
     const zones = await q.all(`
-      SELECT zone, SUM(size) as total_size
+      SELECT zone, SUM(size_bytes) as total_size
       FROM storage_files
       GROUP BY zone
     `) as Array<{ zone: string; total_size: number }>;

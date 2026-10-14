@@ -31,7 +31,7 @@ export async function storageRoutes(fastify: FastifyInstance): Promise<void> {
     };
 
     const mgr = getStorageManager();
-    const files = mgr.search({
+    const files = await mgr.search({
       zone: zone as StorageZone | undefined,
       category,
       q,
@@ -49,7 +49,7 @@ export async function storageRoutes(fastify: FastifyInstance): Promise<void> {
     getUserIdFromRequest(request);
 
     const mgr = getStorageManager();
-    const result = mgr.cleanup();
+    const result = await mgr.cleanup();
     return reply.send({ success: true, ...result });
   });
 
@@ -59,7 +59,7 @@ export async function storageRoutes(fastify: FastifyInstance): Promise<void> {
     getUserIdFromRequest(request);
 
     const mgr = getStorageManager();
-    return reply.send(mgr.stats());
+    return reply.send(await mgr.stats());
   });
 
   // POST /api/storage/upload — multipart file upload
@@ -112,7 +112,7 @@ export async function storageRoutes(fastify: FastifyInstance): Promise<void> {
         createdBy: 'user',
       });
 
-      return reply.send({ success: true, file, url: mgr.getPublicUrl(file.id) });
+      return reply.send({ success: true, file, url: await mgr.getPublicUrl(file.id) });
     } catch (error: any) {
       fastify.log.error('Storage upload error:', error);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
@@ -123,15 +123,15 @@ export async function storageRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /api/storage/:id/info — metadata only
   fastify.get<{ Params: { id: string } }>('/api/storage/:id/info', async (request, reply) => {
     const mgr = getStorageManager();
-    const file = mgr.getById(request.params.id);
+    const file = await mgr.getById(request.params.id);
     if (!file) return reply.status(404).send({ error: 'Not found' });
-    return reply.send({ file, url: mgr.getPublicUrl(file.id) });
+    return reply.send({ file, url: await mgr.getPublicUrl(file.id) });
   });
 
   // GET /api/storage/:id — serve file content
   fastify.get<{ Params: { id: string } }>('/api/storage/:id', async (request, reply) => {
     const mgr = getStorageManager();
-    const result = mgr.getStream(request.params.id);
+    const result = await mgr.getStream(request.params.id);
     if (!result) return reply.status(404).send({ error: 'Not found' });
 
     const { stream, file } = result;
@@ -150,7 +150,7 @@ export async function storageRoutes(fastify: FastifyInstance): Promise<void> {
     getUserIdFromRequest(request);
 
     const mgr = getStorageManager();
-    const deleted = mgr.delete(request.params.id);
+    const deleted = await mgr.delete(request.params.id);
     if (!deleted) return reply.status(404).send({ error: 'Not found' });
     return reply.send({ success: true });
   });

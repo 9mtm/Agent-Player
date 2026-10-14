@@ -13,8 +13,7 @@
 import type { Dialect } from '../db/pg/dialect.js';
 import { nowTs } from '../db/pg/dialect.js';
 import { outsidePgTransaction } from '../db/pg/pool.js';
-import { all, dialect, one, run, sql, type Step } from '../repositories/sql-steps.js';
-import { getStorageManager } from './storage-manager.js';
+import { all, dialect, num, one, run, sql, type Step } from '../repositories/sql-steps.js';
 
 export interface ExtensionAnalytics {
   extensionId: string;
@@ -105,7 +104,7 @@ function* extensionAnalyticsStep(extensionId: string): Step<ExtensionAnalytics> 
   const dailyBreakdown = yield* getDailyBreakdown(extensionId, 30);
 
   // Get storage usage
-  const storageUsage = getStorageUsage(extensionId);
+  const storageUsage = yield* getStorageUsage(extensionId);
 
   // Get top errors from audit logs
   const topErrors = yield* getTopErrors(extensionId, 30);
@@ -160,7 +159,7 @@ function* overviewStep(): Step<OverviewAnalytics> {
   const extensionStats: OverviewAnalytics['extensionStats'] = [];
   for (const ext of extensions) {
     const stats = yield* getStatsForPeriod(ext.extension_id, 29, 0); // Last 30 days
-    const storage = getStorageUsage(ext.extension_id);
+    const storage = yield* getStorageUsage(ext.extension_id);
 
     extensionStats.push({
       extensionId: ext.extension_id,
@@ -250,21 +249,19 @@ function* getDailyBreakdown(extensionId: string, days: number): Step<DailyStats[
 }
 
 /**
- * Get storage usage for an extension
+ * Get storage usage for an extension (its cdn files indexed in storage_files).
+ * One aggregate on the step's own connection, so it works inside the
+ * analytics steps on both drivers.
  */
-function getStorageUsage(extensionId: string): StorageStats {
-  const storageManager = getStorageManager();
-
-  const files = storageManager.search({
-    zone: 'cdn',
-    category: `extensions/${extensionId}`,
-    limit: 10000,
-  });
-
-  const totalBytes = files.reduce((sum, f) => sum + (f.size || 0), 0);
+function* getStorageUsage(extensionId: string): Step<StorageStats> {
+  const row = yield* one<{ files: number; bytes: unknown }>(
+    `SELECT COUNT(*) AS files, SUM(size_bytes) AS bytes FROM storage_files WHERE zone = 'cdn' AND category = ?`,
+    `extensions/${extensionId}`);
+  // SUM is numeric (text) on PostgreSQL and null when there are no files.
+  const totalBytes = num<number | null>(row?.bytes) ?? 0;
 
   return {
-    fileCount: files.length,
+    fileCount: row?.files ?? 0,
     totalBytes,
     totalMB: Math.round((totalBytes / 1024 / 1024) * 100) / 100, // 2 decimal places
   };
@@ -314,7 +311,7 @@ export async function updateAllExtensionStorageStats(): Promise<void> {
 
   for (const { extension_id } of extensions) {
     try {
-      const storage = getStorageUsage(extension_id);
+      const storage = await runner.read(getStorageUsage(extension_id));
       const today = new Date().toISOString().split('T')[0];
 
       // Update or insert
