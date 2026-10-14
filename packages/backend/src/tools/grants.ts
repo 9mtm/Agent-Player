@@ -158,14 +158,14 @@ export function grantCallRefusal(
 // Storage
 // ---------------------------------------------------------------------------
 
-interface ProfileRow { agent_id: string; source: string; parent_agent_id: string | null }
+interface ProfileRow { agent_id: string; source: string; parent_agent_id: string | null; version?: number }
 
 function agentExists(agentId: string): boolean {
   return !!getDatabase().prepare('SELECT 1 FROM agents_config WHERE id = ?').get(agentId);
 }
 
 function readProfile(agentId: string): ProfileRow | undefined {
-  return getDatabase().prepare('SELECT agent_id, source, parent_agent_id FROM agent_grant_profiles WHERE agent_id = ?')
+  return getDatabase().prepare('SELECT agent_id, source, parent_agent_id, version FROM agent_grant_profiles WHERE agent_id = ?')
     .get(agentId) as ProfileRow | undefined;
 }
 
@@ -259,6 +259,8 @@ export interface GrantView {
   source: string;
   parentAgentId: string | null;
   grants: Array<{ tool: string; scopes: GrantScopes | null }>;
+  /** BE-UI-01: optimistic-concurrency token; PUT replaces only when it matches. */
+  version: number;
 }
 
 /** Stored grants of an agent (own, not intersected), seeding if needed. */
@@ -270,11 +272,16 @@ export function getAgentGrantView(agentId: string, available: ReadonlyArray<Pick
     agentId,
     source: profile.source,
     parentAgentId: profile.parent_agent_id,
+    version: readProfile(agentId)?.version ?? 1,
     grants: [...tools.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([tool, scopes]) => ({ tool, scopes })),
   };
 }
 
 export class GrantValidationError extends Error {}
+/** BE-UI-01: the grants changed since the caller read them (expectedVersion mismatch). */
+export class GrantConflictError extends Error {
+  constructor(readonly currentVersion: number) { super('The grants were changed by someone else; reload them and try again'); }
+}
 
 /**
  * Replace an agent's grants (owner API). A sub-agent may only receive a
@@ -282,10 +289,10 @@ export class GrantValidationError extends Error {}
  */
 export function setAgentGrants(
   agentId: string,
-  input: { grants: unknown; parentAgentId?: unknown },
+  input: { grants: unknown; parentAgentId?: unknown; expectedVersion?: number | null },
   by: string,
   available: ReadonlyArray<Pick<Tool, 'name' | 'execClass'>>
-): { before: string[]; after: string[]; parentAgentId: string | null } {
+): { before: string[]; after: string[]; parentAgentId: string | null; version: number } {
   const profile = ensureGrantProfile(agentId, available);
   if (!profile) throw new GrantValidationError('Agent not found');
   if (!Array.isArray(input.grants) || input.grants.length > 500) throw new GrantValidationError('grants must be an array (max 500)');
@@ -335,10 +342,14 @@ export function setAgentGrants(
 
   const before = [...readGrantRows(agentId).keys()].sort();
   const db = getDatabase().getDb();
+  const expected = input.expectedVersion ?? null;
   db.transaction(() => {
+    // Compare-and-set first: nothing is written when the version moved on.
+    const r = db.prepare(`UPDATE agent_grant_profiles SET source = 'owner', parent_agent_id = ?, updated_by = ?, updated_at = datetime('now'), version = version + 1
+                          WHERE agent_id = ?${expected !== null ? ' AND version = ?' : ''}`)
+      .run(parentAgentId, by, agentId, ...(expected !== null ? [expected] : []));
+    if (r.changes === 0) throw new GrantConflictError(readProfile(agentId)?.version ?? 1);
     writeGrantRows(agentId, entries, by);
-    db.prepare(`UPDATE agent_grant_profiles SET source = 'owner', parent_agent_id = ?, updated_by = ?, updated_at = datetime('now') WHERE agent_id = ?`)
-      .run(parentAgentId, by, agentId);
   })();
-  return { before, after: entries.map((e) => e.tool).sort(), parentAgentId };
+  return { before, after: entries.map((e) => e.tool).sort(), parentAgentId, version: readProfile(agentId)?.version ?? 1 };
 }

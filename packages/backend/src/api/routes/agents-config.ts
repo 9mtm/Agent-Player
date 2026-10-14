@@ -25,6 +25,8 @@ import {
   validateExclude,
 } from '../../services/agent-names.js';
 import { SMALL_AGENT_ID } from '../../services/small-agent.js';
+import { VersionInputError, etag, expectedVersionFrom } from '../concurrency.js';
+import { isoUtc } from '../timestamps.js';
 
 /**
  * MCP-01b: the small local agent is a reserved, owner-controlled agent.
@@ -70,6 +72,10 @@ function parseAgent(row: AgentConfig) {
   const apiKeySet = !!(row as any).api_key_credential_id || !!(row.api_key && row.api_key.trim());
   return {
     ...rest,
+    // BE-UI-01: ISO-8601 UTC with Z; `version` is the optimistic-concurrency token.
+    created_at: isoUtc(row.created_at),
+    updated_at: isoUtc(row.updated_at),
+    version: (row as any).version ?? 1,
     isPrimary: row.is_primary === 1,
     capabilities: (() => { try { return JSON.parse(row.capabilities); } catch { return {}; } })(),
     apiKeySet,
@@ -116,7 +122,7 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
       const db = getDatabase();
       const row = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(req.params.id) as AgentConfig | undefined;
       if (!row) return reply.status(404).send({ error: 'Agent not found' });
-      return reply.send({ agent: parseAgent(row) });
+      return reply.header('ETag', etag((row as any).version ?? 1)).send({ agent: parseAgent(row) });
     } catch (err: any) {
       return reply.status(500).send({ error: 'Failed to load agent' });
     }
@@ -187,21 +193,63 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // PUT /api/agents/:id — update agent
-  fastify.put<{ Params: { id: string }; Body: Partial<AgentConfig> & { capabilities?: object } }>('/api/agents/:id', async (req, reply) => {
+  // PUT /api/agents/:id — update agent (partial body; optimistic concurrency, BE-UI-01)
+  //   body: any subset of { name, description, emoji, system_prompt, model, provider,
+  //         temperature, max_tokens, capabilities, api_key } + optional expectedVersion
+  //   or header If-Match: "<version>". Only the fields sent are written.
+  //   409 { code: 'version_conflict', currentVersion, agent } when the version moved on.
+  fastify.put<{ Params: { id: string }; Body: Partial<AgentConfig> & { capabilities?: object; expectedVersion?: number } }>('/api/agents/:id', async (req, reply) => {
     try {
       const db = getDatabase();
       const { id } = req.params;
-      const body = req.body || {};
       const reserved = reservedAgentGuard(id, req, reply);
       if (reserved) return reserved;
+      const raw = req.body;
+      if (raw !== undefined && raw !== null && (typeof raw !== 'object' || Array.isArray(raw))) {
+        return reply.status(400).send({ error: 'Body must be a JSON object' });
+      }
+      const body = (raw || {}) as Partial<AgentConfig> & { capabilities?: object | string; expectedVersion?: number };
 
-      const existing = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(id) as AgentConfig | undefined;
+      let expected: number | null;
+      try {
+        expected = expectedVersionFrom(body, req.headers['if-match']);
+      } catch (err) {
+        if (err instanceof VersionInputError) return reply.status(400).send({ error: err.message, code: 'invalid_version' });
+        throw err;
+      }
+
+      const existing = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(id) as (AgentConfig & { version: number }) | undefined;
       if (!existing) return reply.status(404).send({ error: 'Agent not found' });
+      const conflict = (current: AgentConfig & { version: number }) => reply.status(409).header('ETag', etag(current.version)).send({
+        error: 'The agent was changed by someone else; reload it and try again',
+        code: 'version_conflict',
+        currentVersion: current.version,
+        agent: parseAgent(current),
+      });
+      if (expected !== null && expected !== existing.version) return conflict(existing);
 
-      const capStr = typeof body.capabilities === 'object'
-        ? JSON.stringify(body.capabilities)
-        : (body.capabilities ?? existing.capabilities);
+      // Only the fields that were sent (partial update; no stale rewrite of the others).
+      const sets: string[] = [];
+      const args: unknown[] = [];
+      const text = (k: 'description' | 'emoji' | 'system_prompt' | 'model' | 'provider') => {
+        if (body[k] === undefined) return null;
+        if (typeof body[k] !== 'string') return `${k} must be a string`;
+        sets.push(`${k} = ?`); args.push(body[k]);
+        return null;
+      };
+      const num = (k: 'temperature' | 'max_tokens') => {
+        if (body[k] === undefined) return null;
+        if (typeof body[k] !== 'number' || !Number.isFinite(body[k] as number)) return `${k} must be a number`;
+        sets.push(`${k} = ?`); args.push(body[k]);
+        return null;
+      };
+      for (const problem of [text('description'), text('emoji'), text('system_prompt'), text('model'), text('provider'), num('temperature'), num('max_tokens')]) {
+        if (problem) return reply.status(400).send({ error: problem });
+      }
+      if (body.capabilities !== undefined) {
+        sets.push('capabilities = ?');
+        args.push(typeof body.capabilities === 'object' && body.capabilities !== null ? JSON.stringify(body.capabilities) : String(body.capabilities));
+      }
 
       // CORE-02 / D-AGENT-RENAME: a new name must be free company-wide and is
       // reserved for good (same transaction as the update).
@@ -214,32 +262,31 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
         throw err;
       }
       const renamed = normalizeAgentName(name) !== normalizeAgentName(existing.name ?? '');
+      if (body.name !== undefined && name !== existing.name) { sets.push('name = ?'); args.push(name); }
 
+      let lost = false;
+      const LOST = Symbol('version_conflict');
       try {
         db.transaction(() => {
           if (renamed) reserveAgentName(name, id, { reason: 'rename', reservedBy: req.authUser?.id });
-          db.prepare(`
-        UPDATE agents_config
-        SET name=?, description=?, emoji=?, system_prompt=?, model=?, provider=?,
-            temperature=?, max_tokens=?, capabilities=?, updated_at=datetime('now')
-        WHERE id=?
-      `).run(
-        name,
-        body.description ?? existing.description,
-        body.emoji ?? existing.emoji,
-        body.system_prompt ?? existing.system_prompt,
-        body.model ?? existing.model,
-        body.provider ?? existing.provider,
-        body.temperature ?? existing.temperature,
-        body.max_tokens ?? existing.max_tokens,
-        capStr,
-        id,
-      );
+          if (sets.length) {
+            const r = db.prepare(`UPDATE agents_config SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ?${expected !== null ? ' AND version = ?' : ''}`)
+              .run(...args, id, ...(expected !== null ? [expected] : []));
+            if (r.changes === 0) throw LOST; // rolls back the name reservation too
+          }
         });
       } catch (err) {
+        if (err === LOST) lost = true;
+        else {
         const handled = nameErrorReply(err, reply);
         if (handled) return handled;
         throw err;
+        }
+      }
+      if (lost) {
+        const current = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(id) as (AgentConfig & { version: number }) | undefined;
+        if (!current) return reply.status(404).send({ error: 'Agent not found' });
+        return conflict(current);
       }
 
       // SECURITY (S1.1): a new key goes to the encrypted credentials store; an
@@ -248,9 +295,9 @@ export async function agentsConfigRoutes(fastify: FastifyInstance) {
         await setAgentApiKey(id, body.api_key);
       }
 
-      const updated = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(id) as AgentConfig;
+      const updated = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(id) as AgentConfig & { version: number };
 
-      return reply.send({ agent: parseAgent(updated) });
+      return reply.header('ETag', etag(updated.version)).send({ agent: parseAgent(updated) });
     } catch (err: any) {
       fastify.log.error('[AgentsConfig] Update error:', err);
       return reply.status(500).send({ error: 'Failed to update agent' });

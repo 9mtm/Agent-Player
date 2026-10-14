@@ -55,6 +55,7 @@ import {
   type DrawerRef,
 } from '../memory/drawers.js';
 import { redactSecrets } from './secret-redact.js';
+import { isoUtc } from '../api/timestamps.js';
 import { canonicalPath, denyReason, isInside, isInsideIgnoringCase, realPath } from '../tools/core/file-sandbox.js';
 import { cliConfigDir } from './instance-identity.js';
 import { createRun, getRun, getSteps, elapsedMs, type TaskRunRow, type TaskRunStatus } from './task-runs.js';
@@ -619,8 +620,8 @@ export function smallAgentCard(runId: string): ResultCard | null {
     needs_review: reviewReason !== null,
     review_reason: reviewReason,
     warnings: [...warnings, ...runtime],
-    created_at: run.created_at,
-    finished_at: run.finished_at,
+    created_at: isoUtc(run.created_at) as string, // BE-UI-01: ISO UTC with Z
+    finished_at: isoUtc(run.finished_at),
   };
 }
 
@@ -645,7 +646,7 @@ export function listSmallAgentRuns(filter: { status?: string; limit?: number }):
     summary: r.output_preview ? summaryOf(redactSecrets(r.output_preview).text) : (r.status === 'failed' && r.status_reason ? redactSecrets(r.status_reason).text : null),
     steps_used: r.steps_used,
     max_steps: r.max_steps,
-    created_at: r.created_at,
-    finished_at: r.finished_at,
+    created_at: isoUtc(r.created_at) as string,
+    finished_at: isoUtc(r.finished_at),
   }));
 }

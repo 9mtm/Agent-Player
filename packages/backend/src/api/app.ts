@@ -120,7 +120,8 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   await fastify.register(cors, {
     origin: ALLOWED_ORIGINS,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Idempotency-Key', 'If-Match'],
+    exposedHeaders: ['X-Run-Id', 'X-Message-Id', 'Idempotent-Replayed', 'ETag', 'Date'],
     credentials: true,
     preflightContinue: false,
     optionsSuccessStatus: 204,

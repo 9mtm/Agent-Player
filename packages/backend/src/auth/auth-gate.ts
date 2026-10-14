@@ -120,6 +120,7 @@ export const GUEST_ROUTES: ReadonlySet<string> = new Set([
  * additionally limit guests to rooms marked public.
  */
 export const GUEST_PUBLIC_CHAT_ROUTES: ReadonlySet<string> = new Set([
+  key('GET', '/api/public-chat/policy'), // BE-UI-01: read-only policy
   key('GET', '/api/public-chat/rooms'),
   key('GET', '/api/public-chat/rooms/:id'),
   key('GET', '/api/public-chat/rooms/:id/messages'),

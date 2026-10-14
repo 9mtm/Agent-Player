@@ -29,6 +29,7 @@
  * server was down or the run waited for the owner does not count).
  */
 
+import { isoUtc } from '../api/timestamps.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { getDatabase } from '../db/index.js';
@@ -581,7 +582,8 @@ export function runView(row: TaskRunRow, now = Date.now()): TaskRunView {
     leaseActive: row.status === 'running' && !!row.lease_owner && (row.lease_expires_at ?? 0) >= now,
     cancelRequested: row.cancel_requested === 1,
     outputPreview: row.output_preview,
-    createdAt: row.created_at, startedAt: row.started_at, updatedAt: row.updated_at, finishedAt: row.finished_at,
+    // BE-UI-01: ISO-8601 UTC with Z at the API layer (DB keeps SQLite format).
+    createdAt: isoUtc(row.created_at) as string, startedAt: isoUtc(row.started_at), updatedAt: isoUtc(row.updated_at) as string, finishedAt: isoUtc(row.finished_at),
   };
 }
 
@@ -590,7 +592,7 @@ export function stepView(row: TaskRunStepRow): TaskRunStepView {
     index: row.step_index, kind: row.kind, tool: row.tool_name, status: row.status,
     idempotent: row.idempotent === 1, attempt: row.attempt, idempotencyKey: row.idempotency_key,
     approvalId: row.approval_id, error: row.error, resolvedBy: row.resolved_by,
-    startedAt: row.started_at, completedAt: row.completed_at,
+    startedAt: isoUtc(row.started_at) as string, completedAt: isoUtc(row.completed_at),
   };
 }
 

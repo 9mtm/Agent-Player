@@ -7,6 +7,11 @@
  *   GET  /api/approvals/:id              full view: exact parameters (secrets masked) + paramsHash
  *   POST /api/approvals/:id/approve      { paramsHash } approve once: runs exactly those parameters
  *   POST /api/approvals/:id/deny         deny: it never runs
+ *
+ * BE-UI-01: every approval carries `expiresAt` (requestedAt + 24 h, after
+ * which the server marks it expired) and all timestamps (requestedAt,
+ * decidedAt, executedAt, expiresAt) are ISO-8601 UTC with `Z`. Use the HTTP
+ * `Date` response header for clock drift.
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -16,7 +21,20 @@ import {
   denyApproval,
   getApprovalDetail,
   listApprovals,
+  APPROVAL_TTL_HOURS,
 } from '../../tools/approvals.js';
+import { isoPlusHours, isoUtc } from '../timestamps.js';
+
+/** API view of an approval record: ISO UTC timestamps + absolute expiresAt. */
+function view<T extends { requestedAt: string; decidedAt: string | null; executedAt: string | null }>(r: T): T & { expiresAt: string | null } {
+  return {
+    ...r,
+    requestedAt: isoUtc(r.requestedAt) as string,
+    decidedAt: isoUtc(r.decidedAt),
+    executedAt: isoUtc(r.executedAt),
+    expiresAt: isoPlusHours(r.requestedAt, APPROVAL_TTL_HOURS),
+  };
+}
 import { logAudit } from '../../services/audit-logger.js';
 
 const STATUSES = new Set(['pending', 'approved', 'denied', 'executed', 'failed', 'expired']);
@@ -54,7 +72,7 @@ export async function approvalsRoutes(fastify: FastifyInstance) {
     if (ownerOf(request, reply) === null) return reply;
     const status = request.query?.status;
     if (status !== undefined && !STATUSES.has(status)) return reply.code(400).send({ error: 'Invalid status' });
-    return { approvals: listApprovals({ status, limit: Number(request.query?.limit) || undefined }) };
+    return { approvals: listApprovals({ status, limit: Number(request.query?.limit) || undefined }).map(view) };
   });
 
   fastify.get<{ Params: { id: string } }>('/api/approvals/:id', { config }, async (request, reply) => {
@@ -62,7 +80,7 @@ export async function approvalsRoutes(fastify: FastifyInstance) {
     if (!ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid id' });
     const record = await getApprovalDetail(request.params.id);
     if (!record) return reply.code(404).send({ error: 'Approval not found' });
-    return { approval: record };
+    return { approval: view(record) };
   });
 
   fastify.post<{ Params: { id: string }; Body: { paramsHash?: string } }>('/api/approvals/:id/approve', { config }, async (request, reply) => {
@@ -76,7 +94,7 @@ export async function approvalsRoutes(fastify: FastifyInstance) {
     try {
       const { record, result } = await approveAndRun(request.params.id, ownerId, paramsHash);
       audit(request, ownerId, 'approve', record.id, record.status === 'executed', { tool: record.toolName, agentId: record.agentId, status: record.status });
-      return { approval: record, result: { ok: !result.error, preview: record.resultPreview, error: record.error } };
+      return { approval: view(record), result: { ok: !result.error, preview: record.resultPreview, error: record.error } };
     } catch (err: any) {
       if (err instanceof ApprovalStateError) return reply.code(err.status).send({ error: err.message });
       throw err;
@@ -90,7 +108,7 @@ export async function approvalsRoutes(fastify: FastifyInstance) {
     try {
       const record = denyApproval(request.params.id, ownerId);
       audit(request, ownerId, 'deny', record.id, true, { tool: record.toolName, agentId: record.agentId });
-      return { approval: record };
+      return { approval: view(record) };
     } catch (err: any) {
       if (err instanceof ApprovalStateError) return reply.code(err.status).send({ error: err.message });
       throw err;

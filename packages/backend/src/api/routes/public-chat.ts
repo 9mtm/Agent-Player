@@ -222,6 +222,23 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
   // ══════════════════════════════════════════════════════════════════════════════
 
   /**
+   * GET /api/public-chat/policy (BE-UI-01) - read-only public-room policy for
+   * signed-in users (guests included): whether anonymous visitors may use
+   * public rooms (owner setting `publicRooms.allowAnonymous`, default off)
+   * and the default visibility of new rooms. Changing it stays owner-only
+   * through PUT /api/settings.
+   */
+  fastify.get('/api/public-chat/policy', async (request, reply) => {
+    if (!request.authUser) return reply.code(401).send({ error: 'Authentication required' });
+    return {
+      publicRooms: {
+        allowAnonymous: anonymousPublicRoomsEnabled(),
+        newRoomsPublicByDefault: false,
+      },
+    };
+  });
+
+  /**
    * POST /api/public-chat/rooms
    * Create new chat room (auth required)
    */
@@ -274,7 +291,8 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
         body.wall_video_url || null,
         body.wall_layout ? JSON.stringify(body.wall_layout) : null,
         body.fx_state ? JSON.stringify(body.fx_state) : null,
-        body.is_public !== undefined ? (body.is_public ? 1 : 0) : 1,
+        // BE-UI-01: new rooms are private unless the creator asks for public.
+        body.is_public !== undefined ? (body.is_public ? 1 : 0) : 0,
         body.require_auth ? 1 : 0,
         body.allowed_users ? JSON.stringify(body.allowed_users) : null,
         body.max_message_length || 1000,

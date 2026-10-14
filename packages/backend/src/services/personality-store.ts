@@ -9,6 +9,7 @@
  * Personality never grants tools or permissions (see services/personality.ts).
  */
 
+import { isoUtc } from '../api/timestamps.js';
 import { getDatabase } from '../db/index.js';
 import { readPersonality, writePersonality } from './agent-files.js';
 import {
@@ -83,7 +84,7 @@ function fromRow(row: Row): PersonalityVersion {
     basedOnVersion: row.based_on_version,
     note: row.note,
     createdBy: row.created_by,
-    createdAt: row.created_at,
+    createdAt: isoUtc(row.created_at), // BE-UI-01: ISO UTC with Z
   };
 }
 

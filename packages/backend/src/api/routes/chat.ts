@@ -4,6 +4,7 @@
  * Uses primary agent from agents_config table
  */
 
+import { beginChatTurn, instrumentChatReply, parseIdempotencyKey, replayChatOutcome, requestFingerprint } from '../../services/chat-idempotency.js';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { handleError } from '../error-handler.js';
 import { AgentRuntime, type Message, type Skill } from '../../agent/index.js';
@@ -201,6 +202,23 @@ export async function chatRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: 'Messages array is required' });
     }
 
+    // BE-UI-01: turn ids on every frame/body; a repeated Idempotency-Key from
+    // the same user within 10 minutes returns the first outcome instead of
+    // running the turn again (services/chat-idempotency.ts).
+    const idemKey = parseIdempotencyKey(request.headers['idempotency-key']);
+    if (idemKey === 'invalid') {
+      return reply.status(400).send({ error: 'Idempotency-Key must be 8-128 characters (A-Z, a-z, 0-9, _ - . :)', code: 'invalid_idempotency_key' });
+    }
+    const turn = beginChatTurn(userId, idemKey, requestFingerprint({ agentId, sessionId, stream, messages }));
+    if (turn.kind === 'mismatch') {
+      return reply.status(422).send({ error: 'This Idempotency-Key was already used for a different request', code: 'idempotency_key_reused' });
+    }
+    if (turn.kind === 'in_progress') {
+      return reply.status(409).send({ error: 'A request with this Idempotency-Key is still running', code: 'idempotency_in_progress', runId: turn.ids.runId, messageId: turn.ids.messageId });
+    }
+    if (turn.kind === 'replay') return replayChatOutcome(reply, turn.ids, turn.outcome);
+    instrumentChatReply(reply, turn.ids, turn.entry);
+
     console.log('[Chat] 📦 Received chatContext:', JSON.stringify(chatContext));
 
     // SECURITY (S0-Q.8): a channel-originated turn (Telegram/Discord/Agent Connect sender)
@@ -298,7 +316,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
       if (stream) {
         return streamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id, memoryDrawers);
       } else {
-        return nonStreamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id, memoryDrawers);
+        const out = await nonStreamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id, memoryDrawers);
+        // A plain result object goes through reply.send so it gets the turn ids.
+        return (out as unknown) === reply ? reply : reply.send(out);
       }
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)

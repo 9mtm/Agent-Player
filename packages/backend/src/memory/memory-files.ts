@@ -23,6 +23,7 @@
  * that start with `###` are written with a leading backslash.
  */
 
+import { isoUtc } from '../api/timestamps.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { createHash } from 'crypto';
@@ -373,8 +374,9 @@ function rowToProposal(row: any): MemoryProposal {
     id: row.id, userId: row.user_id, agentId: row.agent_id, drawer, drawerId: drawerId(drawer),
     baseHash: row.base_hash, baseRevision: row.base_revision, changes: JSON.parse(row.changes),
     status: row.status, source: row.source, note: row.note ?? null,
-    createdBy: row.created_by, createdAt: row.created_at,
-    decidedBy: row.decided_by ?? null, decidedAt: row.decided_at ?? null, appliedRevision: row.applied_revision ?? null,
+    // BE-UI-01: ISO-8601 UTC with Z for the API.
+    createdBy: row.created_by, createdAt: isoUtc(row.created_at) as string,
+    decidedBy: row.decided_by ?? null, decidedAt: isoUtc(row.decided_at), appliedRevision: row.applied_revision ?? null,
     reasons: parseReasons(row.reasons),
   };
 }
@@ -607,5 +609,6 @@ export function drawerVersions(userId: string, drawer: DrawerRef, limit = 200): 
            importance_score AS importanceScore, proposal_id AS proposalId, created_by AS createdBy, created_at AS createdAt
       FROM memory_versions WHERE user_id = ? AND drawer_kind = ? AND drawer_key = ?
      ORDER BY drawer_revision DESC, memory_id, version DESC LIMIT ?
-  `).all(userId, drawer.kind, drawer.key || '', Math.max(1, Math.min(1000, limit)));
+  `).all(userId, drawer.kind, drawer.key || '', Math.max(1, Math.min(1000, limit)))
+    .map((r: any) => ({ ...r, createdAt: isoUtc(r.createdAt) }));
 }
