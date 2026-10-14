@@ -157,19 +157,6 @@ export async function getGlobalProviderApiKey(provider: ProviderName): Promise<s
   }
 }
 
-/**
- * SQLite only: getGlobalProviderApiKey, synchronously, for the SQLite-only
- * onboarding wizard (B2.2c part 2). '' on PostgreSQL (fail closed: no key shown).
- */
-export function getGlobalProviderApiKeySync(provider: ProviderName): string {
-  if (provider === 'gemini') return '';
-  try {
-    return getSettingsManager().getApiKeySync(provider) || '';
-  } catch {
-    return '';
-  }
-}
-
 /** True when a global Settings key is configured for the provider. */
 export async function hasGlobalProviderApiKey(provider: ProviderName): Promise<boolean> {
   return (await getGlobalProviderApiKey(provider)).trim().length > 0;

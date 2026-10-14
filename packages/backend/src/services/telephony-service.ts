@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import { getDatabase } from '../db/index.js';
+import { dialect, one, run, sql, type Step } from '../repositories/sql-steps.js';
+import { nowText, secondsSinceText } from '../db/pg/dialect.js';
 import { randomBytes } from 'crypto';
 import { config } from '../config/index.js';
 
@@ -7,6 +8,10 @@ import { config } from '../config/index.js';
  * Unified Telephony Service
  * Supports multiple providers (Twilio, Google Voice)
  * Provides abstraction layer for phone number management, calling, etc.
+ *
+ * B2.2c: the queries run on the process driver (sql-steps). The telephony
+ * timestamps are TEXT on both drivers ('YYYY-MM-DD HH:MM:SS', UTC, nowText).
+ * Provider calls (network) are made outside any transaction.
  */
 
 export interface TelephonyProvider {
@@ -126,15 +131,16 @@ export class TelephonyService {
     );
 
     // Store in database
-    const db = getDatabase();
     const id = randomBytes(16).toString('hex');
 
-    db.prepare(`
+    await sql().read((function* (): Step<unknown> {
+      const d = yield* dialect();
+      return yield* run(`
       INSERT INTO phone_numbers (
         id, phone_number, friendly_name, country_code, capabilities,
         provider, provider_sid, status, purchased_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'))
-    `).run(
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ${nowText(d)})
+    `,
       id,
       purchased.phoneNumber,
       purchased.friendlyName,
@@ -143,6 +149,7 @@ export class TelephonyService {
       selectedProvider,
       purchased.providerSid
     );
+    })());
 
     return id;
   }
@@ -151,11 +158,9 @@ export class TelephonyService {
    * Release a phone number
    */
   async releasePhoneNumber(numberId: string): Promise<void> {
-    const db = getDatabase();
-
-    const number = db.prepare<any>(`
+    const number = await sql().read(one<any>(`
       SELECT provider_sid, provider FROM phone_numbers WHERE id = ?
-    `).get(numberId);
+    `, numberId));
 
     if (!number) {
       throw new Error(`Phone number ${numberId} not found`);
@@ -167,10 +172,13 @@ export class TelephonyService {
     }
 
     // Mark as released in database
-    db.prepare(`
-      UPDATE phone_numbers SET status = 'released', updated_at = datetime('now')
+    await sql().read((function* (): Step<unknown> {
+      const d = yield* dialect();
+      return yield* run(`
+      UPDATE phone_numbers SET status = 'released', updated_at = ${nowText(d)}
       WHERE id = ?
-    `).run(numberId);
+    `, numberId);
+    })());
   }
 
   /**
@@ -180,15 +188,13 @@ export class TelephonyService {
     callPointId: string;
     toNumber: string;
   }): Promise<string> {
-    const db = getDatabase();
-
     // Get call point details
-    const callPoint = db.prepare<any>(`
+    const callPoint = await sql().read(one<any>(`
       SELECT cp.*, pn.phone_number, pn.provider
       FROM call_points cp
       JOIN phone_numbers pn ON pn.id = cp.phone_number_id
       WHERE cp.id = ?
-    `).get(params.callPointId);
+    `, params.callPointId));
 
     if (!callPoint) {
       throw new Error(`Call point ${params.callPointId} not found`);
@@ -211,12 +217,14 @@ export class TelephonyService {
     // Create call session in database
     const sessionId = randomBytes(16).toString('hex');
 
-    db.prepare(`
+    await sql().read((function* (): Step<unknown> {
+      const d = yield* dialect();
+      return yield* run(`
       INSERT INTO call_sessions (
         id, call_point_id, direction, from_number, to_number,
         call_sid, provider, status, started_at, agent_id
-      ) VALUES (?, ?, 'outbound', ?, ?, ?, ?, ?, datetime('now'), ?)
-    `).run(
+      ) VALUES (?, ?, 'outbound', ?, ?, ?, ?, ?, ${nowText(d)}, ?)
+    `,
       sessionId,
       params.callPointId,
       callInfo.from,
@@ -226,6 +234,7 @@ export class TelephonyService {
       callInfo.status,
       callPoint.agent_id
     );
+    })());
 
     return sessionId;
   }
@@ -234,11 +243,9 @@ export class TelephonyService {
    * Hangup a call
    */
   async hangupCall(callSid: string): Promise<void> {
-    const db = getDatabase();
-
-    const session = db.prepare<any>(`
+    const session = await sql().read(one<any>(`
       SELECT provider FROM call_sessions WHERE call_sid = ?
-    `).get(callSid);
+    `, callSid));
 
     if (!session) {
       throw new Error(`Call session with SID ${callSid} not found`);
@@ -246,24 +253,26 @@ export class TelephonyService {
 
     await this.getProvider(session.provider).hangupCall(callSid);
 
-    // Update session status
-    db.prepare(`
+    // Update session status (one statement; the duration is computed by the database)
+    await sql().read((function* (): Step<unknown> {
+      const d = yield* dialect();
+      const secs = secondsSinceText(d, 'started_at');
+      return yield* run(`
       UPDATE call_sessions
-      SET status = 'completed', ended_at = datetime('now'),
-          duration_seconds = (julianday(datetime('now')) - julianday(started_at)) * 86400
+      SET status = 'completed', ended_at = ${nowText(d)},
+          duration_seconds = ${d === 'postgres' ? `round(${secs})` : secs}
       WHERE call_sid = ?
-    `).run(callSid);
+    `, callSid);
+    })());
   }
 
   /**
    * Transfer a call to another number
    */
   async transferCall(callSid: string, toNumber: string): Promise<void> {
-    const db = getDatabase();
-
-    const session = db.prepare<any>(`
+    const session = await sql().read(one<any>(`
       SELECT provider FROM call_sessions WHERE call_sid = ?
-    `).get(callSid);
+    `, callSid));
 
     if (!session) {
       throw new Error(`Call session with SID ${callSid} not found`);
@@ -273,16 +282,20 @@ export class TelephonyService {
 
     // Log transfer in call messages
     const messageId = randomBytes(16).toString('hex');
-    const sessionRecord = db.prepare<any>(`
+    await sql().read((function* (): Step<unknown> {
+      const d = yield* dialect();
+      const sessionRecord = yield* one<any>(`
       SELECT id FROM call_sessions WHERE call_sid = ?
-    `).get(callSid);
+    `, callSid);
 
-    if (sessionRecord) {
-      db.prepare(`
+      if (sessionRecord) {
+        yield* run(`
         INSERT INTO call_messages (id, call_session_id, role, content, timestamp)
-        VALUES (?, ?, 'system', ?, datetime('now'))
-      `).run(messageId, sessionRecord.id, `Call transferred to ${toNumber}`);
-    }
+        VALUES (?, ?, 'system', ?, ${nowText(d)})
+      `, messageId, sessionRecord.id, `Call transferred to ${toNumber}`);
+      }
+      return undefined;
+    })());
   }
 
   /**

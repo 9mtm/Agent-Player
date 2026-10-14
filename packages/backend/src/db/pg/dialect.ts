@@ -171,3 +171,14 @@ export function runResult(res: { rowCount: number | null; rows?: Array<Record<st
   }
   return out;
 }
+
+/**
+ * Seconds from a TEXT timestamp column ('YYYY-MM-DD HH:MM:SS', UTC) to now,
+ * as a number (B2.2c, call durations). SQLite keeps its julianday form (a
+ * REAL); PostgreSQL gives the same value as double precision.
+ */
+export function secondsSinceText(d: Dialect, expr: string): string {
+  return d === 'postgres'
+    ? `extract(epoch FROM (now() - ((${expr})::timestamp AT TIME ZONE 'UTC')))::double precision`
+    : `(julianday(datetime('now')) - julianday(${expr})) * 86400`;
+}

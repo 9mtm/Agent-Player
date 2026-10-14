@@ -11,14 +11,19 @@
  *   settings manager (encrypted at rest) and is only ever returned masked.
  * - Channels are only saved as a preference, never started.
  * - Skills are only saved as a preference, never installed.
+ *
+ * B2.2c: the state runs on the process driver (sql-steps). A save or a
+ * completion reads, merges and writes the row in one transaction under a
+ * per-user lock, so two concurrent saves never lose each other's answers.
  */
 
-import { getDatabase, getRepositories } from '../db/index.js';
+import { getRepositories } from '../db/index.js';
+import { lockName, one, run, sql, type Step } from '../repositories/sql-steps.js';
 import { getSettingsManager } from '../settings/index.js';
 import { DEFAULT_SETTINGS } from '../settings/types.js';
 import type { AgentSettings } from '../settings/types.js';
 import { isMaskedSecret, maskSecret } from '../credentials/secret-mask.js';
-import { getGlobalProviderApiKeySync } from '../credentials/authority.js';
+import { getGlobalProviderApiKey } from '../credentials/authority.js';
 
 export const TOTAL_STEPS = 6;
 
@@ -223,10 +228,21 @@ interface Row {
   skipped: number;
 }
 
-function readRow(userId: string): Row | undefined {
-  return getDatabase()
-    .prepare('SELECT current_step, answers, completed, skipped FROM onboarding_state WHERE user_id = ?')
-    .get(userId) as Row | undefined;
+function readRowStep(userId: string): Step<Row | undefined> {
+  return one<Row>('SELECT current_step, answers, completed, skipped FROM onboarding_state WHERE user_id = ?', userId);
+}
+
+function readRow(userId: string): Promise<Row | undefined> {
+  return sql().read(readRowStep(userId));
+}
+
+/** Read-modify-write of one user's row: one transaction under the user's lock. */
+function updateRow(userId: string, fn: (row: Row | undefined) => Step<void>): Promise<void> {
+  return sql().tx(function* () {
+    yield* lockName(`onboarding_state:${userId}`);
+    const row = yield* readRowStep(userId);
+    yield* fn(row);
+  });
 }
 
 function parseAnswers(raw: string | undefined): WizardAnswers {
@@ -239,11 +255,10 @@ function parseAnswers(raw: string | undefined): WizardAnswers {
   }
 }
 
-function writeRow(userId: string, row: Row, completedAt: 'now' | 'null' | 'keep') {
+function* writeRow(userId: string, row: Row, completedAt: 'now' | 'null' | 'keep'): Step<void> {
   const completedSql =
     completedAt === 'now' ? 'CURRENT_TIMESTAMP' : completedAt === 'null' ? 'NULL' : 'onboarding_state.completed_at';
-  getDatabase()
-    .prepare(
+  yield* run(
       `INSERT INTO onboarding_state (user_id, current_step, answers, completed, skipped, completed_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ${completedAt === 'now' ? 'CURRENT_TIMESTAMP' : 'NULL'}, CURRENT_TIMESTAMP)
        ON CONFLICT(user_id) DO UPDATE SET
@@ -252,27 +267,26 @@ function writeRow(userId: string, row: Row, completedAt: 'now' | 'null' | 'keep'
          completed = excluded.completed,
          skipped = excluded.skipped,
          completed_at = ${completedSql},
-         updated_at = CURRENT_TIMESTAMP`
-    )
-    .run(userId, row.current_step, row.answers, row.completed, row.skipped);
+         updated_at = CURRENT_TIMESTAMP`,
+    userId, row.current_step, row.answers, row.completed, row.skipped);
 }
 
 /** Masked view of the stored key for the chosen cloud provider (never the key itself). */
-function providerKeyView(provider: WizardProvider | undefined): { apiKeySet?: boolean; apiKeyMasked?: string } {
+async function providerKeyView(provider: WizardProvider | undefined): Promise<{ apiKeySet?: boolean; apiKeyMasked?: string }> {
   if (provider !== 'anthropic' && provider !== 'openai') return {};
-  const key = getGlobalProviderApiKeySync(provider === 'anthropic' ? 'claude' : 'openai');
+  const key = await getGlobalProviderApiKey(provider === 'anthropic' ? 'claude' : 'openai');
   return key ? { apiKeySet: true, apiKeyMasked: maskSecret(key) } : { apiKeySet: false };
 }
 
-export function getWizardState(userId: string): WizardState {
-  const row = readRow(userId);
+export async function getWizardState(userId: string): Promise<WizardState> {
+  const row = await readRow(userId);
   const answers = parseAnswers(row?.answers);
   return {
     completed: row?.completed === 1,
     skipped: row?.skipped === 1,
     currentStep: row?.current_step ?? 1,
     totalSteps: TOTAL_STEPS,
-    data: { ...answers, ...providerKeyView(answers.aiProvider) },
+    data: { ...answers, ...(await providerKeyView(answers.aiProvider)) },
   };
 }
 
@@ -282,31 +296,33 @@ export async function saveWizardStep(
   step: ValidatedStep | null,
   currentStep: number | undefined
 ): Promise<WizardState> {
-  const row = readRow(userId);
-  const answers = parseAnswers(row?.answers);
-
   if (step) {
     if (step.step === 'profile') {
       await getRepositories().users.update(userId, { full_name: step.answers.userName });
     } else if (step.step === 'provider') {
       await applyProviderSettings(step.answers, step.apiKey);
-      // A previously saved ollamaUrl must not linger after switching provider.
-      delete answers.ollamaUrl;
     }
-    // channels: saved only, never started. skills: saved only, never installed.
-    Object.assign(answers, step.answers);
   }
 
-  writeRow(
-    userId,
-    {
-      current_step: currentStep ?? row?.current_step ?? 1,
-      answers: JSON.stringify(answers),
-      completed: row?.completed ?? 0,
-      skipped: row?.skipped ?? 0,
-    },
-    'keep'
-  );
+  await updateRow(userId, function* (row) {
+    const answers = parseAnswers(row?.answers);
+    if (step) {
+      // A previously saved ollamaUrl must not linger after switching provider.
+      if (step.step === 'provider') delete answers.ollamaUrl;
+      // channels: saved only, never started. skills: saved only, never installed.
+      Object.assign(answers, step.answers);
+    }
+    yield* writeRow(
+      userId,
+      {
+        current_step: currentStep ?? row?.current_step ?? 1,
+        answers: JSON.stringify(answers),
+        completed: row?.completed ?? 0,
+        skipped: row?.skipped ?? 0,
+      },
+      'keep'
+    );
+  });
   return getWizardState(userId);
 }
 
@@ -327,9 +343,8 @@ async function applyProviderSettings(answers: Omit<ProviderInput, 'apiKey'>, api
   await manager.updateSettings(updates);
 }
 
-export function completeWizard(userId: string, skipped: boolean): WizardState {
-  const row = readRow(userId);
-  writeRow(
+export async function completeWizard(userId: string, skipped: boolean): Promise<WizardState> {
+  await updateRow(userId, (row) => writeRow(
     userId,
     {
       current_step: skipped ? row?.current_step ?? 1 : TOTAL_STEPS,
@@ -338,12 +353,12 @@ export function completeWizard(userId: string, skipped: boolean): WizardState {
       skipped: skipped ? 1 : 0,
     },
     'now'
-  );
+  ));
   return getWizardState(userId);
 }
 
 /** Start over: answers cleared, not completed. Settings already applied stay as they are. */
-export function resetWizard(userId: string): WizardState {
-  writeRow(userId, { current_step: 1, answers: '{}', completed: 0, skipped: 0 }, 'null');
+export async function resetWizard(userId: string): Promise<WizardState> {
+  await sql().read(writeRow(userId, { current_step: 1, answers: '{}', completed: 0, skipped: 0 }, 'null'));
   return getWizardState(userId);
 }

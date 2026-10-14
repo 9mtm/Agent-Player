@@ -14,7 +14,7 @@
 import { getCredentialManager } from '../credentials/manager.js';
 import { isMaskedSecret } from '../credentials/secret-mask.js';
 import { CredentialType } from '../credentials/types.js';
-import { getDatabase } from '../db/index.js';
+import { one, sql } from '../repositories/sql-steps.js';
 
 export const TELEPHONY_SKILL_ID = 'telephony';
 
@@ -34,13 +34,11 @@ export const TELEPHONY_KEYS = {
   teamsAccessToken: 'telephony.teams.access_token',
 } as const;
 
-/** Id of the active installation owner, or null when there is none yet. */
-export function getTelephonyOwnerId(): string | null {
-  const row = getDatabase()
-    .prepare(
-      "SELECT id FROM users WHERE role = 'owner' AND status = 'active' ORDER BY created_at ASC LIMIT 1"
-    )
-    .get() as { id: string } | undefined;
+/** Id of the active installation owner, or null when there is none yet (process driver, B2.2c). */
+export async function getTelephonyOwnerId(): Promise<string | null> {
+  const row = await sql().read(one<{ id: string }>(
+    "SELECT id FROM users WHERE role = 'owner' AND status = 'active' ORDER BY created_at ASC, id ASC LIMIT 1"
+  ));
   return row?.id ?? null;
 }
 
@@ -50,7 +48,7 @@ export function getTelephonyOwnerId(): string | null {
  */
 export async function getTelephonySecret(name: string): Promise<string | null> {
   const manager = getCredentialManager();
-  const ownerId = getTelephonyOwnerId();
+  const ownerId = await getTelephonyOwnerId();
   try {
     const credential =
       (ownerId ? await manager.getByName(name, ownerId) : null) ??
@@ -75,7 +73,7 @@ export async function setTelephonySecret(
 ): Promise<boolean> {
   if (typeof value !== 'string' || value === '' || isMaskedSecret(value)) return false;
 
-  const userId = getTelephonyOwnerId() ?? callerId;
+  const userId = (await getTelephonyOwnerId()) ?? callerId;
   if (!userId) throw new Error('No owner account to store telephony credentials for');
 
   const manager = getCredentialManager();

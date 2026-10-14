@@ -15,9 +15,8 @@
  * r006 (scripts/pg/runtime/r006_app_settings.sql, kept equal to this DDL by
  * test/pg-runtime-ddl.test.mjs). The getters are async; updateSettings reads,
  * merges and writes in one transaction under a lock on the settings key, so
- * two concurrent updates never lose each other's fields. getSettingsSync /
- * getApiKeySync are for the SQLite-only callers that remain (onboarding
- * wizard, B2.2c part 2) and throw on PostgreSQL.
+ * two concurrent updates never lose each other's fields. (B2.2c part 2:
+ * the synchronous getters are gone; every caller uses the async API.)
  */
 
 import type { AgentSettings } from './types.js';
@@ -146,11 +145,6 @@ export class SettingsManager {
     return sql().read(readSettingsStep());
   }
 
-  /** SQLite only: getSettings, synchronously (throws on PostgreSQL). */
-  getSettingsSync(): AgentSettings {
-    return sqliteSync(readSettingsStep());
-  }
-
   /**
    * Get settings with masked API keys (for API responses)
    */
@@ -186,11 +180,6 @@ export class SettingsManager {
   async getApiKey(provider: 'claude' | 'openai'): Promise<string | undefined> {
     const settings = await this.getSettings();
     return settings[provider]?.apiKey;
-  }
-
-  /** SQLite only: getApiKey, synchronously (throws on PostgreSQL). */
-  getApiKeySync(provider: 'claude' | 'openai'): string | undefined {
-    return this.getSettingsSync()[provider]?.apiKey;
   }
 
   /**

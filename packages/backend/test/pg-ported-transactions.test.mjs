@@ -90,6 +90,17 @@ export const PORTED = [
   'src/services/agent-performance-analyzer.js',
   'src/services/agent-evolution-orchestrator.js',
   'src/api/routes/evolution.ts',
+  // B2.2c part 2: credential-adjacent modules
+  'src/webhooks/manager.ts',
+  'src/webhooks/delivery.ts',
+  'src/webhooks/index.ts',
+  'src/api/routes/webhooks.ts',
+  'src/services/telephony-service.ts',
+  'src/telephony/voice-handler.ts',
+  'src/telephony/ivr-engine.ts',
+  'src/telephony/credentials.ts',
+  'src/onboarding/web-wizard.ts',
+  'src/api/routes/onboarding-web.ts',
 ];
 
 /** Ported modules without SQL of their own (they compose ported services). */
@@ -97,7 +108,9 @@ const NO_SQL = new Set(['src/repositories/agents.ts', 'src/repositories/task-run
   // B2.2c: compose the cron store
   'src/scheduler/engine.ts', 'src/api/routes/scheduler.ts',
   'src/api/routes/notifications.ts', 'src/tools/notifications/create-reminder.tool.ts', 'src/repositories/pg/login-throttle.ts',
-  'src/repositories/login-throttle.ts']);
+  'src/repositories/login-throttle.ts',
+  // B2.2c part 2: compose the webhook store / the wizard
+  'src/webhooks/index.ts', 'src/api/routes/webhooks.ts', 'src/api/routes/onboarding-web.ts']);
 
 const FORBIDDEN = [
   [/\bgetDatabase\s*\(/, 'getDatabase() (a raw SQLite handle)'],
@@ -274,7 +287,8 @@ test('B2.2c part 1: with AGENT_PLAYER_DB=postgres the scheduler, MCP, settings, 
     const settings = new SettingsManager(); // no SQLite DDL on PostgreSQL
     await assert.rejects(() => settings.getSettings(), pgErr);
     await assert.rejects(() => settings.updateSettings({ provider: 'local' }), pgErr);
-    assert.throws(() => settings.getSettingsSync(), /SQLite only/);
+    // B2.2c part 2: the synchronous getters were removed (no caller left).
+    assert.equal(settings.getSettingsSync, undefined);
     await assert.rejects(() => notif.notify({ userId: 'u-1', title: 't' }), pgErr);
     await assert.rejects(() => notif.getNotificationSettings('u-1'), pgErr);
     await assert.rejects(() => notif.processScheduledNotifications(), pgErr);
@@ -342,5 +356,32 @@ test('B2.2c part 2: the evolution scheduler writes cron_jobs only through the cr
   // S0-Q.23: no Evolution service writes capabilities.
   for (const rel of ['src/services/agent-learning-engine.js', 'src/services/agent-evolution-orchestrator.js', 'src/services/agent-performance-analyzer.js']) {
     assert.doesNotMatch(stripComments(readFileSync(join(backend, rel), 'utf8')), /UPDATE\s+agents_config/i, rel);
+  }
+});
+
+test('B2.2c part 2: with AGENT_PLAYER_DB=postgres webhooks, telephony and the onboarding wizard take PostgreSQL', async () => {
+  const saved = { db: process.env.AGENT_PLAYER_DB, url: process.env.AGENT_PLAYER_PG_URL };
+  const { PgConfigError } = await import('../src/db/pg/config.ts');
+  const { closePgPool } = await import('../src/db/pg/pool.ts');
+  const { WebhookManager } = await import('../src/webhooks/manager.ts');
+  const tel = await import('../src/telephony/credentials.ts');
+  const { getTelephonyService } = await import('../src/services/telephony-service.ts');
+  const wizard = await import('../src/onboarding/web-wizard.ts');
+  const authority = await import('../src/credentials/authority.ts');
+  const pgErr = (e) => e instanceof PgConfigError;
+  try {
+    process.env.AGENT_PLAYER_DB = 'postgres';
+    delete process.env.AGENT_PLAYER_PG_URL;
+    // No SQLite file is opened for the webhook store on PostgreSQL.
+    await assert.rejects(() => new WebhookManager().initialize('/nonexistent/never-created/webhooks.db'), pgErr);
+    await assert.rejects(() => tel.getTelephonyOwnerId(), pgErr);
+    await assert.rejects(() => getTelephonyService().releasePhoneNumber('n-1'), pgErr);
+    await assert.rejects(() => wizard.getWizardState('u-1'), pgErr);
+    await assert.rejects(() => wizard.completeWizard('u-1', true), pgErr);
+    assert.equal(authority.getGlobalProviderApiKeySync, undefined, 'the synchronous key getter is gone');
+  } finally {
+    if (saved.db === undefined) delete process.env.AGENT_PLAYER_DB; else process.env.AGENT_PLAYER_DB = saved.db;
+    if (saved.url !== undefined) process.env.AGENT_PLAYER_PG_URL = saved.url;
+    await closePgPool();
   }
 });

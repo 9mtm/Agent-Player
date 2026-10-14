@@ -46,7 +46,7 @@ export async function onboardingWebRoutes(fastify: FastifyInstance) {
     const userId = owner(request, reply);
     if (userId === null) return reply;
     try {
-      return { success: true, state: getWizardState(userId) };
+      return { success: true, state: await getWizardState(userId) };
     } catch (error) {
       return handleError(reply, error, 'internal', '[Onboarding]');
     }
@@ -94,7 +94,7 @@ export async function onboardingWebRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ success: false, error: 'Invalid body' });
     }
     try {
-      return { success: true, state: completeWizard(userId, body.skipped === true) };
+      return { success: true, state: await completeWizard(userId, body.skipped === true) };
     } catch (error) {
       return handleError(reply, error, 'internal', '[Onboarding]');
     }
@@ -104,7 +104,7 @@ export async function onboardingWebRoutes(fastify: FastifyInstance) {
     const userId = owner(request, reply);
     if (userId === null) return reply;
     try {
-      return { success: true, state: resetWizard(userId) };
+      return { success: true, state: await resetWizard(userId) };
     } catch (error) {
       return handleError(reply, error, 'internal', '[Onboarding]');
     }

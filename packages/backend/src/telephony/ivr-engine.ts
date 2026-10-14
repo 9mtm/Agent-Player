@@ -1,5 +1,6 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
-import { getDatabase } from '../db/index.js';
+import { one, run, sql } from '../repositories/sql-steps.js';
+import { nowText } from '../db/pg/dialect.js';
 import { randomBytes } from 'crypto';
 
 /**
@@ -31,15 +32,15 @@ export async function processIvrSelection(request: FastifyRequest, reply: Fastif
   const { sessionId } = request.query as any;
 
   try {
-    const db = getDatabase();
+    const db = sql();
 
     // Get session and call point
-    const session = db.prepare<any>(`
+    const session = await db.read(one<any>(`
       SELECT cs.*, cp.ivr_menu, cp.voice_id, cp.transfer_number
       FROM call_sessions cs
       JOIN call_points cp ON cp.id = cs.call_point_id
       WHERE cs.id = ?
-    `).get(sessionId);
+    `, sessionId));
 
     if (!session || !session.ivr_menu) {
       return reply.type('text/xml').send(`
@@ -56,10 +57,10 @@ export async function processIvrSelection(request: FastifyRequest, reply: Fastif
 
     // Log IVR selection
     const messageId = randomBytes(16).toString('hex');
-    db.prepare(`
+    await db.read(run(`
       INSERT INTO call_messages (id, call_session_id, role, content, timestamp)
-      VALUES (?, ?, 'system', ?, datetime('now'))
-    `).run(messageId, sessionId, `IVR: Selected option ${Digits}`);
+      VALUES (?, ?, 'system', ?, ${nowText(db.dialect)})
+    `, messageId, sessionId, `IVR: Selected option ${Digits}`));
 
     // Get selected option
     const option = ivrMenu.options[Digits];
@@ -100,9 +101,9 @@ export async function processIvrSelection(request: FastifyRequest, reply: Fastif
       case 'agent':
         // Update session agent_id and redirect to speech processing
         if (option.agentId) {
-          db.prepare(`
+          await db.read(run(`
             UPDATE call_sessions SET agent_id = ? WHERE id = ?
-          `).run(option.agentId, sessionId);
+          `, option.agentId, sessionId));
         }
 
         return reply.type('text/xml').send(`

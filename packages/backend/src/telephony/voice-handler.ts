@@ -1,5 +1,6 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
-import { getDatabase } from '../db/index.js';
+import { one, run, sql } from '../repositories/sql-steps.js';
+import { nowText, secondsSinceText } from '../db/pg/dialect.js';
 import { randomBytes } from 'crypto';
 import { beginChannelTurn, CHANNEL_TURN_HEADER } from '../tools/channel-policy.js';
 
@@ -7,6 +8,9 @@ import { beginChannelTurn, CHANNEL_TURN_HEADER } from '../tools/channel-policy.j
  * Voice Webhook Handler
  * Handles Twilio/Google Voice webhooks for inbound/outbound calls
  * Generates TwiML responses and manages AI conversation flow
+ *
+ * B2.2c: queries run on the process driver (sql-steps); the call timestamps
+ * are TEXT on both drivers (nowText). Status changes are single statements.
  */
 
 /**
@@ -16,15 +20,15 @@ export async function handleIncomingCall(request: FastifyRequest, reply: Fastify
   const { From, To, CallSid } = request.body as any;
 
   try {
-    const db = getDatabase();
+    const db = sql();
 
     // 1. Find call point by phone number
-    const callPoint = db.prepare<any>(`
+    const callPoint = await db.read(one<any>(`
       SELECT cp.*, pn.phone_number, pn.provider
       FROM call_points cp
       JOIN phone_numbers pn ON pn.id = cp.phone_number_id
       WHERE pn.phone_number = ? AND cp.enabled = 1
-    `).get(To);
+    `, To));
 
     if (!callPoint) {
       // No call point configured - return error TwiML
@@ -51,12 +55,12 @@ export async function handleIncomingCall(request: FastifyRequest, reply: Fastify
 
     // 3. Create call session
     const sessionId = randomBytes(16).toString('hex');
-    db.prepare(`
+    await db.read(run(`
       INSERT INTO call_sessions (
         id, call_point_id, direction, from_number, to_number,
         call_sid, provider, status, started_at, agent_id
-      ) VALUES (?, ?, 'inbound', ?, ?, ?, ?, 'in-progress', datetime('now'), ?)
-    `).run(sessionId, callPoint.id, From, To, CallSid, callPoint.provider, callPoint.agent_id);
+      ) VALUES (?, ?, 'inbound', ?, ?, ?, ?, 'in-progress', ${nowText(db.dialect)}, ?)
+    `, sessionId, callPoint.id, From, To, CallSid, callPoint.provider, callPoint.agent_id));
 
     // 4. Check if IVR menu is configured
     if (callPoint.ivr_menu) {
@@ -105,11 +109,11 @@ export async function handleOutboundTwiml(request: FastifyRequest, reply: Fastif
   const { callPointId } = request.query as any;
 
   try {
-    const db = getDatabase();
+    const db = sql();
 
-    const callPoint = db.prepare<any>(`
+    const callPoint = await db.read(one<any>(`
       SELECT * FROM call_points WHERE id = ?
-    `).get(callPointId);
+    `, callPointId));
 
     if (!callPoint) {
       return reply.type('text/xml').send(`
@@ -127,9 +131,9 @@ export async function handleOutboundTwiml(request: FastifyRequest, reply: Fastif
 
     // For outbound calls, we need to get the session ID from call_sid
     const { CallSid } = request.body as any;
-    const session = db.prepare<any>(`
+    const session = await db.read(one<any>(`
       SELECT id FROM call_sessions WHERE call_sid = ?
-    `).get(CallSid);
+    `, CallSid));
 
     if (!session) {
       return reply.type('text/xml').send(`
@@ -178,10 +182,10 @@ export async function processSpeech(request: FastifyRequest, reply: FastifyReply
   const { sessionId } = request.query as any;
 
   try {
-    const db = getDatabase();
+    const db = sql();
 
     // Get session and call point details
-    const session = db.prepare<any>(`
+    const session = await db.read(one<any>(`
       SELECT
         cs.*,
         cp.agent_id, cp.voice_id, cp.language_preference, cp.max_call_duration,
@@ -189,7 +193,7 @@ export async function processSpeech(request: FastifyRequest, reply: FastifyReply
       FROM call_sessions cs
       JOIN call_points cp ON cp.id = cs.call_point_id
       WHERE cs.id = ?
-    `).get(sessionId);
+    `, sessionId));
 
     if (!session) {
       return reply.type('text/xml').send(`
@@ -203,10 +207,10 @@ export async function processSpeech(request: FastifyRequest, reply: FastifyReply
 
     // Store caller message
     const callerMsgId = randomBytes(16).toString('hex');
-    db.prepare(`
+    await db.read(run(`
       INSERT INTO call_messages (id, call_session_id, role, content, timestamp)
-      VALUES (?, ?, 'caller', ?, datetime('now'))
-    `).run(callerMsgId, sessionId, SpeechResult || '[silence]');
+      VALUES (?, ?, 'caller', ?, ${nowText(db.dialect)})
+    `, callerMsgId, sessionId, SpeechResult || '[silence]'));
 
     // If no speech detected, end call
     if (!SpeechResult || SpeechResult.trim() === '') {
@@ -229,16 +233,16 @@ export async function processSpeech(request: FastifyRequest, reply: FastifyReply
 
     // Store agent message
     const agentMsgId = randomBytes(16).toString('hex');
-    db.prepare(`
+    await db.read(run(`
       INSERT INTO call_messages (id, call_session_id, role, content, timestamp)
-      VALUES (?, ?, 'agent', ?, datetime('now'))
-    `).run(agentMsgId, sessionId, agentResponse);
+      VALUES (?, ?, 'agent', ?, ${nowText(db.dialect)})
+    `, agentMsgId, sessionId, agentResponse));
 
     // Check max call duration
-    const duration = db.prepare<any>(`
-      SELECT (julianday(datetime('now')) - julianday(started_at)) * 86400 as duration
+    const duration = await db.read(one<any>(`
+      SELECT ${secondsSinceText(db.dialect, 'started_at')} as duration
       FROM call_sessions WHERE id = ?
-    `).get(sessionId);
+    `, sessionId));
 
     if (duration && duration.duration > session.max_call_duration) {
       return reply.type('text/xml').send(`
@@ -290,21 +294,21 @@ export async function handleStatusWebhook(request: FastifyRequest, reply: Fastif
   const { CallSid, CallStatus, CallDuration } = request.body as any;
 
   try {
-    const db = getDatabase();
+    const db = sql();
 
     // Update call session status
     if (CallStatus === 'completed' || CallStatus === 'failed' || CallStatus === 'busy' || CallStatus === 'no-answer') {
-      db.prepare(`
+      await db.read(run(`
         UPDATE call_sessions
         SET status = ?,
-            ended_at = datetime('now'),
+            ended_at = ${nowText(db.dialect)},
             duration_seconds = ?
         WHERE call_sid = ?
-      `).run(CallStatus, CallDuration || 0, CallSid);
+      `, CallStatus, CallDuration || 0, CallSid));
 
       // If call completed, trigger post-call processing
       if (CallStatus === 'completed') {
-        const session = db.prepare<any>('SELECT * FROM call_sessions WHERE call_sid = ?').get(CallSid);
+        const session = await db.read(one<any>('SELECT * FROM call_sessions WHERE call_sid = ?', CallSid));
         if (session) {
           // Queue for transcription and AI summary (async)
           queuePostCallProcessing(session.id).catch(err => {
@@ -314,12 +318,12 @@ export async function handleStatusWebhook(request: FastifyRequest, reply: Fastif
       }
     } else {
       // Update status for in-progress states
-      db.prepare(`
+      await db.read(run(`
         UPDATE call_sessions
         SET status = ?,
-            answered_at = CASE WHEN ? = 'in-progress' AND answered_at IS NULL THEN datetime('now') ELSE answered_at END
+            answered_at = CASE WHEN ? = 'in-progress' AND answered_at IS NULL THEN ${nowText(db.dialect)} ELSE answered_at END
         WHERE call_sid = ?
-      `).run(CallStatus, CallStatus, CallSid);
+      `, CallStatus, CallStatus, CallSid));
     }
 
     return reply.send({ success: true });
@@ -336,14 +340,14 @@ export async function handleRecordingWebhook(request: FastifyRequest, reply: Fas
   const { CallSid, RecordingUrl, RecordingSid, RecordingDuration } = request.body as any;
 
   try {
-    const db = getDatabase();
+    const db = sql();
 
     // Update call session with recording URL
-    db.prepare(`
+    await db.read(run(`
       UPDATE call_sessions
       SET recording_url = ?
       WHERE call_sid = ?
-    `).run(RecordingUrl, CallSid);
+    `, RecordingUrl, CallSid));
 
     // Queue recording download to local storage (async)
     queueRecordingDownload(CallSid, RecordingUrl).catch(err => {
