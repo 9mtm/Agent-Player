@@ -3,9 +3,9 @@
  * POST /api/world-generator/ai - Generate world from text prompt
  */
 
-import { dataPath } from '../../config/data-root.js';
 import { FastifyInstance } from 'fastify';
-import { getDatabase } from '../../db/index.js';
+import { q } from '../../repositories/sql-steps.js';
+import { createWorldWithFile, worldsDir } from '../../repositories/user-worlds.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { modelCall } from '../../llm/model-call.js';
 import * as fs from 'fs';
@@ -40,11 +40,10 @@ export async function worldGeneratorRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'Missing prompt or agent_id' });
       }
 
-      const db = getDatabase();
-
-      // Get agent details
-      const agent = db.prepare('SELECT * FROM agents WHERE id = ? AND user_id = ?')
-        .get(agent_id, userId) as any;
+      // Get agent details (B2.2d-10: agents live in agents_config, which is
+      // instance-wide; the former `agents` table never existed, so this
+      // route always failed here with a 500).
+      const agent = await q.one<{ model: string | null }>('SELECT model FROM agents_config WHERE id = ?', agent_id);
 
       if (!agent) {
         return reply.status(404).send({ error: 'Agent not found' });
@@ -129,7 +128,7 @@ Generate the 3D world JSON description:`,
       const filename = `ai-world-${timestamp}.json`;
 
       // Save to storage
-      const storagePath = dataPath('storage', 'cdn', 'worlds');
+      const storagePath = worldsDir();
       if (!fs.existsSync(storagePath)) {
         fs.mkdirSync(storagePath, { recursive: true });
       }
@@ -137,43 +136,19 @@ Generate the 3D world JSON description:`,
       const filepath = path.join(storagePath, filename);
       fs.writeFileSync(filepath, glbContent);
 
-      // Create storage file record
+      // Create the storage file record and the world row (one transaction;
+      // the file record used columns storage_files does not have).
       const fileId = `file_${timestamp}`;
-      db.prepare(`
-        INSERT INTO storage_files (id, user_id, filename, filepath, mimetype, size, zone, category, description, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-      `).run(
-        fileId,
-        userId,
-        filename,
-        `/cdn/worlds/${filename}`,
-        'application/json',
-        glbContent.length,
-        'cdn',
-        'worlds',
-        `AI Generated: ${worldData.name}`
-      );
-
-      // Create world record
       const worldId = `world_${timestamp}`;
-      db.prepare(`
-        INSERT INTO user_worlds (
-          id, user_id, name, description, glb_file_id,
-          is_public, max_players,
-          spawn_position_x, spawn_position_y, spawn_position_z,
-          created_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-      `).run(
+      await createWorldWithFile({
         worldId,
         userId,
-        worldData.name,
-        worldData.description || `AI-generated world from prompt: ${prompt.substring(0, 100)}`,
-        fileId,
-        is_public ?? 0, // use provided value or default to private
-        max_players ?? 10, // use provided value or default to 10
-        0, 0, 0 // spawn at origin
-      );
+        name: worldData.name,
+        description: worldData.description || `AI-generated world from prompt: ${prompt.substring(0, 100)}`,
+        isPublic: is_public ? 1 : 0, // use provided value or default to private
+        maxPlayers: Number.isInteger(max_players) && (max_players as number) > 0 ? (max_players as number) : 10,
+        file: { id: fileId, filename, sizeBytes: glbContent.length, description: `AI Generated: ${worldData.name}` },
+      });
 
       return reply.send({
         success: true,

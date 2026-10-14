@@ -318,8 +318,8 @@ test.after(async () => { try { await roomsApp.close(); } catch { /* ignore */ } 
 
 db.prepare(`INSERT INTO users (id, email, username, password_hash, role, status, email_verified) VALUES ('mc-member', 'mc-member@example.test', 'mc-member', 'x', 'user', 'active', 1)`).run();
 db.prepare(`INSERT INTO public_chat_rooms (id, name, owner_user_id, model, is_public, require_auth) VALUES ('mc-room', 'Lobby', 'mc-owner', 'claude-haiku-test', 1, 0)`).run();
-db.exec(`CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, user_id TEXT, model TEXT)`);
-db.prepare(`INSERT INTO agents (id, user_id, model) VALUES ('mc-world-agent', 'mc-owner', 'claude-sonnet-test')`).run();
+// B2.2d-10: the generator reads the agent's model from agents_config.
+db.prepare(`INSERT INTO agents_config (id, name, model) VALUES ('mc-world-agent', 'World Agent', 'claude-sonnet-test')`).run();
 
 const roomPost = (headers = {}) => roomsApp.inject({ method: 'POST', url: '/api/public-chat/rooms/mc-room/messages', headers, payload: { content: 'hello', username: 'visitor' } });
 const sseText = (body) => body.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)))
