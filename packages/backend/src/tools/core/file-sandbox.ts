@@ -16,9 +16,12 @@
  *  2. lexical containment: `path.relative(root, target)` must not start with
  *     `..` and must not be absolute (separator-aware, so `/work-evil` is not
  *     inside `/work`);
- *  3. the always-deny list (`.env*`, `.data/encryption/**`, `*.db*`,
- *     `.git/**`, SSH keys, `credentials*`, `auth.json`, `instance.json`), on the path relative to the root
- *     and again on the resolved real path, so a wider root never exposes them;
+ *  3. the always-deny list (`.env*`, `*.env` incl. `secrets.env`,
+ *     `.data/encryption/**`, `*.db*`, `.git/**`, SSH keys, `credentials*`,
+ *     `auth.json`, `instance.json`), on the path relative to the root and
+ *     again on the resolved real path, so a wider root never exposes them;
+ *     on the real path also everything under the backend data folder
+ *     (`.data/`) except the `.data/workspaces/` subtree;
  *  4. realpath containment: the real path of the file (read) or of its
  *     parent directory (write) must still be inside the real root, so a
  *     symlink pointing outside is refused;
@@ -123,14 +126,37 @@ const SSH_KEY_NAME = /^id_(rsa|dsa|ecdsa|ed25519)(_sk)?(\.pub)?$/i;
 const DB_NAME = /\.(db|sqlite3?)($|[-.])/i;
 const KEY_FILE = /\.(pem|key|p12|pfx|ppk)$/i;
 /** CLI token (auth.json), backend instance secret (instance.json) and similar. */
-const SECRET_FILE_NAMES: ReadonlySet<string> = new Set(['auth.json', 'instance.json', '.netrc', '.npmrc', '.git-credentials', '.pgpass']);
+const SECRET_FILE_NAMES: ReadonlySet<string> = new Set(['auth.json', 'instance.json', 'secrets.env', '.netrc', '.npmrc', '.git-credentials', '.pgpass']);
+
+/** `.env`, `.env.local`, `secrets.env`, `prod.env`, ... */
+function isEnvFileName(name: string): boolean {
+  const lc = name.toLowerCase();
+  return lc.startsWith('.env') || lc.endsWith('.env');
+}
+
+/** Backend data folder (`<cwd>/.data`), on-disk case. */
+export function backendDataDir(): string {
+  return canonicalPath(path.join(process.cwd(), '.data'));
+}
+
+/**
+ * True when an absolute path is inside the backend data folder but not in
+ * its `workspaces/` subtree (secrets.env, instance.json, databases, logs,
+ * uploads ...). Case-insensitive on darwin/win32.
+ */
+export function isProtectedDataPath(absolute: string): boolean {
+  const dataDir = backendDataDir();
+  const target = canonicalPath(absolute);
+  if (!isInsideIgnoringCase(dataDir, target)) return false;
+  return !isInsideIgnoringCase(canonicalPath(workspacesBaseDir()), target);
+}
 
 /** Reason a path (as components) is on the always-deny list, or null. */
 function denyReasonForComponents(parts: string[]): string | null {
   for (let i = 0; i < parts.length; i++) {
     const c = parts[i];
     const lc = c.toLowerCase();
-    if (lc.startsWith('.env')) return 'environment files are never readable or writable by agents';
+    if (lc.startsWith('.env') || (i === parts.length - 1 && lc.endsWith('.env'))) return 'environment files are never readable or writable by agents';
     if (lc === '.git') return 'git internals are off limits';
     if (lc === '.ssh') return 'SSH keys are off limits';
     if (lc === '.data' && parts[i + 1]?.toLowerCase() === 'encryption') return 'encryption keys are off limits';
@@ -158,8 +184,9 @@ export function denyReason(relFromRoot: string, absolute?: string): string | nul
       if (lc === '.git' || lc === '.ssh') return 'this location is off limits';
       if (lc === '.data' && parts[i + 1]?.toLowerCase() === 'encryption') return 'encryption keys are off limits';
     }
+    if (isProtectedDataPath(absolute)) return 'the backend data folder is off limits (only agent workspaces are allowed)';
     const base = parts[parts.length - 1] ?? '';
-    if (base.toLowerCase().startsWith('.env') || DB_NAME.test(base) || SSH_KEY_NAME.test(base) || KEY_FILE.test(base) || SECRET_FILE_NAMES.has(base.toLowerCase())) return 'this file is off limits';
+    if (isEnvFileName(base) || DB_NAME.test(base) || SSH_KEY_NAME.test(base) || KEY_FILE.test(base) || SECRET_FILE_NAMES.has(base.toLowerCase())) return 'this file is off limits';
   }
   return null;
 }

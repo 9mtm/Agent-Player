@@ -166,6 +166,7 @@ test('protected trees are refused even inside an allowed root (CLI config dir, c
     assert.ok(trees.includes(join(dir, d)), `~/${d} protected`);
   }
   assert.ok(trees.includes(cfgDir));
+  assert.ok(trees.some((t) => t.endsWith(join('.data', 'secrets.env'))), 'secrets.env protected');
   // auth.json / instance.json are deny-listed for the file tools as well.
   writeFileSync(join(outsideDir, 'auth.json'), '{"token":"not-real"}');
   writeFileSync(join(outsideDir, 'instance.json'), '{"secret":"not-real"}');

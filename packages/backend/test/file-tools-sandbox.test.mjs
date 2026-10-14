@@ -166,3 +166,36 @@ test('directories and missing files give clean errors; odd agent ids get a hashe
   assert.equal(w.error, undefined);
   assert.equal(existsSync(join(dir, 'f.txt')), false);
 });
+
+test('secrets.env, any *.env file and the data folder outside workspaces are denied (INST-02)', async () => {
+  writeFileSync(join(dir, '.data', 'secrets.env'), 'JWT_SECRET=not-a-real-secret\n');
+  writeFileSync(join(dir, '.data', 'instance.json'), '{"secret":"not-a-real-secret"}');
+  mkdirSync(join(dir, '.data', 'logs'), { recursive: true });
+  writeFileSync(join(dir, '.data', 'logs', 'agent-player.log'), 'not-a-real-secret');
+  writeFileSync(join(dir, 'prod.env'), 'X=not-a-real-secret\n');
+  for (const p of ['secrets.env', 'conf/prod.env', 'SECRETS.ENV', 'x.Env']) {
+    const w = await write('e1', p, 'x');
+    assert.ok(w.error, `write ${p} must be denied`);
+    assert.match(w.content[0].text, /denied/i, p);
+  }
+  for (const p of ['.data/secrets.env', '.data/instance.json', '.data/logs/agent-player.log', 'prod.env',
+    '.DATA/Secrets.env', '.Data/LOGS/agent-player.log']) {
+    const r = await read('e1', p, { fileReadRoot: dir });
+    assert.ok(r.error, `read ${p} must be denied`);
+    assert.match(r.content[0].text, /denied/i, p);
+    assert.doesNotMatch(r.content[0].text, /not-a-real-secret/);
+  }
+  // a read root inside .data (but not a workspace) exposes nothing either
+  const r = await read('e1', 'agent-player.log', { fileReadRoot: join(dir, '.data', 'logs') });
+  assert.ok(r.error);
+  // a symlink in the workspace that points into .data is refused
+  await write('e1', 'keep.txt', 'mine');
+  symlinkSync(join(dir, '.data', 'logs', 'agent-player.log'), join(ws('e1'), 'link.log'));
+  assert.ok((await read('e1', 'link.log', { fileReadRoot: dir })).error);
+  // workspaces stay usable, including from a wider read root
+  assert.equal((await read('e1', 'keep.txt')).content[0].text, 'mine');
+  assert.equal((await read('e1', '.data/workspaces/e1/keep.txt', { fileReadRoot: dir })).content[0].text, 'mine');
+  assert.equal(sb.isProtectedDataPath(join(dir, '.data', 'secrets.env')), true);
+  assert.equal(sb.isProtectedDataPath(join(dir, '.data', 'workspaces', 'e1', 'keep.txt')), false);
+  assert.equal(sb.isProtectedDataPath(join(dir, 'outside.txt')), false);
+});
