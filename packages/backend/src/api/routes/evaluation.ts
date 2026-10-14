@@ -6,6 +6,8 @@
  * - View evaluation history
  * - Get detailed scores and metrics
  * - Analyze specific dimensions (reasoning, tools, safety, performance)
+ *
+ * B2.2c: the route's own queries run on the process driver (sql-steps).
  */
 
 import { FastifyInstance } from 'fastify';
@@ -13,11 +15,10 @@ import { evaluateAgent, getEvaluationHistory, getLatestEvaluation } from '../../
 import { getToolUsageSummary } from '../../services/tool-accuracy-analyzer.js';
 import { getSafetyIssuesSummary } from '../../services/safety-analyzer.js';
 import { getPerformanceSummary } from '../../services/performance-analyzer.js';
-import { getDatabase } from '../../db/index.js';
+import { q } from '../../repositories/sql-steps.js';
 import { sendInternalError } from '../error-handler.js';
 
 export default async function evaluationRoutes(fastify: FastifyInstance) {
-    const db = getDatabase();
 
     /**
      * POST /api/evaluation/:agentId/evaluate
@@ -96,13 +97,13 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
         const { agentId } = request.params;
 
         try {
-            const scores = db.prepare(`
+            const scores = await q.all(`
                 SELECT *
                 FROM evaluation_scores
                 WHERE agent_id = ?
                 ORDER BY created_at DESC
                 LIMIT 20
-            `).all(agentId);
+            `, agentId);
 
             return reply.send({ scores });
         } catch (error: any) {
@@ -120,13 +121,13 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
         const { agentId } = request.params;
 
         try {
-            const sessions = db.prepare(`
+            const sessions = await q.all(`
                 SELECT *
                 FROM evaluation_sessions
                 WHERE agent_id = ?
                 ORDER BY created_at DESC
                 LIMIT 20
-            `).all(agentId);
+            `, agentId);
 
             return reply.send({ sessions });
         } catch (error: any) {
@@ -146,13 +147,13 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
         const limit = parseInt(request.query.limit || '20');
 
         try {
-            const scores = db.prepare(`
+            const scores = await q.all(`
                 SELECT *
                 FROM reasoning_scores
                 WHERE agent_id = ?
                 ORDER BY created_at DESC
                 LIMIT ?
-            `).all(agentId, limit);
+            `, agentId, limit);
 
             return reply.send({ scores });
         } catch (error: any) {
@@ -254,29 +255,30 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
     fastify.get('/api/evaluation/overview', async (request, reply) => {
         try {
             // Get all agents
-            const agents = db.prepare(`
+            const agents = await q.all(`
                 SELECT id, name
                 FROM agents_config
-            `).all() as any[];
+            `) as any[];
 
             // Get latest evaluation for each agent
-            const overview = agents.map(agent => {
-                const latestEval = db.prepare(`
+            const overview: any[] = [];
+            for (const agent of agents) {
+                const latestEval = await q.one(`
                     SELECT overall_score, grade, created_at
                     FROM evaluation_scores
                     WHERE agent_id = ?
                     ORDER BY created_at DESC
                     LIMIT 1
-                `).get(agent.id) as any;
+                `, agent.id) as any;
 
-                return {
+                overview.push({
                     agent_id: agent.id,
                     agent_name: agent.name,
                     overall_score: latestEval?.overall_score || null,
                     grade: latestEval?.grade || null,
                     last_evaluated: latestEval?.created_at || null,
-                };
-            });
+                });
+            }
 
             // Sort by score (nulls last)
             overview.sort((a, b) => {

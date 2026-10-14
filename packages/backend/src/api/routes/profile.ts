@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { actorOf } from '../../auth/auth-gate.js';
-import { getDatabase } from '../../db/index.js';
+import { q } from '../../repositories/sql-steps.js';
 import { getUserIdFromRequest as getAuthUserId } from '../../auth/jwt.js';
 import { handleError } from '../error-handler.js';
 import { repositories } from '../../repositories/index.js';
@@ -146,9 +146,7 @@ export async function profileRoutes(fastify: FastifyInstance) {
 
       const picUrl = `/storage/profiles/${filename}`;
 
-      const db = getDatabase();
-      db.prepare(`UPDATE users SET profile_picture_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-        .run(picUrl, userId);
+      await q.run(`UPDATE users SET profile_picture_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, picUrl, userId);
 
       return reply.send({ success: true, url: picUrl });
     } catch (error: any) {
@@ -165,10 +163,8 @@ export async function profileRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      const db = getDatabase();
-
       // Get current picture URL to delete file
-      const user = db.prepare('SELECT profile_picture_url FROM users WHERE id = ?').get(userId) as { profile_picture_url: string | null } | undefined;
+      const user = await q.one('SELECT profile_picture_url FROM users WHERE id = ?', userId) as { profile_picture_url: string | null } | undefined;
 
       // Delete file if exists
       if (user?.profile_picture_url) {
@@ -184,8 +180,7 @@ export async function profileRoutes(fastify: FastifyInstance) {
       }
 
       // Update database
-      db.prepare('UPDATE users SET profile_picture_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-        .run(userId);
+      await q.run('UPDATE users SET profile_picture_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?', userId);
 
       return reply.send({ success: true });
     } catch (error: any) {

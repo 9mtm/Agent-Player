@@ -74,8 +74,12 @@ export interface SetupState {
 }
 
 export interface ReadOnlyStageOptions {
-  /** Current first-run state; any error counts as "complete" (fail closed). */
-  setupState: () => SetupState;
+  /**
+   * Current first-run state; any error or rejection counts as "complete"
+   * (fail closed). B2.2c: may be async (the owner check reads the database
+   * on the process driver).
+   */
+  setupState: () => SetupState | Promise<SetupState>;
 }
 
 export function readOnlyStageEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -89,9 +93,9 @@ export function isSafeRead(method: string, routeUrl: string | undefined): boolea
   return typeof routeUrl === 'string' && SAFE_READ_KEYS.has(`GET ${routeUrl}`);
 }
 
-function safeSetupState(get: () => SetupState): SetupState {
+async function safeSetupState(get: () => SetupState | Promise<SetupState>): Promise<SetupState> {
   try {
-    const s = get();
+    const s = await get();
     return { ownerExists: s.ownerExists === true, setupComplete: s.setupComplete !== false };
   } catch {
     return { ownerExists: true, setupComplete: true };
@@ -145,8 +149,8 @@ function preflightTargetsSafeRead(fastify: FastifyInstance, path: string): boole
   });
 }
 
-/** True when this request may pass the read-only stage. */
-export function readOnlyAllows(request: FastifyRequest, opts: ReadOnlyStageOptions): boolean {
+/** True when this request may pass the read-only stage (async: the setup state may read the database). */
+export async function readOnlyAllows(request: FastifyRequest, opts: ReadOnlyStageOptions): Promise<boolean> {
   const method = request.method.toUpperCase();
   const rawUrl = request.raw.url ?? request.url ?? '';
   const route = request.routeOptions?.url;
@@ -174,7 +178,7 @@ export function readOnlyAllows(request: FastifyRequest, opts: ReadOnlyStageOptio
   if (!route || rawUrl !== route) return false;
   if (ALWAYS_ALLOWED_POSTS.has(route)) return true;
   if (SETUP_POSTS.has(route)) {
-    const state = safeSetupState(opts.setupState);
+    const state = await safeSetupState(opts.setupState);
     if (state.setupComplete) return false;
     return route === '/api/setup/complete' || !state.ownerExists;
   }
@@ -189,7 +193,7 @@ export function readOnlyAllows(request: FastifyRequest, opts: ReadOnlyStageOptio
 export function registerReadOnlyStage(fastify: FastifyInstance, opts: ReadOnlyStageOptions): void {
   if (!readOnlyStageEnabled()) return;
   fastify.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (readOnlyAllows(request, opts)) return;
+    if (await readOnlyAllows(request, opts)) return;
     return reply.code(403).send(READ_ONLY_BODY);
   });
 }

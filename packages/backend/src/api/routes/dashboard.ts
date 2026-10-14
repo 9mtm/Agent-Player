@@ -1,17 +1,18 @@
 /**
  * Dashboard API Routes
  * Manages customizable dashboard layouts and widgets
+ *
+ * B2.2c: every query runs on the process driver (sql-steps); SQLite SQL and
+ * response shapes unchanged. Saving a layout is one transaction.
  */
 
 import type { FastifyInstance } from 'fastify';
-import { getDatabase } from '../../db/index.js';
+import { num, q, run, sql } from '../../repositories/sql-steps.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { randomUUID } from 'crypto';
 import { handleError } from '../error-handler.js';
 
 export async function registerDashboardRoutes(fastify: FastifyInstance) {
-  const db = getDatabase();
-
   // ── Widget Management ──
 
   /**
@@ -19,10 +20,10 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
    * List all available dashboard widgets (system + extensions)
    */
   fastify.get('/api/dashboard/widgets', async (request, reply) => {
-    const widgets = db.prepare(`
+    const widgets = await q.all(`
       SELECT * FROM dashboard_widgets
       ORDER BY category, name
-    `).all();
+    `);
 
     return { widgets };
   });
@@ -34,7 +35,7 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
   fastify.get('/api/dashboard/widgets/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
 
-    const widget = db.prepare('SELECT * FROM dashboard_widgets WHERE id = ?').get(id);
+    const widget = await q.one('SELECT * FROM dashboard_widgets WHERE id = ?', id);
 
     if (!widget) {
       return reply.code(404).send({ error: 'Widget not found' });
@@ -53,12 +54,12 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
     try {
       const userId = getUserIdFromRequest(request);
 
-      const layout = db.prepare(`
+      const layout = await q.one(`
         SELECT * FROM user_dashboard_layouts
         WHERE user_id = ? AND is_active = 1
         ORDER BY updated_at DESC
         LIMIT 1
-      `).get(userId) as { widgets: string } | undefined;
+      `, userId) as { widgets: string } | undefined;
 
       if (!layout) {
         // Return empty layout if none exists
@@ -88,14 +89,14 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ error: 'widgets must be an array' });
       }
 
-      // Deactivate all existing layouts
-      db.prepare('UPDATE user_dashboard_layouts SET is_active = 0 WHERE user_id = ?').run(userId);
-
-      // Create new layout
-      db.prepare(`
+      // One transaction: deactivate all existing layouts, create the new one.
+      await sql().tx(function* () {
+        yield* run('UPDATE user_dashboard_layouts SET is_active = 0 WHERE user_id = ?', userId);
+        yield* run(`
         INSERT INTO user_dashboard_layouts (id, user_id, widgets, is_active)
         VALUES (?, ?, ?, 1)
-      `).run(randomUUID(), userId, JSON.stringify(widgets));
+      `, randomUUID(), userId, JSON.stringify(widgets));
+      });
 
       return { success: true };
     } catch (error: any) {
@@ -115,7 +116,7 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
     try {
       const userId = getUserIdFromRequest(request);
 
-      db.prepare('DELETE FROM user_dashboard_layouts WHERE user_id = ?').run(userId);
+      await q.run('DELETE FROM user_dashboard_layouts WHERE user_id = ?', userId);
 
       return { success: true };
     } catch (error: any) {
@@ -135,11 +136,11 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
    */
   fastify.get('/api/dashboard/widgets/quick-stats', async (request, reply) => {
     // Helper to safely get count from a table
-    const safeCount = (query: string, params?: any): number => {
+    const safeCount = async (query: string, params?: any): Promise<number> => {
       try {
         const result = params
-          ? db.prepare(query).get(params) as { count: number }
-          : db.prepare(query).get() as { count: number };
+          ? await q.one(query, params) as { count: number }
+          : await q.one(query) as { count: number };
         return result?.count || 0;
       } catch (err) {
         // Table might not exist yet
@@ -147,10 +148,10 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
       }
     };
 
-    const tasksCount = safeCount('SELECT COUNT(*) as count FROM tasks');
-    const agentsCount = safeCount('SELECT COUNT(*) as count FROM agents_config');
-    const workflowsCount = safeCount('SELECT COUNT(*) as count FROM workflows');
-    const activeWorkflows = safeCount('SELECT COUNT(*) as count FROM workflow_executions WHERE status = ?', 'running');
+    const tasksCount = await safeCount('SELECT COUNT(*) as count FROM tasks');
+    const agentsCount = await safeCount('SELECT COUNT(*) as count FROM agents_config');
+    const workflowsCount = await safeCount('SELECT COUNT(*) as count FROM workflows');
+    const activeWorkflows = await safeCount('SELECT COUNT(*) as count FROM workflow_executions WHERE status = ?', 'running');
 
     return {
       stats: [
@@ -167,11 +168,11 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
    * Task breakdown by status (pie chart)
    */
   fastify.get('/api/dashboard/widgets/task-overview', async (request, reply) => {
-    const statuses = db.prepare(`
+    const statuses = await q.all(`
       SELECT status, COUNT(*) as count
       FROM tasks
       GROUP BY status
-    `).all() as Array<{ status: string; count: number }>;
+    `) as Array<{ status: string; count: number }>;
 
     return {
       chart: {
@@ -186,14 +187,14 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
    * Agent activity chart (bar chart)
    */
   fastify.get('/api/dashboard/widgets/agent-performance', async (request, reply) => {
-    const agents = db.prepare(`
+    const agents = await q.all(`
       SELECT ac.name, COUNT(aa.id) as activity_count
       FROM agents_config ac
       LEFT JOIN agent_activity aa ON aa.agent_id = ac.id
       GROUP BY ac.id, ac.name
       ORDER BY activity_count DESC
       LIMIT 10
-    `).all() as Array<{ name: string; activity_count: number }>;
+    `) as Array<{ name: string; activity_count: number }>;
 
     return {
       chart: {
@@ -208,11 +209,11 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
    * Storage breakdown by zone (pie chart)
    */
   fastify.get('/api/dashboard/widgets/storage-usage', async (request, reply) => {
-    const zones = db.prepare(`
+    const zones = await q.all(`
       SELECT zone, SUM(size) as total_size
       FROM storage_files
       GROUP BY zone
-    `).all() as Array<{ zone: string; total_size: number }>;
+    `) as Array<{ zone: string; total_size: number }>;
 
     const formatSize = (bytes: number) => {
       if (bytes < 1024) return `${bytes} B`;
@@ -224,9 +225,10 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
     return {
       chart: {
         type: 'pie',
+        // SUM is numeric (text) on PostgreSQL: a number on both drivers.
         data: zones.map(z => ({
-          label: `${z.zone} (${formatSize(z.total_size)})`,
-          value: z.total_size,
+          label: `${z.zone} (${formatSize(num(z.total_size))})`,
+          value: num(z.total_size),
         })),
       },
     };
@@ -237,7 +239,7 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
    * Latest 10 system actions (list)
    */
   fastify.get('/api/dashboard/widgets/recent-activity', async (request, reply) => {
-    const activities = db.prepare(`
+    const activities = await q.all(`
       SELECT
         id,
         agent_id,
@@ -247,7 +249,7 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
       FROM agent_activity
       ORDER BY created_at DESC
       LIMIT 10
-    `).all() as Array<{
+    `) as Array<{
       id: string;
       agent_id: string;
       action_type: string;
@@ -271,7 +273,7 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
    * Active workflows (list)
    */
   fastify.get('/api/dashboard/widgets/workflow-status', async (request, reply) => {
-    const workflows = db.prepare(`
+    const workflows = await q.all(`
       SELECT
         we.id,
         w.name,
@@ -283,7 +285,7 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
       WHERE we.status = 'running'
       ORDER BY we.started_at DESC
       LIMIT 10
-    `).all() as Array<{
+    `) as Array<{
       id: string;
       name: string;
       status: string;
@@ -310,13 +312,13 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
     try {
       const userId = getUserIdFromRequest(request);
 
-      const notifications = db.prepare(`
+      const notifications = await q.all(`
         SELECT id, type, title, message, created_at, is_read
         FROM notifications
         WHERE user_id = ?
         ORDER BY created_at DESC
         LIMIT 5
-      `).all(userId) as Array<{
+      `, userId) as Array<{
         id: string;
         type: string;
         title: string;
@@ -356,7 +358,7 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
       const now = new Date();
       const weekLater = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
-      const events = db.prepare(`
+      const events = await q.all(`
         SELECT
           e.id,
           e.title,
@@ -375,7 +377,7 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
           AND e.status != 'cancelled'
         ORDER BY e.start_time ASC
         LIMIT 10
-      `).all(userId, now.toISOString(), weekLater.toISOString());
+      `, userId, now.toISOString(), weekLater.toISOString());
 
       return {
         events: events.map((e: any) => ({
@@ -405,12 +407,12 @@ export async function registerDashboardRoutes(fastify: FastifyInstance) {
    * Active team members (table)
    */
   fastify.get('/api/dashboard/widgets/team-members', async (request, reply) => {
-    const members = db.prepare(`
+    const members = await q.all(`
       SELECT id, name, email, created_at
       FROM users
       ORDER BY created_at DESC
       LIMIT 10
-    `).all() as Array<{
+    `) as Array<{
       id: string;
       name: string;
       email: string;

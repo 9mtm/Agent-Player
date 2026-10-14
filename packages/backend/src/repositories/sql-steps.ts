@@ -251,3 +251,33 @@ export function sqliteSync<T>(step: Step<T>): T {
   }
   return driveSync(step);
 }
+
+/**
+ * B2.2c: one-statement shorthands on the process driver, for route code
+ * whose queries are independent single statements (each is its own read,
+ * no transaction; check-then-write sequences use sql().tx with steps).
+ */
+export const q = {
+  one<T = any>(text: string, ...params: SqlParam[]): Promise<T | undefined> {
+    return sql().read(one<T>(text, ...params));
+  },
+  all<T = any>(text: string, ...params: SqlParam[]): Promise<T[]> {
+    return sql().read(all<T>(text, ...params));
+  },
+  run(text: string, ...params: SqlParam[]): Promise<{ changes: number }> {
+    return sql().read(run(text, ...params));
+  },
+  /** The process driver's dialect (for the db/pg/dialect.ts helpers). */
+  get dialect(): Dialect {
+    return sql().dialect;
+  },
+};
+
+/**
+ * A SUM / AVG / numeric aggregate as a number: PostgreSQL returns numeric as
+ * text, SQLite a number already. null stays null (SQLite SUM of no rows).
+ */
+export function num<T extends number | null | undefined>(v: unknown): T {
+  if (v === null || v === undefined) return v as T;
+  return (typeof v === 'number' ? v : Number(v)) as T;
+}

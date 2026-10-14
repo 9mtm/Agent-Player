@@ -101,6 +101,11 @@ export const PORTED = [
   'src/telephony/credentials.ts',
   'src/onboarding/web-wizard.ts',
   'src/api/routes/onboarding-web.ts',
+  // B2.2c part 2: raw-SQL routes
+  'src/api/routes/dashboard.ts',
+  'src/api/routes/evaluation.ts',
+  'src/api/routes/profile.ts',
+  'src/api/routes/setup.ts',
 ];
 
 /** Ported modules without SQL of their own (they compose ported services). */
