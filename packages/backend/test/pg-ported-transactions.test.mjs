@@ -106,6 +106,9 @@ export const PORTED = [
   'src/api/routes/evaluation.ts',
   'src/api/routes/profile.ts',
   'src/api/routes/setup.ts',
+  'src/api/routes/worlds.ts',
+  'src/api/routes/world-bots.ts',
+  'src/api/routes/multiverse.ts',
 ];
 
 /** Ported modules without SQL of their own (they compose ported services). */

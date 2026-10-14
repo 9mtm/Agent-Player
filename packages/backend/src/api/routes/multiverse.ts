@@ -1,14 +1,39 @@
 import type { FastifyInstance } from 'fastify';
 import { handleError } from '../error-handler.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
-import { getDatabase } from '../../db/index.js';
+import { dialect, one, q, run, sql, type Step } from '../../repositories/sql-steps.js';
+import { forUpdate, nowText } from '../../db/pg/dialect.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 
-export async function multiverseRoutes(fastify: FastifyInstance) {
-  const db = getDatabase();
+type Outcome<T> = { status: 403 | 404; error: string } | { status: 200; value: T };
 
+/** The world row, locked for the rest of the transaction (PostgreSQL). */
+function* lockedWorld(worldId: string): Step<any> {
+  const d = yield* dialect();
+  return yield* one(`SELECT * FROM user_worlds WHERE id = ?${forUpdate(d)}`, worldId);
+}
+
+const BOT_WITH_AGENT = `
+        SELECT
+          wb.*,
+          a.name as agent_name,
+          a.emoji as agent_emoji,
+          a.avatar_url as agent_avatar_url
+        FROM world_bots wb
+        JOIN agents_config a ON wb.agent_id = a.id
+        WHERE wb.id = ?
+      `;
+
+/**
+ * B2.2c: every query runs on the process driver (sql-steps); user_worlds and
+ * world_bots timestamps are TEXT on both drivers (nowText). Each write checks
+ * the world's owner and writes in one transaction, the world row locked on
+ * PostgreSQL, so an ownership check and its write never interleave with
+ * another request.
+ */
+export async function multiverseRoutes(fastify: FastifyInstance) {
   // ───────────────────────────────────────────────────────────────────────────
   // GET /api/multiverse/system - List system multiverse worlds (public/multiverse/system/)
   // ───────────────────────────────────────────────────────────────────────────
@@ -57,7 +82,7 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
 
       // If requesting public worlds, no auth required
       if (is_public === '1') {
-        const worlds = db.prepare(`
+        const worlds = await q.all(`
           SELECT
             w.*,
             u.full_name as owner_name,
@@ -69,7 +94,7 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
           LEFT JOIN storage_files st ON w.thumbnail_file_id = st.id
           WHERE w.is_public = 1
           ORDER BY w.created_at DESC
-        `).all();
+        `);
 
         return reply.send({ worlds });
       }
@@ -82,7 +107,7 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      const worlds = db.prepare(`
+      const worlds = await q.all(`
         SELECT
           w.*,
           u.full_name as owner_name,
@@ -94,7 +119,7 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         LEFT JOIN storage_files st ON w.thumbnail_file_id = st.id
         WHERE w.user_id = ?
         ORDER BY w.created_at DESC
-      `).all(userId);
+      `, userId);
 
       return reply.send({ worlds });
     } catch (error: any) {
@@ -116,7 +141,7 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         // Allow anonymous access to public worlds
       }
 
-      const world = db.prepare(`
+      const world = await q.one<any>(`
         SELECT
           w.*,
           u.full_name as owner_name,
@@ -127,7 +152,7 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         LEFT JOIN storage_files sf ON w.glb_file_id = sf.id
         LEFT JOIN storage_files st ON w.thumbnail_file_id = st.id
         WHERE w.id = ?
-      `).get(id);
+      `, id);
 
       if (!world) {
         return reply.status(404).send({ error: 'World not found' });
@@ -165,11 +190,12 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
       const id = crypto.randomUUID();
       const spawn = spawn_position || { x: 0, y: 0, z: 0 };
 
-      db.prepare(`
+      const world = await sql().tx(function* () {
+        yield* run(`
         INSERT INTO user_worlds
         (id, user_id, name, description, glb_file_id, thumbnail_file_id, is_public, max_players, spawn_position_x, spawn_position_y, spawn_position_z)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+      `,
         id,
         userId,
         name,
@@ -180,10 +206,9 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         max_players || 1,
         spawn.x,
         spawn.y,
-        spawn.z
-      );
-
-      const world = db.prepare('SELECT * FROM user_worlds WHERE id = ?').get(id);
+        spawn.z);
+        return yield* one('SELECT * FROM user_worlds WHERE id = ?', id);
+      });
       return reply.send({ world });
     } catch (error: any) {
       return handleError(reply, error, 'internal', '[Multiverse] Create world failed');
@@ -204,25 +229,24 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      const world = db.prepare('SELECT * FROM user_worlds WHERE id = ?').get(id);
-      if (!world) {
-        return reply.status(404).send({ error: 'World not found' });
-      }
-
-      if (world.user_id !== userId) {
-        return reply.status(403).send({ error: 'Access denied' });
-      }
-
       const { name, description, is_public, max_players } = request.body as any;
 
-      db.prepare(`
-        UPDATE user_worlds
-        SET name = ?, description = ?, is_public = ?, max_players = ?, updated_at = datetime('now')
-        WHERE id = ?
-      `).run(name || world.name, description, is_public ? 1 : 0, max_players || world.max_players, id);
+      const out = await sql().tx(function* (): Step<Outcome<unknown>> {
+        const d = yield* dialect();
+        const world = yield* lockedWorld(id);
+        if (!world) return { status: 404, error: 'World not found' };
+        if (world.user_id !== userId) return { status: 403, error: 'Access denied' };
 
-      const updated = db.prepare('SELECT * FROM user_worlds WHERE id = ?').get(id);
-      return reply.send({ world: updated });
+        yield* run(`
+        UPDATE user_worlds
+        SET name = ?, description = ?, is_public = ?, max_players = ?, updated_at = ${nowText(d)}
+        WHERE id = ?
+      `, name || world.name, description, is_public ? 1 : 0, max_players || world.max_players, id);
+
+        return { status: 200, value: yield* one('SELECT * FROM user_worlds WHERE id = ?', id) };
+      });
+      if (out.status !== 200) return reply.status(out.status).send({ error: out.error });
+      return reply.send({ world: out.value });
     } catch (error: any) {
       return handleError(reply, error, 'internal', '[Multiverse] Update world failed');
     }
@@ -242,16 +266,14 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      const world = db.prepare('SELECT * FROM user_worlds WHERE id = ?').get(id);
-      if (!world) {
-        return reply.status(404).send({ error: 'World not found' });
-      }
-
-      if (world.user_id !== userId) {
-        return reply.status(403).send({ error: 'Access denied' });
-      }
-
-      db.prepare('DELETE FROM user_worlds WHERE id = ?').run(id);
+      const out = await sql().tx(function* (): Step<Outcome<true>> {
+        const world = yield* lockedWorld(id);
+        if (!world) return { status: 404, error: 'World not found' };
+        if (world.user_id !== userId) return { status: 403, error: 'Access denied' };
+        yield* run('DELETE FROM user_worlds WHERE id = ?', id);
+        return { status: 200, value: true };
+      });
+      if (out.status !== 200) return reply.status(out.status).send({ error: out.error });
       return reply.send({ success: true });
     } catch (error: any) {
       return handleError(reply, error, 'internal', '[Multiverse] Delete world failed');
@@ -269,7 +291,7 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
     try {
       const { worldId } = request.params as { worldId: string };
 
-      const bots = db.prepare(`
+      const bots = await q.all(`
         SELECT
           wb.*,
           a.name as agent_name,
@@ -279,7 +301,7 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         JOIN agents_config a ON wb.agent_id = a.id
         WHERE wb.world_id = ? AND wb.is_active = 1
         ORDER BY wb.created_at ASC
-      `).all(worldId);
+      `, worldId);
 
       return reply.send({ bots });
     } catch (error: any) {
@@ -301,15 +323,6 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      // Verify world ownership
-      const world = db.prepare('SELECT * FROM user_worlds WHERE id = ?').get(worldId);
-      if (!world) {
-        return reply.status(404).send({ error: 'World not found' });
-      }
-      if (world.user_id !== userId) {
-        return reply.status(403).send({ error: 'Access denied' });
-      }
-
       const {
         agent_id,
         position_x,
@@ -322,18 +335,21 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         animation_state
       } = request.body as any;
 
-      if (!agent_id) {
-        return reply.status(400).send({ error: 'Agent ID required' });
-      }
-
       const id = crypto.randomUUID();
 
-      db.prepare(`
+      const out = await sql().tx(function* (): Step<Outcome<unknown> | { status: 400; error: string }> {
+        // Verify world ownership
+        const world = yield* lockedWorld(worldId);
+        if (!world) return { status: 404, error: 'World not found' };
+        if (world.user_id !== userId) return { status: 403, error: 'Access denied' };
+        if (!agent_id) return { status: 400, error: 'Agent ID required' };
+
+        yield* run(`
         INSERT INTO world_bots
         (id, world_id, agent_id, position_x, position_y, position_z, rotation_y,
          behavior_type, patrol_path, movement_speed, animation_state, is_active)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-      `).run(
+      `,
         id,
         worldId,
         agent_id,
@@ -344,19 +360,12 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         behavior_type || 'static',
         patrol_path || null,
         movement_speed || 1.0,
-        animation_state || 'idle'
-      );
+        animation_state || 'idle');
 
-      const bot = db.prepare(`
-        SELECT
-          wb.*,
-          a.name as agent_name,
-          a.emoji as agent_emoji,
-          a.avatar_url as agent_avatar_url
-        FROM world_bots wb
-        JOIN agents_config a ON wb.agent_id = a.id
-        WHERE wb.id = ?
-      `).get(id);
+        return { status: 200, value: yield* one(BOT_WITH_AGENT, id) };
+      });
+      if (out.status !== 200) return reply.status(out.status).send({ error: out.error });
+      const bot = out.value;
 
       return reply.send({ bot });
     } catch (error: any) {
@@ -378,17 +387,6 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      // Verify world ownership
-      const world = db.prepare('SELECT * FROM user_worlds WHERE id = ?').get(worldId);
-      if (!world || world.user_id !== userId) {
-        return reply.status(403).send({ error: 'Access denied' });
-      }
-
-      const bot = db.prepare('SELECT * FROM world_bots WHERE id = ? AND world_id = ?').get(botId, worldId);
-      if (!bot) {
-        return reply.status(404).send({ error: 'Bot not found' });
-      }
-
       const {
         position_x,
         position_y,
@@ -400,13 +398,22 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         animation_state
       } = request.body as any;
 
-      db.prepare(`
+      const out = await sql().tx(function* (): Step<Outcome<unknown>> {
+        const d = yield* dialect();
+        // Verify world ownership
+        const world = yield* lockedWorld(worldId);
+        if (!world || world.user_id !== userId) return { status: 403, error: 'Access denied' };
+
+        const bot = yield* one<any>(`SELECT * FROM world_bots WHERE id = ? AND world_id = ?${forUpdate(d)}`, botId, worldId);
+        if (!bot) return { status: 404, error: 'Bot not found' };
+
+        yield* run(`
         UPDATE world_bots
         SET position_x = ?, position_y = ?, position_z = ?, rotation_y = ?,
             behavior_type = ?, patrol_path = ?, movement_speed = ?, animation_state = ?,
-            updated_at = datetime('now')
+            updated_at = ${nowText(d)}
         WHERE id = ?
-      `).run(
+      `,
         position_x ?? bot.position_x,
         position_y ?? bot.position_y,
         position_z ?? bot.position_z,
@@ -415,19 +422,12 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         patrol_path || bot.patrol_path,
         movement_speed ?? bot.movement_speed,
         animation_state || bot.animation_state,
-        botId
-      );
+        botId);
 
-      const updated = db.prepare(`
-        SELECT
-          wb.*,
-          a.name as agent_name,
-          a.emoji as agent_emoji,
-          a.avatar_url as agent_avatar_url
-        FROM world_bots wb
-        JOIN agents_config a ON wb.agent_id = a.id
-        WHERE wb.id = ?
-      `).get(botId);
+        return { status: 200, value: yield* one(BOT_WITH_AGENT, botId) };
+      });
+      if (out.status !== 200) return reply.status(out.status).send({ error: out.error });
+      const updated = out.value;
 
       return reply.send({ bot: updated });
     } catch (error: any) {
@@ -449,13 +449,14 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      // Verify world ownership
-      const world = db.prepare('SELECT * FROM user_worlds WHERE id = ?').get(worldId);
-      if (!world || world.user_id !== userId) {
-        return reply.status(403).send({ error: 'Access denied' });
-      }
-
-      db.prepare('DELETE FROM world_bots WHERE id = ? AND world_id = ?').run(botId, worldId);
+      const out = await sql().tx(function* (): Step<Outcome<true>> {
+        // Verify world ownership
+        const world = yield* lockedWorld(worldId);
+        if (!world || world.user_id !== userId) return { status: 403, error: 'Access denied' };
+        yield* run('DELETE FROM world_bots WHERE id = ? AND world_id = ?', botId, worldId);
+        return { status: 200, value: true };
+      });
+      if (out.status !== 200) return reply.status(out.status).send({ error: out.error });
       return reply.send({ success: true });
     } catch (error: any) {
       return handleError(reply, error, 'internal', '[Multiverse] Delete bot failed');

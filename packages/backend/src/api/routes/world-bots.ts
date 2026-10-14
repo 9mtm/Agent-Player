@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import { getDatabase } from '../../db/index.js';
+import { dialect, one, q, run, sql, type Step } from '../../repositories/sql-steps.js';
+import { forUpdate, nowText } from '../../db/pg/dialect.js';
 import { randomUUID } from 'crypto';
 import { handleError } from '../error-handler.js';
 
@@ -12,6 +13,32 @@ function getUserIdFromRequest(request: any): string | null {
   return getUserIdFromRequestSafe(request);
 }
 
+const BOT_WITH_AGENT = `
+        SELECT
+          wb.*,
+          a.name as agent_name,
+          a.emoji as agent_emoji,
+          a.avatar_url as agent_avatar_url
+        FROM world_bots wb
+        LEFT JOIN agents_config a ON wb.agent_id = a.id
+        WHERE wb.id = ?
+      `;
+
+type BotOutcome = { status: 404; error: string } | { status: 200; bot?: unknown };
+
+/** The caller's own world, locked for the rest of the transaction (PostgreSQL). */
+function* ownWorldStep(worldId: string, userId: string): Step<boolean> {
+  const d = yield* dialect();
+  return !!(yield* one(`SELECT id FROM user_worlds WHERE id = ? AND user_id = ?${forUpdate(d)}`, worldId, userId));
+}
+
+/**
+ * B2.2c: every query runs on the process driver (sql-steps). world_bots
+ * timestamps are TEXT on both drivers: the update writes nowText (the former
+ * datetime("now") quoted "now" as an identifier, which PostgreSQL refuses).
+ * Create, update and delete check the world's owner and the bot and write in
+ * one transaction, with the world row locked on PostgreSQL.
+ */
 export async function worldBotsRoutes(fastify: FastifyInstance) {
   // ───────────────────────────────────────────────────────────────────────────
   // GET /api/multiverse/:worldId/bots - List all bots in a world
@@ -23,21 +50,20 @@ export async function worldBotsRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      const db = getDatabase();
       const { worldId } = request.params as { worldId: string };
 
       // Check if world exists and user has access (owner or public)
-      const world = db.prepare(`
+      const world = await q.one(`
         SELECT * FROM user_worlds
         WHERE id = ? AND (user_id = ? OR is_public = 1)
-      `).get(worldId, userId);
+      `, worldId, userId);
 
       if (!world) {
         return reply.status(404).send({ error: 'World not found or access denied' });
       }
 
       // Get all bots in the world with agent details
-      const bots = db.prepare(`
+      const bots = await q.all(`
         SELECT
           wb.*,
           a.name as agent_name,
@@ -47,7 +73,7 @@ export async function worldBotsRoutes(fastify: FastifyInstance) {
         LEFT JOIN agents_config a ON wb.agent_id = a.id
         WHERE wb.world_id = ?
         ORDER BY wb.created_at DESC
-      `).all(worldId);
+      `, worldId);
 
       return reply.send({ bots });
     } catch (error: any) {
@@ -66,14 +92,7 @@ export async function worldBotsRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      const db = getDatabase();
       const { worldId } = request.params as { worldId: string };
-
-      // Check ownership
-      const world = db.prepare('SELECT * FROM user_worlds WHERE id = ? AND user_id = ?').get(worldId, userId);
-      if (!world) {
-        return reply.status(404).send({ error: 'World not found or access denied' });
-      }
 
       const body = request.body as any;
       const {
@@ -86,38 +105,29 @@ export async function worldBotsRoutes(fastify: FastifyInstance) {
         is_active = 1
       } = body;
 
-      if (!agent_id) {
-        return reply.status(400).send({ error: 'agent_id is required' });
-      }
-
-      // Check if agent exists
-      const agent = db.prepare('SELECT * FROM agents_config WHERE id = ?').get(agent_id);
-      if (!agent) {
-        return reply.status(404).send({ error: 'Agent not found' });
-      }
-
       const id = randomUUID();
+      const out = await sql().tx(function* (): Step<BotOutcome | { status: 400; error: string }> {
+        // Check ownership
+        if (!(yield* ownWorldStep(worldId, userId))) return { status: 404, error: 'World not found or access denied' };
+        if (!agent_id) return { status: 400, error: 'agent_id is required' };
 
-      db.prepare(`
+        // Check if agent exists
+        const agent = yield* one('SELECT * FROM agents_config WHERE id = ?', agent_id);
+        if (!agent) return { status: 404, error: 'Agent not found' };
+
+        yield* run(`
         INSERT INTO world_bots (
           id, world_id, agent_id, position_x, position_y, position_z,
           rotation_y, animation_url, is_active
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+      `,
         id, worldId, agent_id, position_x, position_y, position_z,
-        rotation_y, animation_url, is_active ? 1 : 0
-      );
+        rotation_y, animation_url ?? null, is_active ? 1 : 0);
 
-      const bot = db.prepare(`
-        SELECT
-          wb.*,
-          a.name as agent_name,
-          a.emoji as agent_emoji,
-          a.avatar_url as agent_avatar_url
-        FROM world_bots wb
-        LEFT JOIN agents_config a ON wb.agent_id = a.id
-        WHERE wb.id = ?
-      `).get(id);
+        return { status: 200, bot: yield* one(BOT_WITH_AGENT, id) };
+      });
+      if (out.status !== 200) return reply.status(out.status).send({ error: out.error });
+      const bot = out.bot;
 
       return reply.send({ bot });
     } catch (error: any) {
@@ -136,20 +146,7 @@ export async function worldBotsRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      const db = getDatabase();
       const { worldId, botId } = request.params as { worldId: string; botId: string };
-
-      // Check ownership of world
-      const world = db.prepare('SELECT * FROM user_worlds WHERE id = ? AND user_id = ?').get(worldId, userId);
-      if (!world) {
-        return reply.status(404).send({ error: 'World not found or access denied' });
-      }
-
-      // Check if bot exists in this world
-      const existing = db.prepare('SELECT * FROM world_bots WHERE id = ? AND world_id = ?').get(botId, worldId);
-      if (!existing) {
-        return reply.status(404).send({ error: 'Bot not found in this world' });
-      }
 
       const body = request.body as any;
       const {
@@ -171,23 +168,26 @@ export async function worldBotsRoutes(fastify: FastifyInstance) {
       if (animation_url !== undefined) { updates.push('animation_url = ?'); values.push(animation_url); }
       if (is_active !== undefined) { updates.push('is_active = ?'); values.push(is_active ? 1 : 0); }
 
-      updates.push('updated_at = datetime("now")');
       values.push(botId);
 
-      if (updates.length > 1) {
-        db.prepare(`UPDATE world_bots SET ${updates.join(', ')} WHERE id = ?`).run(...values);
-      }
+      const out = await sql().tx(function* (): Step<BotOutcome> {
+        const d = yield* dialect();
+        // Check ownership of world
+        if (!(yield* ownWorldStep(worldId, userId))) return { status: 404, error: 'World not found or access denied' };
 
-      const bot = db.prepare(`
-        SELECT
-          wb.*,
-          a.name as agent_name,
-          a.emoji as agent_emoji,
-          a.avatar_url as agent_avatar_url
-        FROM world_bots wb
-        LEFT JOIN agents_config a ON wb.agent_id = a.id
-        WHERE wb.id = ?
-      `).get(botId);
+        // Check if bot exists in this world
+        const existing = yield* one(`SELECT id FROM world_bots WHERE id = ? AND world_id = ?${forUpdate(d)}`, botId, worldId);
+        if (!existing) return { status: 404, error: 'Bot not found in this world' };
+
+        updates.push(`updated_at = ${nowText(d)}`);
+        if (updates.length > 1) {
+          yield* run(`UPDATE world_bots SET ${updates.join(', ')} WHERE id = ?`, ...values);
+        }
+
+        return { status: 200, bot: yield* one(BOT_WITH_AGENT, botId) };
+      });
+      if (out.status !== 200) return reply.status(out.status).send({ error: out.error });
+      const bot = out.bot;
 
       return reply.send({ bot });
     } catch (error: any) {
@@ -206,22 +206,18 @@ export async function worldBotsRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: 'Unauthorized' });
       }
 
-      const db = getDatabase();
       const { worldId, botId } = request.params as { worldId: string; botId: string };
 
-      // Check ownership of world
-      const world = db.prepare('SELECT * FROM user_worlds WHERE id = ? AND user_id = ?').get(worldId, userId);
-      if (!world) {
-        return reply.status(404).send({ error: 'World not found or access denied' });
-      }
+      const out = await sql().tx(function* (): Step<BotOutcome> {
+        // Check ownership of world
+        if (!(yield* ownWorldStep(worldId, userId))) return { status: 404, error: 'World not found or access denied' };
 
-      // Check if bot exists in this world
-      const existing = db.prepare('SELECT * FROM world_bots WHERE id = ? AND world_id = ?').get(botId, worldId);
-      if (!existing) {
-        return reply.status(404).send({ error: 'Bot not found in this world' });
-      }
-
-      db.prepare('DELETE FROM world_bots WHERE id = ?').run(botId);
+        // The bot must be in this world: delete only there (one statement)
+        const res = yield* run('DELETE FROM world_bots WHERE id = ? AND world_id = ?', botId, worldId);
+        if (res.changes === 0) return { status: 404, error: 'Bot not found in this world' };
+        return { status: 200 };
+      });
+      if (out.status !== 200) return reply.status(out.status).send({ error: out.error });
       return reply.send({ success: true });
     } catch (error: any) {
       fastify.log.error('Error deleting world bot:', error);
