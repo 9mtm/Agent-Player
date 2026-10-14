@@ -8,10 +8,23 @@ export * from './monitor.js';
 export * from './health-checker.js';
 
 import { getHeartbeatMonitor, HeartbeatMonitor } from './monitor.js';
+import { config as appConfig } from '../config/index.js';
 import { builtInChecks, getSystemResources } from './health-checker.js';
 import type { HeartbeatConfig, SystemHealth, ComponentRegistration } from './types.js';
 
 let initialized = false;
+
+/**
+ * BUG-04: the server's own /health on the configured HOST and PORT (it used
+ * to be `localhost` and a stale default port). A wildcard bind address is
+ * checked on loopback.
+ */
+export function selfHealthUrl(host: string = appConfig.host, port: number = appConfig.port): string {
+  const h = host.trim();
+  const target = h === '' || h === '0.0.0.0' || h === '::' || h === '[::]' ? '127.0.0.1' : h;
+  const shown = target.includes(':') && !target.startsWith('[') ? `[${target}]` : target;
+  return `http://${shown}:${port}/health`;
+}
 
 /**
  * Initialize the heartbeat system
@@ -45,7 +58,7 @@ function registerBuiltInComponents(monitor: HeartbeatMonitor): void {
     critical: true,
     healthCheck: {
       type: 'http',
-      endpoint: `http://localhost:${process.env.PORT || 3001}/health`,
+      endpoint: selfHealthUrl(),
       expectedStatus: 200,
     },
     thresholds: {
