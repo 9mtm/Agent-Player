@@ -27,6 +27,7 @@ const load_setupCommand = async () => (await import('./commands/setup.js')).setu
 const load_servicePrintCommand = async () => (await import('./commands/service.js')).servicePrintCommand;
 const load_importCommand = async () => (await import('./commands/import.js')).importCommand;
 const load_updateCommand = async () => (await import('./commands/update.js')).updateCommand;
+const load_uninstallCommand = async () => (await import('./commands/uninstall.js')).uninstallCommand;
 
 const program = new Command();
 
@@ -140,6 +141,17 @@ Backups go to packages/backend/.data/backups/update-<time>/ (0700, files 0600) a
 Without --fetch nothing is downloaded.`)
   .action(async (options: { to?: string; fetch?: boolean; stop?: boolean }) => {
     process.exitCode = await (await load_updateCommand())(options);
+  });
+
+program
+  .command('uninstall')
+  .description('Remove the service unit, run/log files, CLI token and built output (dry run unless --apply); data is kept')
+  .option('--dry-run', 'Only list what would be removed (the default)')
+  .option('--apply', 'Really remove the listed items')
+  .option('--delete-data', 'Also delete data (databases, secrets, memories, uploads, backups); asks you to type DELETE MY DATA')
+  .option('--stop', 'Stop a running Agent Player first (with --apply)')
+  .action(async (options: { dryRun?: boolean; apply?: boolean; deleteData?: boolean; stop?: boolean }) => {
+    process.exitCode = await (await load_uninstallCommand())(options);
   });
 
 program
