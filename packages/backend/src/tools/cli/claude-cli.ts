@@ -70,7 +70,7 @@ const ANTHROPIC_KEY_NAMES = ['anthropic_api_key', 'claude_api_key'];
  * No user in the context → nothing is read; never another user's credential.
  */
 export async function getAnthropicKeyForUser(userId: unknown): Promise<string> {
-  const owner = resolveToolUser(userId);
+  const owner = await resolveToolUser(userId);
   if (!owner) return '';
   const manager = getCredentialManager();
   try {

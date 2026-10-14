@@ -9,6 +9,8 @@ import { createExtensionApi } from './sdk.js';
 import { createExtensionRouteGuard } from './extension-route-access.js';
 import { createExtensionErrorSanitizer } from './extension-error-sanitizer.js';
 import { getDatabase } from '../db/index.js';
+import { nowText } from '../db/pg/dialect.js';
+import { q } from '../repositories/sql-steps.js';
 import { readdirSync, existsSync, readFileSync, watch } from 'fs';
 import { resolve, join } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -56,8 +58,6 @@ export class ExtensionRunner {
       console.log('[ExtensionRunner] ℹ️  To re-enable extensions, remove or set EXTENSIONS_DISABLED=false in .env file\n');
       return;
     }
-
-    const db = getDatabase();
 
     // Ensure extensions directory exists
     if (!existsSync(this.extensionsDir)) {
@@ -108,12 +108,8 @@ export class ExtensionRunner {
     const manifest: PluginManifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
     const { id, name, version, main } = manifest;
 
-    const db = getDatabase();
-
-    // Check if enabled
-    const configRow = db
-      .prepare('SELECT enabled FROM extension_configs WHERE extension_id = ?')
-      .get(id) as { enabled: number } | undefined;
+    // Check if enabled (extension_configs is on the process driver, B2.2c)
+    const configRow = await q.one<{ enabled: number }>('SELECT enabled FROM extension_configs WHERE extension_id = ?', id);
 
     const isEnabled = configRow?.enabled === 1;
 
@@ -133,7 +129,8 @@ export class ExtensionRunner {
     const extension: Extension = extensionModule.default || extensionModule;
 
     // Create Extension API (SECURITY: pass extensionPath for path validation - H-04)
-    const api = createExtensionApi(id, fastify, db.getDb(), cronEngine, extensionPath) as any;
+    // The extension SDK still gets the SQLite handle (its own B2.2d slice).
+    const api = createExtensionApi(id, fastify, getDatabase().getDb(), cronEngine, extensionPath) as any;
 
     // Call register() hook
     if (extension.register) {
@@ -170,15 +167,15 @@ export class ExtensionRunner {
    * Enable an extension at runtime (requires restart for routes)
    */
   async enableExtension(extensionId: string) {
-    const db = getDatabase();
-
-    db.prepare(
+    // updated_at is TEXT 'YYYY-MM-DD HH:MM:SS' on both drivers.
+    const now = nowText(q.dialect);
+    await q.run(
       `INSERT INTO extension_configs (extension_id, enabled, updated_at)
-       VALUES (?, 1, datetime('now'))
+       VALUES (?, 1, ${now})
        ON CONFLICT(extension_id) DO UPDATE SET
          enabled = 1,
-         updated_at = datetime('now')`
-    ).run(extensionId);
+         updated_at = ${now}`,
+      extensionId);
 
     console.log(`[ExtensionRunner] ✅ Extension "${extensionId}" enabled (restart required for routes)`);
   }
@@ -187,18 +184,16 @@ export class ExtensionRunner {
    * Disable an extension at runtime
    */
   async disableExtension(extensionId: string) {
-    const db = getDatabase();
-
-    db.prepare(
+    await q.run(
       `UPDATE extension_configs
-       SET enabled = 0, updated_at = datetime('now')
-       WHERE extension_id = ?`
-    ).run(extensionId);
+       SET enabled = 0, updated_at = ${nowText(q.dialect)}
+       WHERE extension_id = ?`,
+      extensionId);
 
     // Call onDisable() hook if extension is loaded
     const extension = this.loadedExtensions.get(extensionId);
     if (extension?.onDisable) {
-      const api = createExtensionApi(extensionId, {} as any, db.getDb(), {} as any, join(this.extensionsDir, extensionId));
+      const api = createExtensionApi(extensionId, {} as any, getDatabase().getDb(), {} as any, join(this.extensionsDir, extensionId));
       await extension.onDisable(api);
     }
 

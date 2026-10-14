@@ -6,21 +6,20 @@
  */
 
 import type { Tool, ToolResult } from '../types.js';
-import { getDatabase } from '../../db/index.js';
+import { q } from '../../repositories/sql-steps.js';
 import { repositories } from '../../repositories/index.js';
 import { toolActor } from '../../repositories/actor.js';
 import { CredentialType } from '../../credentials/types.js';
 
 /**
  * F-06: the tool acts for the real user of the tool execution context only.
- * Returns the id when it belongs to an existing active user, otherwise null
- * (no 'default' or other fallback user).
+ * Resolves the id when it belongs to an existing active user, otherwise null
+ * (no 'default' or other fallback user). Reads users on the process driver
+ * (B2.2d-6: on PostgreSQL the SQLite users table is empty, so this refused).
  */
-export function resolveToolUser(userId: unknown): string | null {
+export async function resolveToolUser(userId: unknown): Promise<string | null> {
   if (typeof userId !== 'string' || userId.trim() === '') return null;
-  const row = getDatabase()
-    .prepare('SELECT status FROM users WHERE id = ?')
-    .get(userId) as { status: string } | undefined;
+  const row = await q.one<{ status: string }>('SELECT status FROM users WHERE id = ?', userId);
   return row && row.status === 'active' ? userId : null;
 }
 
@@ -85,7 +84,7 @@ The credential will be encrypted using AES-256-GCM before storage.`,
 
   async execute(params, context): Promise<ToolResult> {
     const { service, name, value, description } = params;
-    const userId = resolveToolUser(context?.userId);
+    const userId = await resolveToolUser(context?.userId);
     if (!userId) {
       return {
         content: [{ type: 'text', text: '❌ Cannot save the credential: no signed-in user for this request.' }],
