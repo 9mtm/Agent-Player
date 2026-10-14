@@ -111,6 +111,8 @@ export const PORTED = [
   'src/api/routes/multiverse.ts',
   'src/api/routes/extensions.ts',
   'src/api/routes/public-chat.ts',
+  'src/api/routes/telephony.ts',
+  'src/api/routes/avatar.ts',
 ];
 
 /** Ported modules without SQL of their own (they compose ported services). */
@@ -393,5 +395,13 @@ test('B2.2c part 2: with AGENT_PLAYER_DB=postgres webhooks, telephony and the on
     if (saved.db === undefined) delete process.env.AGENT_PLAYER_DB; else process.env.AGENT_PLAYER_DB = saved.db;
     if (saved.url !== undefined) process.env.AGENT_PLAYER_PG_URL = saved.url;
     await closePgPool();
+  }
+});
+
+test('B2.2c part 2: camelCase column aliases are quoted in the ported routes (PostgreSQL folds unquoted names)', () => {
+  for (const rel of ['src/api/routes/telephony.ts', 'src/api/routes/avatar.ts']) {
+    const code = stripComments(readFileSync(join(backend, rel), 'utf8'));
+    // An unquoted SQL alias like `phone_number as phoneNumber` would come back as `phonenumber`.
+    assert.doesNotMatch(code, /\b[a-z_]+\.?[a-z_]* as [a-z]+[A-Z]\w*\b(?!['"])/, rel);
   }
 });

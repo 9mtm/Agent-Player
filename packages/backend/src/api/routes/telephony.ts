@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { handleError } from '../error-handler.js';
-import { getDatabase } from '../../db/index.js';
+import { q, run, one, sql } from '../../repositories/sql-steps.js';
+import { nowText, secondsSinceText } from '../../db/pg/dialect.js';
 import { getTelephonyService } from '../../services/telephony-service.js';
 import {
   handleIncomingCall,
@@ -37,34 +38,33 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
   // GET /api/telephony/numbers - List all purchased phone numbers
   fastify.get('/api/telephony/numbers', async (request, reply) => {
     try {
-      const db = getDatabase();
 
       // Read statistics directly from phone_numbers table (pre-computed)
-      const numbers = db.prepare(`
+      const numbers = await q.all(`
         SELECT
           id,
-          phone_number as phoneNumber,
-          friendly_name as friendlyName,
-          country_code as countryCode,
+          phone_number as "phoneNumber",
+          friendly_name as "friendlyName",
+          country_code as "countryCode",
           capabilities,
           provider,
-          provider_sid as providerSid,
+          provider_sid as "providerSid",
           status,
-          monthly_cost as monthlyCost,
-          purchased_at as purchasedAt,
-          created_at as createdAt,
-          COALESCE(total_calls, 0) as totalCalls,
-          COALESCE(total_inbound_calls, 0) as totalInboundCalls,
-          COALESCE(total_outbound_calls, 0) as totalOutboundCalls,
-          COALESCE(total_duration_seconds, 0) as totalDurationSeconds,
-          COALESCE(total_inbound_duration_seconds, 0) as totalInboundDurationSeconds,
-          COALESCE(total_outbound_duration_seconds, 0) as totalOutboundDurationSeconds,
-          COALESCE(total_cost_spent, 0) as totalCostSpent,
-          last_used_at as lastUsedAt
+          monthly_cost as "monthlyCost",
+          purchased_at as "purchasedAt",
+          created_at as "createdAt",
+          COALESCE(total_calls, 0) as "totalCalls",
+          COALESCE(total_inbound_calls, 0) as "totalInboundCalls",
+          COALESCE(total_outbound_calls, 0) as "totalOutboundCalls",
+          COALESCE(total_duration_seconds, 0) as "totalDurationSeconds",
+          COALESCE(total_inbound_duration_seconds, 0) as "totalInboundDurationSeconds",
+          COALESCE(total_outbound_duration_seconds, 0) as "totalOutboundDurationSeconds",
+          COALESCE(total_cost_spent, 0) as "totalCostSpent",
+          last_used_at as "lastUsedAt"
         FROM phone_numbers
         WHERE status != 'released'
         ORDER BY purchased_at DESC
-      `).all();
+      `);
 
       // Parse JSON fields and map to expected format
       const parsed = numbers.map((n: any) => ({
@@ -164,36 +164,35 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
   // GET /api/telephony/call-points - List all call points
   fastify.get('/api/telephony/call-points', async (request, reply) => {
     try {
-      const db = getDatabase();
-      const callPoints = db.prepare(`
+      const callPoints = await q.all(`
         SELECT
           cp.id, cp.name, cp.description,
-          cp.phone_number_id as phoneNumberId,
-          pn.phone_number as phoneNumber,
-          pn.friendly_name as phoneNumberName,
-          cp.agent_id as agentId,
-          a.name as agentName,
-          cp.workflow_id as workflowId,
-          w.name as workflowName,
-          cp.voice_provider as voiceProvider,
-          cp.voice_id as voiceId,
-          cp.language_preference as languagePreference,
-          cp.greeting_message as greetingMessage,
-          cp.ivr_menu as ivrMenu,
-          cp.max_call_duration as maxCallDuration,
-          cp.record_calls as recordCalls,
-          cp.transcription_provider as transcriptionProvider,
-          cp.business_hours as businessHours,
-          cp.after_hours_message as afterHoursMessage,
-          cp.transfer_number as transferNumber,
+          cp.phone_number_id as "phoneNumberId",
+          pn.phone_number as "phoneNumber",
+          pn.friendly_name as "phoneNumberName",
+          cp.agent_id as "agentId",
+          a.name as "agentName",
+          cp.workflow_id as "workflowId",
+          w.name as "workflowName",
+          cp.voice_provider as "voiceProvider",
+          cp.voice_id as "voiceId",
+          cp.language_preference as "languagePreference",
+          cp.greeting_message as "greetingMessage",
+          cp.ivr_menu as "ivrMenu",
+          cp.max_call_duration as "maxCallDuration",
+          cp.record_calls as "recordCalls",
+          cp.transcription_provider as "transcriptionProvider",
+          cp.business_hours as "businessHours",
+          cp.after_hours_message as "afterHoursMessage",
+          cp.transfer_number as "transferNumber",
           cp.enabled,
-          cp.created_at as createdAt
+          cp.created_at as "createdAt"
         FROM call_points cp
         LEFT JOIN phone_numbers pn ON pn.id = cp.phone_number_id
         LEFT JOIN agents_config a ON a.id = cp.agent_id
         LEFT JOIN workflows w ON w.id = cp.workflow_id
         ORDER BY cp.created_at DESC
-      `).all();
+      `);
 
       // Parse JSON fields
       const parsed = callPoints.map((cp: any) => ({
@@ -234,7 +233,6 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
     };
   }>('/api/telephony/call-points', async (request, reply) => {
     try {
-      const db = getDatabase();
       const id = randomBytes(16).toString('hex');
 
       const {
@@ -261,15 +259,14 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'name and phoneNumberId are required' });
       }
 
-      db.prepare(`
+      await q.run(`
         INSERT INTO call_points (
           id, name, description, phone_number_id, agent_id, workflow_id,
           voice_provider, voice_id, language_preference,
           greeting_message, ivr_menu, max_call_duration, record_calls, transcription_provider,
           business_hours, after_hours_message, transfer_number, enabled
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        id,
+      `, id,
         name,
         description || null,
         phoneNumberId,
@@ -286,8 +283,7 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
         businessHours ? JSON.stringify(businessHours) : null,
         afterHoursMessage || null,
         transferNumber || null,
-        enabled !== false ? 1 : 0
-      );
+        enabled !== false ? 1 : 0);
 
       return reply.send({ success: true, id });
     } catch (error: any) {
@@ -305,7 +301,6 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
       const { id } = request.params;
       const updates = request.body;
 
-      const db = getDatabase();
 
       // Build dynamic UPDATE query
       const fields = [];
@@ -350,12 +345,12 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'No valid fields to update' });
       }
 
-      fields.push('updated_at = datetime(\'now\')');
+      fields.push(`updated_at = ${nowText(q.dialect)}`);
       values.push(id);
 
-      db.prepare(`
+      await q.run(`
         UPDATE call_points SET ${fields.join(', ')} WHERE id = ?
-      `).run(...values);
+      `, ...values);
 
       return reply.send({ success: true });
     } catch (error: any) {
@@ -370,9 +365,8 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const { id } = request.params;
-        const db = getDatabase();
-
-        db.prepare('DELETE FROM call_points WHERE id = ?').run(id);
+  
+        await q.run('DELETE FROM call_points WHERE id = ?', id);
 
         return reply.send({ success: true });
       } catch (error: any) {
@@ -388,17 +382,18 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const { id } = request.params;
-        const db = getDatabase();
-
-        // Toggle enabled status
-        db.prepare(`
+  
+        // Toggle enabled status and read it back (one transaction; the toggle is one statement)
+        const d = q.dialect;
+        const updated = await sql().tx(function* () {
+          yield* run(`
           UPDATE call_points
           SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END,
-              updated_at = datetime('now')
+              updated_at = ${nowText(d)}
           WHERE id = ?
-        `).run(id);
-
-        const updated = db.prepare<any>('SELECT enabled FROM call_points WHERE id = ?').get(id);
+        `, id);
+          return yield* one<any>('SELECT enabled FROM call_points WHERE id = ?', id);
+        });
 
         return reply.send({ success: true, enabled: Boolean(updated?.enabled) });
       } catch (error: any) {
@@ -435,22 +430,21 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
   // GET /api/telephony/calls/active - List active calls
   fastify.get('/api/telephony/calls/active', async (request, reply) => {
     try {
-      const db = getDatabase();
 
-      const activeCalls = db.prepare(`
+      const activeCalls = await q.all(`
         SELECT
-          cs.id, cs.call_sid as callSid, cs.direction, cs.from_number as fromNumber,
-          cs.to_number as toNumber, cs.caller_name as callerName, cs.status,
-          cs.started_at as startedAt,
-          (julianday(datetime('now')) - julianday(cs.started_at)) * 86400 as durationSeconds,
-          cp.name as callPointName,
-          a.name as agentName
+          cs.id, cs.call_sid as "callSid", cs.direction, cs.from_number as "fromNumber",
+          cs.to_number as "toNumber", cs.caller_name as "callerName", cs.status,
+          cs.started_at as "startedAt",
+          ${secondsSinceText(q.dialect, 'cs.started_at')} as "durationSeconds",
+          cp.name as "callPointName",
+          a.name as "agentName"
         FROM call_sessions cs
         LEFT JOIN call_points cp ON cp.id = cs.call_point_id
         LEFT JOIN agents_config a ON a.id = cs.agent_id
         WHERE cs.status IN ('queued', 'ringing', 'in-progress')
         ORDER BY cs.started_at DESC
-      `).all();
+      `);
 
       return reply.send({ success: true, activeCalls });
     } catch (error: any) {
@@ -692,7 +686,6 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
     };
   }>('/api/telephony/sessions', async (request, reply) => {
     try {
-      const db = getDatabase();
       const { direction, status, callPointId, fromDate, toDate, limit = 100, offset = 0 } = request.query;
 
       // Build dynamic WHERE clause
@@ -726,22 +719,22 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
 
       const whereClause = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-      const sessions = db.prepare(`
+      const sessions = await q.all(`
         SELECT
-          cs.id, cs.call_sid as callSid, cs.direction, cs.from_number as fromNumber,
-          cs.to_number as toNumber, cs.caller_name as callerName, cs.status,
-          cs.started_at as startedAt, cs.answered_at as answeredAt, cs.ended_at as endedAt,
-          cs.duration_seconds as durationSeconds, cs.recording_url as recordingUrl,
-          cs.recording_file_id as recordingFileId, cs.conversation_summary as conversationSummary,
-          cp.name as callPointName,
-          a.name as agentName
+          cs.id, cs.call_sid as "callSid", cs.direction, cs.from_number as "fromNumber",
+          cs.to_number as "toNumber", cs.caller_name as "callerName", cs.status,
+          cs.started_at as "startedAt", cs.answered_at as "answeredAt", cs.ended_at as "endedAt",
+          cs.duration_seconds as "durationSeconds", cs.recording_url as "recordingUrl",
+          cs.recording_file_id as "recordingFileId", cs.conversation_summary as "conversationSummary",
+          cp.name as "callPointName",
+          a.name as "agentName"
         FROM call_sessions cs
         LEFT JOIN call_points cp ON cp.id = cs.call_point_id
         LEFT JOIN agents_config a ON a.id = cs.agent_id
         ${whereClause}
         ORDER BY cs.created_at DESC
         LIMIT ? OFFSET ?
-      `).all(...values, limit, offset);
+      `, ...values, limit, offset);
 
       return reply.send({ success: true, sessions, total: sessions.length });
     } catch (error: any) {
@@ -756,32 +749,31 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const { id } = request.params;
-        const db = getDatabase();
-
+  
         // Get session details
-        const session = db.prepare<any>(`
+        const session = await q.one<any>(`
           SELECT
             cs.*,
-            cp.name as callPointName,
-            a.name as agentName
+            cp.name as "callPointName",
+            a.name as "agentName"
           FROM call_sessions cs
           LEFT JOIN call_points cp ON cp.id = cs.call_point_id
           LEFT JOIN agents_config a ON a.id = cs.agent_id
           WHERE cs.id = ?
-        `).get(id);
+        `, id);
 
         if (!session) {
           return reply.status(404).send({ error: 'Session not found' });
         }
 
         // Get call messages (transcript)
-        const messages = db.prepare(`
+        const messages = await q.all(`
           SELECT
-            id, role, content, timestamp, audio_url as audioUrl
+            id, role, content, timestamp, audio_url as "audioUrl"
           FROM call_messages
           WHERE call_session_id = ?
           ORDER BY timestamp ASC
-        `).all(id);
+        `, id);
 
         return reply.send({ success: true, session, messages });
       } catch (error: any) {
@@ -797,13 +789,12 @@ export async function registerTelephonyRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const { id } = request.params;
-        const db = getDatabase();
-
-        // Delete messages first (cascade)
-        db.prepare('DELETE FROM call_messages WHERE call_session_id = ?').run(id);
-
-        // Delete session
-        db.prepare('DELETE FROM call_sessions WHERE id = ?').run(id);
+  
+        // Delete messages first (cascade), then the session: one transaction
+        await sql().tx(function* () {
+          yield* run('DELETE FROM call_messages WHERE call_session_id = ?', id);
+          yield* run('DELETE FROM call_sessions WHERE id = ?', id);
+        });
 
         return reply.send({ success: true });
       } catch (error: any) {

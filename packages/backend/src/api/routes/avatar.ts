@@ -1,6 +1,6 @@
 import { dataPath } from '../../config/data-root.js';
 import type { FastifyInstance } from 'fastify';
-import { getDatabase } from '../../db/index.js';
+import { lockName, one, q, run, sql, type Step } from '../../repositories/sql-steps.js';
 import { getAudioService } from '../../services/audio-service.js';
 import { generateLipsync, isRhubarbAvailable } from '../../services/lipsync-service.js';
 import fs from 'fs';
@@ -15,9 +15,36 @@ import {
   avatarDownloadErrorStatus,
 } from '../../services/net/avatar-download.js';
 
+/** One avatar in the API shape (camelCase aliases quoted: PostgreSQL folds unquoted names). */
+const AVATAR_VIEW_SQL = `
+        SELECT id, user_id as "userId", name, source, glb_url as "glbUrl",
+          local_glb_path as "localGlbPath", preview_url as "previewUrl",
+          bg_color as "bgColor", bg_scene as "bgScene", is_active as "isActive", created_at as "createdAt"
+        FROM user_avatars WHERE id = ?
+      `;
+
+/**
+ * B2.2c: add an avatar in one transaction under the user's avatar lock; it
+ * is activated when it is the user's first (exactly one first avatar, also
+ * for two concurrent adds). Returns the stored avatar.
+ */
+function addAvatar(userId: string, id: string, insert: (isActive: number) => Step<unknown>): Promise<any> {
+  return sql().tx(function* () {
+    yield* lockName(`user_avatars:${userId}`);
+    const existingCount = (yield* one('SELECT COUNT(*) as count FROM user_avatars WHERE user_id = ?', userId)) as { count: number };
+    yield* insert(existingCount.count === 0 ? 1 : 0);
+    return yield* one(AVATAR_VIEW_SQL, id);
+  });
+}
+
 /**
  * Avatar API Routes
  * Handles user avatar settings (Ready Player Me URLs, voice preferences)
+ *
+ * B2.2c: every query runs on the process driver (sql-steps). camelCase
+ * aliases are quoted (PostgreSQL folds unquoted names; SQLite returns the
+ * same names). Adding, activating and deleting avatars, and saving the
+ * settings, are check-then-write transactions under a per-user lock.
  */
 export async function registerAvatarRoutes(fastify: FastifyInstance) {
   fastify.log.info('[Avatar API] ✅ Routes registered');
@@ -43,7 +70,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
     const url = request.routeOptions.url || '';
     if (url.startsWith('/api/avatars/:id') && authUser.role !== 'owner') {
       const id = (request.params as any)?.id;
-      const row = getDatabase().prepare('SELECT user_id FROM user_avatars WHERE id = ?').get(id) as { user_id: string } | undefined;
+      const row = await q.one('SELECT user_id FROM user_avatars WHERE id = ?', id) as { user_id: string } | undefined;
       if (row && String(row.user_id) !== uid) {
         return reply.status(404).send({ error: 'Avatar not found' });
       }
@@ -62,27 +89,26 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       }
 
       // Get settings from database
-      const db = getDatabase();
-      const settings = db.prepare(`
+      const settings = await q.one(`
         SELECT
           id,
-          user_id as userId,
-          rpm_avatar_url as rpmAvatarUrl,
-          voice_provider as voiceProvider,
-          voice_id as voiceId,
-          language_preference as languagePreference,
-          bg_color as bgColor,
-          bg_scene as bgScene,
-          wall_text as wallText,
-          wall_logo_url as wallLogoUrl,
-          wall_video_url as wallVideoUrl,
-          wall_spotify_url as wallSpotifyUrl,
-          wall_layout as wallLayout,
-          created_at as createdAt,
-          updated_at as updatedAt
+          user_id as "userId",
+          rpm_avatar_url as "rpmAvatarUrl",
+          voice_provider as "voiceProvider",
+          voice_id as "voiceId",
+          language_preference as "languagePreference",
+          bg_color as "bgColor",
+          bg_scene as "bgScene",
+          wall_text as "wallText",
+          wall_logo_url as "wallLogoUrl",
+          wall_video_url as "wallVideoUrl",
+          wall_spotify_url as "wallSpotifyUrl",
+          wall_layout as "wallLayout",
+          created_at as "createdAt",
+          updated_at as "updatedAt"
         FROM avatar_settings
         WHERE user_id = ?
-      `).get(userId);
+      `, userId);
 
       if (!settings) {
         // Return default settings if not found
@@ -140,9 +166,11 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'userId is required' });
       }
 
+      // Check-then-write in one transaction under a per-user lock (no duplicate row).
+      await sql().tx(function* () {
+      yield* lockName(`avatar_settings:${userId}`);
       // Check if settings exist
-      const db = getDatabase();
-      const existing = db.prepare('SELECT id FROM avatar_settings WHERE user_id = ?').get(userId);
+      const existing = yield* one('SELECT id FROM avatar_settings WHERE user_id = ?', userId);
 
       if (existing) {
         // Update existing settings
@@ -198,15 +226,15 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
           updates.push('updated_at = CURRENT_TIMESTAMP');
           values.push(userId);
 
-          db.prepare(`
+          yield* run(`
             UPDATE avatar_settings
             SET ${updates.join(', ')}
             WHERE user_id = ?
-          `).run(...values);
+          `, ...values);
         }
       } else {
         // Insert new settings
-        db.prepare(`
+        yield* run(`
           INSERT INTO avatar_settings (
             user_id,
             rpm_avatar_url,
@@ -221,8 +249,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
             wall_spotify_url,
             wall_layout
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          userId,
+        `, userId,
           rpmAvatarUrl || null,
           voiceProvider || 'openai',
           voiceId || 'alloy',
@@ -233,31 +260,31 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
           wallLogoUrl || '',
           wallVideoUrl || '',
           wallSpotifyUrl || '',
-          wallLayout || '{}'
-        );
+          wallLayout || '{}');
       }
+      });
 
       // Return updated settings
-      const settings = db.prepare(`
+      const settings = await q.one(`
         SELECT
           id,
-          user_id as userId,
-          rpm_avatar_url as rpmAvatarUrl,
-          voice_provider as voiceProvider,
-          voice_id as voiceId,
-          language_preference as languagePreference,
-          bg_color as bgColor,
-          bg_scene as bgScene,
-          wall_text as wallText,
-          wall_logo_url as wallLogoUrl,
-          wall_video_url as wallVideoUrl,
-          wall_spotify_url as wallSpotifyUrl,
-          wall_layout as wallLayout,
-          created_at as createdAt,
-          updated_at as updatedAt
+          user_id as "userId",
+          rpm_avatar_url as "rpmAvatarUrl",
+          voice_provider as "voiceProvider",
+          voice_id as "voiceId",
+          language_preference as "languagePreference",
+          bg_color as "bgColor",
+          bg_scene as "bgScene",
+          wall_text as "wallText",
+          wall_logo_url as "wallLogoUrl",
+          wall_video_url as "wallVideoUrl",
+          wall_spotify_url as "wallSpotifyUrl",
+          wall_layout as "wallLayout",
+          created_at as "createdAt",
+          updated_at as "updatedAt"
         FROM avatar_settings
         WHERE user_id = ?
-      `).get(userId);
+      `, userId);
 
       return reply.send({
         success: true,
@@ -532,36 +559,39 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       const { userId } = request.query;
       if (!userId) return reply.status(400).send({ error: 'userId is required' });
 
-      const db = getDatabase();
 
-      // Auto-import existing rpm_avatar_url if no avatars yet
-      const existing = db.prepare('SELECT COUNT(*) as cnt FROM user_avatars WHERE user_id = ?').get(userId) as { cnt: number };
-      if (existing.cnt === 0) {
-        const settings = db.prepare('SELECT rpm_avatar_url FROM avatar_settings WHERE user_id = ?').get(userId) as { rpm_avatar_url: string | null } | undefined;
-        if (settings?.rpm_avatar_url) {
-          db.prepare(`
+      // Auto-import existing rpm_avatar_url if no avatars yet (one transaction
+      // under the user's avatar lock: two first visits never import twice)
+      await sql().tx(function* () {
+        yield* lockName(`user_avatars:${userId}`);
+        const existing = (yield* one('SELECT COUNT(*) as cnt FROM user_avatars WHERE user_id = ?', userId)) as { cnt: number };
+        if (existing.cnt === 0) {
+          const settings = (yield* one('SELECT rpm_avatar_url FROM avatar_settings WHERE user_id = ?', userId)) as { rpm_avatar_url: string | null } | undefined;
+          if (settings?.rpm_avatar_url) {
+            yield* run(`
             INSERT INTO user_avatars (user_id, name, source, glb_url, is_active)
             VALUES (?, 'My Avatar', 'rpm', ?, 1)
-          `).run(userId, settings.rpm_avatar_url);
+          `, userId, settings.rpm_avatar_url);
+          }
         }
-      }
+      });
 
-      const avatars = db.prepare(`
+      const avatars = await q.all(`
         SELECT
-          id, user_id as userId, name, source,
-          glb_url as glbUrl, local_glb_path as localGlbPath,
-          preview_url as previewUrl, bg_color as bgColor, bg_scene as bgScene,
-          is_active as isActive, created_at as createdAt
+          id, user_id as "userId", name, source,
+          glb_url as "glbUrl", local_glb_path as "localGlbPath",
+          preview_url as "previewUrl", bg_color as "bgColor", bg_scene as "bgScene",
+          is_active as "isActive", created_at as "createdAt"
         FROM user_avatars
         WHERE user_id = ?
         ORDER BY is_active DESC, created_at ASC
-      `).all(userId);
+      `, userId);
 
       // Sync active avatar to users.avatar_url for profile API
       const activeAvatar = avatars.find((a: any) => a.isActive);
       if (activeAvatar) {
         const effectiveUrl = activeAvatar.localGlbPath || activeAvatar.glbUrl;
-        db.prepare('UPDATE users SET avatar_url = ? WHERE id = ?').run(effectiveUrl, userId);
+        await q.run('UPDATE users SET avatar_url = ? WHERE id = ?', effectiveUrl, userId);
       }
 
       return reply.send({ success: true, avatars });
@@ -581,33 +611,35 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       if (!userId) return reply.status(400).send({ error: 'userId is required' });
       if (!glbUrl && source !== 'upload') return reply.status(400).send({ error: 'glbUrl is required' });
 
-      const db = getDatabase();
       const id = randomBytes(8).toString('hex');
 
-      // Auto-activate if this is the user's first avatar
-      const existingCount = db.prepare('SELECT COUNT(*) as count FROM user_avatars WHERE user_id = ?').get(userId) as { count: number };
-      const isActive = existingCount.count === 0 ? 1 : 0;
+      // One transaction under the user's avatar lock: the first avatar is
+      // activated exactly once even when two are added at the same time.
+      const avatar = await sql().tx(function* () {
+        yield* lockName(`user_avatars:${userId}`);
+        // Auto-activate if this is the user's first avatar
+        const existingCount = (yield* one('SELECT COUNT(*) as count FROM user_avatars WHERE user_id = ?', userId)) as { count: number };
+        const isActive = existingCount.count === 0 ? 1 : 0;
 
-      db.prepare(`
+        yield* run(`
         INSERT INTO user_avatars (id, user_id, name, source, glb_url, preview_url, bg_color, bg_scene, is_active)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        id, userId,
-        name || 'New Avatar',
-        source || 'url',
-        glbUrl || null,
-        previewUrl || null,
-        bgColor || '#0a0a0a',
-        bgScene || 'none',
-        isActive
-      );
+      `, id, userId,
+          name || 'New Avatar',
+          source || 'url',
+          glbUrl || null,
+          previewUrl || null,
+          bgColor || '#0a0a0a',
+          bgScene || 'none',
+          isActive);
 
-      const avatar = db.prepare(`
-        SELECT id, user_id as userId, name, source, glb_url as glbUrl,
-          local_glb_path as localGlbPath, preview_url as previewUrl,
-          bg_color as bgColor, bg_scene as bgScene, is_active as isActive, created_at as createdAt
+        return yield* one(`
+        SELECT id, user_id as "userId", name, source, glb_url as "glbUrl",
+          local_glb_path as "localGlbPath", preview_url as "previewUrl",
+          bg_color as "bgColor", bg_scene as "bgScene", is_active as "isActive", created_at as "createdAt"
         FROM user_avatars WHERE id = ?
-      `).get(id);
+      `, id);
+      });
 
       return reply.send({ success: true, avatar });
     } catch (error: any) {
@@ -626,7 +658,6 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       const { id } = request.params;
       const { name, bgColor, bgScene } = request.body;
 
-      const db = getDatabase();
       const updates: string[] = [];
       const values: any[] = [];
 
@@ -637,7 +668,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       if (updates.length === 0) return reply.send({ success: true });
 
       values.push(id);
-      db.prepare(`UPDATE user_avatars SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+      await q.run(`UPDATE user_avatars SET ${updates.join(', ')} WHERE id = ?`, ...values);
 
       return reply.send({ success: true });
     } catch (error: any) {
@@ -657,32 +688,37 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       const { userId } = request.body;
       if (!userId) return reply.status(400).send({ error: 'userId is required' });
 
-      const db = getDatabase();
 
-      // Deactivate all for this user, then activate the selected one
-      db.prepare('UPDATE user_avatars SET is_active = 0 WHERE user_id = ?').run(userId);
-      db.prepare('UPDATE user_avatars SET is_active = 1 WHERE id = ? AND user_id = ?').run(id, userId);
+      // One transaction under the user's avatar locks: exactly one active
+      // avatar, and the settings / profile copies follow it.
+      await sql().tx(function* () {
+        yield* lockName(`user_avatars:${userId}`);
+        yield* lockName(`avatar_settings:${userId}`);
+        // Deactivate all for this user, then activate the selected one
+        yield* run('UPDATE user_avatars SET is_active = 0 WHERE user_id = ?', userId);
+        yield* run('UPDATE user_avatars SET is_active = 1 WHERE id = ? AND user_id = ?', id, userId);
 
-      // Sync to avatar_settings AND users table for backward compat + profile API
-      const avatar = db.prepare(`
-        SELECT glb_url as glbUrl, local_glb_path as localGlbPath
+        // Sync to avatar_settings AND users table for backward compat + profile API
+        const avatar = (yield* one(`
+        SELECT glb_url as "glbUrl", local_glb_path as "localGlbPath"
         FROM user_avatars WHERE id = ?
-      `).get(id) as { glbUrl: string | null; localGlbPath: string | null } | undefined;
+      `, id)) as { glbUrl: string | null; localGlbPath: string | null } | undefined;
 
-      if (avatar) {
-        const effectiveUrl = avatar.localGlbPath || avatar.glbUrl;
+        if (avatar) {
+          const effectiveUrl = avatar.localGlbPath || avatar.glbUrl;
 
-        // Update avatar_settings (for avatar viewer)
-        const hasSettings = db.prepare('SELECT id FROM avatar_settings WHERE user_id = ?').get(userId);
-        if (hasSettings) {
-          db.prepare('UPDATE avatar_settings SET rpm_avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?').run(effectiveUrl, userId);
-        } else {
-          db.prepare('INSERT INTO avatar_settings (user_id, rpm_avatar_url) VALUES (?, ?)').run(userId, effectiveUrl);
+          // Update avatar_settings (for avatar viewer)
+          const hasSettings = yield* one('SELECT id FROM avatar_settings WHERE user_id = ?', userId);
+          if (hasSettings) {
+            yield* run('UPDATE avatar_settings SET rpm_avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?', effectiveUrl, userId);
+          } else {
+            yield* run('INSERT INTO avatar_settings (user_id, rpm_avatar_url) VALUES (?, ?)', userId, effectiveUrl);
+          }
+
+          // Update users.avatar_url (for profile API + World Builder)
+          yield* run('UPDATE users SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', effectiveUrl, userId);
         }
-
-        // Update users.avatar_url (for profile API + World Builder)
-        db.prepare('UPDATE users SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(effectiveUrl, userId);
-      }
+      });
 
       return reply.send({ success: true });
     } catch (error: any) {
@@ -702,37 +738,43 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       const { userId } = request.query;
       if (!userId) return reply.status(400).send({ error: 'userId is required' });
 
-      const db = getDatabase();
-      const avatar = db.prepare(`
-        SELECT source, local_glb_path as localGlbPath, is_active as isActive
+      // The row delete and the hand-over of the active avatar: one
+      // transaction under the user's avatar lock.
+      const avatar = await sql().tx(function* () {
+        yield* lockName(`user_avatars:${userId}`);
+        const row = (yield* one(`
+        SELECT source, local_glb_path as "localGlbPath", is_active as "isActive"
         FROM user_avatars WHERE id = ? AND user_id = ?
-      `).get(id, userId) as { source: string; localGlbPath: string | null; isActive: number } | undefined;
+      `, id, userId)) as { source: string; localGlbPath: string | null; isActive: number } | undefined;
+        if (!row) return undefined;
+
+        yield* run('DELETE FROM user_avatars WHERE id = ? AND user_id = ?', id, userId);
+
+        // If deleted avatar was active, activate the first remaining one
+        if (row.isActive) {
+          const next = (yield* one('SELECT id, glb_url as "glbUrl", local_glb_path as "localGlbPath" FROM user_avatars WHERE user_id = ? LIMIT 1', userId)) as any;
+          if (next) {
+            yield* run('UPDATE user_avatars SET is_active = 1 WHERE id = ?', next.id);
+            const url = next.localGlbPath || next.glbUrl;
+            yield* run('UPDATE avatar_settings SET rpm_avatar_url = ? WHERE user_id = ?', url, userId);
+            yield* run('UPDATE users SET avatar_url = ? WHERE id = ?', url, userId);
+          } else {
+            // No avatars left - clear the users.avatar_url
+            yield* run('UPDATE users SET avatar_url = NULL WHERE id = ?', userId);
+          }
+        }
+        return row;
+      });
 
       if (!avatar) return reply.status(404).send({ error: 'Avatar not found' });
 
-      // Delete uploaded file if exists
+      // Delete uploaded file if exists (after the row is gone)
       if (avatar.localGlbPath) {
         const absPath = uploadPathFromUrl(avatar.localGlbPath);
         const avatarDir = absPath ? path.dirname(absPath) : null;
         try {
           if (avatarDir && fs.existsSync(avatarDir)) fs.rmSync(avatarDir, { recursive: true, force: true });
         } catch {}
-      }
-
-      db.prepare('DELETE FROM user_avatars WHERE id = ? AND user_id = ?').run(id, userId);
-
-      // If deleted avatar was active, activate the first remaining one
-      if (avatar.isActive) {
-        const next = db.prepare('SELECT id, glb_url as glbUrl, local_glb_path as localGlbPath FROM user_avatars WHERE user_id = ? LIMIT 1').get(userId) as any;
-        if (next) {
-          db.prepare('UPDATE user_avatars SET is_active = 1 WHERE id = ?').run(next.id);
-          const url = next.localGlbPath || next.glbUrl;
-          db.prepare('UPDATE avatar_settings SET rpm_avatar_url = ? WHERE user_id = ?').run(url, userId);
-          db.prepare('UPDATE users SET avatar_url = ? WHERE id = ?').run(url, userId);
-        } else {
-          // No avatars left - clear the users.avatar_url
-          db.prepare('UPDATE users SET avatar_url = NULL WHERE id = ?').run(userId);
-        }
       }
 
       return reply.send({ success: true });
@@ -768,22 +810,11 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
 
       const localModelPath = `/storage/avatars/user/${userId}/${id}/${modelFilename}`;
 
-      const db = getDatabase();
-      // Auto-activate if this is the user's first avatar
-      const existingCount = db.prepare('SELECT COUNT(*) as count FROM user_avatars WHERE user_id = ?').get(userId) as { count: number };
-      const isActive = existingCount.count === 0 ? 1 : 0;
-
-      db.prepare(`
+      // Auto-activate if this is the user's first avatar (one transaction, avatar lock)
+      const avatar = await addAvatar(userId, id, (isActive) => run(`
         INSERT INTO user_avatars (id, user_id, name, source, local_glb_path, is_active)
         VALUES (?, ?, ?, 'upload', ?, ?)
-      `).run(id, userId, name || data.filename || 'Uploaded Avatar', localModelPath, isActive);
-
-      const avatar = db.prepare(`
-        SELECT id, user_id as userId, name, source, glb_url as glbUrl,
-          local_glb_path as localGlbPath, preview_url as previewUrl,
-          bg_color as bgColor, bg_scene as bgScene, is_active as isActive, created_at as createdAt
-        FROM user_avatars WHERE id = ?
-      `).get(id);
+      `, id, userId, name || data.filename || 'Uploaded Avatar', localModelPath, isActive));
 
       fastify.log.info(`[Avatar] Model uploaded: ${localModelPath}`);
       return reply.send({ success: true, avatar });
@@ -797,12 +828,11 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { id: string } }>('/api/avatars/:id/preview', async (request, reply) => {
     try {
       const { id } = request.params;
-      const db = getDatabase();
 
-      const avatar = db.prepare(`
-        SELECT id, user_id as userId, local_glb_path as localGlbPath
+      const avatar = await q.one(`
+        SELECT id, user_id as "userId", local_glb_path as "localGlbPath"
         FROM user_avatars WHERE id = ?
-      `).get(id) as { id: string; userId: string; localGlbPath: string | null } | undefined;
+      `, id) as { id: string; userId: string; localGlbPath: string | null } | undefined;
 
       if (!avatar) return reply.status(404).send({ error: 'Avatar not found' });
 
@@ -819,7 +849,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
 
       const previewUrl = `/storage/avatars/user/${avatar.userId}/${id}/preview.png`;
 
-      db.prepare('UPDATE user_avatars SET preview_url = ? WHERE id = ?').run(previewUrl, id);
+      await q.run('UPDATE user_avatars SET preview_url = ? WHERE id = ?', previewUrl, id);
 
       fastify.log.info(`[Avatar] Preview saved: ${previewUrl}`);
       return reply.send({ success: true, previewUrl });
@@ -833,12 +863,11 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { id: string } }>('/api/avatars/:id/localize', async (request, reply) => {
     try {
       const { id } = request.params;
-      const db = getDatabase();
 
-      const avatar = db.prepare(`
-        SELECT id, user_id as userId, glb_url as glbUrl, local_glb_path as localGlbPath
+      const avatar = await q.one(`
+        SELECT id, user_id as "userId", glb_url as "glbUrl", local_glb_path as "localGlbPath"
         FROM user_avatars WHERE id = ?
-      `).get(id) as { id: string; userId: string; glbUrl: string | null; localGlbPath: string | null } | undefined;
+      `, id) as { id: string; userId: string; glbUrl: string | null; localGlbPath: string | null } | undefined;
 
       if (!avatar) return reply.status(404).send({ error: 'Avatar not found' });
       if (avatar.localGlbPath) return reply.send({ success: true, message: 'Already local' });
@@ -860,16 +889,12 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
         localPreviewUrl = `/storage/avatars/user/${avatar.userId}/${id}/preview.png`;
       }
 
-      db.prepare(`
+      const updated = await sql().tx(function* () {
+        yield* run(`
         UPDATE user_avatars SET local_glb_path = ?, preview_url = COALESCE(?, preview_url) WHERE id = ?
-      `).run(localGlbPath, localPreviewUrl, id);
-
-      const updated = db.prepare(`
-        SELECT id, user_id as userId, name, source, glb_url as glbUrl,
-          local_glb_path as localGlbPath, preview_url as previewUrl,
-          bg_color as bgColor, bg_scene as bgScene, is_active as isActive, created_at as createdAt
-        FROM user_avatars WHERE id = ?
-      `).get(id);
+      `, localGlbPath, localPreviewUrl, id);
+        return yield* one(AVATAR_VIEW_SQL, id);
+      });
 
       fastify.log.info(`[Avatar] Localized: ${localGlbPath}`);
       return reply.send({ success: true, avatar: updated });
@@ -912,22 +937,11 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
         localPreviewUrl = `/storage/avatars/user/${userId}/${id}/preview.png`;
       }
 
-      const db = getDatabase();
-      // Auto-activate if this is the user's first avatar
-      const existingCount = db.prepare('SELECT COUNT(*) as count FROM user_avatars WHERE user_id = ?').get(userId) as { count: number };
-      const isActive = existingCount.count === 0 ? 1 : 0;
-
-      db.prepare(`
+      // Auto-activate if this is the user's first avatar (one transaction, avatar lock)
+      const avatar = await addAvatar(userId, id, (isActive) => run(`
         INSERT INTO user_avatars (id, user_id, name, source, local_glb_path, preview_url, is_active)
         VALUES (?, ?, ?, 'url', ?, ?, ?)
-      `).run(id, userId, name || 'Downloaded Avatar', localGlbPath, localPreviewUrl, isActive);
-
-      const avatar = db.prepare(`
-        SELECT id, user_id as userId, name, source, glb_url as glbUrl,
-          local_glb_path as localGlbPath, preview_url as previewUrl,
-          bg_color as bgColor, bg_scene as bgScene, is_active as isActive, created_at as createdAt
-        FROM user_avatars WHERE id = ?
-      `).get(id);
+      `, id, userId, name || 'Downloaded Avatar', localGlbPath, localPreviewUrl, isActive));
 
       fastify.log.info(`[Avatar] Downloaded: ${localGlbPath}`);
       return reply.send({ success: true, avatar });
@@ -944,13 +958,12 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { id: string } }>('/api/avatars/:id', async (request, reply) => {
     try {
       const { id } = request.params;
-      const db = getDatabase();
-      const avatar = db.prepare(`
-        SELECT id, user_id as userId, name, source, glb_url as glbUrl,
-          local_glb_path as localGlbPath, preview_url as previewUrl,
-          bg_color as bgColor, bg_scene as bgScene, is_active as isActive, created_at as createdAt
+      const avatar = await q.one(`
+        SELECT id, user_id as "userId", name, source, glb_url as "glbUrl",
+          local_glb_path as "localGlbPath", preview_url as "previewUrl",
+          bg_color as "bgColor", bg_scene as "bgScene", is_active as "isActive", created_at as "createdAt"
         FROM user_avatars WHERE id = ?
-      `).get(id);
+      `, id);
       if (!avatar) return reply.status(404).send({ error: 'Avatar not found' });
       return reply.send({ success: true, avatar });
     } catch (error: any) {
@@ -1027,25 +1040,23 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
         const localPath = `/storage/animations/user/${userId}/${id}/${animFilename}`;
         const format = ext === '.fbx' ? 'fbx' : 'glb';
 
-        const db = getDatabase();
-        db.prepare(`
+        const animation = await sql().tx(function* () {
+          yield* run(`
           INSERT INTO user_animations (id, user_id, name, filename, format, category, local_path, file_size)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          id, userId,
+        `, id, userId,
           name || data.filename?.replace(/\.(fbx|glb)$/i, '') || 'Custom Animation',
           data.filename || animFilename,
           format,
           category || 'custom',
           localPath,
-          buffer.length
-        );
-
-        const animation = db.prepare(`
-          SELECT id, user_id as userId, name, filename, format, category,
-            local_path as localPath, file_size as fileSize, created_at as createdAt
+          buffer.length);
+          return yield* one(`
+          SELECT id, user_id as "userId", name, filename, format, category,
+            local_path as "localPath", file_size as "fileSize", created_at as "createdAt"
           FROM user_animations WHERE id = ?
-        `).get(id);
+        `, id);
+        });
 
         fastify.log.info(`[Animation] Uploaded: ${localPath} (${format})`);
         return reply.send({ success: true, animation });
@@ -1062,14 +1073,13 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
       const { userId } = request.query;
       if (!userId) return reply.status(400).send({ error: 'userId is required' });
 
-      const db = getDatabase();
-      const animations = db.prepare(`
-        SELECT id, user_id as userId, name, filename, format, category,
-          local_path as localPath, file_size as fileSize, created_at as createdAt
+      const animations = await q.all(`
+        SELECT id, user_id as "userId", name, filename, format, category,
+          local_path as "localPath", file_size as "fileSize", created_at as "createdAt"
         FROM user_animations
         WHERE user_id = ?
         ORDER BY created_at DESC
-      `).all(userId);
+      `, userId);
 
       return reply.send({ success: true, animations });
     } catch (error: any) {
@@ -1087,10 +1097,9 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
         const { userId } = request.query;
         if (!userId) return reply.status(400).send({ error: 'userId is required' });
 
-        const db = getDatabase();
-        const anim = db.prepare(
-          'SELECT local_path as localPath FROM user_animations WHERE id = ? AND user_id = ?'
-        ).get(id, userId) as { localPath: string } | undefined;
+          const anim = await q.one(
+          'SELECT local_path as "localPath" FROM user_animations WHERE id = ? AND user_id = ?'
+        , id, userId) as { localPath: string } | undefined;
 
         if (!anim) return reply.status(404).send({ error: 'Animation not found' });
 
@@ -1101,7 +1110,7 @@ export async function registerAvatarRoutes(fastify: FastifyInstance) {
           if (absDir && fs.existsSync(absDir)) fs.rmSync(absDir, { recursive: true, force: true });
         } catch { /* ignore cleanup errors */ }
 
-        db.prepare('DELETE FROM user_animations WHERE id = ? AND user_id = ?').run(id, userId);
+        await q.run('DELETE FROM user_animations WHERE id = ? AND user_id = ?', id, userId);
 
         fastify.log.info(`[Animation] Deleted: ${anim.localPath}`);
         return reply.send({ success: true });
