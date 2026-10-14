@@ -15,41 +15,23 @@
  * run's cost (R2).
  *
  * Gate: 'user' tier (guests refused) for the first three, 'owner' for resolve
- * (tier rule + config.access); handlers check the role/ownership again.
+ * and review (tier rule + config.access). B1-core: the scope (own runs vs
+ * owner-wide, owner-only decisions) is enforced by the task runs repository
+ * (repositories/task-runs.ts) with the request's actor.
  */
 
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { actorOf } from '../../auth/auth-gate.js';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { logAudit } from '../../services/audit-logger.js';
-import {
-  RunStateError,
-  cancelRun,
-  getRun,
-  getSteps,
-  listRuns,
-  resolveUncertainStep,
-  runDetailView,
-  runView,
-  stepView,
-  type TaskRunRow,
-} from '../../services/task-runs.js';
-import { applyRunReview } from '../../services/task-run-executor.js';
+import { RunStateError, runView, stepView } from '../../services/task-runs.js';
+import { repositories } from '../../repositories/index.js';
+import { ScopeError, sendScopeError } from '../../repositories/scope.js';
 
 const ID = /^[0-9a-f-]{36}$/i;
 const STATUSES = new Set(['queued', 'running', 'waiting_approval', 'completed', 'failed', 'cancelled']);
 const OUTCOMES = new Set(['done', 'skip', 'retry']);
 
-function caller(request: FastifyRequest, reply: FastifyReply) {
-  const user = request.authUser;
-  if (!user) { reply.code(401).send({ error: 'Authentication required' }); return null; }
-  if (user.role === 'guest') { reply.code(403).send({ error: 'Guest accounts can only use public rooms' }); return null; }
-  return user;
-}
-
-function visible(run: TaskRunRow | undefined, user: { id: string; role: string }): run is TaskRunRow {
-  return !!run && (user.role === 'owner' || (run.user_id !== null && run.user_id === user.id));
-}
-
-function audit(request: FastifyRequest, userId: string, action: string, runId: string, success: boolean, metadata: Record<string, unknown>) {
+function audit(request: FastifyRequest, userId: string | undefined, action: string, runId: string, success: boolean, metadata: Record<string, unknown>) {
   logAudit({
     event_type: 'data.update',
     event_category: 'data_modification',
@@ -68,37 +50,36 @@ function audit(request: FastifyRequest, userId: string, action: string, runId: s
 }
 
 export async function taskRunsRoutes(fastify: FastifyInstance) {
+  const runs = repositories.taskRuns;
+
   fastify.get<{ Querystring: { status?: string; taskId?: string; limit?: string } }>('/api/task-runs', async (request, reply) => {
-    const user = caller(request, reply);
-    if (!user) return reply;
-    const { status, taskId, limit } = request.query ?? {};
-    if (status !== undefined && !STATUSES.has(status)) return reply.code(400).send({ error: 'Invalid status' });
-    if (taskId !== undefined && (typeof taskId !== 'string' || taskId.length > 200)) return reply.code(400).send({ error: 'Invalid taskId' });
-    const rows = listRuns({ userId: user.role === 'owner' ? undefined : user.id, status, taskId, limit: Number(limit) || undefined });
-    return { runs: rows.map((r) => runView(r)) };
+    try {
+      const { status, taskId, limit } = request.query ?? {};
+      if (status !== undefined && !STATUSES.has(status)) return reply.code(400).send({ error: 'Invalid status' });
+      if (taskId !== undefined && (typeof taskId !== 'string' || taskId.length > 200)) return reply.code(400).send({ error: 'Invalid taskId' });
+      const rows = await runs.list(actorOf(request), { status, taskId, limit: Number(limit) || undefined });
+      return { runs: rows.map((r) => runView(r)) };
+    } catch (err) { return sendScopeError(reply, err); }
   });
 
   fastify.get<{ Params: { id: string } }>('/api/task-runs/:id', async (request, reply) => {
-    const user = caller(request, reply);
-    if (!user) return reply;
-    if (!ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid id' });
-    const run = getRun(request.params.id);
-    if (!visible(run, user)) return reply.code(404).send({ error: 'Run not found' });
-    return { run: await runDetailView(run), steps: getSteps(run.id).map(stepView) };
+    try {
+      if (!ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid id' });
+      const { run, steps } = await runs.detail(actorOf(request), request.params.id);
+      return { run, steps: steps.map(stepView) };
+    } catch (err) { return sendScopeError(reply, err); }
   });
 
   fastify.post<{ Params: { id: string } }>('/api/task-runs/:id/cancel', async (request, reply) => {
-    const user = caller(request, reply);
-    if (!user) return reply;
+    const userId = actorOf(request)?.userId;
     if (!ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid id' });
-    const run = getRun(request.params.id);
-    if (!visible(run, user)) return reply.code(404).send({ error: 'Run not found' });
     try {
-      const updated = cancelRun(run.id, user.id);
-      audit(request, user.id, 'cancel', run.id, true, { taskId: run.task_id, status: updated.status });
-      return { run: runView(updated) };
+      const { before, after } = await runs.cancel(actorOf(request), request.params.id);
+      audit(request, userId, 'cancel', before.id, true, { taskId: before.task_id, status: after.status });
+      return { run: runView(after) };
     } catch (err: any) {
-      audit(request, user.id, 'cancel', run.id, false, { error: err?.message });
+      if (err instanceof ScopeError) return sendScopeError(reply, err);
+      audit(request, userId, 'cancel', request.params.id, false, { error: err?.message });
       if (err instanceof RunStateError) return reply.code(err.status).send({ error: err.message });
       throw err;
     }
@@ -108,23 +89,24 @@ export async function taskRunsRoutes(fastify: FastifyInstance) {
     '/api/task-runs/:id/steps/:index/resolve',
     { config: { access: 'owner' as const } },
     async (request, reply) => {
-      const user = caller(request, reply);
-      if (!user) return reply;
-      if (user.role !== 'owner') return reply.code(403).send({ error: 'This action requires the owner account' });
-      if (!ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid id' });
-      const index = Number(request.params.index);
-      if (!/^\d{1,6}$/.test(request.params.index) || !Number.isInteger(index)) return reply.code(400).send({ error: 'Invalid step index' });
-      const outcome = request.body?.outcome;
-      if (typeof outcome !== 'string' || !OUTCOMES.has(outcome)) return reply.code(400).send({ error: "outcome must be 'done', 'skip' or 'retry'" });
+      const userId = actorOf(request)?.userId;
       try {
-        const updated = await resolveUncertainStep(request.params.id, index, outcome as 'done' | 'skip' | 'retry', user.id);
-        audit(request, user.id, 'resolve_step', updated.id, true, { step: index, outcome });
-        return { run: runView(updated), steps: getSteps(updated.id).map(stepView) };
-      } catch (err: any) {
-        audit(request, user.id, 'resolve_step', request.params.id, false, { step: index, outcome, error: err?.message });
-        if (err instanceof RunStateError) return reply.code(err.status).send({ error: err.message });
-        throw err;
-      }
+        if (!ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid id' });
+        const index = Number(request.params.index);
+        if (!/^\d{1,6}$/.test(request.params.index) || !Number.isInteger(index)) return reply.code(400).send({ error: 'Invalid step index' });
+        const outcome = request.body?.outcome;
+        if (typeof outcome !== 'string' || !OUTCOMES.has(outcome)) return reply.code(400).send({ error: "outcome must be 'done', 'skip' or 'retry'" });
+        try {
+          const updated = await runs.resolveStep(actorOf(request), request.params.id, index, outcome as 'done' | 'skip' | 'retry');
+          audit(request, userId, 'resolve_step', updated.id, true, { step: index, outcome });
+          return { run: runView(updated), steps: (await runs.steps(actorOf(request), updated.id)).map(stepView) };
+        } catch (err: any) {
+          if (err instanceof ScopeError) throw err;
+          audit(request, userId, 'resolve_step', request.params.id, false, { step: index, outcome, error: err?.message });
+          if (err instanceof RunStateError) return reply.code(err.status).send({ error: err.message });
+          throw err;
+        }
+      } catch (err) { return sendScopeError(reply, err); }
     },
   );
 
@@ -132,25 +114,26 @@ export async function taskRunsRoutes(fastify: FastifyInstance) {
     '/api/task-runs/:id/review',
     { config: { access: 'owner' as const } },
     async (request, reply) => {
-      const user = caller(request, reply);
-      if (!user) return reply;
-      if (user.role !== 'owner') return reply.code(403).send({ error: 'This action requires the owner account' });
-      if (!ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid id' });
-      const decision = request.body?.decision;
-      if (decision !== 'accept' && decision !== 'reject') return reply.code(400).send({ error: "decision must be 'accept' or 'reject'" });
-      const note = request.body?.note;
-      if (note !== undefined && note !== null && (typeof note !== 'string' || note.length > 2000)) return reply.code(400).send({ error: 'note must be a string (max 2000 characters)' });
-      const reviewer = request.body?.reviewer ?? 'owner';
-      if (reviewer !== 'owner' && reviewer !== 'large_agent') return reply.code(400).send({ error: "reviewer must be 'owner' or 'large_agent'" });
+      const userId = actorOf(request)?.userId;
       try {
-        const updated = await applyRunReview(request.params.id, decision, user.id, reviewer, typeof note === 'string' && note ? note : null);
-        audit(request, user.id, 'review', updated.id, true, { decision, reviewer });
-        return { run: await runDetailView(updated) };
-      } catch (err: any) {
-        audit(request, user.id, 'review', request.params.id, false, { decision, error: err?.message });
-        if (err instanceof RunStateError) return reply.code(err.status).send({ error: err.message });
-        throw err;
-      }
+        if (!ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid id' });
+        const decision = request.body?.decision;
+        if (decision !== 'accept' && decision !== 'reject') return reply.code(400).send({ error: "decision must be 'accept' or 'reject'" });
+        const note = request.body?.note;
+        if (note !== undefined && note !== null && (typeof note !== 'string' || note.length > 2000)) return reply.code(400).send({ error: 'note must be a string (max 2000 characters)' });
+        const reviewer = request.body?.reviewer ?? 'owner';
+        if (reviewer !== 'owner' && reviewer !== 'large_agent') return reply.code(400).send({ error: "reviewer must be 'owner' or 'large_agent'" });
+        try {
+          const updated = await runs.review(actorOf(request), request.params.id, decision, reviewer, typeof note === 'string' && note ? note : null);
+          audit(request, userId, 'review', updated.id, true, { decision, reviewer });
+          return { run: (await runs.detail(actorOf(request), updated.id)).run };
+        } catch (err: any) {
+          if (err instanceof ScopeError) throw err;
+          audit(request, userId, 'review', request.params.id, false, { decision, error: err?.message });
+          if (err instanceof RunStateError) return reply.code(err.status).send({ error: err.message });
+          throw err;
+        }
+      } catch (err) { return sendScopeError(reply, err); }
     },
   );
 }
