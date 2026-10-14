@@ -36,32 +36,18 @@ export async function csrfProtection(
     // Get Origin or Referer header
     const origin = request.headers.origin || request.headers.referer;
 
-    // DEBUG: Log CSRF check
-    console.log('[CSRF] Checking request:', {
-        method: request.method,
-        url: request.url,
-        origin: origin,
-        referer: request.headers.referer,
-        allowedOrigins: getAllowedOrigins()
-    });
-
     // SECURITY: Allow server-to-server requests from localhost (Next.js API routes)
     // These are internal API calls from the frontend server, not from browsers
     const hostname = request.hostname;
     const remoteAddress = request.ip;
     if (!origin && (hostname === 'localhost' || hostname === '127.0.0.1') &&
         (remoteAddress === '127.0.0.1' || remoteAddress === '::1' || remoteAddress === '::ffff:127.0.0.1')) {
-        console.log('[CSRF] ✅ PASSED: Server-to-server request from localhost');
         return;
     }
 
     if (!origin) {
         // SECURITY: Reject requests without Origin/Referer for state-changing operations
-        console.log('[CSRF] BLOCKED: Missing origin/referer header');
-        reply.code(403).send({
-            error: 'Forbidden',
-            message: 'Missing origin or referer header'
-        });
+        reject(request, reply, 'Missing origin or referer header');
         return;
     }
 
@@ -71,36 +57,20 @@ export async function csrfProtection(
         const url = new URL(origin);
         requestOrigin = `${url.protocol}//${url.host}`;
     } catch {
-        reply.code(403).send({
-            error: 'Forbidden',
-            message: 'Invalid origin or referer header'
-        });
+        reject(request, reply, 'Invalid origin or referer header');
         return;
     }
 
     // Check if origin is in allowed list
     const allowedOrigins = getAllowedOrigins();
-
-    console.log('[CSRF] Validating origin:', {
-        requestOrigin,
-        allowedOrigins,
-        exactMatch: allowedOrigins.includes(requestOrigin)
-    });
-
     const isAllowed = allowedOrigins.some(allowed => {
         // Exact match
-        if (requestOrigin === allowed) {
-            console.log('[CSRF] ✅ ALLOWED: Exact match -', requestOrigin, '===', allowed);
-            return true;
-        }
+        if (requestOrigin === allowed) return true;
 
         // Wildcard match (e.g., *.example.com)
         if (allowed.includes('*')) {
             const pattern = allowed.replace(/\*/g, '.*');
-            const regex = new RegExp(`^${pattern}$`);
-            const matches = regex.test(requestOrigin);
-            console.log('[CSRF] Wildcard check:', { pattern, requestOrigin, matches });
-            return matches;
+            return new RegExp(`^${pattern}$`).test(requestOrigin);
         }
 
         return false;
@@ -108,17 +78,25 @@ export async function csrfProtection(
 
     if (!isAllowed) {
         // SECURITY: Reject requests from untrusted origins
-        console.log('[CSRF] ❌ BLOCKED: Origin not in allowed list');
-        reply.code(403).send({
-            error: 'Forbidden',
-            message: 'Origin not allowed'
-        });
+        reject(request, reply, 'Origin not allowed');
         return;
     }
 
-    console.log('[CSRF] ✅ PASSED: Request allowed');
-
     // Origin is valid, continue processing
+}
+
+/**
+ * Send the 403 with a machine-readable code (BE-UI-02) and log one warning.
+ * The log line has the method and path only: no query string, no headers.
+ */
+function reject(request: FastifyRequest, reply: FastifyReply, message: string): void {
+    const path = String(request.url || '').split('?')[0];
+    console.warn(`[CSRF] Blocked ${request.method} ${path}: ${message}`);
+    reply.code(403).send({
+        error: 'Forbidden',
+        code: 'origin_not_allowed',
+        message
+    });
 }
 
 /**

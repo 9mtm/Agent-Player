@@ -15,6 +15,11 @@ const PUBLISHED_DEFAULT_PASSWORDS: ReadonlySet<string> = new Set([
   'user123',
   'system-user-not-for-login',
   'demo-user-password',
+  // BE-UI-02: fictional credentials published by the core UI mock mode and its tests.
+  'mock-only',
+  'fictional-password',
+  'new-fictional-password',
+  'another-fictional-password',
 ]);
 
 export function isSystemAccount(userId: string): boolean {

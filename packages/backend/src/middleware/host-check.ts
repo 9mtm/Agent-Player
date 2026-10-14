@@ -60,7 +60,7 @@ export function registerHostCheck(fastify: FastifyInstance, allowed: Set<string>
   fastify.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!isAllowedHost(request.headers.host, allowed)) {
       request.log.warn({ host: request.headers.host }, '[HostCheck] Rejected request with disallowed Host header');
-      return reply.code(421).send({ error: 'Misdirected Request' });
+      return reply.code(421).send({ error: 'Misdirected Request', code: 'host_not_allowed' });
     }
   });
 }

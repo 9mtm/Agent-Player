@@ -272,8 +272,12 @@ export interface GateRouteEntry {
   access: RouteAccess | 'extension';
 }
 
-function deny(reply: FastifyReply, code: 401 | 403, error: string) {
-  return reply.code(code).send({ error });
+/** Machine-readable reason sent with every gate refusal (BE-UI-02). */
+export type AuthErrorCode = 'unauthenticated' | 'forbidden' | 'inactive_user';
+
+function deny(reply: FastifyReply, status: 401 | 403, error: string) {
+  const code: AuthErrorCode = status === 401 ? 'unauthenticated' : 'forbidden';
+  return reply.code(status).send({ error, code });
 }
 
 function roleAllowed(access: RouteAccess, role: UserRole): boolean {

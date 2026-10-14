@@ -49,14 +49,16 @@ export function authorizeActiveRole(
   try {
     userId = verifyRequestToken(request, { requireActive: false });
   } catch {
-    reply.code(401).send({ error: 'Authentication required' });
+    reply.code(401).send({ error: 'Authentication required', code: 'unauthenticated' });
     return null;
   }
   const user = getDatabase()
     .prepare('SELECT role, status FROM users WHERE id = ?')
     .get(userId) as { role: string; status: string } | undefined;
   if (!user || user.status !== 'active' || !roles.includes(user.role as UserRole)) {
-    reply.code(403).send({ error: 'This action requires an active owner or admin account' });
+    // BE-UI-02: same message; the code tells a disabled account from a missing role.
+    const code = !user || user.status !== 'active' ? 'inactive_user' : 'forbidden';
+    reply.code(403).send({ error: 'This action requires an active owner or admin account', code });
     return null;
   }
   return userId;

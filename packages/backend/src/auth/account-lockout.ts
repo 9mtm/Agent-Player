@@ -48,7 +48,8 @@ export function checkAccountLock(email: string): {
     const db = getDatabase();
 
     // Check if user has an active lock
-    const user = db.query(
+    // BE-UI-02: queryOne (query returns an array, so the lock was never seen)
+    const user = db.queryOne(
         `SELECT locked_until, failed_attempts FROM users WHERE email = ?`,
         email
     ) as any;
@@ -95,11 +96,13 @@ export function getRecentFailedAttempts(email: string): number {
     const cutoffTime = new Date();
     cutoffTime.setMinutes(cutoffTime.getMinutes() - ATTEMPT_WINDOW_MINUTES);
 
-    const result = db.query(
+    // BE-UI-02: queryOne, and compare in SQLite's own datetime format
+    // (attempted_at is CURRENT_TIMESTAMP 'YYYY-MM-DD HH:MM:SS', not ISO).
+    const result = db.queryOne(
         `SELECT COUNT(*) as count FROM login_attempts
          WHERE email = ?
          AND success = 0
-         AND attempted_at > ?`,
+         AND attempted_at > datetime(?)`,
         email,
         cutoffTime.toISOString()
     ) as any;
@@ -125,7 +128,7 @@ export function lockAccount(email: string): void {
     db.execute(
         `UPDATE users
          SET locked_until = ?,
-             failed_attempts = (SELECT COUNT(*) FROM login_attempts WHERE email = ? AND success = 0 AND attempted_at > ?)
+             failed_attempts = (SELECT COUNT(*) FROM login_attempts WHERE email = ? AND success = 0 AND attempted_at > datetime(?))
          WHERE email = ?`,
         lockUntil.toISOString(),
         email,

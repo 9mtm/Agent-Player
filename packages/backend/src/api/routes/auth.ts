@@ -90,8 +90,10 @@ export async function authRoutes(fastify: FastifyInstance) {
   const authRateLimit = {
     max: 5, // Maximum 5 attempts
     timeWindow: '15 minutes', // Per 15 minute window
-    errorResponseBuilder: () => ({
+    errorResponseBuilder: (_request: unknown, context: { statusCode: number }) => ({
+      statusCode: context.statusCode,
       error: 'Too many attempts',
+      code: 'rate_limited',
       message: 'Too many authentication attempts. Please try again in 15 minutes.'
     })
   };
@@ -155,6 +157,7 @@ export async function authRoutes(fastify: FastifyInstance) {
     if (lockStatus.isLocked) {
       return reply.code(429).send({
         error: 'Account locked',
+        code: 'account_locked',
         message: `Too many failed login attempts. Please try again in ${lockStatus.remainingMinutes} minutes.`
       });
     }
@@ -163,7 +166,7 @@ export async function authRoutes(fastify: FastifyInstance) {
       // Get IP and User-Agent for attempt tracking
       const ipAddress = request.ip;
       const userAgent = request.headers['user-agent'];
-      const denied = { error: 'Forbidden', message: 'Account access denied' };
+      const denied = { error: 'Forbidden', code: 'account_inactive', message: 'Account access denied' };
       const invalid = { error: 'Unauthorized', message: 'Invalid email or password' };
 
       const result = await identity().signIn(email, password);
@@ -190,6 +193,7 @@ export async function authRoutes(fastify: FastifyInstance) {
           logAuthEvent('auth.login.failed', request, result.userId, result.username, false, 'Published default password refused');
           return reply.code(403).send({
             error: 'Forbidden',
+            code: 'published_password',
             message: 'This account uses a default password and is disabled. Reset the password from the CLI.'
           });
         case 'ok':
