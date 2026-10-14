@@ -49,7 +49,7 @@ export interface McpToolRow {
   input_schema: string;
   annotations: string | null;
   requires_approval: number | null;
-  /** Grant binding fingerprint (server id + generation + name + schema + annotations). */
+  /** Grant binding fingerprint (server id + generation + name + schema + annotations + title + description). */
   fingerprint: string | null;
   discovered_at: string;
 }

@@ -288,7 +288,7 @@ export async function refreshServer(id: string, actor: string | null = null): Pr
       annotations,
     });
   }
-  const fingerprints = new Map(keep.map((k) => [k.registry, toolFingerprint({ serverId: id, generation: row.generation, toolName: k.tool, inputSchema: k.schema, annotations: k.annotations })]));
+  const fingerprints = new Map(keep.map((k) => [k.registry, toolFingerprint({ serverId: id, generation: row.generation, toolName: k.tool, inputSchema: k.schema, annotations: k.annotations, title: k.title, description: k.description })]));
   // Grants of tools that vanished or changed are removed (a changed tool needs a fresh grant).
   const stale = new Set(oldTools.filter((t) => !t.fingerprint || fingerprints.get(t.registry_name) !== t.fingerprint).map((t) => t.registry_name));
   for (const name of grantedNamesWithPrefix(serverPrefix(row.name))) if (!fingerprints.has(name)) stale.add(name);

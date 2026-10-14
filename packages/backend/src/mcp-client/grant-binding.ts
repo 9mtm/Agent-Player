@@ -3,7 +3,10 @@
  *
  * A grant of an MCP tool (agent_tool_grants row `mcp__<server>__<tool>`) is
  * only effective while it is bound to the tool's current fingerprint:
- *   sha256(server id, server generation, tool name, input schema, annotations).
+ *   sha256(server id, server generation, tool name, input schema, annotations,
+ *          title, description).
+ * Title and description are the text the model sees, so a server that rewrites
+ * them (e.g. to inject instructions) also loses the grant.
  * The server id is new for every added server, and the generation is renewed
  * when its launch spec or URL changes, so a re-created server with the same
  * name, a changed target, or a changed tool schema needs a fresh owner grant.
@@ -16,9 +19,12 @@
 import { createHash } from 'node:crypto';
 import { getDatabase } from '../db/index.js';
 
-export function toolFingerprint(parts: { serverId: string; generation: string | null; toolName: string; inputSchema: string; annotations: string | null }): string {
+export function toolFingerprint(parts: {
+  serverId: string; generation: string | null; toolName: string; inputSchema: string; annotations: string | null;
+  title: string | null; description: string | null;
+}): string {
   return createHash('sha256')
-    .update(JSON.stringify([parts.serverId, parts.generation ?? '', parts.toolName, parts.inputSchema, parts.annotations ?? '']))
+    .update(JSON.stringify([parts.serverId, parts.generation ?? '', parts.toolName, parts.inputSchema, parts.annotations ?? '', parts.title ?? '', parts.description ?? '']))
     .digest('hex');
 }
 
