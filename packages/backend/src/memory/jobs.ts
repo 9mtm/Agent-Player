@@ -10,7 +10,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { all, one, sql } from '../repositories/sql-steps.js';
-import { getDatabase } from '../db/index.js';
+import { ensureNamedJob } from '../scheduler/store.js';
 import { runWeeklySummary } from './weekly-summary.js';
 import { runRetention } from './retention.js';
 import { logAudit } from '../services/audit-logger.js';
@@ -63,9 +63,10 @@ export function memoryJobName(job: MemoryJobName, userId: string): string {
  * Make sure every active owner account has its weekly summary job (idempotent).
  * Returns the jobs created. The cron engine loads them from cron_jobs.
  *
- * B2.2b-4: the owner accounts are read on the process driver (users is
- * ported); cron_jobs stays on SQLite with the cron engine that reads it
- * (scheduler/engine.ts, not ported yet: B2.2c).
+ * B2.2c: owners and cron_jobs are both on the process driver; each job is
+ * checked and inserted in one transaction under a per-name lock
+ * (scheduler/store.ts ensureNamedJob), so two processes never create the
+ * same job twice.
  */
 export async function ensureMemoryJobs(): Promise<Array<{ id: string; name: string; cronExpression: string; actionData: Record<string, unknown> }>> {
   const owners = await sql().read(all<{ id: string }>(`SELECT id FROM users WHERE role = 'owner' AND COALESCE(status, 'active') = 'active' ORDER BY id`));
@@ -73,15 +74,10 @@ export async function ensureMemoryJobs(): Promise<Array<{ id: string; name: stri
   for (const { id: userId } of owners) {
     for (const [job, cronExpression, description] of SCHEDULE) {
       const name = memoryJobName(job, userId);
-      const cron = getDatabase();
-      if (cron.prepare('SELECT 1 FROM cron_jobs WHERE name = ?').get(name)) continue;
       const id = uuidv4();
       const actionData = { job, userId };
-      const now = new Date().toISOString();
-      cron.prepare(`
-        INSERT INTO cron_jobs (id, name, description, cron_expression, action_type, action_data, enabled, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-      `).run(id, name, description, cronExpression, MEMORY_JOB_ACTION, JSON.stringify(actionData), now, now);
+      const inserted = await ensureNamedJob(id, { name, description, cronExpression, actionType: MEMORY_JOB_ACTION, actionData });
+      if (!inserted) continue;
       created.push({ id, name, cronExpression, actionData });
     }
   }

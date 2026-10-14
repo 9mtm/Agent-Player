@@ -17,6 +17,7 @@ import type {
   RunWorkflowAction,
 } from './types.js';
 import { getJobQueue } from './queue.js';
+import { claimRun, listEnabledJobs, recordRunTimes, saveExecution, tickSlot, type ExecutionRecord } from './store.js';
 
 export class CronEngine extends EventEmitter implements ICronEngine {
   private jobs: Map<string, CronJob> = new Map();
@@ -89,6 +90,15 @@ export class CronEngine extends EventEmitter implements ICronEngine {
     const task = cron.schedule(
       job.cronExpression,
       async () => {
+        // B2.2c: on PostgreSQL several processes fire the same tick; only the
+        // one that claims its slot runs it (store.ts claimRun). SQLite: always.
+        try {
+          if (!(await claimRun(job.id, tickSlot(job.cronExpression)))) return;
+        } catch (error: any) {
+          console.error(`[CronEngine] ❌ Job "${job.name}" claim failed:`, error?.code ?? 'error');
+          return;
+        }
+
         console.log(`[CronEngine] ⏰ Executing job: ${job.name}`);
 
         try {
@@ -325,36 +335,10 @@ export class CronEngine extends EventEmitter implements ICronEngine {
   }
 
   /**
-   * Load jobs from database
+   * Load jobs from database (B2.2c: on the process driver, store.ts)
    */
   private async loadJobs(): Promise<void> {
-    const { getDatabase } = await import('../db/index.js');
-    const db = getDatabase();
-
-    const rows = db
-      .prepare(
-        `
-      SELECT * FROM cron_jobs
-      WHERE enabled = 1
-    `
-      )
-      .all() as any[];
-
-    for (const row of rows) {
-      const job: CronJob = {
-        id: row.id,
-        name: row.name,
-        description: row.description,
-        cronExpression: row.cron_expression,
-        actionType: row.action_type,
-        actionData: JSON.parse(row.action_data),
-        enabled: Boolean(row.enabled),
-        lastRun: row.last_run ? new Date(row.last_run) : undefined,
-        nextRun: row.next_run ? new Date(row.next_run) : undefined,
-        createdAt: new Date(row.created_at),
-        updatedAt: new Date(row.updated_at),
-      };
-
+    for (const job of await listEnabledJobs()) {
       this.jobs.set(job.id, job);
     }
   }
@@ -363,43 +347,14 @@ export class CronEngine extends EventEmitter implements ICronEngine {
    * Update job in database
    */
   private async updateJob(job: CronJob): Promise<void> {
-    const { getDatabase } = await import('../db/index.js');
-    const db = getDatabase();
-
-    db.getDb().prepare(
-      `
-      UPDATE cron_jobs
-      SET last_run = ?, next_run = ?, updated_at = ?
-      WHERE id = ?
-    `
-    ).run(
-      job.lastRun?.toISOString() || null,
-      job.nextRun?.toISOString() || null,
-      new Date().toISOString(),
-      job.id
-    );
+    await recordRunTimes(job);
   }
 
   /**
    * Save execution history
    */
-  private async saveExecutionHistory(history: any): Promise<void> {
-    const { getDatabase } = await import('../db/index.js');
-    const db = getDatabase();
-
-    db.getDb().prepare(
-      `
-      INSERT INTO job_executions (job_id, success, output, error, executed_at, duration)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `
-    ).run(
-      history.jobId,
-      history.success ? 1 : 0,
-      history.output || null,
-      history.error || null,
-      history.executedAt.toISOString(),
-      history.duration
-    );
+  private async saveExecutionHistory(history: ExecutionRecord): Promise<void> {
+    await saveExecution(history);
   }
 }
 

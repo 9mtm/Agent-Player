@@ -8,14 +8,13 @@ import { v4 as uuidv4 } from 'uuid';
 import cron from 'node-cron';
 import { getCronEngine } from '../../scheduler/engine.js';
 import { getJobQueue } from '../../scheduler/queue.js';
-import { getDatabase } from '../../db/index.js';
+import { deleteJob, insertJob, jobHistory, setJobEnabled, updateJobDefinition } from '../../scheduler/store.js';
 import type { CronJob, CronActionType, CronActionData } from '../../scheduler/types.js';
 import { handleError } from '../error-handler.js';
 
 export async function schedulerRoutes(fastify: FastifyInstance) {
   const cronEngine = getCronEngine();
   const jobQueue = getJobQueue();
-  const db = getDatabase();
 
   // GET /api/scheduler/jobs - List all cron jobs
   fastify.get('/api/scheduler/jobs', async (request, reply) => {
@@ -108,23 +107,8 @@ export async function schedulerRoutes(fastify: FastifyInstance) {
         updatedAt: new Date(),
       };
 
-      // Save to database
-      db.getDb().prepare(
-        `
-        INSERT INTO cron_jobs (id, name, description, cron_expression, action_type, action_data, enabled, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `
-      ).run(
-        job.id,
-        job.name,
-        job.description || null,
-        job.cronExpression,
-        job.actionType,
-        JSON.stringify(job.actionData),
-        job.enabled ? 1 : 0,
-        job.createdAt.toISOString(),
-        job.updatedAt.toISOString()
-      );
+      // Save to database (B2.2c: process driver)
+      await insertJob(job);
 
       // Schedule if enabled
       if (job.enabled) {
@@ -179,22 +163,7 @@ export async function schedulerRoutes(fastify: FastifyInstance) {
       const updatedJob = { ...job, ...updates, updatedAt: new Date() };
 
       // Update in database
-      db.getDb().prepare(
-        `
-        UPDATE cron_jobs
-        SET name = ?, description = ?, cron_expression = ?, action_type = ?, action_data = ?, enabled = ?, updated_at = ?
-        WHERE id = ?
-      `
-      ).run(
-        updatedJob.name,
-        updatedJob.description || null,
-        updatedJob.cronExpression,
-        updatedJob.actionType,
-        JSON.stringify(updatedJob.actionData),
-        updatedJob.enabled ? 1 : 0,
-        updatedJob.updatedAt.toISOString(),
-        id
-      );
+      await updateJobDefinition(updatedJob);
 
       // Reschedule
       cronEngine.unscheduleJob(id);
@@ -233,7 +202,7 @@ export async function schedulerRoutes(fastify: FastifyInstance) {
         cronEngine.unscheduleJob(id);
 
         // Delete from database
-        db.getDb().prepare('DELETE FROM cron_jobs WHERE id = ?').run(id);
+        await deleteJob(id);
 
         return {
           success: true,
@@ -298,10 +267,7 @@ export async function schedulerRoutes(fastify: FastifyInstance) {
         job.updatedAt = new Date();
 
         // Update database
-        db.getDb().prepare('UPDATE cron_jobs SET enabled = 1, updated_at = ? WHERE id = ?').run(
-          job.updatedAt.toISOString(),
-          id
-        );
+        await setJobEnabled(id, true, job.updatedAt);
 
         // Schedule
         cronEngine.scheduleJob(job);
@@ -338,10 +304,7 @@ export async function schedulerRoutes(fastify: FastifyInstance) {
         job.updatedAt = new Date();
 
         // Update database
-        db.getDb().prepare('UPDATE cron_jobs SET enabled = 0, updated_at = ? WHERE id = ?').run(
-          job.updatedAt.toISOString(),
-          id
-        );
+        await setJobEnabled(id, false, job.updatedAt);
 
         // Unschedule
         cronEngine.unscheduleJob(id);
@@ -365,27 +328,11 @@ export async function schedulerRoutes(fastify: FastifyInstance) {
       try {
         const { id } = request.params;
 
-        const history = db
-          .prepare(
-            `
-          SELECT * FROM job_executions
-          WHERE job_id = ?
-          ORDER BY executed_at DESC
-          LIMIT 100
-        `
-          )
-          .all(id) as any[];
+        const history = await jobHistory(id, 100);
 
         return {
           success: true,
-          history: history.map((h) => ({
-            id: h.id,
-            success: Boolean(h.success),
-            output: h.output,
-            error: h.error,
-            executedAt: h.executed_at,
-            duration: h.duration,
-          })),
+          history,
         };
       } catch (error: any) {
         console.error('[Scheduler API] ❌ Get history failed:', error);
