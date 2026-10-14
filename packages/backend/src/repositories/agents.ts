@@ -10,8 +10,8 @@
  *                                        personality or grant change is a
  *                                        permission/config change)
  *
- * Personality never grants tools; grants are permissions. Not yet here
- * (B1-rest): agents_config CRUD and naming (routes/agents-config.ts).
+ * Personality never grants tools; grants are permissions. agents_config
+ * CRUD and naming live in agents-config.ts (same repository, B1.6).
  *
  * SQLite implementation over tools/grants.ts and services/personality-store.ts.
  */
@@ -30,9 +30,11 @@ import {
   type SaveInput,
 } from '../services/personality-store.js';
 
+import { sqliteAgentConfigs, type AgentConfigsRepository } from './agents-config.js';
+
 type Available = ReadonlyArray<Pick<Tool, 'name' | 'execClass'>>;
 
-export interface AgentsRepository {
+export interface AgentsRepository extends AgentConfigsRepository {
   grantView(actor: Actor | null | undefined, agentId: string, available: Available): Promise<GrantView | null>;
   setGrants(
     actor: Actor | null | undefined,
@@ -60,6 +62,8 @@ function ownerOrSelfAgent(actor: Actor | null | undefined, agentId: string): Act
 }
 
 export const sqliteAgents: AgentsRepository = {
+  ...sqliteAgentConfigs,
+
   async grantView(actor, agentId, available) {
     requireOwner(actor);
     return getAgentGrantView(agentId, available);

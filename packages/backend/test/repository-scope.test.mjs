@@ -221,6 +221,32 @@ test('agents (grants, personality): scope matrix', async () => {
   await row('agents.rollbackPersonality', (a) => A.rollbackPersonality(a, 'rs-agent', 999), OWNER_ONLY);
 });
 
+test('agents (configs, naming): scope matrix', async () => {
+  const A = repositories.agents;
+  const SMALL = 'small-local-agent';
+  await row('agents.listConfigs', (a) => A.listConfigs(a), MEMBERS);
+  await row('agents.getConfig', (a) => A.getConfig(a, 'rs-agent'), MEMBERS);
+  await row('agents.suggestName', (a) => A.suggestName(a, {}), ADMIN_UP);
+  // invalid name: a permitted call fails with an input error, not a scope error
+  await row('agents.createConfig(invalid name)', (a) => A.createConfig(a, { name: { bad: true } }), ADMIN_UP);
+  await row('agents.updateConfig(missing)', (a) => A.updateConfig(a, 'missing-agent', {}), ADMIN_UP);
+  await row('agents.updateConfig(reserved small agent)', (a) => A.updateConfig(a, SMALL, 'not-an-object'), OWNER_ONLY);
+  await row('agents.setPrimary(missing)', (a) => A.setPrimary(a, 'missing-agent'), ADMIN_UP);
+  await row('agents.setPrimary(reserved small agent, missing row)', (a) => A.setPrimary(a, SMALL).catch((e) => { if (e instanceof ScopeError) throw e; }), OWNER_ONLY);
+  await row('agents.duplicateConfig(missing)', (a) => A.duplicateConfig(a, 'missing-agent'), ADMIN_UP);
+  await row('agents.deleteConfig(missing)', (a) => A.deleteConfig(a, 'missing-agent'), ADMIN_UP);
+  await assert.rejects(() => A.deleteConfig(ACTORS.admin, SMALL), (e) => e instanceof ScopeError && e.status === 403 && e.code === 'reserved_agent');
+  // the owner creates, renames (name reserved for good) and deletes
+  const created = await silent(() => A.createConfig(ACTORS.owner, { name: 'Scope Matrix Agent' }));
+  assert.equal(created.name, 'Scope Matrix Agent');
+  const renamed = await A.updateConfig(ACTORS.admin, created.id, { name: 'Scope Matrix Renamed', expectedVersion: created.version });
+  assert.equal(renamed.name, 'Scope Matrix Renamed');
+  await assert.rejects(() => A.updateConfig(ACTORS.admin, created.id, { description: 'x', expectedVersion: created.version }), (e) => e.constructor.name === 'AgentConfigConflictError');
+  await silent(() => A.deleteConfig(ACTORS.owner, created.id));
+  assert.equal(await A.getConfig(ACTORS.user, created.id), null);
+  checks += 6;
+});
+
 // --- credentials ----------------------------------------------------------------
 
 test('credentials: scope matrix', async () => {
@@ -371,7 +397,8 @@ test('withTransaction: one actor, commit or roll back, synchronous on SQLite', a
 
 test('routes: no user id from body/query in the moved routes; SYSTEM_ACTOR never in routes', () => {
   const routesDir = join(backendDir, 'src/api/routes');
-  const moved = ['task-runs.ts', 'agent-grants.ts', 'agent-personality.ts', 'credentials.ts', 'audit.ts', 'memory-files.ts', 'profile.ts'];
+  const moved = ['task-runs.ts', 'agent-grants.ts', 'agent-personality.ts', 'credentials.ts', 'audit.ts', 'memory-files.ts', 'profile.ts',
+    'agents-config.ts'];
   for (const f of moved) {
     const src = readFileSync(join(routesDir, f), 'utf8');
     assert.doesNotMatch(src, /(body|query)\)?(\s+as\s+[^;]*?)?\??\.userId\b/, `${f} reads a user id from the request`);

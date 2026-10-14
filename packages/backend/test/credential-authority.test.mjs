@@ -32,9 +32,16 @@ const { getCredentialStorage } = await import(join(backendDir, 'src/credentials/
 await getCredentialStorage().initialize();
 const authority = await import(join(backendDir, 'src/credentials/authority.ts'));
 const { agentsConfigRoutes } = await import(join(backendDir, 'src/api/routes/agents-config.ts'));
+const { registerAuthGate } = await import(join(backendDir, 'src/auth/auth-gate.ts'));
+const { generateToken } = await import(join(backendDir, 'src/auth/jwt.ts'));
 const { default: Fastify } = await import('fastify');
 
+// B1.6: the agents routes take the actor from the verified token (owner here).
+db.prepare(`INSERT INTO users (id, email, username, password_hash, role, status) VALUES ('ca-owner', 'ca-owner@example.test', 'ca-owner', 'x', 'owner', 'active')`).run();
+const headers = { authorization: `Bearer ${generateToken('ca-owner', 1)}` };
+
 const app = Fastify();
+registerAuthGate(app);
 await app.register(agentsConfigRoutes);
 await app.ready();
 
@@ -122,7 +129,7 @@ test('keys resolve per agent only: never another agent\'s key', async () => {
 
 test('agents API stores keys encrypted and only ever answers masked', async () => {
   const key = fakeKey();
-  const created = await app.inject({ method: 'POST', url: '/api/agents', payload: { name: 'api-agent', provider: 'claude', api_key: key } });
+  const created = await app.inject({ method: 'POST', headers, url: '/api/agents', payload: { name: 'api-agent', provider: 'claude', api_key: key } });
   assert.equal(created.statusCode, 201, created.body);
   assert.ok(!created.body.includes(key));
   const agent = created.json().agent;
@@ -133,21 +140,21 @@ test('agents API stores keys encrypted and only ever answers masked', async () =
   assert.equal(await authority.getAgentApiKey(agent.id), key);
 
   for (const url of ['/api/agents', `/api/agents/${agent.id}`]) {
-    const res = await app.inject({ method: 'GET', url });
+    const res = await app.inject({ method: 'GET', headers, url });
     assert.equal(res.statusCode, 200);
     assert.ok(!res.body.includes(key), `${url} leaks the key`);
   }
 
   // Masked placeholder / empty keep the stored key.
   for (const api_key of ['••••••••', '']) {
-    const put = await app.inject({ method: 'PUT', url: `/api/agents/${agent.id}`, payload: { api_key } });
+    const put = await app.inject({ method: 'PUT', headers, url: `/api/agents/${agent.id}`, payload: { api_key } });
     assert.equal(put.statusCode, 200);
     assert.equal(await authority.getAgentApiKey(agent.id), key);
   }
   // A new key replaces it, same credential id, never in the column.
   const credId = row(agent.id).api_key_credential_id;
   const key2 = fakeKey();
-  const put = await app.inject({ method: 'PUT', url: `/api/agents/${agent.id}`, payload: { api_key: key2 } });
+  const put = await app.inject({ method: 'PUT', headers, url: `/api/agents/${agent.id}`, payload: { api_key: key2 } });
   assert.equal(put.statusCode, 200);
   assert.ok(!put.body.includes(key2));
   assert.equal(row(agent.id).api_key_credential_id, credId);
@@ -155,7 +162,7 @@ test('agents API stores keys encrypted and only ever answers masked', async () =
   assert.equal(await authority.getAgentApiKey(agent.id), key2);
 
   // Deleting the agent removes its key credential.
-  const del = await app.inject({ method: 'DELETE', url: `/api/agents/${agent.id}` });
+  const del = await app.inject({ method: 'DELETE', headers, url: `/api/agents/${agent.id}` });
   assert.equal(del.statusCode, 200);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM credentials WHERE id = ?').get(credId).n, 0);
 });
