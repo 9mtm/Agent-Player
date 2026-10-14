@@ -3,15 +3,16 @@
  * Endpoints for security audit logs and monitoring
  */
 
+import { actorOf } from '../../auth/auth-gate.js';
 import type { FastifyInstance } from 'fastify';
-import {
-  getAuditLogger,
-  getAuditStorage,
-  getAuditStatus,
-  type AuditQuery,
-  type AuditConfig,
-} from '../../audit/index.js';
+import type { AuditQuery, AuditConfig } from '../../audit/index.js';
 import { handleError } from '../error-handler.js';
+import { repositories } from '../../repositories/index.js';
+import { ScopeError, sendScopeError } from '../../repositories/scope.js';
+
+// B1-core: scope (admin read, owner config/cleanup) is enforced by the audit
+// repository (repositories/audit.ts) with the request's actor; the auth gate
+// tiers (/api/audit admin, config write + cleanup owner) stay in front.
 
 export async function auditRoutes(fastify: FastifyInstance) {
   /**
@@ -20,9 +21,10 @@ export async function auditRoutes(fastify: FastifyInstance) {
    */
   fastify.get('/api/audit/status', async (request, reply) => {
     try {
-      const status = getAuditStatus();
+      const status = await repositories.audit.status(actorOf(request));
       return status;
     } catch (error: any) {
+      if (error instanceof ScopeError) return sendScopeError(reply, error);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Audit] Get status failed');
     }
@@ -34,10 +36,10 @@ export async function auditRoutes(fastify: FastifyInstance) {
    */
   fastify.get('/api/audit/stats', async (request, reply) => {
     try {
-      const storage = getAuditStorage();
-      const stats = storage.getStats();
+      const stats = await repositories.audit.stats(actorOf(request));
       return stats;
     } catch (error: any) {
+      if (error instanceof ScopeError) return sendScopeError(reply, error);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Audit] Get stats failed');
     }
@@ -50,7 +52,6 @@ export async function auditRoutes(fastify: FastifyInstance) {
   fastify.get('/api/audit/events', async (request, reply) => {
     try {
       const query = request.query as Record<string, string>;
-      const storage = getAuditStorage();
 
       const filters: AuditQuery = {
         limit: query.limit ? parseInt(query.limit) : 50,
@@ -69,7 +70,7 @@ export async function auditRoutes(fastify: FastifyInstance) {
       if (query.result) filters.result = query.result as any;
       if (query.search) filters.search = query.search;
 
-      const events = storage.query(filters);
+      const events = await repositories.audit.query(actorOf(request), filters);
 
       return {
         events,
@@ -77,6 +78,7 @@ export async function auditRoutes(fastify: FastifyInstance) {
         filters,
       };
     } catch (error: any) {
+      if (error instanceof ScopeError) return sendScopeError(reply, error);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Audit] Query events failed');
     }
@@ -89,16 +91,16 @@ export async function auditRoutes(fastify: FastifyInstance) {
   fastify.get('/api/audit/events/recent', async (request, reply) => {
     try {
       const query = request.query as { limit?: string };
-      const storage = getAuditStorage();
       const limit = query.limit ? parseInt(query.limit) : 50;
 
-      const events = storage.getRecent(limit);
+      const events = await repositories.audit.recent(actorOf(request), limit);
 
       return {
         events,
         count: events.length,
       };
     } catch (error: any) {
+      if (error instanceof ScopeError) return sendScopeError(reply, error);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Audit] Get recent events failed');
     }
@@ -111,9 +113,7 @@ export async function auditRoutes(fastify: FastifyInstance) {
   fastify.get('/api/audit/events/:id', async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
-      const storage = getAuditStorage();
-
-      const event = storage.getById(id);
+      const event = await repositories.audit.get(actorOf(request), id);
 
       if (!event) {
         return reply.status(404).send({
@@ -123,6 +123,7 @@ export async function auditRoutes(fastify: FastifyInstance) {
 
       return event;
     } catch (error: any) {
+      if (error instanceof ScopeError) return sendScopeError(reply, error);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Audit] Get event failed');
     }
@@ -134,9 +135,9 @@ export async function auditRoutes(fastify: FastifyInstance) {
    */
   fastify.get('/api/audit/config', async (request, reply) => {
     try {
-      const logger = getAuditLogger();
-      return logger.getConfig();
+      return await repositories.audit.config(actorOf(request));
     } catch (error: any) {
+      if (error instanceof ScopeError) return sendScopeError(reply, error);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Audit] Get config failed');
     }
@@ -149,22 +150,14 @@ export async function auditRoutes(fastify: FastifyInstance) {
   fastify.put('/api/audit/config', async (request, reply) => {
     try {
       const body = request.body as Partial<AuditConfig>;
-      const logger = getAuditLogger();
-
-      logger.updateConfig(body);
-
-      // Log the config change
-      logger.logConfigChange(
-        { type: 'api', id: 'admin' },
-        { type: 'config', id: 'audit', name: 'Audit Configuration' },
-        { after: body }
-      );
+      const config = await repositories.audit.updateConfig(actorOf(request), body);
 
       return {
         success: true,
-        config: logger.getConfig(),
+        config,
       };
     } catch (error: any) {
+      if (error instanceof ScopeError) return sendScopeError(reply, error);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Audit] Update config failed');
     }
@@ -176,14 +169,14 @@ export async function auditRoutes(fastify: FastifyInstance) {
    */
   fastify.post('/api/audit/cleanup', async (request, reply) => {
     try {
-      const storage = getAuditStorage();
-      const deleted = storage.cleanup();
+      const deleted = await repositories.audit.cleanup(actorOf(request));
 
       return {
         success: true,
         deletedEvents: deleted,
       };
     } catch (error: any) {
+      if (error instanceof ScopeError) return sendScopeError(reply, error);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Audit] Cleanup failed');
     }
@@ -196,7 +189,6 @@ export async function auditRoutes(fastify: FastifyInstance) {
   fastify.get('/api/audit/export', async (request, reply) => {
     try {
       const query = request.query as Record<string, string>;
-      const storage = getAuditStorage();
 
       const filters: AuditQuery = {};
       if (query.startDate) filters.startDate = new Date(query.startDate);
@@ -204,13 +196,14 @@ export async function auditRoutes(fastify: FastifyInstance) {
       if (query.category) filters.category = query.category.split(',') as any;
       if (query.severity) filters.severity = query.severity.split(',') as any;
 
-      const json = storage.exportToJson(filters);
+      const json = await repositories.audit.exportJson(actorOf(request), filters);
 
       reply.header('Content-Type', 'application/json');
       reply.header('Content-Disposition', `attachment; filename="audit-export-${Date.now()}.json"`);
 
       return json;
     } catch (error: any) {
+      if (error instanceof ScopeError) return sendScopeError(reply, error);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Audit] Export failed');
     }
@@ -222,12 +215,10 @@ export async function auditRoutes(fastify: FastifyInstance) {
    */
   fastify.get('/api/audit/alerts', async (request, reply) => {
     try {
-      const storage = getAuditStorage();
-
       // Get critical and high severity events from last 24h
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-      const alerts = storage.query({
+      const alerts = await repositories.audit.query(actorOf(request), {
         startDate: oneDayAgo,
         severity: ['critical', 'high'],
         orderBy: 'timestamp',
@@ -248,6 +239,7 @@ export async function auditRoutes(fastify: FastifyInstance) {
         period: '24h',
       };
     } catch (error: any) {
+      if (error instanceof ScopeError) return sendScopeError(reply, error);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Audit] Get alerts failed');
     }
@@ -261,12 +253,11 @@ export async function auditRoutes(fastify: FastifyInstance) {
     try {
       const { actorId } = request.params as { actorId: string };
       const query = request.query as { limit?: string; days?: string };
-      const storage = getAuditStorage();
 
       const days = query.days ? parseInt(query.days) : 7;
       const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-      const events = storage.query({
+      const events = await repositories.audit.query(actorOf(request), {
         actorId,
         startDate,
         limit: query.limit ? parseInt(query.limit) : 100,
@@ -281,6 +272,7 @@ export async function auditRoutes(fastify: FastifyInstance) {
         period: `${days} days`,
       };
     } catch (error: any) {
+      if (error instanceof ScopeError) return sendScopeError(reply, error);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Audit] Get activity failed');
     }
