@@ -1,33 +1,22 @@
 /**
  * Write Tool
  *
- * Write content to a file in the workspace
+ * Write a file inside the agent's own workspace `.data/workspaces/<agentId>/`
+ * (S1.6). Writing outside it is not possible at all (Q-17).
  */
 
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import type { Tool, ToolResult } from './types.js';
-
-/**
- * Validate that path is safe (no path traversal attacks)
- */
-function isPathSafe(filePath: string, workspaceDir: string): boolean {
-  const resolvedPath = path.resolve(workspaceDir, filePath);
-  const normalizedWorkspace = path.resolve(workspaceDir);
-
-  // Path must be inside workspace
-  return resolvedPath.startsWith(normalizedWorkspace);
-}
+import type { Tool, ToolResult } from '../types.js';
+import { FileSandboxError, MAX_WRITE_BYTES, sandboxedWriteFile, writeRootFor } from './file-sandbox.js';
 
 export const writeTool: Tool = {
   name: 'write',
-  description: 'Write content to a file in the workspace. Creates parent directories if needed.',
+  description: `Write a text file inside your workspace folder (paths are relative to it; parent folders are created; max ${MAX_WRITE_BYTES} bytes). Files outside the workspace cannot be written.`,
   input_schema: {
     type: 'object',
     properties: {
       path: {
         type: 'string',
-        description: 'Path to the file to write (relative to workspace)',
+        description: 'Path to the file to write (relative to your workspace)',
       },
       content: {
         type: 'string',
@@ -42,76 +31,28 @@ export const writeTool: Tool = {
         description: 'Create a new markdown file with meeting notes',
       },
       {
-        path: 'config/api-keys.json',
-        content: '{\n  "openai": "sk-...",\n  "claude": "sk-..."\n}',
-        description: 'Save API configuration as JSON file',
-      },
-      {
-        path: 'scripts/deploy.sh',
-        content: '#!/bin/bash\nnpm run build\nnpm run deploy',
-        description: 'Create a shell script for deployment',
+        path: 'drafts/announcement.txt',
+        content: 'Hello team, the release moves to Friday.',
+        description: 'Save a draft text in the workspace',
       },
     ],
   },
 
-  async execute(params): Promise<ToolResult> {
-    const { path: filePath, content } = params;
-    const workspaceDir = process.cwd(); // TODO: Get from context
-
-    // Security check
-    if (!isPathSafe(filePath, workspaceDir)) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `❌ Access denied: Path "${filePath}" is outside workspace`,
-          },
-        ],
-        error: 'Path outside workspace',
-      };
-    }
-
+  async execute(params, context): Promise<ToolResult> {
+    const { path: filePath, content } = params ?? {};
     try {
-      const fullPath = path.resolve(workspaceDir, filePath);
-      console.log(`[WriteTool] 📝 Writing: ${fullPath}`);
-      console.log(`[WriteTool]   Content length: ${content.length} chars`);
-
-      // Create parent directories if they don't exist
-      const parentDir = path.dirname(fullPath);
-      await fs.mkdir(parentDir, { recursive: true });
-
-      // Write file
-      await fs.writeFile(fullPath, content, 'utf-8');
-
-      const stats = await fs.stat(fullPath);
-
-      console.log(`[WriteTool] ✅ File written successfully`);
-      console.log(`[WriteTool]   Size: ${stats.size} bytes`);
-
+      const root = writeRootFor(context);
+      const r = sandboxedWriteFile(root, filePath, content);
       return {
-        content: [
-          {
-            type: 'text',
-            text: `✅ File written successfully: ${filePath} (${stats.size} bytes)`,
-          },
-        ],
-        details: {
-          path: filePath,
-          size: stats.size,
-          modified: stats.mtime,
-        },
+        content: [{ type: 'text', text: `✅ File written: ${r.rel} (${r.size} bytes)` }],
+        details: { path: r.rel, size: r.size, modified: r.modified },
       };
     } catch (error: any) {
-      console.error(`[WriteTool] ❌ Write failed:`, error.message);
-
+      const message = error instanceof FileSandboxError ? error.message : 'Failed to write file';
+      if (!(error instanceof FileSandboxError)) console.error('[WriteTool] write failed:', error?.code ?? 'error');
       return {
-        content: [
-          {
-            type: 'text',
-            text: `❌ Failed to write file: ${error.message}`,
-          },
-        ],
-        error: error.message,
+        content: [{ type: 'text', text: `❌ ${message}` }],
+        error: message,
       };
     }
   },

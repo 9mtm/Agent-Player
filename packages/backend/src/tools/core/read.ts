@@ -1,107 +1,47 @@
 /**
  * Read Tool
  *
- * Read file contents from the workspace
+ * Read a file from the agent's workspace (S1.6 sandbox: per-agent
+ * `.data/workspaces/<agentId>/`, or an explicit read root set by server
+ * code; realpath containment, always-deny list, size limit).
  */
 
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import type { Tool, ToolResult } from './types.js';
-
-/**
- * Validate that path is safe (no path traversal attacks)
- */
-function isPathSafe(filePath: string, workspaceDir: string): boolean {
-  const resolvedPath = path.resolve(workspaceDir, filePath);
-  const normalizedWorkspace = path.resolve(workspaceDir);
-
-  // Path must be inside workspace
-  return resolvedPath.startsWith(normalizedWorkspace);
-}
+import type { Tool, ToolResult } from '../types.js';
+import { FileSandboxError, MAX_READ_BYTES, readRootFor, sandboxedReadFile } from './file-sandbox.js';
 
 export const readTool: Tool = {
   name: 'read',
-  description: 'Read the contents of a file from the workspace',
+  description: `Read a text file from your workspace folder (paths are relative to it; max ${MAX_READ_BYTES} bytes). Files outside the workspace, environment files, keys, databases and credentials cannot be read.`,
   input_schema: {
     type: 'object',
     properties: {
       path: {
         type: 'string',
-        description: 'Path to the file to read (relative to workspace)',
+        description: 'Path to the file to read (relative to your workspace)',
       },
     },
     required: ['path'],
     examples: [
-      {
-        path: 'package.json',
-        description: 'Read package.json to check dependencies and scripts',
-      },
-      {
-        path: 'src/config/settings.ts',
-        description: 'Read application settings configuration file',
-      },
-      {
-        path: '.env.example',
-        description: 'Read environment variables template',
-      },
-      {
-        path: 'README.md',
-        description: 'Read project documentation',
-      },
+      { path: 'notes/meeting.md', description: 'Read meeting notes saved earlier in the workspace' },
+      { path: 'report.txt', description: 'Read a report file from the workspace' },
     ],
   },
 
-  async execute(params): Promise<ToolResult> {
-    const { path: filePath } = params;
-    const workspaceDir = process.cwd(); // TODO: Get from context
-
-    // Security check
-    if (!isPathSafe(filePath, workspaceDir)) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `❌ Access denied: Path "${filePath}" is outside workspace`,
-          },
-        ],
-        error: 'Path outside workspace',
-      };
-    }
-
+  async execute(params, context): Promise<ToolResult> {
+    const filePath = params?.path;
     try {
-      const fullPath = path.resolve(workspaceDir, filePath);
-      console.log(`[ReadTool] 📖 Reading: ${fullPath}`);
-
-      const content = await fs.readFile(fullPath, 'utf-8');
-      const stats = await fs.stat(fullPath);
-
-      console.log(`[ReadTool] ✅ File read successfully`);
-      console.log(`[ReadTool]   Size: ${stats.size} bytes`);
-
+      const root = readRootFor(context);
+      const r = sandboxedReadFile(root, filePath);
       return {
-        content: [
-          {
-            type: 'text',
-            text: content,
-          },
-        ],
-        details: {
-          path: filePath,
-          size: stats.size,
-          modified: stats.mtime,
-        },
+        content: [{ type: 'text', text: r.content }],
+        details: { path: r.rel, size: r.size, modified: r.modified },
       };
     } catch (error: any) {
-      console.error(`[ReadTool] ❌ Read failed:`, error.message);
-
+      const message = error instanceof FileSandboxError ? error.message : 'Failed to read file';
+      if (!(error instanceof FileSandboxError)) console.error('[ReadTool] read failed:', error?.code ?? 'error');
       return {
-        content: [
-          {
-            type: 'text',
-            text: `❌ Failed to read file: ${error.message}`,
-          },
-        ],
-        error: error.message,
+        content: [{ type: 'text', text: `❌ ${message}` }],
+        error: message,
       };
     }
   },

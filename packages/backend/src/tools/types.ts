@@ -72,4 +72,11 @@ export interface ToolExecutionContext {
   memoryDrawers?: import('../memory/drawers.js').DrawerRef[];
   /** CORE-08: the durable task-run step this call belongs to (set by the run executor). */
   taskRun?: { runId: string; stepIndex: number; idempotencyKey: string };
+  /**
+   * S1.6 / MCP-01b: directory the `read` tool is confined to instead of the
+   * agent's own workspace. Set only by trusted server code (e.g. the
+   * owner-chosen directory of a small-agent run), never from model input.
+   * `write` ignores it and always stays in the agent's workspace.
+   */
+  fileReadRoot?: string;
 }
