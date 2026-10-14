@@ -13,9 +13,12 @@
  * them. A sub-agent's grants must be a subset of its parent's.
  */
 
+import { actorOf } from '../../auth/auth-gate.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { repositories } from '../../repositories/index.js';
+import { actorOrReply, requireOwner } from '../../repositories/scope.js';
 import { createToolsRegistry } from '../../tools/index.js';
-import { GrantConflictError, GrantValidationError, getAgentGrantView, setAgentGrants } from '../../tools/grants.js';
+import { GrantConflictError, GrantValidationError } from '../../tools/grants.js';
 import { VersionInputError, etag, expectedVersionFrom } from '../concurrency.js';
 import { approvalCategory } from '../../tools/approvals.js';
 import { isToolExecClass, isToolObjectAllowedByExecPolicy } from '../../tools/exec-policy.js';
@@ -23,11 +26,10 @@ import { logAudit } from '../../services/audit-logger.js';
 
 const AGENT_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 
+/** Owner account id (central rule, repositories/scope.ts), else 401/403 sent and null. */
 function ownerOf(request: FastifyRequest, reply: FastifyReply): string | null {
-  const user = request.authUser;
-  if (!user) { reply.code(401).send({ error: 'Authentication required' }); return null; }
-  if (user.role !== 'owner') { reply.code(403).send({ error: 'This action requires the owner account' }); return null; }
-  return user.id;
+  const actor = actorOrReply(reply, actorOf(request), requireOwner);
+  return actor ? actor.userId ?? null : null;
 }
 
 function registeredTools() {
@@ -41,7 +43,7 @@ export async function agentGrantsRoutes(fastify: FastifyInstance) {
     if (ownerOf(request, reply) === null) return reply;
     if (!AGENT_ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid agent id' });
     const available = registeredTools();
-    const view = getAgentGrantView(request.params.id, available);
+    const view = await repositories.agents.grantView(actorOf(request), request.params.id, available);
     if (!view) return reply.code(404).send({ error: 'Agent not found' });
     reply.header('ETag', etag(view.version));
     return {
@@ -78,10 +80,10 @@ export async function agentGrantsRoutes(fastify: FastifyInstance) {
       }
       let change;
       try {
-        change = setAgentGrants(agentId, { grants: body.grants, parentAgentId: body.parentAgentId, expectedVersion }, ownerId, available);
+        change = await repositories.agents.setGrants(actorOf(request), agentId, { grants: body.grants, parentAgentId: body.parentAgentId, expectedVersion }, available);
       } catch (err: any) {
         if (err instanceof GrantConflictError) {
-          const current = getAgentGrantView(agentId, available);
+          const current = await repositories.agents.grantView(actorOf(request), agentId, available);
           return reply.code(409).header('ETag', etag(err.currentVersion)).send({ error: err.message, code: 'version_conflict', currentVersion: err.currentVersion, ...current });
         }
         if (err instanceof GrantValidationError) {
@@ -108,7 +110,7 @@ export async function agentGrantsRoutes(fastify: FastifyInstance) {
         success: true,
         metadata: { added, removed, parentAgentId: change.parentAgentId },
       });
-      const view = getAgentGrantView(agentId, available);
+      const view = await repositories.agents.grantView(actorOf(request), agentId, available);
       if (view) reply.header('ETag', etag(view.version));
       return view;
     });

@@ -14,28 +14,25 @@
  * grants tools or permissions (those are /api/agents/:id/tool-grants).
  */
 
+import { actorOf } from '../../auth/auth-gate.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { repositories } from '../../repositories/index.js';
+import { actorOrReply, requireOwner } from '../../repositories/scope.js';
 import { logAudit } from '../../services/audit-logger.js';
 import { DIALECTS, PRESETS, PersonalityInputError, TRAIT_NAMES, traitsToBehavior } from '../../services/personality.js';
 import {
   PersonalityLockedError,
   PersonalityNotFoundError,
   exportPersonalityFile,
-  getCurrentPersonality,
-  listPersonalityVersions,
-  rollbackPersonality,
-  savePersonalityVersion,
-  setPersonalityLocked,
   type PersonalityVersion,
 } from '../../services/personality-store.js';
 
 const AGENT_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 
+/** Owner account id (central rule, repositories/scope.ts), else 401/403 sent and null. */
 function ownerOf(request: FastifyRequest, reply: FastifyReply): string | null {
-  const user = request.authUser;
-  if (!user) { reply.code(401).send({ error: 'Authentication required' }); return null; }
-  if (user.role !== 'owner') { reply.code(403).send({ error: 'This action requires the owner account' }); return null; }
-  return user.id;
+  const actor = actorOrReply(reply, actorOf(request), requireOwner);
+  return actor ? actor.userId ?? null : null;
 }
 
 function view(p: PersonalityVersion) {
@@ -49,7 +46,7 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
 
   async function change(
     request: FastifyRequest<Params>, reply: FastifyReply, action: string,
-    run: (agentId: string, ownerId: string) => PersonalityVersion,
+    run: (agentId: string) => Promise<PersonalityVersion>,
   ) {
     const ownerId = ownerOf(request, reply);
     if (ownerId === null) return reply;
@@ -63,7 +60,7 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
     });
     let result: PersonalityVersion;
     try {
-      result = run(agentId, ownerId);
+      result = await run(agentId);
     } catch (err) {
       if (err instanceof PersonalityInputError) { audit(false, { error_message: err.message }); return reply.code(400).send({ error: err.message }); }
       if (err instanceof PersonalityLockedError) { audit(false, { error_message: err.message }); return reply.code(409).send({ error: err.message }); }
@@ -83,7 +80,7 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
   fastify.get<Params>('/api/agents/:id/personality/current', { config }, async (request, reply) => {
     if (ownerOf(request, reply) === null) return reply;
     if (!AGENT_ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid agent id' });
-    const current = getCurrentPersonality(request.params.id);
+    const current = await repositories.agents.currentPersonality(actorOf(request), request.params.id);
     if (!current) return reply.code(404).send({ error: 'Agent not found' });
     return {
       ...view(current),
@@ -96,7 +93,7 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
   fastify.get<Params>('/api/agents/:id/personality/versions', { config }, async (request, reply) => {
     if (ownerOf(request, reply) === null) return reply;
     if (!AGENT_ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid agent id' });
-    const versions = listPersonalityVersions(request.params.id);
+    const versions = await repositories.agents.personalityVersions(actorOf(request), request.params.id);
     if (!versions) return reply.code(404).send({ error: 'Agent not found' });
     return { agentId: request.params.id, versions };
   });
@@ -107,15 +104,15 @@ export async function agentPersonalityRoutes(fastify: FastifyInstance) {
       if (ownerOf(request, reply) === null) return reply;
       return reply.code(400).send({ error: 'Body must be an object' });
     }
-    return change(request, reply, 'agent_personality.save', (agentId, ownerId) => savePersonalityVersion(agentId, body, ownerId));
+    return change(request, reply, 'agent_personality.save', (agentId) => repositories.agents.savePersonality(actorOf(request), agentId, body));
   });
 
   fastify.post<Params>('/api/agents/:id/personality/lock', { config }, async (request, reply) =>
-    change(request, reply, 'agent_personality.lock', (agentId, ownerId) => setPersonalityLocked(agentId, true, ownerId)));
+    change(request, reply, 'agent_personality.lock', (agentId) => repositories.agents.setPersonalityLocked(actorOf(request), agentId, true)));
 
   fastify.post<Params>('/api/agents/:id/personality/unlock', { config }, async (request, reply) =>
-    change(request, reply, 'agent_personality.unlock', (agentId, ownerId) => setPersonalityLocked(agentId, false, ownerId)));
+    change(request, reply, 'agent_personality.unlock', (agentId) => repositories.agents.setPersonalityLocked(actorOf(request), agentId, false)));
 
   fastify.post<Params & { Body: { version?: unknown } }>('/api/agents/:id/personality/rollback', { config }, async (request, reply) =>
-    change(request, reply, 'agent_personality.rollback', (agentId, ownerId) => rollbackPersonality(agentId, request.body?.version, ownerId)));
+    change(request, reply, 'agent_personality.rollback', (agentId) => repositories.agents.rollbackPersonality(actorOf(request), agentId, request.body?.version)));
 }
