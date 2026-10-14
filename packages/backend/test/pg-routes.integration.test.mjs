@@ -605,7 +605,7 @@ test('avatars: CRUD with camelCase fields; concurrent first adds activate exactl
 // Onboarding wizard
 // ---------------------------------------------------------------------------
 
-test('onboarding wizard: concurrent saves keep both answers (per-user lock); complete and reset', { skip }, async () => {
+test('onboarding wizard: concurrent saves keep both answers (per-user lock); profile name on PostgreSQL; complete and reset', { skip }, async () => {
   const id = u.member.id;
   await Promise.all([
     m.wizard.saveWizardStep(id, { step: 'channels', answers: { selectedChannels: ['web'] } }, 3),
@@ -615,6 +615,10 @@ test('onboarding wizard: concurrent saves keep both answers (per-user lock); com
   assert.deepEqual(st.data.selectedChannels, ['web']);
   assert.deepEqual(st.data.selectedSkills, ['notes']);
   assert.equal(st.completed, false);
+  // The profile step writes users.full_name on PostgreSQL (no SQLite users repository).
+  await m.wizard.saveWizardStep(id, { step: 'profile', answers: { userName: `Member ${tag}`, language: 'en' } }, 2);
+  assert.equal((await one('SELECT full_name FROM users WHERE id = ?', id)).full_name, `Member ${tag}`);
+  assert.equal((await m.wizard.getWizardState(id)).data.userName, `Member ${tag}`);
   const done = await m.wizard.completeWizard(id, true);
   assert.equal(done.completed, true);
   assert.equal(done.skipped, true);

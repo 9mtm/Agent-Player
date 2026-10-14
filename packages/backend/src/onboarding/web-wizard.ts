@@ -17,8 +17,7 @@
  * per-user lock, so two concurrent saves never lose each other's answers.
  */
 
-import { getRepositories } from '../db/index.js';
-import { lockName, one, run, sql, type Step } from '../repositories/sql-steps.js';
+import { lockName, one, q, run, sql, type Step } from '../repositories/sql-steps.js';
 import { getSettingsManager } from '../settings/index.js';
 import { DEFAULT_SETTINGS } from '../settings/types.js';
 import type { AgentSettings } from '../settings/types.js';
@@ -298,7 +297,8 @@ export async function saveWizardStep(
 ): Promise<WizardState> {
   if (step) {
     if (step.step === 'profile') {
-      await getRepositories().users.update(userId, { full_name: step.answers.userName });
+      // The same statement UsersRepository.update ran (SQLite only), on the process driver.
+      await q.run('UPDATE users SET full_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', step.answers.userName, userId);
     } else if (step.step === 'provider') {
       await applyProviderSettings(step.answers, step.apiKey);
     }
