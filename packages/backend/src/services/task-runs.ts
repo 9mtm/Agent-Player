@@ -34,6 +34,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { getDatabase } from '../db/index.js';
 import { getEncryptionService } from '../credentials/encryption.js';
+import { decryptContract, encryptContract, type TaskContract, type Verdict, type VerificationStatus, contractView, type ContractView } from './task-contracts.js';
 
 export type TaskRunStatus = 'queued' | 'running' | 'waiting_approval' | 'completed' | 'failed' | 'cancelled';
 export type StepStatus = 'started' | 'completed' | 'failed' | 'unknown' | 'waiting_approval' | 'retry';
@@ -93,7 +94,7 @@ export function idempotencyKey(runId: string, stepIndex: number, kind: 'model' |
 // ---------------------------------------------------------------------------
 
 export class LeaseLostError extends Error { constructor() { super('lease lost'); } }
-export class BudgetExceededError extends Error { constructor(readonly which: 'steps' | 'duration', detail: string) { super(`budget: ${detail}`); } }
+export class BudgetExceededError extends Error { constructor(readonly which: 'steps' | 'duration' | 'cost', detail: string) { super(`budget: ${detail}`); } }
 export class RunCancelledError extends Error { constructor() { super('cancelled'); } }
 export class ReplayMismatchError extends Error { constructor(index: number) { super(`replay mismatch at step ${index}: the stored step has a different input`); } }
 /** The run paused (waits for the owner); not a failure. */
@@ -113,6 +114,13 @@ export interface TaskRunRow {
   input_encrypted: string | null; input_iv: string | null; input_tag: string | null;
   output_preview: string | null;
   created_at: string; started_at: string | null; updated_at: string; finished_at: string | null;
+  // R1 / R2 (migration 068)
+  contract_encrypted: string | null; contract_iv: string | null; contract_tag: string | null;
+  verification_status: VerificationStatus | null; verification_reasons: string | null;
+  verification_round: number; max_verification_retries: number;
+  review_mode: string | null; review_decision: 'accepted' | 'rejected' | null;
+  reviewed_by: string | null; reviewer_kind: string | null; review_note: string | null; reviewed_at: string | null;
+  max_cost_cents: number | null; cost_cents: number;
 }
 
 export interface TaskRunStepRow {
@@ -121,6 +129,8 @@ export interface TaskRunStepRow {
   approval_id: string | null;
   result_encrypted: string | null; result_iv: string | null; result_tag: string | null;
   error: string | null; resolved_by: string | null; started_at: string; completed_at: string | null;
+  provider: string | null; model: string | null; input_tokens: number | null; output_tokens: number | null;
+  cost_cents: number | null; usage_source: string | null;
 }
 
 export function getRun(id: string): TaskRunRow | undefined {
@@ -144,6 +154,8 @@ export interface CreateRunInput {
   prompt: string;
   maxSteps?: number;
   maxDurationMs?: number;
+  /** R1: the task's contract, pinned on the run (its budget may only lower the limits). */
+  contract?: TaskContract | null;
 }
 
 /** Create a queued run, or return the task's unfinished run (one per task). */
@@ -153,13 +165,22 @@ export async function createRun(input: CreateRunInput): Promise<TaskRunRow> {
   const d = runDefaults();
   const { encrypted, iv, authTag } = await getEncryptionService().encrypt(JSON.stringify({ prompt: input.prompt }));
   const id = randomUUID();
+  const contract = input.contract ?? null;
+  let maxSteps = clampInt(input.maxSteps, d.maxSteps, 1, 10_000);
+  let maxDurationMs = clampInt(input.maxDurationMs, d.maxDurationMs, 1, 24 * 3_600_000);
+  if (contract?.budget?.maxSteps) maxSteps = Math.min(maxSteps, contract.budget.maxSteps);
+  if (contract?.budget?.maxDurationMs) maxDurationMs = Math.min(maxDurationMs, contract.budget.maxDurationMs);
+  const enc = contract ? await encryptContract(contract) : null;
   try {
     getDatabase().prepare(`
-      INSERT INTO task_runs (id, task_id, agent_id, user_id, status, max_steps, max_duration_ms, input_encrypted, input_iv, input_tag)
-      VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
-    `).run(id, input.taskId, input.agentId, input.userId ?? null,
-      clampInt(input.maxSteps, d.maxSteps, 1, 10_000), clampInt(input.maxDurationMs, d.maxDurationMs, 1, 24 * 3_600_000),
-      encrypted, iv, authTag);
+      INSERT INTO task_runs (id, task_id, agent_id, user_id, status, max_steps, max_duration_ms, input_encrypted, input_iv, input_tag,
+        contract_encrypted, contract_iv, contract_tag, max_verification_retries, review_mode, max_cost_cents)
+      VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, input.taskId, input.agentId, input.userId ?? null, maxSteps, maxDurationMs,
+      encrypted, iv, authTag,
+      enc?.encrypted ?? null, enc?.iv ?? null, enc?.authTag ?? null,
+      contract ? contract.maxVerificationRetries : 0, contract?.review ?? null,
+      contract?.budget?.maxCostCents ?? null);
   } catch (err: any) {
     // Another process created the task's run at the same moment.
     const raced = activeRunForTask(input.taskId);
@@ -178,6 +199,11 @@ export async function runPrompt(run: TaskRunRow): Promise<string> {
   if (!run.input_encrypted || !run.input_iv || !run.input_tag) return '';
   const plain = await getEncryptionService().decrypt(run.input_encrypted, run.input_iv, run.input_tag);
   return String(JSON.parse(plain).prompt ?? '');
+}
+
+/** R1: the contract pinned on a run (null = no contract). */
+export async function runContract(run: Pick<TaskRunRow, 'contract_encrypted' | 'contract_iv' | 'contract_tag'>): Promise<TaskContract | null> {
+  return decryptContract(run.contract_encrypted, run.contract_iv, run.contract_tag);
 }
 
 export interface Lease { runId: string; owner: string; generation: number }
@@ -399,7 +425,8 @@ export async function durableStep<T>(lease: Lease, index: number, spec: StepSpec
   } catch (err) {
     if (err instanceof BudgetExceededError) {
       // Outcome of the interrupted step is unknown.
-      try { setStepStatus(lease, index, spec.idempotent ? 'failed' : 'unknown', 'stopped by the duration budget while running'); } catch { /* lease gone */ }
+      const why = err.which === 'cost' ? err.message.slice(0, 300) : 'stopped by the duration budget while running';
+      try { setStepStatus(lease, index, spec.idempotent || err.which === 'cost' ? 'failed' : 'unknown', why); } catch { /* lease gone */ }
       throw err;
     }
     try { setStepStatus(lease, index, 'failed', String((err as any)?.message ?? err).slice(0, 300)); } catch { /* lease gone */ }
@@ -560,7 +587,14 @@ export interface TaskRunView {
   id: string; taskId: string; agentId: string; userId: string | null;
   status: TaskRunStatus; statusReason: string | null;
   attempt: number; checkpointStep: number; stepsUsed: number;
-  budget: { maxSteps: number; maxDurationMs: number; activeMs: number };
+  budget: { maxSteps: number; maxDurationMs: number; activeMs: number; maxCostCents: number | null; costCents: number };
+  /** R1: separate from the execution status. null = the run has no contract (unverified). */
+  verification: {
+    status: VerificationStatus | null; reasons: string[]; round: number; maxRetries: number;
+    reviewMode: string | null;
+    review: { decision: 'accepted' | 'rejected'; by: string | null; reviewer: string | null; note: string | null; at: string | null } | null;
+  };
+  hasContract: boolean;
   leaseActive: boolean; cancelRequested: boolean;
   outputPreview: string | null;
   createdAt: string; startedAt: string | null; updatedAt: string; finishedAt: string | null;
@@ -571,6 +605,8 @@ export interface TaskRunStepView {
   idempotent: boolean; attempt: number; idempotencyKey: string;
   approvalId: string | null; error: string | null; resolvedBy: string | null;
   startedAt: string; completedAt: string | null;
+  /** R2: model steps only (null for tool steps and replayed-free steps). */
+  usage: { provider: string | null; model: string | null; inputTokens: number | null; outputTokens: number | null; costCents: number | null; source: string | null } | null;
 }
 
 export function runView(row: TaskRunRow, now = Date.now()): TaskRunView {
@@ -578,7 +614,18 @@ export function runView(row: TaskRunRow, now = Date.now()): TaskRunView {
     id: row.id, taskId: row.task_id, agentId: row.agent_id, userId: row.user_id,
     status: row.status, statusReason: row.status_reason,
     attempt: row.attempt, checkpointStep: row.checkpoint_step, stepsUsed: row.steps_used,
-    budget: { maxSteps: row.max_steps, maxDurationMs: row.max_duration_ms, activeMs: elapsedMs(row, now) },
+    budget: { maxSteps: row.max_steps, maxDurationMs: row.max_duration_ms, activeMs: elapsedMs(row, now), maxCostCents: row.max_cost_cents ?? null, costCents: roundCents(row.cost_cents ?? 0) },
+    verification: {
+      status: row.verification_status ?? null,
+      reasons: parseReasons(row.verification_reasons),
+      round: row.verification_round ?? 0,
+      maxRetries: row.max_verification_retries ?? 0,
+      reviewMode: row.review_mode ?? null,
+      review: row.review_decision
+        ? { decision: row.review_decision, by: row.reviewed_by, reviewer: row.reviewer_kind, note: row.review_note, at: isoUtc(row.reviewed_at) }
+        : null,
+    },
+    hasContract: !!row.contract_encrypted,
     leaseActive: row.status === 'running' && !!row.lease_owner && (row.lease_expires_at ?? 0) >= now,
     cancelRequested: row.cancel_requested === 1,
     outputPreview: row.output_preview,
@@ -593,6 +640,9 @@ export function stepView(row: TaskRunStepRow): TaskRunStepView {
     idempotent: row.idempotent === 1, attempt: row.attempt, idempotencyKey: row.idempotency_key,
     approvalId: row.approval_id, error: row.error, resolvedBy: row.resolved_by,
     startedAt: isoUtc(row.started_at) as string, completedAt: isoUtc(row.completed_at),
+    usage: row.kind === 'model' && (row.provider || row.cost_cents !== null)
+      ? { provider: row.provider, model: row.model, inputTokens: row.input_tokens, outputTokens: row.output_tokens, costCents: row.cost_cents, source: row.usage_source }
+      : null,
   };
 }
 
@@ -606,4 +656,125 @@ export function listRuns(filter: { userId?: string | null; status?: string; task
   return getDatabase().prepare(
     `SELECT * FROM task_runs ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC, rowid DESC LIMIT ?`
   ).all(...args, limit) as TaskRunRow[];
+}
+
+function roundCents(n: number): number { return Math.round((Number(n) || 0) * 10_000) / 10_000; }
+
+function parseReasons(raw: string | null): string[] {
+  if (!raw) return [];
+  try { const v = JSON.parse(raw); return Array.isArray(v) ? v.map(String) : []; } catch { return []; }
+}
+
+// ---------------------------------------------------------------------------
+// R2: cost usage per step
+// ---------------------------------------------------------------------------
+
+/** Record a model step's usage (provider, model, tokens, cost) and add it to the run total. */
+export function recordStepUsage(runId: string, stepIndex: number, u: { provider: string; model: string | null; inputTokens: number; outputTokens: number; costCents: number; source: string }): void {
+  const db = getDatabase();
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE task_run_steps SET provider = ?, model = ?, input_tokens = ?, output_tokens = ?, cost_cents = COALESCE(cost_cents, 0) + ?, usage_source = ?
+      WHERE run_id = ? AND step_index = ?
+    `).run(u.provider, u.model, u.inputTokens, u.outputTokens, u.costCents, u.source, runId, stepIndex);
+    db.prepare(`UPDATE task_runs SET cost_cents = cost_cents + ?, updated_at = datetime('now') WHERE id = ?`).run(u.costCents, runId);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// R1: verification rounds + review
+// ---------------------------------------------------------------------------
+
+export interface StoredVerdict extends Verdict { round: number; verifier: string; createdAt: string }
+
+export function getVerification(runId: string, round: number): StoredVerdict | null {
+  const row = getDatabase().prepare('SELECT * FROM task_run_verifications WHERE run_id = ? AND round = ?').get(runId, round) as
+    { round: number; status: VerificationStatus; reasons: string; checks: string; verifier: string; created_at: string } | undefined;
+  if (!row) return null;
+  return { round: row.round, status: row.status, reasons: parseReasons(row.reasons), checks: JSON.parse(row.checks), verifier: row.verifier, createdAt: isoUtc(row.created_at) as string };
+}
+
+export function listVerifications(runId: string): StoredVerdict[] {
+  const rows = getDatabase().prepare('SELECT round FROM task_run_verifications WHERE run_id = ? ORDER BY round').all(runId) as Array<{ round: number }>;
+  return rows.map((r) => getVerification(runId, r.round)!).filter(Boolean);
+}
+
+/**
+ * Store a round's verdict (fenced). A verdict already stored for the round
+ * wins: a resumed run replays the same decision instead of judging again.
+ */
+export function storeVerification(lease: Lease, round: number, verdict: Verdict, verifier: string): StoredVerdict {
+  const db = getDatabase();
+  db.transaction(() => {
+    if (!holdsLease(lease)) throw new LeaseLostError();
+    db.prepare(`
+      INSERT OR IGNORE INTO task_run_verifications (run_id, round, status, reasons, checks, verifier) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(lease.runId, round, verdict.status, JSON.stringify(verdict.reasons), JSON.stringify(verdict.checks), verifier);
+    db.prepare(`UPDATE task_runs SET verification_round = MAX(verification_round, ?), updated_at = datetime('now') WHERE id = ?`).run(round, lease.runId);
+  });
+  return getVerification(lease.runId, round)!;
+}
+
+/** Set the run's verification status (fenced while the run is running). */
+export function setRunVerification(lease: Lease, status: VerificationStatus, reasons: string[]): void {
+  const db = getDatabase();
+  const res = db.prepare(`UPDATE task_runs SET verification_status = ?, verification_reasons = ?, updated_at = datetime('now') WHERE ${FENCE}`)
+    .run(status, JSON.stringify(reasons), lease.runId, lease.owner, lease.generation);
+  if (res.changes !== 1) throw new LeaseLostError();
+}
+
+/** After the run finished (unfenced): mark it needs_review (e.g. the small-agent card asks for it). */
+export function markRunNeedsReview(runId: string, reason: string): void {
+  getDatabase().prepare(`
+    UPDATE task_runs SET verification_status = 'needs_review', verification_reasons = ?, updated_at = datetime('now')
+    WHERE id = ? AND status = 'completed' AND (verification_status IS NULL OR verification_status = 'verified') AND review_decision IS NULL
+  `).run(JSON.stringify([reason]), runId);
+}
+
+/** Successful tool calls of a run (completed tool steps whose result has no error). */
+export async function successfulToolCalls(runId: string): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (const s of getSteps(runId)) {
+    if (s.kind !== 'tool' || s.status !== 'completed' || !s.tool_name) continue;
+    let ok = false;
+    try { const r = await stepResult<any>(s); ok = !!r && !r.error; } catch { ok = false; }
+    if (ok) out.set(s.tool_name, (out.get(s.tool_name) ?? 0) + 1);
+  }
+  return out;
+}
+
+export type ReviewDecision = 'accept' | 'reject';
+
+/**
+ * Owner decision for a run whose result needs review. Only once; only for
+ * a completed run in needs_review.
+ */
+export function reviewRun(runId: string, decision: ReviewDecision, by: string, reviewer: 'owner' | 'large_agent', note: string | null): TaskRunRow {
+  const db = getDatabase();
+  db.transaction(() => {
+    const run = getRun(runId);
+    if (!run) throw new RunStateError('Run not found', 404);
+    if (run.status !== 'completed' || run.verification_status !== 'needs_review') throw new RunStateError('This run is not waiting for a review', 409);
+    if (run.review_decision) throw new RunStateError('This run was already reviewed', 409);
+    db.prepare(`
+      UPDATE task_runs SET review_decision = ?, reviewed_by = ?, reviewer_kind = ?, review_note = ?, reviewed_at = datetime('now'), updated_at = datetime('now')
+      WHERE id = ?
+    `).run(decision === 'accept' ? 'accepted' : 'rejected', by, reviewer, note, runId);
+  });
+  return getRun(runId)!;
+}
+
+export interface TaskRunDetailView extends TaskRunView {
+  contract: ContractView | null;
+  verificationRounds: StoredVerdict[];
+}
+
+/** Run detail for the API: contract without input values or secrets, verification rounds, cost. */
+export async function runDetailView(row: TaskRunRow): Promise<TaskRunDetailView> {
+  let contract: ContractView | null = null;
+  try {
+    const c = await runContract(row);
+    contract = c ? contractView(c) : null;
+  } catch { contract = null; }
+  return { ...runView(row), contract, verificationRounds: listVerifications(row.id) };
 }

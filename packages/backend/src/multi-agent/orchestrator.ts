@@ -632,6 +632,28 @@ export class AgentOrchestrator {
   }
 
   /**
+   * R1: the run finished but its result needs a review (owner or a large
+   * agent) before the task counts as completed. The output is kept; no
+   * pipeline propagation or parent completion until it is accepted
+   * (completeTask) or rejected (failTask).
+   */
+  holdTaskForReview(taskId: string, output?: Record<string, unknown>): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    task.status = 'review';
+    if (output) task.output = output;
+    if (task.assignedTo) {
+      const agent = this.agents.get(task.assignedTo);
+      if (agent) {
+        agent.currentTasks = agent.currentTasks.filter((id) => id !== taskId);
+        if (agent.currentTasks.length === 0) agent.status = 'idle';
+      }
+    }
+    this.persistTask(task);
+    return true;
+  }
+
+  /**
    * Complete task
    */
   completeTask(taskId: string, output?: Record<string, unknown>): boolean {

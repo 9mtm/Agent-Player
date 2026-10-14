@@ -25,6 +25,8 @@ export interface ClaudeResponse {
     arguments: Record<string, any>;
   }>;
   stopReason?: string;
+  /** Token usage reported by the provider (R2 cost budget). */
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 export class ClaudeClient {
@@ -82,6 +84,13 @@ export class ClaudeClient {
       stopReason: data.stop_reason,
       rawBlocks: data.content, // keep raw blocks for agentic loop
     };
+    const u = data?.usage;
+    if (u && Number.isFinite(u.input_tokens) && Number.isFinite(u.output_tokens)) {
+      result.usage = {
+        inputTokens: Number(u.input_tokens) + (Number(u.cache_creation_input_tokens) || 0) + (Number(u.cache_read_input_tokens) || 0),
+        outputTokens: Number(u.output_tokens),
+      };
+    }
 
     // Extract text content
     const textBlocks = data.content.filter((block: any) => block.type === 'text');

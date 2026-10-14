@@ -13,6 +13,10 @@ import {
   type MessageType,
 } from '../../multi-agent/index.js';
 import { getDatabase } from '../../db/index.js';
+import { createToolsRegistry } from '../../tools/index.js';
+import { UNKNOWN_PRINCIPAL } from '../../tools/grants.js';
+import { ContractValidationError, storeTaskContract, validateContract, type TaskContract } from '../../services/task-contracts.js';
+import { runDefaults } from '../../services/task-runs.js';
 
 export async function multiAgentRoutes(fastify: FastifyInstance): Promise<void> {
   const prefix = '/api/multi-agent';
@@ -262,10 +266,37 @@ export async function multiAgentRoutes(fastify: FastifyInstance): Promise<void> 
       deadline?: string;
       maxRetries?: number;
       assignedTo?: string;   // agent id or name — if provided, auto-assign after creation
+      contract?: unknown;    // R1: task contract (see services/task-contracts.ts)
     };
 
     if (!body.title || !body.description) {
       return reply.status(400).send({ error: 'Missing required fields: title, description' });
+    }
+
+    const isOwner = request.authUser?.role === 'owner';
+    let assignee: { id: string; auto_approve_tasks: number } | undefined;
+    if (body.assignedTo) {
+      assignee = getDatabase().prepare(
+        `SELECT id, auto_approve_tasks FROM agents_config WHERE id = ? OR name = ? LIMIT 1`
+      ).get(body.assignedTo, body.assignedTo) as { id: string; auto_approve_tasks: number } | undefined;
+    }
+
+    // R1: validate the contract before anything is created. Allowed tools
+    // must be inside what the run would get: the assignee's grants, limited
+    // to the minimal set when the creator is not the owner (S1.2).
+    let contract: TaskContract | null = null;
+    if (body.contract !== undefined && body.contract !== null) {
+      if (body.assignedTo && !assignee) return reply.status(400).send({ error: `contract: agent "${body.assignedTo}" not found` });
+      try {
+        const grants = assignee
+          ? createToolsRegistry({ workspaceDir: process.cwd(), agentId: assignee.id, delegatedFrom: isOwner ? [] : [UNKNOWN_PRINCIPAL] }).getContext().grants ?? null
+          : null;
+        const d = runDefaults();
+        contract = validateContract(body.contract, { grants, maxSteps: d.maxSteps, maxDurationMs: d.maxDurationMs });
+      } catch (err) {
+        if (err instanceof ContractValidationError) return reply.status(400).send({ error: err.message });
+        throw err;
+      }
     }
 
     const orchestrator = getOrchestrator();
@@ -282,22 +313,17 @@ export async function multiAgentRoutes(fastify: FastifyInstance): Promise<void> 
       maxRetries: body.maxRetries,
       // S1.2: only the owner's own API tasks count as undelegated; anyone else
       // is a principal without grants of its own (runs get the minimal set).
-      origin: request.authUser?.role === 'owner' ? 'owner' : `user:${request.authUser?.id ?? 'unknown'}`,
+      origin: isOwner ? 'owner' : `user:${request.authUser?.id ?? 'unknown'}`,
     });
 
-    // If an agent was specified, resolve it and auto-assign
-    if (body.assignedTo) {
-      const db = getDatabase();
-      const agent = db.prepare(
-        `SELECT id, auto_approve_tasks FROM agents_config WHERE id = ? OR name = ? LIMIT 1`
-      ).get(body.assignedTo, body.assignedTo) as { id: string; auto_approve_tasks: number } | undefined;
+    if (contract) await storeTaskContract(task.id, contract, request.authUser?.id ?? null);
 
-      if (agent) {
-        orchestrator.assignTask(task.id, agent.id);
-      }
+    // If an agent was specified (resolved above), auto-assign
+    if (assignee) {
+      orchestrator.assignTask(task.id, assignee.id);
     }
 
-    return reply.status(201).send({ success: true, task: orchestrator.getTask(task.id) ?? task });
+    return reply.status(201).send({ success: true, task: orchestrator.getTask(task.id) ?? task, hasContract: !!contract });
   });
 
   /**

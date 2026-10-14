@@ -7,6 +7,12 @@
  *   POST /api/task-runs/:id/cancel                   owner or the run's own user; pending approvals of the run are denied
  *   POST /api/task-runs/:id/steps/:index/resolve     owner only: { outcome: 'done' | 'skip' | 'retry' } for a step
  *                                                    whose outcome is unknown after an interruption
+ *   POST /api/task-runs/:id/review                   owner only (R1): { decision: 'accept' | 'reject', note?, reviewer?:
+ *                                                    'owner' | 'large_agent' } for a run whose result needs review
+ *
+ * R1: GET /:id also shows the pinned contract (input VALUES never, keys
+ * only; texts secret-redacted), verification status/reasons/rounds and the
+ * run's cost (R2).
  *
  * Gate: 'user' tier (guests refused) for the first three, 'owner' for resolve
  * (tier rule + config.access); handlers check the role/ownership again.
@@ -21,10 +27,12 @@ import {
   getSteps,
   listRuns,
   resolveUncertainStep,
+  runDetailView,
   runView,
   stepView,
   type TaskRunRow,
 } from '../../services/task-runs.js';
+import { applyRunReview } from '../../services/task-run-executor.js';
 
 const ID = /^[0-9a-f-]{36}$/i;
 const STATUSES = new Set(['queued', 'running', 'waiting_approval', 'completed', 'failed', 'cancelled']);
@@ -76,7 +84,7 @@ export async function taskRunsRoutes(fastify: FastifyInstance) {
     if (!ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid id' });
     const run = getRun(request.params.id);
     if (!visible(run, user)) return reply.code(404).send({ error: 'Run not found' });
-    return { run: runView(run), steps: getSteps(run.id).map(stepView) };
+    return { run: await runDetailView(run), steps: getSteps(run.id).map(stepView) };
   });
 
   fastify.post<{ Params: { id: string } }>('/api/task-runs/:id/cancel', async (request, reply) => {
@@ -114,6 +122,32 @@ export async function taskRunsRoutes(fastify: FastifyInstance) {
         return { run: runView(updated), steps: getSteps(updated.id).map(stepView) };
       } catch (err: any) {
         audit(request, user.id, 'resolve_step', request.params.id, false, { step: index, outcome, error: err?.message });
+        if (err instanceof RunStateError) return reply.code(err.status).send({ error: err.message });
+        throw err;
+      }
+    },
+  );
+
+  fastify.post<{ Params: { id: string }; Body: { decision?: string; note?: unknown; reviewer?: unknown } }>(
+    '/api/task-runs/:id/review',
+    { config: { access: 'owner' as const } },
+    async (request, reply) => {
+      const user = caller(request, reply);
+      if (!user) return reply;
+      if (user.role !== 'owner') return reply.code(403).send({ error: 'This action requires the owner account' });
+      if (!ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid id' });
+      const decision = request.body?.decision;
+      if (decision !== 'accept' && decision !== 'reject') return reply.code(400).send({ error: "decision must be 'accept' or 'reject'" });
+      const note = request.body?.note;
+      if (note !== undefined && note !== null && (typeof note !== 'string' || note.length > 2000)) return reply.code(400).send({ error: 'note must be a string (max 2000 characters)' });
+      const reviewer = request.body?.reviewer ?? 'owner';
+      if (reviewer !== 'owner' && reviewer !== 'large_agent') return reply.code(400).send({ error: "reviewer must be 'owner' or 'large_agent'" });
+      try {
+        const updated = await applyRunReview(request.params.id, decision, user.id, reviewer, typeof note === 'string' && note ? note : null);
+        audit(request, user.id, 'review', updated.id, true, { decision, reviewer });
+        return { run: await runDetailView(updated) };
+      } catch (err: any) {
+        audit(request, user.id, 'review', request.params.id, false, { decision, error: err?.message });
         if (err instanceof RunStateError) return reply.code(err.status).send({ error: err.message });
         throw err;
       }

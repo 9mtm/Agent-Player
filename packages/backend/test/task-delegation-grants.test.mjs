@@ -21,6 +21,10 @@ process.env.DATABASE_PATH = join(dir, '.data', 'agent-player.db');
 process.env.JWT_SECRET = randomBytes(64).toString('hex'); // throwaway, test only
 process.env.ENCRYPTION_KEY = randomBytes(32).toString('hex'); // throwaway, test only
 delete process.env.AGENT_EXEC_TOOLS;
+// R2: cron runs call a (stubbed) paid model; autonomous paid calls need a
+// daily cap above 0 (default 0 = off). Throwaway value, no real spend.
+process.env.DAILY_PAID_CAP_CENTS = '1000000';
+delete process.env.MODEL_PRICES_JSON;
 
 const modelRequests = [];
 const realFetch = globalThis.fetch;

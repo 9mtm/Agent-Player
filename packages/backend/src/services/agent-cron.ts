@@ -17,6 +17,8 @@ import { ClaudeClient } from '../llm/claude-client.js';
 import { logActivity } from './activity-logger.js';
 import { resolveProviderApiKey } from '../credentials/authority.js';
 import { createRun } from './task-runs.js';
+import { contractPrompt, getTaskContract } from './task-contracts.js';
+import { CostBudgetError, recordPaidCall, releasePaidCall, reservePaidCall } from './cost-budget.js';
 import { executeTaskRun, type AgentRow } from './task-run-executor.js';
 
 const HEARTBEAT_OK_TOKEN = 'HEARTBEAT_OK';
@@ -65,6 +67,18 @@ async function runHeartbeat(agent: AgentRow, heartbeatContent: string): Promise<
     `If nothing needs attention, reply with exactly: HEARTBEAT_OK\n\n` +
     `## HEARTBEAT.md\n${heartbeatContent}`;
 
+  // R2 / D-BUDGET: a heartbeat is an autonomous paid call -> daily cap gate.
+  let ticket;
+  try {
+    ticket = reservePaidCall({ provider: 'claude', model: agent.model, payload: { prompt, systemPrompt }, maxOutputTokens: 1024, purpose: 'heartbeat' });
+  } catch (err: any) {
+    if (err instanceof CostBudgetError) {
+      console.log(`[AgentCron] 💤 Heartbeat for "${agent.name}" skipped: ${err.message}`);
+      return;
+    }
+    throw err;
+  }
+
   let response: any;
   try {
     response = await claude.sendMessage(
@@ -72,9 +86,11 @@ async function runHeartbeat(agent: AgentRow, heartbeatContent: string): Promise<
       { systemPrompt, temperature: agent.temperature, maxTokens: 1024 },
     );
   } catch (err: any) {
+    releasePaidCall(ticket);
     console.warn(`[AgentCron] ⚠️  Heartbeat API error for "${agent.name}": ${err.message}`);
     return;
   }
+  recordPaidCall(ticket, response?.usage, response?.content ?? '');
 
   const reply: string = (response.content ?? '').trim();
 
@@ -126,10 +142,14 @@ export async function runAgentTask(agent: AgentRow, taskId: string, taskDescript
     summary: `Agent ${agent.name} started task`,
   });
 
-  const run = await createRun({ taskId, agentId: agent.id, userId: null, prompt: taskDescription });
+  // R1: the task's contract (if any) is pinned on the run and shown to the model.
+  const contract = await getTaskContract(taskId);
+  const prompt = contract ? `${taskDescription}\n${contractPrompt(contract)}` : taskDescription;
+  const run = await createRun({ taskId, agentId: agent.id, userId: null, prompt, contract });
   const res = await executeTaskRun(run.id);
   if (res.status === 'waiting_approval') return `Task run ${run.id} is waiting for the owner (${res.reason}).`;
   if (res.status === 'not_claimed' || res.status === 'lease_lost') return `Task run ${run.id} is being executed by another worker.`;
+  if (res.verification === 'needs_review') return `${res.output ?? ''}\n\n(Task run ${run.id} is waiting for a review.)`;
   return res.output ?? res.reason ?? '';
 }
 

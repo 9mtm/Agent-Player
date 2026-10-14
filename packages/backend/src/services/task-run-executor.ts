@@ -8,6 +8,12 @@
  * incomplete step actually runs. Permissions are re-checked on every
  * attempt (the tools registry is built from the agent's current grants).
  *
+ * R1: a run with a task contract is verified when the loop ends
+ * (task-contracts.ts); a failed verdict starts another round in the same run
+ * (bounded by the contract) where every completed step is replayed, so side
+ * effects never repeat. Verdicts are stored per round. R2: every fresh
+ * model call goes through the cost budget gate (cost-budget.ts).
+ *
  * startTaskRunRecovery() runs once at boot and then on an interval: queued
  * runs (new, approval decided, owner resolved) and running runs whose lease
  * expired are claimed again (one worker per run via the atomic claim).
@@ -23,7 +29,11 @@ import { UNKNOWN_PRINCIPAL } from '../tools/grants.js';
 import { logActivity } from './activity-logger.js';
 import { resolveProviderApiKey } from '../credentials/authority.js';
 import { ollamaToolChat } from '../llm/ollama-tool-chat.js';
-import { SMALL_AGENT_ID, smallAgentRunScope, smallAgentSystemPrompt } from './small-agent.js';
+import { SMALL_AGENT_ID, smallAgentCard, smallAgentRunScope, smallAgentSystemPrompt } from './small-agent.js';
+import { intersectGrants, staticGrants } from '../tools/grants.js';
+import { sameDrawer } from '../memory/drawers.js';
+import { CostBudgetError, recordPaidCall, releasePaidCall, reservePaidCall } from './cost-budget.js';
+import { contractDrawers, retryFeedback, verifyResult, type TaskContract } from './task-contracts.js';
 import {
   BudgetExceededError,
   LeaseLostError,
@@ -37,12 +47,21 @@ import {
   getRun,
   heartbeat,
   isIdempotentTool,
+  getVerification,
+  markRunNeedsReview,
+  recordStepUsage,
+  runContract,
+  setRunVerification,
+  storeVerification,
+  successfulToolCalls,
   requeueDecidedApprovalRuns,
   runDefaults,
   runPrompt,
   setRecoveryKick,
   settleCancelledDeadRuns,
+  reviewRun,
   type Lease,
+  type ReviewDecision,
 } from './task-runs.js';
 
 export interface AgentRow {
@@ -89,6 +108,8 @@ export interface AttemptResult {
   status: 'completed' | 'failed' | 'cancelled' | 'waiting_approval' | 'not_claimed' | 'lease_lost';
   output?: string;
   reason?: string;
+  /** R1: verdict of a run with a contract. */
+  verification?: 'verified' | 'failed_verification' | 'needs_review';
 }
 
 interface StoredModelResponse {
@@ -97,12 +118,20 @@ interface StoredModelResponse {
   rawBlocks?: any[];
   /** Ollama (small agent): the assistant message to append. */
   assistant?: any;
+  /** Provider-reported token usage (R2). */
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 type LoopMessage = { role: string; content: string | any[]; [k: string]: any };
 
 /** How one provider's model is called and how its turns are appended. */
 interface ModelDriver {
+  /** Provider + model + output limit, for the cost budget gate (R2). */
+  provider: string;
+  model: string;
+  maxTokens: number;
+  /** What is sent besides the messages (system prompt, tools), for the input estimate. */
+  overhead: unknown;
   call(messages: LoopMessage[]): Promise<StoredModelResponse>;
   assistantMessage(r: StoredModelResponse): LoopMessage;
   toolResultMessages(results: Array<{ id: string; tool: string; result: ToolResult; text: string }>): LoopMessage[];
@@ -161,6 +190,10 @@ function recreateIfRecurring(taskId: string, agentId: string): void {
 
 function claudeDriver(claude: ClaudeClient, agent: AgentRow, systemPrompt: string, tools: any[]): ModelDriver {
   return {
+    provider: 'claude',
+    model: agent.model,
+    maxTokens: agent.max_tokens || 1024,
+    overhead: { systemPrompt, tools },
     async call(messages) {
       const r = await claude.sendMessage(messages as any, {
         systemPrompt,
@@ -168,7 +201,7 @@ function claudeDriver(claude: ClaudeClient, agent: AgentRow, systemPrompt: strin
         temperature: agent.temperature,
         maxTokens: agent.max_tokens,
       });
-      return { content: r.content, toolCalls: r.toolCalls, rawBlocks: r.rawBlocks };
+      return { content: r.content, toolCalls: r.toolCalls, rawBlocks: r.rawBlocks, ...(r.usage ? { usage: r.usage } : {}) };
     },
     assistantMessage: (r) => ({ role: 'assistant', content: r.rawBlocks || r.content }),
     toolResultMessages: (results) => [{
@@ -186,6 +219,10 @@ function claudeDriver(claude: ClaudeClient, agent: AgentRow, systemPrompt: strin
 /** MCP-01: local Ollama model of the small agent (non-streaming, tools in function format). */
 function ollamaDriver(agent: AgentRow, systemPrompt: string, tools: any[]): ModelDriver {
   return {
+    provider: 'ollama',
+    model: agent.model,
+    maxTokens: agent.max_tokens || 1024,
+    overhead: { systemPrompt, tools },
     async call(messages) {
       const r = await ollamaToolChat({
         model: agent.model,
@@ -195,7 +232,7 @@ function ollamaDriver(agent: AgentRow, systemPrompt: string, tools: any[]): Mode
         temperature: agent.temperature,
         maxTokens: agent.max_tokens,
       });
-      return { content: r.content, toolCalls: r.toolCalls, assistant: r.assistant };
+      return { content: r.content, toolCalls: r.toolCalls, assistant: r.assistant, ...(r.usage ? { usage: r.usage } : {}) };
     },
     assistantMessage: (r) => r.assistant ?? { role: 'assistant', content: r.content ?? '' },
     toolResultMessages: (results) => results.map(({ tool, result, text }) => ({
@@ -204,6 +241,45 @@ function ollamaDriver(agent: AgentRow, systemPrompt: string, tools: any[]): Mode
       content: result?.error ? `Error: ${text}` : text,
     })),
   };
+}
+
+/**
+ * R2: one model call of an autonomous run through the cost budget gate.
+ * Paid providers: the worst case is reserved first (daily cap + the run's
+ * cost limit); refused -> BudgetExceededError('cost'). The provider's usage
+ * (or the estimate) is recorded on the step and the run. Replayed steps
+ * never get here, so they cost nothing.
+ */
+async function gatedModelCall(driver: ModelDriver, messages: LoopMessage[], runId: string, stepIndex: number): Promise<StoredModelResponse> {
+  const run = getRun(runId);
+  let ticket;
+  try {
+    ticket = reservePaidCall({
+      provider: driver.provider,
+      model: driver.model,
+      payload: { messages, overhead: driver.overhead },
+      maxOutputTokens: driver.maxTokens,
+      purpose: 'task_run',
+      runId,
+      stepIndex,
+      runLimitCents: run?.max_cost_cents ?? null,
+    });
+  } catch (err) {
+    if (err instanceof CostBudgetError) throw new BudgetExceededError('cost', err.message);
+    throw err;
+  }
+  let response: StoredModelResponse;
+  try {
+    response = await driver.call(messages);
+  } catch (err) {
+    releasePaidCall(ticket);
+    throw err;
+  }
+  const used = recordPaidCall(ticket, response.usage, response.content ?? '');
+  try {
+    recordStepUsage(runId, stepIndex, { provider: ticket.provider, model: driver.model, inputTokens: used.inputTokens, outputTokens: used.outputTokens, costCents: used.costCents, source: used.source });
+  } catch { /* usage bookkeeping must not fail the step */ }
+  return response;
 }
 
 /**
@@ -224,9 +300,10 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
   const taskId = run.task_id;
   const orchestrator = getOrchestrator();
 
-  const fail = async (reason: string, agentId: string): Promise<AttemptResult> => {
+  const fail = async (reason: string, agentId: string, noRetry = false): Promise<AttemptResult> => {
     if (!finishAttempt(lease, 'failed', reason)) return { status: 'lease_lost' };
-    orchestrator.failTask(taskId, reason, { noRetry: hasToolSteps(runId) });
+    // A cost refusal would only be refused again: never auto-retry it.
+    orchestrator.failTask(taskId, reason, { noRetry: noRetry || hasToolSteps(runId) });
     await logActivity({ agentId, taskId, actionType: 'task_failed', summary: reason.slice(0, 200) });
     return { status: 'failed', reason, output: reason };
   };
@@ -249,6 +326,8 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
     });
     let driver: ModelDriver;
     let systemPrompt: string;
+    let smallTemp: number | undefined;
+    let claudeClient: ClaudeClient | undefined;
     if (isSmall) {
       // MCP-01: the small local agent. Tools = what the run was given at
       // spawn ∩ the agent's grants now (never wider); only the stored
@@ -259,6 +338,7 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
       // the editable agents_config row.
       registry.updateContext({ grants: scope.grants, memoryDrawers: scope.memoryDrawers, userId: scope.userId ?? undefined, fileReadRoot: scope.fileReadRoot });
       systemPrompt = smallAgentSystemPrompt();
+      smallTemp = scope.temperature;
       driver = ollamaDriver({ ...agent, model: scope.model, temperature: scope.temperature, max_tokens: scope.maxTokens }, systemPrompt, registry.getToolsForAPI());
     } else {
       // SECURITY (S1.1): key from the credential authority (agent's own key,
@@ -270,71 +350,136 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
         return await fail(msg, agent.id);
       }
       systemPrompt = agent.system_prompt ?? `You are ${agent.name}, an AI agent.`;
-      driver = claudeDriver(new ClaudeClient(apiKey, agent.model), agent, systemPrompt, registry.getToolsForAPI());
+      claudeClient = new ClaudeClient(apiKey, agent.model);
+      driver = claudeDriver(claudeClient, agent, systemPrompt, registry.getToolsForAPI());
     }
     const prompt = await runPrompt(run);
+    // R1: the contract pinned on the run narrows tools and drawers for this
+    // attempt (never wider than the agent's grants now).
+    const contract: TaskContract | null = await runContract(run);
+    if (contract?.allowedTools) {
+      registry.updateContext({ grants: intersectGrants(registry.getContext().grants!, staticGrants(contract.allowedTools)) });
+    }
+    if (contract?.allowedDrawers) {
+      const wanted = contractDrawers(contract);
+      const current = registry.getContext().memoryDrawers;
+      registry.updateContext({ memoryDrawers: current ? wanted.filter((d) => current.some((c) => sameDrawer(c, d))) : wanted });
+    }
+    if (contract?.allowedTools || contract?.allowedDrawers) {
+      // Rebuild the driver so the model is only offered the narrowed tools.
+      const tools = registry.getToolsForAPI();
+      driver = isSmall
+        ? ollamaDriver({ ...agent, model: driver.model, temperature: smallTemp!, max_tokens: driver.maxTokens }, systemPrompt, tools)
+        : claudeDriver(claudeClient!, agent, systemPrompt, tools);
+    }
 
     const loopMessages: LoopMessage[] = [{ role: 'user', content: prompt }];
     let stepIndex = 0;
     let finalContent = '';
+    let finalResponse: StoredModelResponse | null = null;
+    let round = 0;
+    let verdict: { status: 'verified' | 'failed_verification' | 'needs_review'; reasons: string[] } | null = null;
 
-    for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-      if (lost) throw new LeaseLostError();
-      const { result: response } = await durableStep<StoredModelResponse>(lease, stepIndex++, {
-        kind: 'model',
-        name: 'model',
-        input: { messages: loopMessages },
-        idempotent: true, // no external side effect: safe to call again
-        run: () => driver.call(loopMessages),
-      });
-
-      if (!response.toolCalls || response.toolCalls.length === 0) {
-        finalContent = response.content ?? '';
-        break;
-      }
-      loopMessages.push(driver.assistantMessage(response));
-
-      const toolResults: Array<{ id: string; tool: string; result: ToolResult; text: string }> = [];
-      for (const toolCall of response.toolCalls) {
+    for (;;) {
+      finalResponse = null;
+      finalContent = '';
+      for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
         if (lost) throw new LeaseLostError();
-        const tool = registry.get(toolCall.tool);
-        const needsApproval = tool ? approvalCategory(tool) !== null : false;
-        const { result, replayed } = await durableStep<ToolResult>(lease, stepIndex++, {
-          kind: 'tool',
-          name: toolCall.tool,
-          input: toolCall.arguments ?? {},
-          idempotent: isIdempotentTool(tool, needsApproval),
-          run: async (key, index) => {
-            registry.updateContext({ taskRun: { runId, stepIndex: index, idempotencyKey: key } });
-            try {
-              return await registry.execute(toolCall.tool, toolCall.arguments ?? {});
-            } finally {
-              registry.updateContext({ taskRun: undefined });
-            }
-          },
-          pendingApprovalOf: (r) => (r?.details?.status === 'pending_approval' && typeof r.details.approvalId === 'string' ? r.details.approvalId : null),
-          approvalOutcome,
+        const { result: response } = await durableStep<StoredModelResponse>(lease, stepIndex++, {
+          kind: 'model',
+          name: 'model',
+          input: { messages: loopMessages },
+          idempotent: true, // no external side effect: safe to call again
+          run: (_key, index) => gatedModelCall(driver, loopMessages, runId, index),
         });
-        const resultText = result?.content?.[0]?.text ?? JSON.stringify(result);
-        toolResults.push({ id: toolCall.id, tool: toolCall.tool, result, text: resultText });
-        if (!replayed) {
-          await logActivity({
-            agentId: agent.id, taskId, sessionId: `cron-${taskId}`,
-            actionType: 'tool_called', toolName: toolCall.tool, summary: String(resultText).slice(0, 200),
-          });
+
+        if (!response.toolCalls || response.toolCalls.length === 0) {
+          finalContent = response.content ?? '';
+          finalResponse = response;
+          break;
         }
+        loopMessages.push(driver.assistantMessage(response));
+
+        const toolResults: Array<{ id: string; tool: string; result: ToolResult; text: string }> = [];
+        for (const toolCall of response.toolCalls) {
+          if (lost) throw new LeaseLostError();
+          const tool = registry.get(toolCall.tool);
+          const needsApproval = tool ? approvalCategory(tool) !== null : false;
+          const { result, replayed } = await durableStep<ToolResult>(lease, stepIndex++, {
+            kind: 'tool',
+            name: toolCall.tool,
+            input: toolCall.arguments ?? {},
+            idempotent: isIdempotentTool(tool, needsApproval),
+            run: async (key, index) => {
+              registry.updateContext({ taskRun: { runId, stepIndex: index, idempotencyKey: key } });
+              try {
+                return await registry.execute(toolCall.tool, toolCall.arguments ?? {});
+              } finally {
+                registry.updateContext({ taskRun: undefined });
+              }
+            },
+            pendingApprovalOf: (r) => (r?.details?.status === 'pending_approval' && typeof r.details.approvalId === 'string' ? r.details.approvalId : null),
+            approvalOutcome,
+          });
+          const resultText = result?.content?.[0]?.text ?? JSON.stringify(result);
+          toolResults.push({ id: toolCall.id, tool: toolCall.tool, result, text: resultText });
+          if (!replayed) {
+            await logActivity({
+              agentId: agent.id, taskId, sessionId: `cron-${taskId}`,
+              actionType: 'tool_called', toolName: toolCall.tool, summary: String(resultText).slice(0, 200),
+            });
+          }
+        }
+        loopMessages.push(...driver.toolResultMessages(toolResults));
       }
-      loopMessages.push(...driver.toolResultMessages(toolResults));
+
+      if (!contract) break;
+      // R1: deterministic verification of this round. A stored verdict (an
+      // earlier attempt got this far) is replayed, never judged again.
+      const stored = getVerification(runId, round);
+      const v = stored ?? storeVerification(lease, round, verifyResult(contract, finalContent, {
+        agentId: agent.id,
+        toolCalls: await successfulToolCalls(runId),
+      }), 'deterministic-checks/v1');
+      verdict = { status: v.status, reasons: v.reasons };
+      if (v.status !== 'failed_verification' || round >= contract.maxVerificationRetries) break;
+      // Another round inside the same run: the model sees why and answers
+      // again; every completed step before this point is replayed, not re-run.
+      loopMessages.push(finalResponse ? driver.assistantMessage(finalResponse) : { role: 'assistant', content: finalContent || '(no answer)' });
+      loopMessages.push({ role: 'user', content: retryFeedback(v.reasons, round, contract.maxVerificationRetries) });
+      round++;
     }
 
+    if (verdict) setRunVerification(lease, verdict.status, verdict.reasons);
     // The run is recorded completed first (fenced): a crash after this point
     // never runs the task again.
     if (!finishAttempt(lease, 'completed', null, finalContent.slice(0, 500))) return { status: 'lease_lost' };
+    if (verdict?.status === 'failed_verification') {
+      const reason = `verification failed: ${verdict.reasons.join('; ')}`.slice(0, 500);
+      orchestrator.failTask(taskId, reason, { noRetry: true });
+      await logActivity({ agentId: agent.id, taskId, actionType: 'task_failed', summary: reason.slice(0, 200) });
+      try { await registry.execute('desktop_control', { action: 'hide_indicator' }); } catch { /* ignore */ }
+      return { status: 'completed', output: finalContent, reason, verification: 'failed_verification' };
+    }
+    if (verdict?.status === 'needs_review') {
+      // Held for the owner / a large agent: POST /api/task-runs/:id/review.
+      orchestrator.holdTaskForReview(taskId, { output: finalContent });
+      await logActivity({ agentId: agent.id, taskId, actionType: 'task_completed', summary: `Waiting for review: ${finalContent.slice(0, 180)}` });
+      try { await registry.execute('desktop_control', { action: 'hide_indicator' }); } catch { /* ignore */ }
+      return { status: 'completed', output: finalContent, verification: 'needs_review' };
+    }
     orchestrator.completeTask(taskId, { output: finalContent });
+    if (isSmall) {
+      // MCP-01: important small-agent outputs are reviewed by a large agent.
+      try {
+        const card = smallAgentCard(runId);
+        if (card?.needs_review) markRunNeedsReview(runId, card.review_reason ?? 'the small-agent card asks for a review');
+      } catch { /* card unavailable: leave as is */ }
+    }
     await logActivity({ agentId: agent.id, taskId, actionType: 'task_completed', summary: finalContent.slice(0, 200) });
     recreateIfRecurring(taskId, agent.id);
     try { await registry.execute('desktop_control', { action: 'hide_indicator' }); } catch { /* ignore */ }
-    return { status: 'completed', output: finalContent };
+    return { status: 'completed', output: finalContent, ...(verdict ? { verification: verdict.status } : {}) };
   } catch (err: any) {
     if (err instanceof LeaseLostError) {
       console.warn(`[TaskRun] ⚠️  Run ${runId}: lease lost; another worker owns it now`);
@@ -351,7 +496,7 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
       return { status: 'cancelled', reason: 'cancelled' };
     }
     if (err instanceof BudgetExceededError) {
-      const res = await fail(err.message, run.agent_id);
+      const res = await fail(err.message, run.agent_id, err.which === 'cost');
       return res.status === 'failed' ? { ...res, reason: err.message } : res;
     }
     const msg = `Run error: ${String(err?.message ?? err).slice(0, 300)}`;
@@ -359,6 +504,32 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
   } finally {
     clearInterval(hb);
   }
+}
+
+// ---------------------------------------------------------------------------
+// R1: review of a needs_review result
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply a review decision. The run records it once; a task held in
+ * 'review' is completed (accept: pipeline output + recurrence as usual) or
+ * failed without retry (reject). A task that already completed (small-agent
+ * runs keep their card output) only gets the decision recorded.
+ */
+export async function applyRunReview(runId: string, decision: ReviewDecision, by: string, reviewer: 'owner' | 'large_agent', note: string | null) {
+  const run = reviewRun(runId, decision, by, reviewer, note);
+  const orchestrator = getOrchestrator();
+  const task = orchestrator.getTask(run.task_id);
+  if (task && task.status === 'review') {
+    if (decision === 'accept') {
+      orchestrator.completeTask(run.task_id, (task.output as Record<string, unknown> | undefined) ?? { output: run.output_preview ?? '' });
+      recreateIfRecurring(run.task_id, run.agent_id);
+    } else {
+      orchestrator.failTask(run.task_id, `result rejected by review${note ? `: ${note}` : ''}`.slice(0, 500), { noRetry: true });
+    }
+  }
+  await logActivity({ agentId: run.agent_id, taskId: run.task_id, actionType: decision === 'accept' ? 'task_completed' : 'task_failed', summary: `Review ${decision === 'accept' ? 'accepted' : 'rejected'} the result` });
+  return run;
 }
 
 // ---------------------------------------------------------------------------

@@ -28,6 +28,8 @@ export interface OllamaToolChatResult {
   /** The assistant message to append to the conversation. */
   assistant: OllamaMessage;
   model: string;
+  /** Token counts reported by Ollama (R2; local models cost 0). */
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 export function toOllamaTools(tools: AnthropicStyleTool[]) {
@@ -90,5 +92,8 @@ export async function ollamaToolChat(opts: {
   if (toolCalls.length > 0) {
     assistant.tool_calls = toolCalls.map((c) => ({ function: { name: c.tool, arguments: c.arguments } }));
   }
-  return { content, toolCalls, assistant, model: typeof data?.model === 'string' ? data.model : opts.model };
+  const usage = Number.isFinite(data?.prompt_eval_count) && Number.isFinite(data?.eval_count)
+    ? { inputTokens: Number(data.prompt_eval_count), outputTokens: Number(data.eval_count) }
+    : undefined;
+  return { content, toolCalls, assistant, model: typeof data?.model === 'string' ? data.model : opts.model, ...(usage ? { usage } : {}) };
 }

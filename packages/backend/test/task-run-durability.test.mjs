@@ -26,6 +26,10 @@ process.env.TASK_RUN_LEASE_MS = '1500';
 delete process.env.AGENT_EXEC_TOOLS;
 delete process.env.TASK_RUN_MAX_STEPS;
 delete process.env.TASK_RUN_MAX_DURATION_MS;
+// R2: the stubbed model is a paid provider; autonomous paid calls need a
+// daily cap above 0 (default 0 = off). Throwaway value, no real spend.
+process.env.DAILY_PAID_CAP_CENTS = '1000000';
+delete process.env.MODEL_PRICES_JSON;
 const LEASE_WAIT = 1800;
 
 const realFetch = globalThis.fetch;

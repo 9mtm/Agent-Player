@@ -69,6 +69,8 @@ function script(scenario, t) {
     case 'D': return toolUse(t, 'idem_lookup', { q: `D${t}` }); // never finishes on its own
     case 'E': return t === 0 ? toolUse(t, 'hang_effect', { entry: 'E' }) : text('done E');
     case 'F': return t === 0 ? toolUse(t, 'stub_pay', { amount: 5 }) : text('done F');
+    // R1: side effect, a wrong answer, then (after verification feedback) the right one.
+    case 'G': return t === 0 ? toolUse(t, 'ledger_append', { entry: 'G1' }) : t === 1 ? text('draft without the word') : text('GOOD answer G');
     default: return text('?');
   }
 }
@@ -93,6 +95,7 @@ async function main() {
     const t = (body.messages.length - 1) / 2;
     modelCalls++;
     note(workDir, `model:${sc}:${t}`);
+    if (process.env.HANG_MODEL_T !== undefined && Number(process.env.HANG_MODEL_T) === t) await forever();
     return new Response(JSON.stringify(script(sc, t)), { status: 200, headers: { 'content-type': 'application/json' } });
   };
 
@@ -110,6 +113,12 @@ async function main() {
       orchestrator.registerAgent({ id: AGENT_ID, name: AGENT_ID, role: 'worker', capabilities: [], maxConcurrentTasks: 10 });
     }
     const task = orchestrator.createTask({ title: `SCENARIO:${scenario}`, description: 'durable run test', origin: 'owner' });
+    if (process.env.CONTRACT_JSON) {
+      // R1: a task contract given at create time (validated like the API does).
+      const contracts = await import(join(backendDir, 'src/services/task-contracts.ts'));
+      const c = contracts.validateContract(JSON.parse(process.env.CONTRACT_JSON), { grants: null, maxSteps: 60, maxDurationMs: 1_800_000 });
+      await contracts.storeTaskContract(task.id, c, 'tr-owner');
+    }
     orchestrator.assignTask(task.id, AGENT_ID);
     process.stdout.write(`TASK ${task.id}\n`);
     const cron = await import(join(backendDir, 'src/services/agent-cron.ts'));
