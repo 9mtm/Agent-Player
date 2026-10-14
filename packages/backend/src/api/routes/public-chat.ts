@@ -8,13 +8,15 @@
  * locked on PostgreSQL; joining a room is one transaction under a per-room
  * lock (no duplicate participant, no double count). Messages with the same
  * created_at second keep insertion order on SQLite (rowid); PostgreSQL
- * breaks the tie by id. The S0-A.14 outsider-memory rule and the Q-14
+ * breaks the tie by id, which is time-ordered (orderedId, a UUIDv7). The
+ * S0-A.14 outsider-memory rule and the Q-14
  * anonymous-room rule are unchanged.
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { dialect, lockName, one, q, run, sql, type Step } from '../../repositories/sql-steps.js';
 import { forUpdate, greatest } from '../../db/pg/dialect.js';
+import { orderedId } from '../../repositories/ordered-id.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { randomUUID } from 'crypto';
 import { readPersonality, readMemory } from '../../services/agent-files.js';
@@ -115,7 +117,7 @@ async function streamPublicChatResponse(
   });
 
   let fullResponse = '';
-  const assistantMessageId = randomUUID();
+  const assistantMessageId = orderedId();
 
   try {
     // R2.3 (Q-32d): a room reply is never the owner's own chat (visitors,
@@ -577,7 +579,7 @@ export async function registerPublicChatRoutes(fastify: FastifyInstance) {
       : (username || 'Anonymous');
 
     // Store user message
-    const userMessageId = randomUUID();
+    const userMessageId = orderedId();
     // The message and the room's message count: one transaction.
     await sql().tx(function* () {
       yield* run(`

@@ -18,7 +18,7 @@ const BOT_WITH_AGENT = `
           wb.*,
           a.name as agent_name,
           a.emoji as agent_emoji,
-          a.avatar_url as agent_avatar_url
+          NULL as agent_avatar_url
         FROM world_bots wb
         LEFT JOIN agents_config a ON wb.agent_id = a.id
         WHERE wb.id = ?
@@ -38,6 +38,9 @@ function* ownWorldStep(worldId: string, userId: string): Step<boolean> {
  * datetime("now") quoted "now" as an identifier, which PostgreSQL refuses).
  * Create, update and delete check the world's owner and the bot and write in
  * one transaction, with the world row locked on PostgreSQL.
+ *
+ * agents_config has no avatar_url column (neither driver): the bot views
+ * return agent_avatar_url as NULL (the former a.avatar_url failed the query).
  */
 export async function worldBotsRoutes(fastify: FastifyInstance) {
   // ───────────────────────────────────────────────────────────────────────────
@@ -68,7 +71,7 @@ export async function worldBotsRoutes(fastify: FastifyInstance) {
           wb.*,
           a.name as agent_name,
           a.emoji as agent_emoji,
-          a.avatar_url as agent_avatar_url
+          NULL as agent_avatar_url
         FROM world_bots wb
         LEFT JOIN agents_config a ON wb.agent_id = a.id
         WHERE wb.world_id = ?

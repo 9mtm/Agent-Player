@@ -20,7 +20,7 @@ const BOT_WITH_AGENT = `
           wb.*,
           a.name as agent_name,
           a.emoji as agent_emoji,
-          a.avatar_url as agent_avatar_url
+          NULL as agent_avatar_url
         FROM world_bots wb
         JOIN agents_config a ON wb.agent_id = a.id
         WHERE wb.id = ?
@@ -32,6 +32,9 @@ const BOT_WITH_AGENT = `
  * the world's owner and writes in one transaction, the world row locked on
  * PostgreSQL, so an ownership check and its write never interleave with
  * another request.
+ *
+ * agents_config has no avatar_url column (neither driver): the bot views
+ * return agent_avatar_url as NULL (the former a.avatar_url failed the query).
  */
 export async function multiverseRoutes(fastify: FastifyInstance) {
   // ───────────────────────────────────────────────────────────────────────────
@@ -296,7 +299,7 @@ export async function multiverseRoutes(fastify: FastifyInstance) {
           wb.*,
           a.name as agent_name,
           a.emoji as agent_emoji,
-          a.avatar_url as agent_avatar_url
+          NULL as agent_avatar_url
         FROM world_bots wb
         JOIN agents_config a ON wb.agent_id = a.id
         WHERE wb.world_id = ? AND wb.is_active = 1
