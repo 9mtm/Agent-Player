@@ -91,7 +91,8 @@ import evolutionRoutes from './routes/evolution.js';
 import evaluationRoutes from './routes/evaluation.js';
 import memorySharingRoutes from './routes/memory-sharing.js';
 import memoryQualityRoutes from './routes/memory-quality.js';
-import setupRoutes from './routes/setup.js';
+import setupRoutes, { setupStateForReadOnlyStage } from './routes/setup.js';
+import { registerReadOnlyStage } from './read-only-stage.js';
 import { marketplaceRoutes } from './routes/marketplace.js';
 import { config } from '../config/index.js';
 import { registerCsrfProtection } from '../middleware/csrf-protection.js';
@@ -120,6 +121,11 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       }
     }
   });
+
+  // RUN-ISO stage 1: with AGENT_PLAYER_READONLY=1 only reads, login/logout
+  // and first-run setup pass. Registered first, before every other hook and
+  // the auth gate (see src/api/read-only-stage.ts).
+  registerReadOnlyStage(fastify, { setupState: setupStateForReadOnlyStage });
 
   // SECURITY (H-ERR-01): one global error handler, set before any plugin so
   // every encapsulated route context inherits it. Unknown / 5xx errors get

@@ -37,6 +37,14 @@ function isSetupDone(): boolean {
   return existsSync(SETUP_FLAG_FILE) || ownerExistsSafe();
 }
 
+/**
+ * First-run state for the read-only stage (api/read-only-stage.ts). Throws
+ * when the database is unusable; the stage then fails closed.
+ */
+export function setupStateForReadOnlyStage(): { ownerExists: boolean; setupComplete: boolean } {
+  return { ownerExists: ownerExists(), setupComplete: existsSync(SETUP_FLAG_FILE) };
+}
+
 // SECURITY (S0-Q.2): setup steps that change the system only run before setup is complete.
 const SETUP_ONLY_ROUTES = new Set(['/api/setup/check', '/api/setup/database', '/api/setup/python', '/api/setup/complete']);
 
