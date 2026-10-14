@@ -3,6 +3,7 @@
  * Tracks component health and manages heartbeats
  */
 
+import { backgroundEnabled } from '../config/background.js';
 import { v4 as uuidv4 } from 'uuid';
 import {
   type Heartbeat,
@@ -339,6 +340,8 @@ export class HeartbeatMonitor {
   private startAutoCheck(componentId: string): void {
     const state = this.components.get(componentId);
     if (!state) return;
+    // RUN-ISO F2: no check timers with AGENT_PLAYER_BACKGROUND=off.
+    if (!backgroundEnabled()) return;
 
     const interval = state.registration.interval || this.config.defaultInterval;
 

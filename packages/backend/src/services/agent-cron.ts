@@ -8,6 +8,7 @@
  * results are stored back on the orchestrator task, not streamed to a client.
  */
 
+import { backgroundEnabled } from '../config/background.js';
 import cron from 'node-cron';
 import path from 'path';
 import { existsSync, readFileSync } from 'fs';
@@ -160,6 +161,9 @@ function registerAgentCron(agent: AgentRow): void {
     console.warn(`[AgentCron] ⚠️  Invalid cron schedule for agent "${agent.name}": ${agent.cron_schedule}`);
     return;
   }
+
+  // RUN-ISO F2: AGENT_PLAYER_BACKGROUND=off schedules nothing.
+  if (!backgroundEnabled()) return;
 
   const task = cron.schedule(agent.cron_schedule, async () => {
     // Update last_heartbeat (timestamptz on PostgreSQL; CURRENT_TIMESTAMP on both drivers)

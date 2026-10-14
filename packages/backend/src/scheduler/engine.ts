@@ -3,6 +3,7 @@
  * Manages scheduled jobs using node-cron
  */
 
+import { backgroundEnabled } from '../config/background.js';
 import { isPaidProviderUrl } from '../llm/model-call.js';
 import cron from 'node-cron';
 import { EventEmitter } from 'events';
@@ -76,6 +77,12 @@ export class CronEngine extends EventEmitter implements ICronEngine {
     // If already scheduled, unschedule first
     if (this.tasks.has(job.id)) {
       this.unscheduleJob(job.id);
+    }
+
+    // RUN-ISO F2: with AGENT_PLAYER_BACKGROUND=off the job is known but never runs.
+    if (!backgroundEnabled()) {
+      this.jobs.set(job.id, job);
+      return;
     }
 
     // Create scheduled task

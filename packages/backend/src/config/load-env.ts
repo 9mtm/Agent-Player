@@ -5,12 +5,30 @@
  * evaluated in order before the importing module's body runs, so a `dotenv`
  * call in the body would run after every other import has already read
  * process.env.
+ *
+ * RUN-ISO F3: with AGENT_PLAYER_ISOLATED=1 (set by scripts/isolated-server.ts)
+ * the isolation rules are checked first, before any secret is generated or
+ * any store is opened, and no `.env` file is loaded.
  */
 
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { config as loadDotenv } from 'dotenv';
 import { bootstrapSecrets, SecretsBootstrapError } from './secrets-bootstrap.js';
+import { checkIsolatedServerEnv, ISOLATED_ENV } from './isolation.js';
 
-loadDotenv({ quiet: true });
+if (process.env[ISOLATED_ENV] === '1') {
+  // src/config (or dist/config) -> packages/backend -> packages -> repo root.
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
+  const errors = checkIsolatedServerEnv(process.env, { repoRoot, homeDirs: [os.userInfo().homedir] }, process.cwd());
+  if (errors.length) {
+    for (const e of errors) console.error(`FATAL (isolated mode): ${e}`);
+    process.exit(1);
+  }
+} else {
+  loadDotenv({ quiet: true });
+}
 
 try {
   bootstrapSecrets();

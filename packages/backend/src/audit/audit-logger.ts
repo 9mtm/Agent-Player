@@ -3,6 +3,7 @@
  * Core service for logging audit events
  */
 
+import { backgroundEnabled } from '../config/background.js';
 import { v4 as uuidv4 } from 'uuid';
 import {
   type AuditEvent,
@@ -17,6 +18,9 @@ import {
   SEVERITY_WEIGHTS,
 } from './types.js';
 
+/** Without the flush timer (background off) the buffer is cleared at this size. */
+const MAX_UNFLUSHED_EVENTS = 1000;
+
 type AuditEventHandler = (event: AuditEvent) => void | Promise<void>;
 
 export class AuditLogger {
@@ -24,6 +28,7 @@ export class AuditLogger {
   private handlers: AuditEventHandler[] = [];
   private buffer: AuditEvent[] = [];
   private flushInterval: ReturnType<typeof setInterval> | null = null;
+  private started = false;
 
   constructor(config: Partial<AuditConfig> = {}) {
     this.config = { ...DEFAULT_AUDIT_CONFIG, ...config };
@@ -33,10 +38,12 @@ export class AuditLogger {
    * Start the audit logger
    */
   start(): void {
-    if (this.flushInterval) return;
+    if (this.flushInterval || this.started) return;
+    this.started = true;
 
-    // Flush buffer every 5 seconds
-    this.flushInterval = setInterval(() => this.flush(), 5000);
+    // Flush buffer every 5 seconds (RUN-ISO F2: no timer with
+    // AGENT_PLAYER_BACKGROUND=off; log() bounds the buffer instead).
+    if (backgroundEnabled()) this.flushInterval = setInterval(() => this.flush(), 5000);
 
     this.log({
       category: 'system',
@@ -55,6 +62,7 @@ export class AuditLogger {
       clearInterval(this.flushInterval);
       this.flushInterval = null;
     }
+    this.started = false;
     this.flush();
   }
 
@@ -108,6 +116,7 @@ export class AuditLogger {
 
     // Add to buffer
     this.buffer.push(event);
+    if (!this.flushInterval && this.buffer.length > MAX_UNFLUSHED_EVENTS) this.flush();
 
     // Log to console if enabled
     if (this.config.logToConsole) {

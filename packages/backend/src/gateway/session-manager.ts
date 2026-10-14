@@ -4,6 +4,8 @@
  * Manages shared sessions across all interfaces
  */
 
+import { backgroundEnabled } from '../config/background.js';
+import { dataPathOr } from '../config/data-root.js';
 import { randomUUID } from 'crypto';
 // TEMPORARY: Using in-memory database until better-sqlite3 build issues are resolved on Windows
 import TempDatabase from '../db/temp-db.js';
@@ -17,7 +19,7 @@ export class SessionManager {
   private sessionTimeout: number;
 
   constructor(
-    private storageDir: string = './.data/gateway',
+    private storageDir: string = dataPathOr('./.data/gateway', 'gateway'),
     sessionTimeout: number = 3600000 // 1 hour default
   ) {
     this.sessionTimeout = sessionTimeout;
@@ -257,6 +259,8 @@ export class SessionManager {
    * Cleanup expired sessions
    */
   private startCleanupInterval(): void {
+    // RUN-ISO F2: no cleanup timer with AGENT_PLAYER_BACKGROUND=off.
+    if (!backgroundEnabled()) return;
     setInterval(() => {
       this.cleanup();
     }, 300000); // Every 5 minutes

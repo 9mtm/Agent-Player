@@ -10,6 +10,7 @@
  * POST   /api/camera/room/:roomId/signal  exchange WebRTC signal (offer/answer/ice)
  */
 
+import { backgroundEnabled } from '../../config/background.js';
 import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
 import { randomUUID } from 'node:crypto';
@@ -40,13 +41,15 @@ const roomSignals = new Map<string, {
   createdAt: number;
 }>();
 
-// Clean up old rooms every 30 minutes
-setInterval(() => {
-  const cutoff = Date.now() - 30 * 60 * 1000;
-  for (const [id, room] of roomSignals) {
-    if (room.createdAt < cutoff) roomSignals.delete(id);
-  }
-}, 5 * 60 * 1000).unref(); // housekeeping only: never keeps the process alive
+// Clean up old rooms every 30 minutes (RUN-ISO F2: not with AGENT_PLAYER_BACKGROUND=off)
+if (backgroundEnabled()) {
+  setInterval(() => {
+    const cutoff = Date.now() - 30 * 60 * 1000;
+    for (const [id, room] of roomSignals) {
+      if (room.createdAt < cutoff) roomSignals.delete(id);
+    }
+  }, 5 * 60 * 1000).unref(); // housekeeping only: never keeps the process alive
+}
 
 export async function cameraRoutes(fastify: FastifyInstance): Promise<void> {
 
