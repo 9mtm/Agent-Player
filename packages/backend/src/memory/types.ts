@@ -66,6 +66,8 @@ export interface Memory {
   summary?: string;
   /** Vector embedding */
   embedding?: number[];
+  /** Model id of `embedding` (CORE-06), e.g. `ollama:qwen3-embedding:0.6b`, `hash-v2` */
+  embeddingModel?: string;
   /** Current temporal layer (legacy) */
   layer?: MemoryLayer;
   /** Multi-Tier Memory Layer (new system) */

@@ -13,6 +13,8 @@
  *   GET  /api/memory/retention             retention settings + recent runs
  *   PUT  /api/memory/retention             { enabled?, taskTtlDays?, experienceAfterDays?, experienceMinGroup? }
  *   POST /api/memory/retention/run         { dryRun? } run the rules now (recorded)
+ *   GET  /api/memory/embeddings            preferred embedding model + vectors per model (CORE-06)
+ *   POST /api/memory/embeddings/reembed    { limit? } re-embed vectors of another model now
  *
  * Forgetting one memory is POST /api/memory/:id/forget (any account, own memory).
  *
@@ -25,6 +27,7 @@ import { logAudit } from '../../services/audit-logger.js';
 import { buildWeeklyDigest, latestWeeklySummary, listWeeklySummaries, renderDigest, runWeeklySummary } from '../../memory/weekly-summary.js';
 import { forgetAll } from '../../memory/forget.js';
 import { DrawerInputError, parseDrawerId } from '../../memory/drawers.js';
+import { embeddingStatus, reembedUserMemories } from '../../memory/reembed.js';
 import { RetentionInputError, getRetentionConfig, listRetentionRuns, runRetention, setRetentionConfig } from '../../memory/retention.js';
 
 function body(request: FastifyRequest): Record<string, unknown> {
@@ -73,6 +76,20 @@ export async function memoryLearningRoutes(fastify: FastifyInstance) {
       request_method: request.method, request_path: request.routeOptions?.url ?? undefined,
       resource_type: resourceType, resource_id: resourceId, action, success: true, metadata,
     });
+
+  fastify.get('/api/memory/embeddings', { config }, async (request, reply) => {
+    const ownerId = ownerOf(request, reply);
+    if (ownerId === null) return reply;
+    return embeddingStatus(ownerId);
+  });
+
+  fastify.post('/api/memory/embeddings/reembed', { config }, async (request, reply) => {
+    const ownerId = ownerOf(request, reply);
+    if (ownerId === null) return reply;
+    const result = await reembedUserMemories(ownerId, { limit: Number(body(request).limit) || undefined });
+    audit(request, ownerId, 'memory.reembed', 'memory', '*', { model: result.targetModel, reembedded: result.reembedded, remaining: result.remaining });
+    return { success: !result.error, ...result };
+  });
 
   fastify.post('/api/memory/forget-all', { config }, async (request, reply) => {
     const ownerId = ownerOf(request, reply);

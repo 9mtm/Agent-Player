@@ -164,6 +164,7 @@ export const TIER_RULES: readonly Rule[] = [
   { methods: '*', prefix: '/api/memory/weekly-summary', access: 'owner' }, // what the agent learned this week (CORE-05)
   { methods: '*', prefix: '/api/memory/retention', access: 'owner' },  // retention rules + runs (CORE-07)
   { methods: ['POST'], exact: '/api/memory/forget-all', access: 'owner' }, // erase a drawer / all memory (CORE-07)
+  { methods: '*', prefix: '/api/memory/embeddings', access: 'owner' }, // embedding model status + re-embed job (CORE-06)
 
   // --- owner or admin: configuration, outbound requests, money, other users' data ---
   { methods: '*', prefix: '/api/ai-tools', access: 'admin' },        // scans the home directory

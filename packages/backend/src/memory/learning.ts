@@ -40,6 +40,7 @@ import {
 } from './memory-files.js';
 import { recordBaselineIfMissing, recordVersion, versionEntryOf, type VersionEntry } from './versions.js';
 import type { ImportanceLevel, Memory, MemoryType, MultiTierLayer } from './types.js';
+import { textSimilarity } from './embedding.js';
 
 export const MAX_LEARNED_CONTENT = 50_000;
 /** Confidence below this needs review. */
@@ -261,7 +262,9 @@ export async function learn(input: LearnInput): Promise<LearnOutcome> {
       continue;
     }
     const similar = (await storage.search({ userId: input.userId, query: content, drawers: [drawer], limit: 5 }))
-      .map((r) => ({ id: r.memory.id, content: r.memory.content, similarity: r.similarity }));
+      // CORE-06: the contradiction check uses a model-independent word
+      // similarity (search scores depend on the active embedding model).
+      .map((r) => ({ id: r.memory.id, content: r.memory.content, similarity: textSimilarity(content, r.memory.content) }));
     const cls = classifyLearning({ ...c, content, type, drawer }, { similar });
     const entry: VersionEntry = { type, importance: clampImportance(c.importance), content };
 

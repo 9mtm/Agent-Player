@@ -9,7 +9,9 @@ import fs from 'fs/promises';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { getDatabase } from '../db/index.js';
-import { getEmbeddingService } from './embedding.js';
+import { LEGACY_HASH_MODEL, getEmbeddingService } from './embedding.js';
+import { lexicalTokens } from './text-normalize.js';
+import { MIN_RECALL_SCORE, WORKING_LAYER_BOOST, bm25Scores, hybridScore, vectorScore } from './hybrid.js';
 import {
   DRAWER_KEY_SQL,
   DRAWER_KIND_SQL,
@@ -28,6 +30,9 @@ import type {
 } from './types.js';
 
 /** A single safe path segment: letters, digits, `_`, `-`, `.`, `@`; never `.`/`..`. */
+/** At most this many stale vectors are re-embedded during one search. */
+export const LAZY_REEMBED_PER_SEARCH = 16;
+
 function isSafeSegment(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9_.@-]{1,200}$/.test(value) && value !== '.' && value !== '..';
 }
@@ -35,12 +40,14 @@ function isSafeSegment(value: unknown): value is string {
 export class MemoryStorage implements IMemoryStorage {
   private memoryDir: string;
   private db: ReturnType<typeof getDatabase>;
-  private embeddingService: ReturnType<typeof getEmbeddingService>;
 
   constructor(memoryDir = '../../.data/memory') {
     this.memoryDir = memoryDir;
     this.db = getDatabase();
-    this.embeddingService = getEmbeddingService();
+  }
+
+  private get embeddingService(): ReturnType<typeof getEmbeddingService> {
+    return getEmbeddingService();
   }
 
   /**
@@ -106,6 +113,13 @@ export class MemoryStorage implements IMemoryStorage {
       if (!columns.includes('drawer_key')) {
         db.exec("ALTER TABLE memories ADD COLUMN drawer_key TEXT");
       }
+      // CORE-06 embedding model per vector (normally added by migration 063)
+      if (!columns.includes('embedding_model')) {
+        db.exec("ALTER TABLE memories ADD COLUMN embedding_model TEXT");
+      }
+      if (!columns.includes('embedding_dims')) {
+        db.exec("ALTER TABLE memories ADD COLUMN embedding_dims INTEGER");
+      }
 
       // Create indexes for Multi-Tier Memory System
       db.exec(`
@@ -136,7 +150,9 @@ export class MemoryStorage implements IMemoryStorage {
 
     // Generate embedding if not provided
     if (!memory.embedding) {
-      memory.embedding = await this.embeddingService.embed(memory.content);
+      const e = await this.embeddingService.embedDetailed(memory.content);
+      memory.embedding = e.vector;
+      memory.embeddingModel = e.model;
     }
 
     this.writeRow(memory);
@@ -163,13 +179,18 @@ export class MemoryStorage implements IMemoryStorage {
     if (!memory.embedding) throw new Error('Memory embedding missing');
     const drawer = memory.drawer ? normalizeDrawer(memory.drawer) : defaultDrawerForType(memory.type);
     memory.drawer = drawer;
+    // CORE-06: the model of the vector (known for vectors made by the
+    // embedding service; anything else is 'unknown' and never compared).
+    const embeddingModel = this.embeddingService.modelOf(memory.embedding) ?? memory.embeddingModel ?? 'unknown';
+    memory.embeddingModel = embeddingModel;
 
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO memories (
         id, user_id, type, content, embedding, memory_layer, status,
         metadata, importance_score, tags, created_at, last_accessed_at, access_count,
-        expiry_timestamp, consolidation_status, drawer_kind, drawer_key
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        expiry_timestamp, consolidation_status, drawer_kind, drawer_key,
+        embedding_model, embedding_dims
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -189,7 +210,9 @@ export class MemoryStorage implements IMemoryStorage {
       memory.expiryTimestamp || null,
       memory.consolidationStatus || 'pending',
       drawer.kind,
-      drawer.key || ''
+      drawer.key || '',
+      embeddingModel,
+      memory.embedding.length
     );
   }
 
@@ -308,7 +331,9 @@ export class MemoryStorage implements IMemoryStorage {
 
     // Regenerate embedding if content changed
     if (updates.content) {
-      updated.embedding = await this.embeddingService.embed(updated.content);
+      const e = await this.embeddingService.embedDetailed(updated.content);
+      updated.embedding = e.vector;
+      updated.embeddingModel = e.model;
     }
 
     await this.save(updated);
@@ -321,13 +346,15 @@ export class MemoryStorage implements IMemoryStorage {
   }
 
   /**
-   * Search memories using vector similarity (with Multi-Tier Memory support)
+   * Hybrid search (CORE-06): BM25 over normalized tokens + cosine of vectors
+   * of the same model (memory/hybrid.ts). Only the user's rows in the given
+   * drawers are read. Rows whose vector is of another model than the
+   * preferred one are re-embedded here (at most LAZY_REEMBED_PER_SEARCH per
+   * search) when the preferred model is answering.
    */
   async search(query: MemorySearchQuery): Promise<MemorySearchResult[]> {
-    // Get query embedding
-    const queryEmbedding = await this.embeddingService.embed(query.query);
+    const q = await this.embeddingService.embedQuery(query.query);
 
-    // Get all memories for user
     let sql = 'SELECT * FROM memories WHERE user_id = ?';
     const params: any[] = [query.userId];
 
@@ -358,31 +385,55 @@ export class MemoryStorage implements IMemoryStorage {
       params.push(query.minImportance / 10);
     }
 
-    const stmt = this.db.prepare(sql);
-    const rows = stmt.all(...params) as any[];
+    const rows = this.db.prepare(sql).all(...params) as any[];
+    const memories = rows.map((row) => this.rowToMemory(row));
+    if (q.model === this.embeddingService.targetModel()) await this.reembedStale(memories, q.model);
 
-    // Calculate similarities
-    const results: MemorySearchResult[] = rows
-      .map(row => {
-        const memory = this.rowToMemory(row);
-        const similarity = memory.embedding
-          ? this.embeddingService.similarity(queryEmbedding, memory.embedding)
-          : 0;
-
-        return { memory, similarity };
+    const lexical = bm25Scores(lexicalTokens(query.query), memories.map((m) => lexicalTokens(m.content)));
+    const results: MemorySearchResult[] = memories
+      .map((memory, i) => {
+        const comparable = memory.embedding && memory.embeddingModel === q.model && memory.embedding.length === q.dims;
+        // A hash cosine without any lexical match is a bucket collision, not similarity.
+        const vector = comparable && (q.semantic || lexical[i] > 0)
+          ? vectorScore(this.embeddingService.similarity(q.vector, memory.embedding!), q.semantic)
+          : null;
+        let similarity = hybridScore(vector, lexical[i], q.semantic);
+        if (similarity >= MIN_RECALL_SCORE && memory.memoryLayer === 'working') similarity += WORKING_LAYER_BOOST;
+        return {
+          memory,
+          similarity,
+          scoreBreakdown: { vectorScore: vector ?? 0, keywordScore: lexical[i], recencyScore: 0, importanceScore: memory.importanceScore ?? 0.5 },
+        };
       })
-      .filter(result => result.similarity > 0.1) // Minimum threshold
-      .sort((a, b) => {
-        // Prioritize working memory (current session context)
-        if (a.memory.memoryLayer === 'working' && b.memory.memoryLayer !== 'working') return -1;
-        if (b.memory.memoryLayer === 'working' && a.memory.memoryLayer !== 'working') return 1;
-        // Then sort by similarity
-        return b.similarity - a.similarity;
-      });
+      .filter((r) => r.similarity >= MIN_RECALL_SCORE)
+      .sort((a, b) => b.similarity - a.similarity);
 
-    // Return top N results
-    const limit = query.limit || 10;
-    return results.slice(0, limit);
+    return results.slice(0, query.limit || 10);
+  }
+
+  /** Re-embed up to LAZY_REEMBED_PER_SEARCH memories whose vector is not of `model`. */
+  private async reembedStale(memories: Memory[], model: string): Promise<void> {
+    const stale = memories.filter((m) => m.embeddingModel !== model).slice(0, LAZY_REEMBED_PER_SEARCH);
+    if (stale.length === 0) return;
+    const fresh = await this.embeddingService.embedManyDetailed(stale.map((m) => m.content));
+    stale.forEach((m, i) => {
+      const e = fresh[i];
+      if (e.model !== model) return; // provider fell back meanwhile: keep the old vector
+      if (this.setEmbedding(m.userId, m.id, m.content, e.vector, e.model)) {
+        m.embedding = e.vector;
+        m.embeddingModel = e.model;
+      }
+    });
+  }
+
+  /**
+   * Store a new vector for a memory if its content is still `content`
+   * (a concurrent edit wins). True when written.
+   */
+  setEmbedding(userId: string, id: string, content: string, vector: number[], model: string): boolean {
+    return this.db.prepare(
+      'UPDATE memories SET embedding = ?, embedding_model = ?, embedding_dims = ? WHERE id = ? AND user_id = ? AND content = ?'
+    ).run(JSON.stringify(vector), model, vector.length, id, userId, content).changes === 1;
   }
 
   /**
@@ -463,6 +514,7 @@ ${JSON.stringify(memory.metadata, null, 2)}
       type: row.type as MemoryType,
       content: row.content,
       embedding: row.embedding ? JSON.parse(row.embedding) : undefined,
+      embeddingModel: row.embedding ? (row.embedding_model || LEGACY_HASH_MODEL) : undefined,
       memoryLayer: row.memory_layer || 'factual',
       importanceScore: row.importance_score ?? 0.5,
       status: row.status || 'active',

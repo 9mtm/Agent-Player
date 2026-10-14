@@ -96,6 +96,11 @@ export class MemoryIndexer implements IMemoryIndexer {
       CREATE INDEX IF NOT EXISTS idx_memory_created ON memory_index(created_at);
       CREATE INDEX IF NOT EXISTS idx_chunks_memory ON memory_chunks(memory_id);
     `);
+    // CORE-06: model of each stored vector; vectors of other models are not compared.
+    for (const table of ['memory_index', 'memory_chunks']) {
+      const cols = (this.db.prepare(`PRAGMA table_info(${table})`).all() as any[]).map((c) => c.name);
+      if (!cols.includes('embedding_model')) this.db.exec(`ALTER TABLE ${table} ADD COLUMN embedding_model TEXT`);
+    }
   }
 
   /**
@@ -104,14 +109,15 @@ export class MemoryIndexer implements IMemoryIndexer {
   async index(memory: Memory): Promise<void> {
     // Generate embedding if not present
     const embedding = memory.embedding || await this.embeddingService.embed(memory.content);
+    const embeddingModel = this.embeddingService.modelOf(embedding) ?? memory.embeddingModel ?? 'unknown';
     const embeddingBuffer = Buffer.from(new Float32Array(embedding).buffer);
 
     // Insert/update memory index
     this.db.prepare(`
       INSERT OR REPLACE INTO memory_index (
         id, memory_id, content, embedding, layer, importance,
-        created_at, last_accessed, access_count, tags
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        created_at, last_accessed, access_count, tags, embedding_model
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       memory.id,
       memory.id,
@@ -122,7 +128,8 @@ export class MemoryIndexer implements IMemoryIndexer {
       memory.createdAt.toISOString(),
       memory.lastAccessed?.toISOString() || null,
       memory.accessCount,
-      JSON.stringify(memory.tags || [])
+      JSON.stringify(memory.tags || []),
+      embeddingModel
     );
 
     // Update FTS index
@@ -233,8 +240,8 @@ export class MemoryIndexer implements IMemoryIndexer {
   ): Promise<MemorySearchResult[]> {
     const weights = this.config.searchWeights;
 
-    // Vector search
-    const vectorResults = await this.vectorSearch(embedding, limit * 3);
+    // Vector search (only vectors of the query vector's model, CORE-06)
+    const vectorResults = await this.vectorSearch(embedding, limit * 3, this.embeddingService.modelOf(embedding));
 
     // Keyword search (FTS)
     const keywordResults = await this.keywordSearch(query, limit * 3);
@@ -305,7 +312,7 @@ export class MemoryIndexer implements IMemoryIndexer {
   /**
    * Vector similarity search
    */
-  private async vectorSearch(embedding: number[], limit: number): Promise<any[]> {
+  private async vectorSearch(embedding: number[], limit: number, model?: string): Promise<any[]> {
     const rows = this.db.prepare(`
       SELECT * FROM memory_index
       ORDER BY created_at DESC
@@ -318,7 +325,7 @@ export class MemoryIndexer implements IMemoryIndexer {
     return rows
       .map((row) => {
         const storedEmbedding = this.bufferToEmbedding(row.embedding);
-        const score = storedEmbedding
+        const score = storedEmbedding && (!model || row.embedding_model === model)
           ? this.embeddingService.similarity(queryEmbedding, storedEmbedding)
           : 0;
 

@@ -232,6 +232,8 @@ const OWNER_ONLY = [
   ['GET', '/api/memory/weekly-summary'], ['POST', '/api/memory/weekly-summary/run'],
   // CORE-07: forget-all + retention rules
   ['POST', '/api/memory/forget-all'], ['GET', '/api/memory/retention'], ['PUT', '/api/memory/retention'], ['POST', '/api/memory/retention/run'],
+  // CORE-06: embedding model status + re-embed job
+  ['GET', '/api/memory/embeddings'], ['POST', '/api/memory/embeddings/reembed'],
   ['POST', '/api/database/query'], ['POST', '/api/database/restore'], ['GET', '/api/database/stats'],
   ['POST', '/api/sandbox/execute'], ['PUT', '/api/sandbox/config'],
   ['POST', '/api/system/restart'],
