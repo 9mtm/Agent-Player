@@ -91,7 +91,7 @@ export interface SecretStatus {
 export function inspectSecrets(
   dataDir: string,
   dotenv: Map<string, string>,
-  env: NodeJS.ProcessEnv = {},
+  env: Record<string, string | undefined> = {},
 ): SecretStatus[] {
   const file = readEnvFile(path.join(dataDir, SECRETS_FILE_NAME));
   return REQUIRED_SECRETS.map((spec) => {
