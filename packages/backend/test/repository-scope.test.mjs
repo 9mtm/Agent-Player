@@ -407,6 +407,73 @@ test('memory recall: agent runs read only open drawers, outsiders nothing, accou
   checks += 8;
 });
 
+test('memory (quality, sharing, deduplication; B1.7): scope matrix', async () => {
+  const R = repositories.memory;
+  const OTHER = await mem(ACTORS.other, { kind: 'owner' }, 'other user fact for sharing');
+  //                                                                   owner admin user guest other agent outsdr service none
+  const OWN_ROW                                                     = [404, 404, 'ok', 403, 404, 403, 403, 403, 401];
+  await row('memory.qualityStats', (a) => R.qualityStats(a), MEMBERS);
+  await row('memory.lowQuality', (a) => R.lowQuality(a, 5), MEMBERS);
+  await row('memory.analyzeQuality(user memory)', (a) => R.analyzeQuality(a, M_USER.id), OWN_ROW);
+  await row('memory.analyzeQuality(missing)', (a) => R.analyzeQuality(a, 'missing'), [404, 404, 404, 403, 404, 403, 403, 403, 401]);
+  await row('memory.enrich(user memory)', (a) => R.enrich(a, M_USER.id), OWN_ROW);
+  await row('memory.batchEnrich', (a) => R.batchEnrich(a, 1), MEMBERS);
+  await row('memory.qualityHistory(user memory)', (a) => R.qualityHistory(a, M_USER.id), OWN_ROW);
+  await row('memory.relationships(user memory)', (a) => R.relationships(a, M_USER.id), OWN_ROW);
+  await row('memory.enrichmentLog(user memory)', (a) => R.enrichmentLog(a, M_USER.id), OWN_ROW);
+  await row('memory.qualityDistribution', (a) => R.qualityDistribution(a), MEMBERS);
+  // invalid input: a permitted call fails with an input error (400), checked after the 404
+  await row('memory.share(user memory, invalid visibility)', (a) => R.share(a, M_USER.id, { visibility: 'everyone' }), OWN_ROW);
+  await row('memory.share(other user memory)', (a) => R.share(a, OTHER.id, { visibility: 'everyone' }),
+                                                                      [404, 404, 404, 403, 'ok', 403, 403, 403, 401]);
+  await row('memory.markCritical(user memory, invalid)', (a) => R.markCritical(a, M_USER.id, { critical: 'yes' }), OWN_ROW);
+  await row('memory.shared', (a) => R.shared(a, { limit: 5 }), MEMBERS);
+  await row('memory.sharedByAgent', (a) => R.sharedByAgent(a, 'rs-agent', 5), MEMBERS);
+  await row('memory.runDeduplication(invalid threshold)', (a) => R.runDeduplication(a, 2), MEMBERS);
+  await row('memory.deduplicationStats', (a) => R.deduplicationStats(a), MEMBERS);
+  await row('memory.deduplicationCandidates(invalid threshold)', (a) => R.deduplicationCandidates(a, 0.1), MEMBERS);
+  await row('memory.sharingAudit', (a) => R.sharingAudit(a, { limit: 5 }), MEMBERS);
+  await row('memory.teamIds', (a) => R.teamIds(a), MEMBERS);
+});
+
+test('memory sharing (B1.7): strictly per user; team shares need a team the caller belongs to', async () => {
+  const R = repositories.memory;
+  const { MemoryShareInputError } = await import(join(backendDir, 'src/repositories/memory-shared.ts'));
+  const isInput = (msg) => (e) => e instanceof MemoryShareInputError && msg.test(e.message);
+  const team = await repositories.identity.createTeam(ACTORS.other, { name: 'Sharing team' });
+  const M_OTHER = await mem(ACTORS.other, { kind: 'owner' }, 'other user fact shared to a team');
+  // rs-user is not in rs-other's team: refused, nothing changes
+  await assert.rejects(() => R.share(ACTORS.user, M_USER.id, { visibility: 'team', teamId: team.id }), isInput(/team you belong to/));
+  await assert.rejects(() => R.share(ACTORS.user, M_USER.id, { visibility: 'team' }), isInput(/team you belong to/));
+  await assert.rejects(() => R.share(ACTORS.user, M_USER.id, { visibility: 'public', reason: 'x'.repeat(1001) }), isInput(/Invalid reason/));
+  assert.equal(db.prepare('SELECT visibility FROM memories WHERE id = ?').get(M_USER.id).visibility ?? 'private', 'private');
+  // the other user shares to their own team; rs-user (not a member) does not see it, the owner neither
+  const shared = await R.share(ACTORS.other, M_OTHER.id, { visibility: 'team', teamId: team.id, reason: 'for the team' });
+  assert.deepEqual(shared, { memoryId: M_OTHER.id, visibility: 'team', teamId: team.id });
+  const ids = async (a) => (await R.shared(a, { limit: 50 })).map((m) => m.id);
+  assert.ok((await ids(ACTORS.other)).includes(M_OTHER.id), 'own team share visible');
+  assert.ok(!(await ids(ACTORS.user)).includes(M_OTHER.id), 'not visible outside the team');
+  assert.ok(!(await ids(ACTORS.owner)).includes(M_OTHER.id), 'no owner-wide view');
+  assert.ok(!(await ids(ACTORS.admin)).includes(M_OTHER.id));
+  // the audit log shows only own memories' rows
+  assert.ok((await R.sharingAudit(ACTORS.other, { limit: 50 })).some((r) => r.memory_id === M_OTHER.id));
+  assert.deepEqual(await R.sharingAudit(ACTORS.owner, { memoryId: M_OTHER.id, limit: 50 }), []);
+  assert.deepEqual(await R.sharingAudit(ACTORS.user, { memoryId: M_OTHER.id, limit: 50 }), []);
+  // after rs-user joins, the team share becomes visible to them
+  db.prepare(`INSERT INTO team_members (id, team_id, user_id, role) VALUES (?, ?, 'rs-user', 'user')`).run(randomUUID(), team.id);
+  assert.ok((await R.teamIds(ACTORS.user)).includes(team.id));
+  assert.ok((await ids(ACTORS.user)).includes(M_OTHER.id), 'visible to a team member');
+  // a share by someone else never changes the row
+  await assert.rejects(() => R.markCritical(ACTORS.user, M_OTHER.id, { critical: true }), (e) => e instanceof ScopeError && e.status === 404);
+  assert.equal(db.prepare('SELECT is_team_critical FROM memories WHERE id = ?').get(M_OTHER.id).is_team_critical ?? 0, 0);
+  // back to private (no team id kept)
+  assert.deepEqual(await R.share(ACTORS.other, M_OTHER.id, { visibility: 'private' }), { memoryId: M_OTHER.id, visibility: 'private', teamId: null });
+  assert.equal(db.prepare('SELECT team_id FROM memories WHERE id = ?').get(M_OTHER.id).team_id, null);
+  // quality reads never cross users
+  assert.ok((await R.lowQuality(ACTORS.user, 100)).every((m) => m.user_id === undefined || m.user_id === 'rs-user'));
+  checks += 19;
+});
+
 // --- audit --------------------------------------------------------------------
 
 test('audit: scope matrix', async () => {
@@ -437,6 +504,42 @@ test('audit: scope matrix', async () => {
   }
   assert.deepEqual(seen, { type: 'user', id: 'rs-owner', ip: '127.0.0.1' });
   checks += 2;
+});
+
+test('audit (B1.7): encryption key rotation records the real actor, never api/admin', async () => {
+  const { getAuditLogger } = await import(join(backendDir, 'src/audit/index.ts'));
+  const { getKeyManager } = await import(join(backendDir, 'src/encryption/index.ts'));
+  const { encryptionRoutes } = await import(join(backendDir, 'src/api/routes/encryption.ts'));
+  const { requestAuditActor } = await import(join(backendDir, 'src/repositories/audit.ts'));
+  const { generateToken } = await import(join(backendDir, 'src/auth/jwt.ts'));
+  const { default: Fastify } = await import('fastify');
+  const km = getKeyManager();
+  const originalRotate = km.rotateKeys;
+  km.rotateKeys = async () => ({ id: 'test-key', algorithm: 'aes-256-gcm', createdAt: new Date(), expiresAt: null });
+  const logger = getAuditLogger();
+  const original = logger.logConfigChange;
+  const seen = [];
+  logger.logConfigChange = function (actor, ...rest) { seen.push(actor); return original.call(this, actor, ...rest); };
+  const app = Fastify();
+  await app.register(encryptionRoutes);
+  await app.ready();
+  try {
+    const res = await silent(() => app.inject({ method: 'POST', url: '/api/encryption/keys/rotate', headers: { authorization: `Bearer ${generateToken('rs-owner', 1)}` } }));
+    assert.equal(res.statusCode, 200, res.body);
+  } finally {
+    km.rotateKeys = originalRotate;
+    logger.logConfigChange = original;
+    await app.close();
+  }
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].type, 'user');
+  assert.equal(seen[0].id, 'rs-owner');
+  // the other actor kinds map to who really acted; no actor is never an admin
+  assert.deepEqual(requestAuditActor(ACTORS.admin), { type: 'user', id: 'rs-admin' });
+  assert.equal(requestAuditActor(ACTORS.agent).type, 'agent');
+  assert.equal(requestAuditActor(ACTORS.service).id, 'service:telegram');
+  assert.deepEqual(requestAuditActor(null, { ip: '127.0.0.1' }), { type: 'api', id: 'anonymous', ip: '127.0.0.1' });
+  checks += 8;
 });
 
 // --- identity -----------------------------------------------------------------
@@ -537,7 +640,8 @@ test('routes: no user id from body/query in the moved routes; SYSTEM_ACTOR never
   const routesDir = join(backendDir, 'src/api/routes');
   const moved = ['task-runs.ts', 'agent-grants.ts', 'agent-personality.ts', 'credentials.ts', 'audit.ts', 'memory-files.ts', 'profile.ts',
     'agents-config.ts', 'memory.ts', 'memory-learning.ts', 'memory-import.ts',
-    'auth.ts', 'team.ts', 'gateway.ts'];
+    'auth.ts', 'team.ts', 'gateway.ts',
+    'memory-quality.ts', 'memory-sharing.ts', 'memory-access.ts'];
   for (const f of moved) {
     const src = readFileSync(join(routesDir, f), 'utf8');
     assert.doesNotMatch(src, /(body|query)\)?(\s+as\s+[^;]*?)?\??\.userId\b/, `${f} reads a user id from the request`);
@@ -545,8 +649,17 @@ test('routes: no user id from body/query in the moved routes; SYSTEM_ACTOR never
     assert.doesNotMatch(src, /\{[^}\n]*\buserId\b[^}\n]*\}\s*=\s*\(?\s*(request|req)\.(body|query)\b/, `${f} destructures a user id from the request`);
   }
   for (const f of readdirSync(routesDir)) {
-    assert.doesNotMatch(readFileSync(join(routesDir, f), 'utf8'), /SYSTEM_ACTOR/, `${f} must not use SYSTEM_ACTOR`);
+    const src = readFileSync(join(routesDir, f), 'utf8');
+    assert.doesNotMatch(src, /SYSTEM_ACTOR/, `${f} must not use SYSTEM_ACTOR`);
+    // B1.7: no audit entry names a made-up 'api/admin' actor
+    assert.doesNotMatch(src, /type:\s*'api',\s*id:\s*[^}]*'admin'/, `${f} logs the literal api/admin actor`);
   }
+  // B1.7: the memory side routes reach memory only through the repository
+  for (const f of ['memory-quality.ts', 'memory-sharing.ts', 'memory-access.ts']) {
+    const src = readFileSync(join(routesDir, f), 'utf8');
+    assert.doesNotMatch(src, /getDatabase|getMemoryStorage|authenticateActiveUser|MemoryQualityScorer|MemoryEnrichmentService|memory-deduplication/, `${f} must use the memory repository`);
+  }
+  assert.match(readFileSync(join(routesDir, 'memory-access.ts'), 'utf8'), /actorOrReply\(reply, actorOf\(request\), requireMember\)/);
   // B1.6: the memory tools reach memory only through the repository (no own
   // storage/database access, no model-supplied user id).
   const toolsDir = join(backendDir, 'src/tools/memory');
@@ -557,7 +670,7 @@ test('routes: no user id from body/query in the moved routes; SYSTEM_ACTOR never
     assert.doesNotMatch(src, /params\??\.userId\b/, `${f} reads a user id from the model`);
     assert.match(src, /repositories\.memory\./, `${f} uses the memory repository`);
   }
-  checks += moved.length * 2 + 1 + memoryTools.length * 3;
+  checks += moved.length * 2 + 1 + memoryTools.length * 3 + 4;
 });
 
 test('matrix size', () => {
