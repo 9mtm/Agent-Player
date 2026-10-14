@@ -6,6 +6,8 @@
 //  - the launcher prints `listening on 127.0.0.1:<port>`;
 //  - GET /health returns 200;
 //  - a POST (chat) returns 403 read_only_stage;
+//  - a GET outside the safe-read allowlist (agents/status, a provider probe)
+//    returns 403 read_only_stage, also with a raw dot-segment path;
 //  - the launcher-built tree passes the isolated tree check, the log file
 //    is 0600, the secrets file is inside the root;
 //  - nothing appears outside the root (the parent holds only the root; the
@@ -16,6 +18,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { request as httpRequest } from 'node:http';
 import { lstatSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -110,6 +113,24 @@ test('a POST returns 403 read_only_stage', { skip: !listening }, async () => {
   });
   assert.equal(res.status, 403);
   assert.deepEqual(await res.json(), { error: 'Forbidden', code: 'read_only_stage' });
+});
+
+test('a GET outside the safe-read allowlist (agents/status) returns 403 read_only_stage', { skip: !listening }, async () => {
+  const res = await fetch(url('/api/agents/status'), { headers: { origin: 'http://127.0.0.1:42522' } });
+  assert.equal(res.status, 403);
+  assert.deepEqual(await res.json(), { error: 'Forbidden', code: 'read_only_stage' });
+  // Raw path with a dot segment (fetch would normalise it): refused too.
+  const raw = await new Promise((resolve, reject) => {
+    const r = httpRequest({ host: '127.0.0.1', port, path: '/api/./agents/status', method: 'GET' }, (res2) => {
+      let body = '';
+      res2.on('data', (b) => { body += b; });
+      res2.on('end', () => resolve({ status: res2.statusCode, body }));
+    });
+    r.on('error', reject);
+    r.end();
+  });
+  assert.equal(raw.status, 403, raw.body);
+  assert.deepEqual(JSON.parse(raw.body), { error: 'Forbidden', code: 'read_only_stage' });
 });
 
 test('the tree is safe and nothing appears outside the root', { skip: !listening }, async () => {

@@ -1,11 +1,18 @@
-// RUN-ISO read-only stage 1 (AGENT_PLAYER_READONLY=1) and ISO-2 settings
-// refusal, on the real buildServer() route table.
-//  - only GET/HEAD/OPTIONS pass, plus exact POST /api/auth/login,
-//    POST /api/auth/logout, and the setup routes while setup is not complete;
-//  - chat, memory approve, agents PUT, settings, unknown routes, query /
-//    prefix / trailing-slash tricks, websocket upgrades and event streams
-//    get 403 { error: 'Forbidden', code: 'read_only_stage' };
-// Throwaway temp data root; fetch is stubbed (no network); app.inject only.
+// RUN-ISO read-only stage 1 (AGENT_PLAYER_READONLY=1) and ISO-RO-1 safe-read
+// allowlist, on the real buildServer() + startup route table.
+//  - only GET/HEAD on READ_ONLY_SAFE_READS (dispatched route template +
+//    method), CORS preflight for those, plus exact POST /api/auth/login,
+//    POST /api/auth/logout and the setup routes while setup is not complete;
+//  - every allowlisted read, called as the owner under side-effect spies
+//    (test/fixtures/side-effect-spies.mjs), causes no SQL write, no network,
+//    no child process, no file write and no exit (table-driven over the
+//    exported list, so a new entry is checked automatically);
+//  - GETs with side effects (agents/status provider probe, skills
+//    marketplace GitHub fetch, avatar SQL writes, ...), other unlisted reads,
+//    unknown routes, chat, memory approve, agents PUT, settings, path tricks,
+//    websocket upgrades and event streams get
+//    403 { error: 'Forbidden', code: 'read_only_stage' }.
+// Throwaway temp data root; all network is blocked by the spies; app.inject only.
 // Run: node --import tsx --test test/read-only-stage.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,37 +20,40 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { installSideEffectSpies, noSideEffects } from './fixtures/side-effect-spies.mjs';
 
 const backendDir = process.cwd();
 const base = realpathSync(mkdtempSync(join(tmpdir(), 'ap-readonly-')));
 const dataDir = join(base, 'data');
-const cwdDir = join(base, 'cwd');
+const cwdDir = join(base, 'data', 'run');
 for (const d of [dataDir, cwdDir, join(base, 'home'), join(base, 'tmp')]) mkdirSync(d, { recursive: true });
 process.chdir(cwdDir);
 for (const k of ['DATABASE_PATH', 'UPLOADS_DIR', 'AUDIT_DB_PATH', 'ENCRYPTION_DB_PATH', 'MCP_SERVERS_DIR', 'STORAGE_BASE_DIR',
   'AGENT_PLAYER_DB', 'AGENT_PLAYER_PG_URL', 'DATABASE_URL', 'JWT_SECRET', 'ENCRYPTION_KEY', 'MASTER_ENCRYPTION_KEY',
-  'WORKFLOW_SECRET', 'AGENT_EXEC_TOOLS', 'AGENT_PLAYER_ISOLATED']) delete process.env[k];
+  'WORKFLOW_SECRET', 'AGENT_EXEC_TOOLS', 'AGENT_PLAYER_ISOLATED', 'GITHUB_TOKEN']) delete process.env[k];
 Object.assign(process.env, {
   HOME: join(base, 'home'), TMPDIR: join(base, 'tmp'), NODE_ENV: 'production', HOST: '127.0.0.1', PORT: '0',
   AGENT_PLAYER_DATA_DIR: dataDir, AGENT_PLAYER_BACKGROUND: 'off', EXTENSIONS_DISABLED: 'true', MEMORY_EMBEDDINGS: 'hash',
   OLLAMA_URL: 'http://127.0.0.1:9', LOCAL_MODEL_API_URL: 'http://127.0.0.1:9/v1', ALLOWED_ORIGINS: 'http://127.0.0.1:42522',
-  AGENT_PLAYER_READONLY: '1',
+  AGENT_PLAYER_READONLY: '1', AGENT_PLAYER_ISOLATED_STAGE: '1',
 });
 
-const realFetch = globalThis.fetch;
-globalThis.fetch = async () => { throw new Error('network disabled in test'); };
-const quiet = { log: console.log, warn: console.warn, info: console.info };
-console.log = () => {}; console.info = () => {}; console.warn = () => {};
+const spies = installSideEffectSpies(backendDir);
+const quiet = { log: console.log, warn: console.warn, info: console.info, error: console.error };
+console.log = () => {}; console.info = () => {}; console.warn = () => {}; console.error = () => {};
 
 await import(join(backendDir, 'src/config/load-env.ts'));
 const { buildServer } = await import(join(backendDir, 'src/api/app.ts'));
+const { initializeBackend } = await import(join(backendDir, 'src/api/startup.ts'));
+const { READ_ONLY_SAFE_READS } = await import(join(backendDir, 'src/api/read-only-stage.ts'));
 const app = await buildServer({ logger: false });
+await initializeBackend(app);
 await app.ready();
-const { closeDatabase } = await import(join(backendDir, 'src/db/database.ts'));
+const { closeDatabase, getDatabase } = await import(join(backendDir, 'src/db/database.ts'));
 
 test.after(async () => {
-  console.log = quiet.log; console.info = quiet.info; console.warn = quiet.warn;
-  globalThis.fetch = realFetch;
+  console.log = quiet.log; console.info = quiet.info; console.warn = quiet.warn; console.error = quiet.error;
+  spies.restoreFetch();
   await app.close();
   closeDatabase();
   rmSync(base, { recursive: true, force: true });
@@ -52,9 +62,10 @@ test.after(async () => {
 const ORIGIN = 'http://127.0.0.1:42522';
 const owner = { name: 'Fictional Owner', email: 'owner@example.test', password: `T-${randomBytes(12).toString('hex')}-a1!` };
 let token = null;
+const ids = {};
 
-function call(target, method, url, { payload, headers = {}, auth = true } = {}) {
-  return target.inject({
+function req(method, url, { payload, headers = {}, auth = true } = {}) {
+  return app.inject({
     method, url, payload,
     headers: {
       host: '127.0.0.1:42521', origin: ORIGIN,
@@ -64,19 +75,45 @@ function call(target, method, url, { payload, headers = {}, auth = true } = {}) 
     },
   });
 }
-const req = (method, url, opts) => call(app, method, url, opts);
 
 function assertReadOnly(res, what) {
   assert.equal(res.statusCode, 403, `${what}: ${res.statusCode} ${res.body}`);
   assert.deepEqual(res.json(), { error: 'Forbidden', code: 'read_only_stage' }, what);
 }
 
-test('reads pass: GET /health, HEAD /health, OPTIONS preflight, GET /api/setup/status', async () => {
+/** Run a request with the spies armed; returns [response, side effects seen]. */
+async function spied(method, url, opts) {
+  spies.arm();
+  try {
+    const res = await req(method, url, opts);
+    await new Promise((r) => setTimeout(r, 50)); // let fire-and-forget work show up
+    return [res, spies.disarm()];
+  } finally {
+    spies.disarm();
+  }
+}
+
+test('reads pass: GET /health, HEAD /health, preflight for a safe read, GET /api/setup/status', async () => {
   assert.equal((await req('GET', '/health')).statusCode, 200);
   assert.equal((await req('HEAD', '/health')).statusCode, 200);
-  const pre = await req('OPTIONS', '/api/chat', { headers: { 'access-control-request-method': 'POST' } });
-  assert.equal(pre.statusCode, 204);
+  const pre = await req('OPTIONS', '/api/agents', { headers: { 'access-control-request-method': 'GET' } });
+  assert.equal(pre.statusCode, 204, pre.body);
+  assert.equal(pre.headers['access-control-allow-origin'], ORIGIN);
   assert.equal((await req('GET', '/api/setup/status')).statusCode, 200);
+});
+
+test('preflight only for allowlisted targets', async () => {
+  const pf = (url, m) => req('OPTIONS', url, { headers: { 'access-control-request-method': m } });
+  assert.equal((await pf('/api/auth/login', 'POST')).statusCode, 204, 'login preflight');
+  assert.equal((await pf('/api/agents/a1', 'GET')).statusCode, 204, 'agent detail preflight');
+  assertReadOnly(await pf('/api/chat', 'POST'), 'chat preflight');
+  assertReadOnly(await pf('/api/agents/a1', 'PUT'), 'agents PUT preflight');
+  assertReadOnly(await pf('/api/agents/status', 'GET'), 'static sibling of /api/agents/:id');
+  assertReadOnly(await pf('/api/skills/marketplace/available', 'GET'), 'marketplace preflight');
+  assertReadOnly(await pf('/api/no-such-route', 'GET'), 'unknown route preflight');
+  assertReadOnly(await pf('/api/agents/a%2Fb', 'GET'), 'encoded slash preflight');
+  assertReadOnly(await pf('/api/auth/login?x=1', 'POST'), 'login preflight with query');
+  assertReadOnly(await req('OPTIONS', '/api/agents'), 'OPTIONS without preflight headers');
 });
 
 test('setup before completion: only the exact routes; query, slash and case tricks are refused', async () => {
@@ -104,16 +141,147 @@ test('login works (exact URL only); a GET read works with the token', async () =
   assert.ok(token, 'a token is returned');
   const me = await req('GET', '/api/auth/me');
   assert.equal(me.statusCode, 200, me.body);
-  assert.equal((me.json().user ?? me.json()).email, owner.email);
+  const user = me.json().user ?? me.json();
+  assert.equal(user.email, owner.email);
+  ids.user = user.id;
   const agents = await req('GET', '/api/agents');
-  assert.notEqual(agents.statusCode, 403, agents.body);
+  assert.equal(agents.statusCode, 200, agents.body);
+  ids.agent = agents.json().agents[0]?.id;
+  assert.ok(ids.agent, 'a default agent exists');
+});
+
+test('seed one memory proposal and one personality proposal (direct store calls, spies off)', async () => {
+  const MF = await import(join(backendDir, 'src/memory/memory-files.ts'));
+  const view = await MF.viewDrawerFile(ids.user, ids.agent, { kind: 'owner' });
+  const text = `${view.content}\n### new | fact | importance 6\nRead-only stage seed entry\n`;
+  const mp = await MF.createProposal({ userId: ids.user, agentId: ids.agent, drawer: { kind: 'owner' }, text, source: 'upload', note: null });
+  ids.memoryProposal = mp.id;
+  const PS = await import(join(backendDir, 'src/services/personality-store.ts'));
+  const pp = await PS.createPersonalityProposal(ids.agent, { delta: { warmth: -2 }, reason: 'read-only stage seed' }, 'owner', ids.user);
+  ids.personalityProposal = pp.id;
+  assert.ok(ids.memoryProposal && ids.personalityProposal);
+});
+
+// One real request per allowlisted template, filled with seeded ids so the
+// handler takes its full (positive) path. A new entry must add a sample here.
+const SAMPLES = {
+  '/health': () => '/health',
+  '/': () => '/',
+  '/api/setup/status': () => '/api/setup/status',
+  '/api/auth/me': () => '/api/auth/me',
+  '/api/agents': () => '/api/agents',
+  '/api/agents/:id': () => `/api/agents/${ids.agent}`,
+  '/api/agents/:id/personality/proposals': () => `/api/agents/${ids.agent}/personality/proposals?status=pending`,
+  '/api/agents/:id/personality/proposals/:pid': () => `/api/agents/${ids.agent}/personality/proposals/${ids.personalityProposal}`,
+  '/api/memory/proposals': () => '/api/memory/proposals?status=pending',
+  '/api/memory/proposals/:id': () => `/api/memory/proposals/${ids.memoryProposal}`,
+  '/api/memory/files/:drawer': () => `/api/memory/files/owner?agentId=${encodeURIComponent(ids.agent)}`,
+};
+
+test('the allowlist is frozen, GET only, registered routes, each with a reason and a sample', () => {
+  assert.ok(READ_ONLY_SAFE_READS.length >= 10);
+  assert.ok(Object.isFrozen(READ_ONLY_SAFE_READS));
+  for (const e of READ_ONLY_SAFE_READS) {
+    assert.ok(Object.isFrozen(e), `${e.url} entry is frozen`);
+    assert.equal(e.method, 'GET', e.url);
+    assert.ok(typeof e.why === 'string' && e.why.length > 10, `${e.url} has a reason`);
+    assert.ok(app.hasRoute({ method: 'GET', url: e.url }), `${e.url} is a registered GET route`);
+    assert.ok(SAMPLES[e.url], `${e.url}: add a sample URL to SAMPLES in this test`);
+  }
+});
+
+for (const entry of READ_ONLY_SAFE_READS) {
+  test(`safe read ${entry.method} ${entry.url}: passes and has no side effect (GET and HEAD)`, async () => {
+    for (const method of ['GET', 'HEAD']) {
+      const url = SAMPLES[entry.url]();
+      const [res, seen] = await spied(method, url);
+      assert.equal(res.statusCode, 200, `${method} ${url}: ${res.statusCode} ${res.body}`);
+      assert.ok(noSideEffects(seen), `${method} ${url} side effects: ${JSON.stringify(seen)}`);
+    }
+  });
+}
+
+test('the spies do see side effects (control)', async () => {
+  spies.arm();
+  getDatabase().prepare('UPDATE users SET email = email WHERE id = ?').run(ids.user);
+  await fetch('https://example.invalid/').catch(() => {});
+  const seen = spies.disarm();
+  assert.equal(seen.sql.length, 1, JSON.stringify(seen));
+  assert.equal(seen.net.length, 1, JSON.stringify(seen));
+});
+
+// GETs found with side effects by the ISO-RO-1 audit (spies + handler reading).
+const SIDE_EFFECT_GETS = [
+  ['/api/agents/status', 'probes the model endpoint (fetch 127.0.0.1:9/api/version) and cloud providers'],
+  ['/api/skills/marketplace/available', 'fetches api.github.com without a token'],
+  ['/api/avatars?userId=1', 'may INSERT user_avatars / UPDATE users.avatar_url'],
+  ['/api/sandbox/status', 'exec docker'],
+  ['/api/models', 'fetch model endpoint /api/tags'],
+  ['/api/models/providers', 'fetch model endpoint /api/tags'],
+  ['/api/ai-tools/ollama/models', 'fetch model endpoint /api/tags'],
+  ['/api/approvals', 'UPDATE tool_approvals SET status = expired'],
+  ['/api/notifications/settings', 'INSERT notification_settings'],
+  ['/api/agents/main-agent/tool-grants', 'DELETE + INSERT agent_tool_grants'],
+  ['/api/agents/main-agent/personality', 'mkdir the agent folder'],
+  ['/api/agents/main-agent/memory', 'mkdir the agent folder'],
+  ['/api/agents/main-agent/files', 'mkdir the agent folder'],
+  ['/api/setup/check', 'spawns host commands'],
+];
+
+test('GETs with side effects are refused before their handler runs (403, no side effect)', async () => {
+  for (const [url, why] of SIDE_EFFECT_GETS) {
+    for (const method of ['GET', 'HEAD']) {
+      const [res, seen] = await spied(method, url);
+      if (method === 'GET') assertReadOnly(res, `${method} ${url} (${why})`);
+      else assert.equal(res.statusCode, 403, `${method} ${url}`);
+      assert.ok(noSideEffects(seen), `${method} ${url}: ${JSON.stringify(seen)}`);
+    }
+  }
+});
+
+test('unlisted reads and unknown routes are refused', async () => {
+  for (const url of ['/api/settings', '/api/sessions', '/api/memory/files', '/api/memory/files/owner/versions',
+    '/api/agents/main-agent/personality/current', '/api/instance', '/docs', '/favicon.ico', '/index.html',
+    '/api/no-such-route', '/api/ext/some-extension/anything', '/no-such-file.txt']) {
+    assertReadOnly(await req('GET', url), `GET ${url}`);
+  }
+  assert.equal((await req('HEAD', '/api/settings')).statusCode, 403);
+});
+
+test('query strings on safe reads pass; path tricks are refused or routed to a safe read', async () => {
+  for (const url of ['/api/agents?x=1', '/api/memory/proposals', '/api/memory/proposals?status=pending', '/health?probe=1']) {
+    const [res, seen] = await spied('GET', url);
+    assert.equal(res.statusCode, 200, `${url}: ${res.body}`);
+    assert.ok(noSideEffects(seen), url);
+  }
+  for (const url of ['//api/agents', '/api//agents', '/api/agents/', '/API/agents', '/api/Agents', '/api/agents%2Fstatus',
+    '/api/agents/a%2Fb', '/api/agents/a%2fb', '/api/agents/%2E%2E', '/api/agents/%2e',
+    '/api/agents/%252E', '/api/agents/a%5Cb', '/api/agents\\status', '/api/agents/a%00', '/api/agents/status',
+    '/api/agents/status?x=1', '/health/', '/HEALTH']) {
+    const [res, seen] = await spied('GET', url);
+    assertReadOnly(res, `GET ${url}`);
+    assert.ok(noSideEffects(seen), url);
+  }
+  // Dot segments: light-my-request (like fetch) resolves them before the
+  // server sees the URL, so they arrive as a plain safe read or as a refused
+  // route; the raw form is refused by the real-launcher test.
+  for (const url of ['/api/./agents', '/api/agents/x/..', '/api/x/../agents/status', '/api/agents/..']) {
+    const [res, seen] = await spied('GET', url);
+    assert.ok(res.statusCode === 200 || (res.statusCode === 403 && res.json().code === 'read_only_stage'), `${url}: ${res.statusCode}`);
+    assert.ok(noSideEffects(seen), url);
+  }
+  // A differently-cased word is just an agent id on the safe /api/agents/:id read
+  // (the router is case-sensitive): it never reaches /api/agents/status.
+  const [res, seen] = await spied('GET', '/api/agents/STATUS');
+  assert.equal(res.statusCode, 404, res.body);
+  assert.ok(noSideEffects(seen));
 });
 
 test('writes are refused: chat POST (and SSE chat), memory approve, agents PUT, settings, deletes, unknown routes', async () => {
   assertReadOnly(await req('POST', '/api/chat', { payload: { message: 'hi' } }), 'POST /api/chat');
   assertReadOnly(await req('POST', '/api/chat', { payload: { message: 'hi', stream: true }, headers: { accept: 'text/event-stream' } }), 'SSE chat');
   assertReadOnly(await req('POST', '/api/chat/agentic', { payload: { message: 'hi' } }), 'agentic chat');
-  assertReadOnly(await req('POST', '/api/memory/proposals/p1/approve', { payload: {} }), 'memory approve');
+  assertReadOnly(await req('POST', `/api/memory/proposals/${ids.memoryProposal}/approve`, { payload: {} }), 'memory approve');
   assertReadOnly(await req('PUT', '/api/agents/a1', { payload: { name: 'x' } }), 'agents PUT');
   assertReadOnly(await req('PUT', '/api/settings', { payload: { provider: 'local' } }), 'settings PUT');
   assertReadOnly(await req('DELETE', '/api/agents/a1'), 'agents DELETE');

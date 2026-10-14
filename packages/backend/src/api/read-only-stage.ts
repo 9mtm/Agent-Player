@@ -1,22 +1,31 @@
 /**
- * Read-only stage 1 (RUN-ISO).
+ * Read-only stage 1 (RUN-ISO, ISO-RO-1).
  *
  * With `AGENT_PLAYER_READONLY=1` (forced by scripts/isolated-server.ts) one
  * root `onRequest` hook, registered before every other hook and the auth
- * gate, refuses every method other than GET / HEAD / OPTIONS with
- * 403 `{ error: 'Forbidden', code: 'read_only_stage' }`. That covers chat
- * (including SSE chat, which is POST), memory/personality decisions, agent
- * edits, settings and every other write.
+ * gate, is DEFAULT DENY: a request passes only when it is
+ *  - GET or HEAD on a route in READ_ONLY_SAFE_READS, matched on the route
+ *    Fastify dispatched to (`request.routeOptions.url`) plus the method,
+ *    never on the raw URL; or
+ *  - a CORS preflight (OPTIONS) for such a read or for one of the POST
+ *    exceptions below; or
+ *  - one of the exact POST exceptions, matched on the raw URL AND the
+ *    dispatched route (no prefix, no query string, no trailing slash):
+ *      POST /api/auth/login, POST /api/auth/logout;
+ *      POST /api/setup/admin while no owner exists and setup is not complete;
+ *      POST /api/setup/complete while setup is not complete.
+ * Everything else, including unknown (404) routes, gets
+ * 403 `{ error: 'Forbidden', code: 'read_only_stage' }`.
  *
- * Exceptions, matched exactly on the raw request URL (no prefix match, no
- * query string, no trailing slash) AND on the route Fastify dispatched to:
- *  - POST /api/auth/login, POST /api/auth/logout;
- *  - POST /api/setup/admin while no owner exists and setup is not complete;
- *  - POST /api/setup/complete while setup is not complete.
+ * Many GET routes have side effects (provider probes, GitHub fetches, docker
+ * exec, SQL writes, file writes), so "GET is safe" is not assumed. Every
+ * allowlist entry was checked by reading its handler and by calling it under
+ * side-effect spies (test/read-only-stage.test.mjs runs that check for every
+ * entry). A new entry needs the same review.
  *
- * Also refused in this stage: websocket / any `Upgrade` request, any request
- * that asks for an event stream (`Accept: text/event-stream`), and
- * GET /api/setup/check (it spawns host commands).
+ * Also refused: websocket / any `Upgrade` request, any request that asks for
+ * an event stream (`Accept: text/event-stream`), and path tricks on reads
+ * (`//`, trailing `/`, backslash, `.` / `..` segments, encoded `/` `\` `.` `%` or NUL).
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -25,13 +34,39 @@ export const READONLY_ENV = 'AGENT_PLAYER_READONLY';
 
 export const READ_ONLY_BODY = Object.freeze({ error: 'Forbidden', code: 'read_only_stage' });
 
-const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+export interface SafeRead {
+  readonly method: 'GET';
+  /** Fastify route template, exactly as registered (`request.routeOptions.url`). */
+  readonly url: string;
+  /** Why the handler is side-effect-free. */
+  readonly why: string;
+}
 
-/** POST routes that stay open in stage 1. */
-const ALWAYS_ALLOWED = new Set(['/api/auth/login', '/api/auth/logout']);
+/**
+ * The only reads open in stage 1. HEAD is allowed for the same routes
+ * (Fastify's HEAD route runs the GET handler). Checked for each entry:
+ * no SQL write, no network (not even loopback / model endpoints), no child
+ * process, no file write, no process exit.
+ */
+export const READ_ONLY_SAFE_READS: readonly SafeRead[] = Object.freeze(([
+  { method: 'GET', url: '/health', why: 'static JSON (status, time, version); touches nothing' },
+  { method: 'GET', url: '/', why: 'static JSON (name, version, docs link); touches nothing' },
+  { method: 'GET', url: '/api/setup/status', why: 'existsSync(setup flag) + SELECT owner; no write, no spawn (unlike /api/setup/check)' },
+  { method: 'GET', url: '/api/auth/me', why: 'verifies the token, then SELECT of the caller (identity.self); no session or last-seen write' },
+  { method: 'GET', url: '/api/agents', why: 'SELECT * FROM agents_config (listConfigs); no write' },
+  { method: 'GET', url: '/api/agents/:id', why: 'SELECT one agents_config row (getConfig); static siblings such as /api/agents/status are separate routes and stay refused' },
+  { method: 'GET', url: '/api/agents/:id/personality/proposals', why: 'owner only; validated id and status, SELECT personality proposals; no write' },
+  { method: 'GET', url: '/api/agents/:id/personality/proposals/:pid', why: 'owner only; validated ids, SELECT one personality proposal; no write' },
+  { method: 'GET', url: '/api/memory/proposals', why: 'owner only; validated status, SELECT memory_file_proposals (LIMIT 200); no write' },
+  { method: 'GET', url: '/api/memory/proposals/:id', why: 'owner only; SELECT one memory_file_proposals row by validated id; no write' },
+  { method: 'GET', url: '/api/memory/files/:drawer', why: 'owner only; viewDrawerFile renders the export text from SELECTs in a read transaction; never writes the file (export is a separate POST)' },
+] as SafeRead[]).map((e) => Object.freeze(e)));
 
-/** Reads that still have side effects (spawn host commands): refused in stage 1. */
-const REFUSED_READS = new Set(['/api/setup/check']);
+const SAFE_READ_KEYS: ReadonlySet<string> = new Set(READ_ONLY_SAFE_READS.map((e) => `GET ${e.url}`));
+
+/** POST routes that stay open in stage 1 (exact raw URL = dispatched route). */
+const ALWAYS_ALLOWED_POSTS = new Set(['/api/auth/login', '/api/auth/logout']);
+const SETUP_POSTS = new Set(['/api/setup/admin', '/api/setup/complete']);
 
 export interface SetupState {
   ownerExists: boolean;
@@ -47,6 +82,13 @@ export function readOnlyStageEnabled(env: NodeJS.ProcessEnv = process.env): bool
   return (env[READONLY_ENV] ?? '').trim() === '1';
 }
 
+/** True when the route template + method is an allowlisted safe read. */
+export function isSafeRead(method: string, routeUrl: string | undefined): boolean {
+  const m = method.toUpperCase();
+  if (m !== 'GET' && m !== 'HEAD') return false;
+  return typeof routeUrl === 'string' && SAFE_READ_KEYS.has(`GET ${routeUrl}`);
+}
+
 function safeSetupState(get: () => SetupState): SetupState {
   try {
     const s = get();
@@ -54,6 +96,53 @@ function safeSetupState(get: () => SetupState): SetupState {
   } catch {
     return { ownerExists: true, setupComplete: true };
   }
+}
+
+/**
+ * Path part of the raw URL, or null when it carries a path trick: double
+ * slash, trailing slash, backslash, `.`/`..` segment, or an encoded `/` `\` `.` `%` or NUL.
+ */
+function cleanPath(rawUrl: string): string | null {
+  const q = rawUrl.search(/[?#]/);
+  const p = q === -1 ? rawUrl : rawUrl.slice(0, q);
+  if (!p.startsWith('/') || p.includes('//') || p.includes('\\')) return null;
+  if (p.length > 1 && p.endsWith('/')) return null; // empty last segment (would be an empty param)
+  if (/%(2f|5c|2e|25|00)/i.test(p)) return null;
+  if (p.split('/').some((s) => s === '.' || s === '..')) return null;
+  return p;
+}
+
+function decode(s: string): string | null {
+  try { return decodeURIComponent(s); } catch { return null; }
+}
+
+/**
+ * CORS preflight for a safe read: the path must fill an allowlisted template
+ * AND Fastify must route that path (for GET) with exactly the same params, so
+ * a static sibling (e.g. /api/agents/status vs /api/agents/:id) never rides
+ * on a parameter template.
+ */
+function preflightTargetsSafeRead(fastify: FastifyInstance, path: string): boolean {
+  let found: { params?: Record<string, string> } | null = null;
+  try { found = fastify.findRoute({ method: 'GET', url: path }) as { params?: Record<string, string> } | null; } catch { return false; }
+  if (!found) return false;
+  const routed = found.params ?? {};
+  const segs = path.split('/');
+  return READ_ONLY_SAFE_READS.some((e) => {
+    const tpl = e.url.split('/');
+    if (tpl.length !== segs.length) return false;
+    const params: Record<string, string> = {};
+    for (let i = 0; i < tpl.length; i++) {
+      if (tpl[i].startsWith(':')) {
+        const v = decode(segs[i]);
+        if (v === null || v === '') return false;
+        params[tpl[i].slice(1)] = v;
+      } else if (tpl[i] !== segs[i]) return false;
+    }
+    const a = Object.keys(params).sort();
+    const b = Object.keys(routed).sort();
+    return a.length === b.length && a.every((k, i) => k === b[i] && params[k] === routed[k]);
+  });
 }
 
 /** True when this request may pass the read-only stage. */
@@ -65,15 +154,26 @@ export function readOnlyAllows(request: FastifyRequest, opts: ReadOnlyStageOptio
   if (headers.upgrade !== undefined || String(headers.connection ?? '').toLowerCase().includes('upgrade')) return false;
   if (String(headers.accept ?? '').toLowerCase().includes('text/event-stream')) return false;
 
-  if (READ_METHODS.has(method)) {
-    const pathOnly = rawUrl.split('?')[0];
-    return !REFUSED_READS.has(pathOnly) && !(route && REFUSED_READS.has(route));
+  if (method === 'GET' || method === 'HEAD') {
+    return cleanPath(rawUrl) !== null && isSafeRead(method, route);
   }
+
+  if (method === 'OPTIONS') {
+    // Only @fastify/cors' preflight route ('*'), never a custom OPTIONS handler.
+    if (route !== '*' || headers.origin === undefined) return false;
+    const wanted = String(headers['access-control-request-method'] ?? '').trim().toUpperCase();
+    const path = cleanPath(rawUrl);
+    if (path === null) return false;
+    if (wanted === 'GET' || wanted === 'HEAD') return preflightTargetsSafeRead(request.server, path);
+    if (wanted === 'POST') return rawUrl === path && (ALWAYS_ALLOWED_POSTS.has(path) || SETUP_POSTS.has(path));
+    return false;
+  }
+
   if (method !== 'POST') return false;
   // Exact match on the raw URL and on the dispatched route: no query, no prefix, no encoding tricks.
   if (!route || rawUrl !== route) return false;
-  if (ALWAYS_ALLOWED.has(route)) return true;
-  if (route === '/api/setup/admin' || route === '/api/setup/complete') {
+  if (ALWAYS_ALLOWED_POSTS.has(route)) return true;
+  if (SETUP_POSTS.has(route)) {
     const state = safeSetupState(opts.setupState);
     if (state.setupComplete) return false;
     return route === '/api/setup/complete' || !state.ownerExists;
