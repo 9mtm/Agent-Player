@@ -211,12 +211,19 @@ export async function chatRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: 'Idempotency-Key must be 8-128 characters (A-Z, a-z, 0-9, _ - . :)', code: 'invalid_idempotency_key' });
     }
     // The fingerprint covers the whole request that defines the turn (CHAT-01).
+    // /api/chat has no anonymous callers: the actor for the per-actor running
+    // cap is the signed-in user, or for a server-created channel turn its
+    // channel conversation (many outside senders share one owner user id).
+    const actor = channelTurn
+      ? `channel:${channelTurn.policy.channel}:${channelTurn.policy.conversationId}`
+      : `user:${userId}`;
     const turn = beginChatTurn(userId, idemKey, requestFingerprint({
       agentId, sessionId, stream, messages, model, temperature, maxTokens,
       systemPrompt, systemPromptAppend, memoryContext: bodyMemoryContext, memoryScope, chatContext,
-    }));
+    }), actor);
     if (turn.kind === 'busy') {
-      // Every remembered key is still running: refuse rather than forget one.
+      // This actor already runs its maximum of keyed turns, or (last resort)
+      // every remembered key is still running: refuse rather than forget one.
       reply.header('Retry-After', '30');
       return reply.status(429).send({ error: 'Too Many Requests', code: 'rate_limited', message: 'Too many chat turns are running; try again shortly' });
     }
@@ -612,9 +619,13 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
   // CHAT-01: headers go out before Ollama is contacted, so a cold model load
   // cannot trip a pre-header timeout; the heartbeat keeps the stream alive.
   openSseStream(reply.raw);
+  // The client went away before the reply ended: stop the model (CHAT-01).
+  const upstreamAbort = new AbortController();
+  reply.raw.once?.('close', () => { if (!reply.raw.writableEnded) upstreamAbort.abort(); });
   let response: Response;
   try {
     response = await fetch(`${OLLAMA_URL}/api/chat`, {
+      signal: upstreamAbort.signal,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -107,6 +107,10 @@ export async function streamChatClaude(
   // SSE headers + heartbeat (a no-op when the route already opened the
   // stream). The heartbeat covers tool steps and rate-limit waits (CHAT-01).
   openSseStream(reply.raw);
+  // CHAT-01: when the client closes the connection before the reply ended,
+  // the turn is aborted: no further model calls or tool steps run.
+  let clientGone = false;
+  reply.raw.once?.('close', () => { if (!reply.raw.writableEnded) clientGone = true; });
 
   try {
     const claude = new ClaudeClient(apiKey, model);
@@ -237,6 +241,7 @@ export async function streamChatClaude(
             content: `\n\n*Rate limit reached — waiting ${waitSec}s before continuing...*\n\n`,
           })}\n\n`);
           await new Promise(resolve => setTimeout(resolve, waitSec * 1000));
+          if (clientGone) throw new Error('client closed');
           return callWithRetry(msgs, attempt + 1);
         }
         throw err;
@@ -245,6 +250,7 @@ export async function streamChatClaude(
 
     // === AGENTIC LOOP ===
     while (iteration < MAX_ITERATIONS) {
+      if (clientGone) break;
       iteration++;
       console.log(`[Chat] 🔄 Agentic loop iteration ${iteration}/${MAX_ITERATIONS}`);
 
@@ -257,6 +263,8 @@ export async function streamChatClaude(
         console.log(`[Chat] ✅ Final response after ${iteration} iterations (${finalContent.length} chars)`);
         break;
       }
+
+      if (clientGone) break;
 
       // Reset consecutive error counter when Claude makes tool calls
       consecutiveErrors = 0;
@@ -357,6 +365,12 @@ export async function streamChatClaude(
       await toolsRegistry.execute('desktop_control', { action: 'hide_indicator' });
     } catch {
       // Silently ignore — indicator may already be hidden or desktop_control unavailable
+    }
+
+    if (clientGone) {
+      console.log('[Chat] Client closed the connection; turn aborted');
+      reply.raw.end();
+      return reply;
     }
 
     // Stream final content to client in bounded chunks (never splits an emoji)

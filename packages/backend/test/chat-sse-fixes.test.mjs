@@ -1,6 +1,8 @@
 // CHAT-01: chat idempotency and SSE stream hardening.
 //  - running idempotency entries are never evicted at the cap (429 instead),
 //    and a duplicate key does not run the turn twice;
+//  - per-actor running cap (one actor cannot block another), connection
+//    close settles the entry at once, stale running entries expire at 15 min;
 //  - the fingerprint covers the whole request (all messages, model, options);
 //  - replay frames carry <= 16 KiB of text and reassemble exactly;
 //  - the final answer is sent in bounded frames (256 KiB -> < 1,000 frames);
@@ -187,6 +189,90 @@ test('chat route: a full table answers 429 rate_limited; a duplicate key while r
   idem.resetChatIdempotency();
 });
 
+test('per-actor cap: actor A at its cap is refused alone; actor B still runs; the global cap stays a last resort', () => {
+  idem.resetChatIdempotency();
+  assert.equal(idem.MAX_RUNNING_PER_ACTOR, 4);
+  const fp = idem.requestFingerprint({ stream: true, messages: [{ role: 'user', content: 'x' }] });
+  const a = [];
+  for (let i = 0; i < 4; i++) a.push(idem.beginChatTurn('uA', `key-a-${i}-xxxx`, fp));
+  assert.ok(a.every((t) => t.kind === 'new'));
+  const over = idem.beginChatTurn('uA', 'key-a-9-xxxx', fp);
+  assert.deepEqual(over, { kind: 'busy', scope: 'actor' });
+  assert.equal(idem.runningChatTurns('user:uA'), 4, 'one actor never holds more than its cap');
+  // A retry of a running key is still answered (not counted as a new turn).
+  assert.equal(idem.beginChatTurn('uA', 'key-a-0-xxxx', fp).kind, 'in_progress');
+  // Actor B is unaffected.
+  assert.equal(idem.beginChatTurn('uB', 'key-b-0-xxxx', fp).kind, 'new');
+  // Channel conversations sharing one owner user id are separate actors.
+  assert.equal(idem.beginChatTurn('uA', 'key-c-0-xxxx', fp, 'channel:telegram:chat-1').kind, 'new');
+  // A finished turn frees A's slot.
+  const reply = fakeReply();
+  idem.instrumentChatReply(reply, a[0].ids, a[0].entry);
+  reply.send({ ok: true });
+  assert.equal(idem.runningChatTurns('user:uA'), 3);
+  assert.equal(idem.beginChatTurn('uA', 'key-a-9-xxxx', fp).kind, 'new');
+  // Global hard cap: many actors, one turn each, all running -> 429 global.
+  idem.resetChatIdempotency();
+  idem.setChatIdempotencyCap(3);
+  for (const u of ['g1', 'g2', 'g3']) assert.equal(idem.beginChatTurn(u, 'key-g-xxxxxx', fp).kind, 'new');
+  assert.deepEqual(idem.beginChatTurn('g4', 'key-g-xxxxxx', fp), { kind: 'busy', scope: 'global' });
+  idem.resetChatIdempotency();
+});
+
+test('connection close before the reply ended: entry dropped at once, slot freed; a completed turn stays replayable', () => {
+  idem.resetChatIdempotency();
+  const fp = idem.requestFingerprint({ stream: true, messages: [{ role: 'user', content: 'x' }] });
+  const t1 = idem.beginChatTurn('uC', 'key-close-xxxx', fp);
+  const raw = fakeRaw();
+  idem.instrumentChatReply(fakeReply(raw), t1.ids, t1.entry);
+  raw.writeHead(200, { 'Content-Type': 'text/event-stream' });
+  raw.write(`data: ${JSON.stringify({ type: 'text', content: 'partial' })}\n\n`);
+  assert.equal(idem.runningChatTurns('user:uC'), 1);
+  raw.destroyed = true; raw.emit('close'); // client went away
+  assert.equal(idem.runningChatTurns('user:uC'), 0, 'slot freed without waiting');
+  const t2 = idem.beginChatTurn('uC', 'key-close-xxxx', fp);
+  assert.equal(t2.kind, 'new', 'aborted turn is not replayed; a retry runs anew');
+  assert.notEqual(t2.ids.runId, t1.ids.runId);
+  // The aborted backend work ending later does not resurrect or double-free.
+  raw.end();
+  assert.equal(idem.runningChatTurns('user:uC'), 1);
+  assert.equal(idem.beginChatTurn('uC', 'key-close-xxxx', fp).kind, 'in_progress');
+  // Completed stream: replayable, and the close that follows end changes nothing.
+  const t3 = idem.beginChatTurn('uC', 'key-done-xxxxx', fp);
+  const raw3 = fakeRaw();
+  idem.instrumentChatReply(fakeReply(raw3), t3.ids, t3.entry);
+  raw3.writeHead(200, { 'Content-Type': 'text/event-stream' });
+  raw3.write(`data: ${JSON.stringify({ type: 'text', content: 'all' })}\n\n`);
+  raw3.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+  raw3.end(); // emits finish + close
+  const r = idem.beginChatTurn('uC', 'key-done-xxxxx', fp);
+  assert.equal(r.kind, 'replay');
+  assert.equal(r.outcome.content, 'all');
+  assert.equal(r.outcome.done, true);
+  idem.resetChatIdempotency();
+});
+
+test('stale running entries expire at 15 minutes (injected clock); finished ones after 10', () => {
+  idem.resetChatIdempotency();
+  assert.equal(idem.RUNNING_STALE_MS, 15 * 60_000);
+  let t = 1_000_000;
+  idem.setChatIdempotencyClock(() => t);
+  const fp = idem.requestFingerprint({ stream: true, messages: [{ role: 'user', content: 'x' }] });
+  const run = idem.beginChatTurn('uS', 'key-stale-xxxx', fp);
+  const fin = idem.beginChatTurn('uS', 'key-fin-xxxxxx', fp);
+  const reply = fakeReply(); idem.instrumentChatReply(reply, fin.ids, fin.entry); reply.send({ ok: 1 });
+  t += 10 * 60_000 + 1;
+  assert.equal(idem.beginChatTurn('uS', 'key-stale-xxxx', fp).kind, 'in_progress', 'still running at 10 min');
+  assert.equal(idem.beginChatTurn('uS', 'key-fin-xxxxxx', fp).kind, 'new', 'finished entry expired after 10 min');
+  t += 5 * 60_000; // 15 min + 1 ms since the running turn started
+  assert.equal(idem.runningChatTurns('user:uS'), 2);
+  const again = idem.beginChatTurn('uS', 'key-stale-xxxx', fp);
+  assert.equal(again.kind, 'new', 'stale running entry dropped');
+  assert.notEqual(again.ids.runId, run.ids.runId);
+  assert.equal(idem.runningChatTurns('user:uS'), 2, 'stale slot freed (new key-fin + new key-stale)');
+  idem.resetChatIdempotency();
+});
+
 // --- 2. fingerprint covers the whole request -----------------------------------
 
 test('fingerprint: covers all messages, agent, session, model and options; key order does not matter', () => {
@@ -353,6 +439,25 @@ test('heartbeat: one timer per stream, cleared on close as well as end', async (
   await tick(60);
   assert.equal(raw.out.length, n);
   sse.setSseHeartbeatMs(null);
+});
+
+test('agentic stream: a client close during a tool step aborts the turn (no further model calls)', async () => {
+  slowToolMs = 150;
+  claudeQueue.length = 0;
+  claudeQueue.push(
+    { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu_2', name: 'x_slow', input: {} }], usage: { input_tokens: 1, output_tokens: 1 } },
+    { stop_reason: 'end_turn', content: [{ type: 'text', text: 'never sent' }], usage: { input_tokens: 1, output_tokens: 1 } },
+  );
+  const raw = fakeRaw();
+  const policy = { kind: 'channel', channel: 'test', conversationId: 'c', allowedDestinations: [], allowedTools: new Set(['x_slow']) };
+  setTimeout(() => { raw.destroyed = true; raw.emit('close'); }, 50);
+  await muted(() => streamChatClaude(fakeReply(raw), 'test-key-not-real', 'claude-test', [{ role: 'user', content: 'go' }], 'sys',
+    [{ name: 'x_slow', description: 'slow step', input_schema: { type: 'object', properties: {} } }], 0.5,
+    's-owner', 'sse-1', undefined, policy, 's-agent'));
+  assert.equal(claudeQueue.length, 1, 'the second model call was not made');
+  assert.ok(!raw.out.some((w) => w.includes('never sent')));
+  assert.equal(raw.writableEnded, true);
+  claudeQueue.length = 0;
 });
 
 // --- 6. Ollama path ------------------------------------------------------------

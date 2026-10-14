@@ -16,12 +16,18 @@
  *  - same key, different request (any message, agent, session, stream
  *    flag, model or option differs) -> 422 { code: 'idempotency_key_reused' }.
  *
- * Running entries are never evicted (CHAT-01): at the 2,000-entry cap the
- * oldest finished entry is dropped; when only running entries remain, a new
- * keyed turn is refused (429 rate_limited) rather than forgetting a running
- * one, which would let a retry run the turn twice. A running entry is
- * dropped only when it is older than RUNNING_STALE_MS (a turn that never
- * ended, e.g. the process lost the response).
+ * Running entries are never evicted (CHAT-01), since forgetting one would
+ * let a retry run the turn twice. Instead:
+ *  - per actor (the signed-in user, or the channel conversation of a
+ *    server-created channel turn) at most MAX_RUNNING_PER_ACTOR keyed turns
+ *    run at once; over that, only that actor gets 429 rate_limited;
+ *  - a global hard cap (2,000 entries) is the last-resort guard: finished
+ *    entries are dropped oldest first; if only running ones remain, 429;
+ *  - when the client connection closes before the reply ended, the turn is
+ *    aborted: its entry is dropped at once (slot freed, a retry runs anew).
+ *    Only a turn that ran to its end stays replayable, for 10 minutes;
+ *  - a running entry older than RUNNING_STALE_MS (a turn whose response
+ *    never ended or closed) is dropped as a leak guard.
  *
  * State lives in process memory only (lost on restart), keyed by a hash of
  * user + key; the request is kept only as a hash. The outcome text is kept
@@ -33,8 +39,18 @@ import type { FastifyReply } from 'fastify';
 import { SSE_HEADERS, chunkText } from './chat-sse.js';
 
 export const IDEMPOTENCY_TTL_MS = 10 * 60_000;
-const RUNNING_STALE_MS = 60 * 60_000;
+/**
+ * Longest a keyed turn may hold its slot. Turns have no single absolute
+ * timeout: the UI bridge gives a stream 120 s, a CLI bridge call 180 s, and
+ * the agentic loop (25 steps) can wait up to 3 min on rate limits per call.
+ * Real turns end (or their connection closes, which settles the entry) well
+ * inside 15 minutes; this only bounds entries whose response never settled.
+ */
+export const RUNNING_STALE_MS = 15 * 60_000;
+export const MAX_RUNNING_PER_ACTOR = 4;
 let maxEntries = 2_000;
+let maxRunningPerActor = MAX_RUNNING_PER_ACTOR;
+let now: () => number = () => Date.now();
 const MAX_STORED_CONTENT = 256 * 1024;
 /** Each replayed text frame carries at most this much UTF-8 text. */
 export const REPLAY_FRAME_BYTES = 16 * 1024;
@@ -51,20 +67,37 @@ export interface Entry {
   fingerprint: string;
   ids: ChatTurnIds;
   createdAt: number;
-  state: 'running' | 'done';
+  state: 'running' | 'done' | 'aborted';
+  actor: string;
   outcome?: Outcome;
 }
 
 const entries = new Map<string, Entry>();
+/** Running keyed turns per actor. */
+const runningByActor = new Map<string, number>();
+
+/** Leave the running state exactly once (frees the actor's slot). */
+function settle(entry: Entry, state: 'done' | 'aborted'): boolean {
+  if (entry.state !== 'running') return false;
+  entry.state = state;
+  const n = (runningByActor.get(entry.actor) ?? 1) - 1;
+  if (n > 0) runningByActor.set(entry.actor, n); else runningByActor.delete(entry.actor);
+  return true;
+}
+
+function drop(key: string, entry: Entry): void {
+  settle(entry, 'aborted');
+  if (entries.get(key) === entry) entries.delete(key);
+}
 
 function sha256(s: string): string {
   return createHash('sha256').update(s).digest('hex');
 }
 
-function prune(now = Date.now()): void {
+function prune(t = now()): void {
   for (const [k, e] of entries) {
-    const age = now - e.createdAt;
-    if (e.state === 'done' ? age > IDEMPOTENCY_TTL_MS : age > RUNNING_STALE_MS) entries.delete(k);
+    const age = t - e.createdAt;
+    if (e.state === 'done' ? age > IDEMPOTENCY_TTL_MS : age > RUNNING_STALE_MS) drop(k, e);
   }
 }
 
@@ -73,7 +106,7 @@ function makeRoom(): boolean {
   if (entries.size < maxEntries) return true;
   for (const [k, e] of entries) {
     if (e.state !== 'done') continue;
-    entries.delete(k);
+    drop(k, e);
     if (entries.size < maxEntries) return true;
   }
   return false;
@@ -115,10 +148,13 @@ export type BeginResult =
   | { kind: 'replay'; ids: ChatTurnIds; outcome: Outcome }
   | { kind: 'in_progress'; ids: ChatTurnIds }
   | { kind: 'mismatch' }
-  | { kind: 'busy' };
+  | { kind: 'busy'; scope: 'actor' | 'global' };
 
-/** Start a turn; with a key, look up an earlier one first. */
-export function beginChatTurn(userId: string, key: string | null, fingerprint: string): BeginResult {
+/**
+ * Start a turn; with a key, look up an earlier one first. `actor` is who
+ * the per-actor running cap counts against (defaults to the user).
+ */
+export function beginChatTurn(userId: string, key: string | null, fingerprint: string, actor: string = `user:${userId}`): BeginResult {
   const ids = newTurnIds();
   if (!key) return { kind: 'new', ids, entry: null };
   prune();
@@ -129,23 +165,45 @@ export function beginChatTurn(userId: string, key: string | null, fingerprint: s
     if (prev.state === 'running' || !prev.outcome) return { kind: 'in_progress', ids: prev.ids };
     return { kind: 'replay', ids: prev.ids, outcome: prev.outcome };
   }
-  if (!makeRoom()) return { kind: 'busy' };
-  const entry: Entry = { hash, fingerprint, ids, createdAt: Date.now(), state: 'running' };
+  if ((runningByActor.get(actor) ?? 0) >= maxRunningPerActor) return { kind: 'busy', scope: 'actor' };
+  if (!makeRoom()) return { kind: 'busy', scope: 'global' };
+  const entry: Entry = { hash, fingerprint, ids, createdAt: now(), state: 'running', actor };
   entries.set(hash, entry);
+  runningByActor.set(actor, (runningByActor.get(actor) ?? 0) + 1);
   return { kind: 'new', ids, entry };
 }
 
 function finish(entry: Entry | null, outcome: Outcome): void {
-  if (!entry || entry.state === 'done') return;
-  entry.state = 'done';
+  if (!entry || entry.state !== 'running') return; // already done, or aborted and dropped
   entry.outcome = outcome;
+  settle(entry, 'done');
+}
+
+/** The client went away before the reply ended: abort, drop the entry, free the slot. */
+function abort(entry: Entry | null): void {
+  if (!entry || entry.state !== 'running') return;
+  drop(entry.hash, entry);
+}
+
+/** Running keyed turns for an actor (tests, diagnostics). */
+export function runningChatTurns(actor: string): number {
+  return runningByActor.get(actor) ?? 0;
 }
 
 /** Test hook. */
-export function resetChatIdempotency(): void { entries.clear(); maxEntries = 2_000; }
+export function resetChatIdempotency(): void {
+  entries.clear(); runningByActor.clear();
+  maxEntries = 2_000; maxRunningPerActor = MAX_RUNNING_PER_ACTOR; now = () => Date.now();
+}
 
-/** Test hook: lower the entry cap. */
+/** Test hook: lower the global entry cap. */
 export function setChatIdempotencyCap(n: number): void { maxEntries = n; }
+
+/** Test hook: change the per-actor running cap. */
+export function setChatIdempotencyActorCap(n: number): void { maxRunningPerActor = n; }
+
+/** Test hook: inject the clock. */
+export function setChatIdempotencyClock(fn: (() => number) | null): void { now = fn ?? (() => Date.now()); }
 
 function withIds(obj: Record<string, unknown>, ids: ChatTurnIds): Record<string, unknown> {
   return { ...obj, runId: ids.runId, messageId: ids.messageId };
@@ -194,10 +252,16 @@ export function instrumentChatReply(reply: FastifyReply, ids: ChatTurnIds, entry
     return origWrite(chunk, ...rest);
   };
   const origEnd = raw.end.bind(raw);
+  let ended = false;
   raw.end = (...args: any[]) => {
+    ended = true;
     if (streamed) finish(entry, { kind: 'stream', status: raw.statusCode ?? 200, content, truncated, done });
     return origEnd(...args);
   };
+  // Connection closed before the reply ended: the turn is aborted (CHAT-01).
+  if (entry && typeof raw.once === 'function') {
+    raw.once('close', () => { if (!ended && !raw.writableEnded) abort(entry); });
+  }
 
   // JSON (reply.send) path.
   const origSend = reply.send.bind(reply);
