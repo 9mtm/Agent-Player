@@ -236,6 +236,9 @@ test('agents (configs, naming): scope matrix', async () => {
   await row('agents.duplicateConfig(missing)', (a) => A.duplicateConfig(a, 'missing-agent'), ADMIN_UP);
   await row('agents.deleteConfig(missing)', (a) => A.deleteConfig(a, 'missing-agent'), ADMIN_UP);
   await assert.rejects(() => A.deleteConfig(ACTORS.admin, SMALL), (e) => e instanceof ScopeError && e.status === 403 && e.code === 'reserved_agent');
+  // the reserved id is the small local agent's id (kept as a constant to avoid an import cycle)
+  assert.match(readFileSync(join(backendDir, 'src/services/small-agent.ts'), 'utf8'), /export const SMALL_AGENT_ID = 'small-local-agent';/);
+  assert.equal((await import(join(backendDir, 'src/repositories/agents-config.ts'))).RESERVED_AGENT_ID, SMALL);
   // the owner creates, renames (name reserved for good) and deletes
   const created = await silent(() => A.createConfig(ACTORS.owner, { name: 'Scope Matrix Agent' }));
   assert.equal(created.name, 'Scope Matrix Agent');
@@ -244,7 +247,7 @@ test('agents (configs, naming): scope matrix', async () => {
   await assert.rejects(() => A.updateConfig(ACTORS.admin, created.id, { description: 'x', expectedVersion: created.version }), (e) => e.constructor.name === 'AgentConfigConflictError');
   await silent(() => A.deleteConfig(ACTORS.owner, created.id));
   assert.equal(await A.getConfig(ACTORS.user, created.id), null);
-  checks += 6;
+  checks += 8;
 });
 
 // --- credentials ----------------------------------------------------------------

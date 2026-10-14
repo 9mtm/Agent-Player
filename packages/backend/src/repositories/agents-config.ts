@@ -36,7 +36,6 @@ import {
   validateExclude,
   type NameSuggestion,
 } from '../services/agent-names.js';
-import { SMALL_AGENT_ID } from '../services/small-agent.js';
 import { VersionInputError, expectedVersionFrom } from '../api/concurrency.js';
 
 export interface AgentConfigRow {
@@ -79,6 +78,13 @@ export class AgentConfigConflictError extends Error {
   constructor(readonly current: AgentConfigRow) { super('The agent was changed by someone else; reload it and try again'); }
 }
 
+/**
+ * services/small-agent.ts SMALL_AGENT_ID. Not imported from there: that
+ * module loads the tools registry, which loads the repositories (cycle).
+ * The scope matrix checks both stay equal.
+ */
+export const RESERVED_AGENT_ID = 'small-local-agent';
+
 export const RESERVED_AGENT_MSG = 'The small local agent is reserved; only the owner can change it';
 const NOT_FOUND = 'Agent not found';
 
@@ -99,7 +105,7 @@ const newAgentId = () => `agent-${Date.now()}-${randomBytes(3).toString('hex')}`
 /** Owner/admin; the reserved small local agent: owner only (MCP-01b). */
 function adminFor(actor: Actor | null | undefined, id: string): Actor {
   const a = requireAdmin(actor);
-  if (id === SMALL_AGENT_ID && !isSystem(a) && !isOwner(a)) throw new ScopeError(403, RESERVED_AGENT_MSG, 'reserved_agent');
+  if (id === RESERVED_AGENT_ID && !isSystem(a) && !isOwner(a)) throw new ScopeError(403, RESERVED_AGENT_MSG, 'reserved_agent');
   return a;
 }
 
