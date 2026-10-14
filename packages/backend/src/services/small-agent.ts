@@ -1,0 +1,503 @@
+/**
+ * Small-agent runs (MCP-01, D-HYBRID).
+ *
+ * A large agent (Claude Code / Codex through the Agent Player MCP server, with
+ * the owner's CLI token) hands a light task to the small local agent: a
+ * dedicated agent `small-local-agent` (provider ollama, local Qwen model).
+ * Every task becomes an ordinary durable task run (CORE-08) with:
+ *
+ *  - tools  = requested ∩ SMALL_AGENT_SAFE_TOOLS ∩ the small agent's own
+ *             grants, minus anything exec-class or approval-gated. Nothing
+ *             requested -> memory_search + storage_search. `read` only when
+ *             asked for explicitly. Delegation never expands permissions.
+ *  - drawers = the requested memory drawers that an owner turn may open
+ *             (memory/drawers.ts selectDrawers + subagentDrawers). Nothing
+ *             requested -> no memory at all.
+ *  - budget = lower defaults than other runs (15 steps / 5 min); a larger
+ *             request is clamped down, never up.
+ *  - capacity: at most SMALL_AGENT_MAX_CONCURRENT (default 2) active runs;
+ *             further spawns are refused (429), never queued silently.
+ *
+ * What a run was allowed is stored in small_agent_runs when it is created
+ * and read again by the executor on every attempt (smallAgentRunScope).
+ * The result card says whether a large agent must review the output.
+ */
+
+import { getDatabase } from '../db/index.js';
+import { getOrchestrator } from '../multi-agent/index.js';
+import { DEFAULT_OLLAMA_MODEL } from '../llm/ollama.js';
+import { createToolsRegistry } from '../tools/index.js';
+import { approvalCategory } from '../tools/approvals.js';
+import { isToolExecClass } from '../tools/exec-policy.js';
+import { TOOL_NAME_PATTERN, intersectGrants, setAgentGrants, staticGrants, type AgentToolGrants } from '../tools/grants.js';
+import {
+  DrawerInputError,
+  drawerId,
+  normalizeDrawer,
+  parseDrawerId,
+  sameDrawer,
+  selectDrawers,
+  subagentDrawers,
+  type DrawerRef,
+} from '../memory/drawers.js';
+import { createRun, getRun, getSteps, elapsedMs, type TaskRunRow, type TaskRunStatus } from './task-runs.js';
+
+export const SMALL_AGENT_ID = 'small-local-agent';
+
+/** The only tools a small-agent run can ever get (read-only, no external effect). */
+export const SMALL_AGENT_SAFE_TOOLS: readonly string[] = ['memory_search', 'storage_search', 'read'];
+/** Tools a run gets when the caller does not name any. */
+export const SMALL_AGENT_DEFAULT_TOOLS: readonly string[] = ['memory_search', 'storage_search'];
+
+export const SMALL_AGENT_KINDS = ['lookup', 'summary', 'classification', 'draft', 'other'] as const;
+export type SmallAgentKind = typeof SMALL_AGENT_KINDS[number];
+/** Kinds whose output is purely informational (no review needed when nothing went wrong). */
+const INFORMATIONAL_KINDS: ReadonlySet<string> = new Set(['lookup', 'summary', 'classification']);
+
+const MAX_TASK_CHARS = 8_000;
+const MAX_REQUESTED_TOOLS = 20;
+const MAX_REQUESTED_DRAWERS = 14;
+const MAX_CARD_OUTPUT_CHARS = 20_000;
+
+const SYSTEM_PROMPT = [
+  'You are the small local helper agent of Agent Player.',
+  'A larger agent gave you one light task: a lookup, a summary, a classification or a draft.',
+  'Do only that task. Use only the tools you were given; you cannot send messages, change files or run commands.',
+  'If you cannot do the task with what you have, say so plainly.',
+  'Answer with the result only. Start with a one-line summary, then the details.',
+].join(' ');
+
+function envInt(name: string, fallback: number, min: number, max: number): number {
+  const v = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(v) && v >= min && v <= max ? v : fallback;
+}
+
+/** Defaults (env overrides, read at call time). */
+export function smallAgentDefaults() {
+  return {
+    maxSteps: envInt('SMALL_AGENT_MAX_STEPS', 15, 1, 100),
+    maxDurationMs: envInt('SMALL_AGENT_MAX_DURATION_MS', 5 * 60_000, 5_000, 60 * 60_000),
+    maxConcurrent: envInt('SMALL_AGENT_MAX_CONCURRENT', 2, 1, 50),
+    model: (process.env.SMALL_AGENT_MODEL || '').trim() || DEFAULT_OLLAMA_MODEL,
+  };
+}
+
+export class SmallAgentInputError extends Error { readonly status = 400; }
+export class SmallAgentCapacityError extends Error {
+  readonly status = 429;
+  constructor(readonly capacity: SmallAgentCapacity) {
+    super(`The small agent is busy: ${capacity.active} of ${capacity.limit} runs are active. Try again when one finishes.`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The dedicated agent
+// ---------------------------------------------------------------------------
+
+/**
+ * Create the small agent once (agents_config + grant profile + orchestrator
+ * registration). Its stored grants are exactly the safe set; the owner can
+ * narrow them later through the grants API, and runs respect that.
+ */
+export function ensureSmallAgent(): void {
+  const db = getDatabase();
+  const exists = db.prepare('SELECT 1 FROM agents_config WHERE id = ?').get(SMALL_AGENT_ID);
+  if (!exists) {
+    db.prepare(`
+      INSERT OR IGNORE INTO agents_config (id, name, description, system_prompt, model, provider, temperature, max_tokens, cron_enabled)
+      VALUES (?, ?, ?, ?, ?, 'ollama', 0.2, 2048, 0)
+    `).run(
+      SMALL_AGENT_ID,
+      'Small local agent',
+      'Local Qwen helper for light tasks delegated by a large agent (lookups, summaries, classification, drafts).',
+      SYSTEM_PROMPT,
+      smallAgentDefaults().model,
+    );
+    const available = createToolsRegistry({ workspaceDir: process.cwd() }).listRegistered();
+    setAgentGrants(SMALL_AGENT_ID, { grants: [...SMALL_AGENT_SAFE_TOOLS] }, 'system:small-agent', available);
+  }
+  const orchestrator = getOrchestrator();
+  if (!orchestrator.getAgent(SMALL_AGENT_ID)) {
+    orchestrator.registerAgent({
+      id: SMALL_AGENT_ID,
+      name: 'Small local agent',
+      role: 'worker',
+      capabilities: ['lookup', 'summary', 'classification', 'draft'],
+      // Concurrency is limited by SMALL_AGENT_MAX_CONCURRENT, not here.
+      maxConcurrentTasks: 1_000,
+    } as any);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tools and drawers
+// ---------------------------------------------------------------------------
+
+export interface Dropped { item: string; reason: string }
+
+type ToolInfo = { name: string; execClass?: boolean; requiresApproval?: boolean };
+
+/**
+ * Tools a small-agent run may use: requested ∩ safe set ∩ the agent's grants,
+ * minus exec-class and approval-gated tools. Pure (inputs passed in).
+ */
+export function resolveSmallAgentTools(
+  requested: unknown,
+  registered: ReadonlyArray<ToolInfo>,
+  agentGrants: AgentToolGrants,
+): { requested: string[]; granted: string[]; dropped: Dropped[] } {
+  let list: string[];
+  if (requested === undefined || requested === null) {
+    list = [...SMALL_AGENT_DEFAULT_TOOLS];
+  } else {
+    if (!Array.isArray(requested) || requested.length > MAX_REQUESTED_TOOLS) {
+      throw new SmallAgentInputError(`tools must be an array of tool names (max ${MAX_REQUESTED_TOOLS})`);
+    }
+    list = [];
+    for (const t of requested) {
+      if (typeof t !== 'string' || !TOOL_NAME_PATTERN.test(t)) throw new SmallAgentInputError('invalid tool name');
+      if (!list.includes(t)) list.push(t);
+    }
+  }
+  const granted: string[] = [];
+  const dropped: Dropped[] = [];
+  for (const name of list) {
+    const tool = registered.find((t) => t.name === name);
+    if (!SMALL_AGENT_SAFE_TOOLS.includes(name)) dropped.push({ item: name, reason: 'not in the small-agent safe set (memory_search, storage_search, read)' });
+    else if (!tool) dropped.push({ item: name, reason: 'not available on this server' });
+    else if (isToolExecClass(tool)) dropped.push({ item: name, reason: 'exec-class tools are never delegated' });
+    else if (approvalCategory(tool) !== null) dropped.push({ item: name, reason: 'tools that need owner approval are never delegated' });
+    else if (!agentGrants.tools.has(name)) dropped.push({ item: name, reason: 'not granted to the small agent' });
+    else granted.push(name);
+  }
+  return { requested: list, granted, dropped };
+}
+
+/**
+ * Drawers a small-agent run may read: the requested ones that an owner turn
+ * may open (owner, experience, ONE project, ONE task, up to 10 people).
+ * Nothing requested -> none. Invalid entries are a 400; extra projects/tasks
+ * are dropped with a warning.
+ */
+export function resolveSmallAgentDrawers(requested: unknown): { drawers: DrawerRef[]; dropped: Dropped[] } {
+  if (requested === undefined || requested === null) return { drawers: [], dropped: [] };
+  if (!Array.isArray(requested) || requested.length > MAX_REQUESTED_DRAWERS) {
+    throw new SmallAgentInputError(`drawers must be an array (max ${MAX_REQUESTED_DRAWERS})`);
+  }
+  const parsed: DrawerRef[] = [];
+  for (const r of requested) {
+    try {
+      const d = typeof r === 'string' ? parseDrawerId(r) : normalizeDrawer(r);
+      if (!parsed.some((x) => sameDrawer(x, d))) parsed.push(d);
+    } catch (err) {
+      if (err instanceof DrawerInputError) throw new SmallAgentInputError(`invalid drawer: ${err.message}`);
+      throw err;
+    }
+  }
+  const project = parsed.find((d) => d.kind === 'project')?.key ?? null;
+  const task = parsed.find((d) => d.kind === 'task')?.key ?? null;
+  const people = parsed.filter((d) => d.kind === 'people').map((d) => d.key!);
+  const allowed = selectDrawers({ audience: 'owner', project, task, people, experience: parsed.some((d) => d.kind === 'experience') });
+  const drawers = subagentDrawers(allowed, parsed);
+  const dropped = parsed
+    .filter((d) => !drawers.some((x) => sameDrawer(x, d)))
+    .map((d) => ({ item: drawerId(d), reason: 'an owner turn opens at most one project, one task and ten people drawers' }));
+  return { drawers, dropped };
+}
+
+// ---------------------------------------------------------------------------
+// Capacity
+// ---------------------------------------------------------------------------
+
+export interface SmallAgentCapacity {
+  active: number; running: number; queued: number; waiting: number; limit: number; available: number;
+}
+
+export function smallAgentCapacity(): SmallAgentCapacity {
+  const rows = getDatabase().prepare(`
+    SELECT status, COUNT(*) AS n FROM task_runs
+    WHERE agent_id = ? AND status IN ('queued', 'running', 'waiting_approval') GROUP BY status
+  `).all(SMALL_AGENT_ID) as Array<{ status: string; n: number }>;
+  const by = (s: string) => rows.find((r) => r.status === s)?.n ?? 0;
+  const limit = smallAgentDefaults().maxConcurrent;
+  const active = by('queued') + by('running') + by('waiting_approval');
+  return { active, running: by('running'), queued: by('queued'), waiting: by('waiting_approval'), limit, available: Math.max(0, limit - active) };
+}
+
+// ---------------------------------------------------------------------------
+// Spawn
+// ---------------------------------------------------------------------------
+
+interface SmallAgentRunRow {
+  run_id: string; task_id: string; requested_by: string; kind: SmallAgentKind;
+  requested_tools: string; granted_tools: string; drawers: string; model: string; warnings: string; created_at: string;
+}
+
+function parseList<T = string>(json: string | null | undefined): T[] {
+  try {
+    const v = JSON.parse(json ?? '[]');
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+export interface SpawnInput {
+  ownerId: string;
+  task: unknown;
+  tools?: unknown;
+  drawers?: unknown;
+  maxSteps?: unknown;
+  kind?: unknown;
+}
+
+export interface SpawnResult {
+  run: TaskRunRow;
+  kind: SmallAgentKind;
+  grantedTools: string[];
+  drawers: DrawerRef[];
+  model: string;
+  warnings: string[];
+  capacity: SmallAgentCapacity;
+}
+
+// One spawn at a time in this process, so the capacity check and the insert
+// cannot interleave.
+let spawnChain: Promise<unknown> = Promise.resolve();
+
+export function spawnSmallAgentRun(input: SpawnInput): Promise<SpawnResult> {
+  const next = spawnChain.then(() => doSpawn(input));
+  spawnChain = next.catch(() => undefined);
+  return next;
+}
+
+async function doSpawn(input: SpawnInput): Promise<SpawnResult> {
+  if (typeof input.task !== 'string' || !input.task.trim()) throw new SmallAgentInputError('task is required');
+  if (input.task.length > MAX_TASK_CHARS) throw new SmallAgentInputError(`task is too long (max ${MAX_TASK_CHARS} characters)`);
+  const kind = (input.kind === undefined || input.kind === null ? 'other' : input.kind) as SmallAgentKind;
+  if (!(SMALL_AGENT_KINDS as readonly unknown[]).includes(kind)) {
+    throw new SmallAgentInputError(`kind must be one of ${SMALL_AGENT_KINDS.join(', ')}`);
+  }
+  const d = smallAgentDefaults();
+  const warnings: string[] = [];
+  let maxSteps = d.maxSteps;
+  if (input.maxSteps !== undefined && input.maxSteps !== null) {
+    const n = Number(input.maxSteps);
+    if (!Number.isInteger(n) || n < 1) throw new SmallAgentInputError('max_steps must be a positive integer');
+    if (n > d.maxSteps) warnings.push(`max_steps ${n} lowered to the small-agent limit ${d.maxSteps}`);
+    maxSteps = Math.min(n, d.maxSteps);
+  }
+
+  ensureSmallAgent();
+  const registry = createToolsRegistry({ workspaceDir: process.cwd(), agentId: SMALL_AGENT_ID });
+  const tools = resolveSmallAgentTools(input.tools, registry.listRegistered(), registry.getContext().grants!);
+  const drawers = resolveSmallAgentDrawers(input.drawers);
+  for (const x of tools.dropped) warnings.push(`tool "${x.item}" not given: ${x.reason}`);
+  for (const x of drawers.dropped) warnings.push(`drawer "${x.item}" not opened: ${x.reason}`);
+
+  const capacity = smallAgentCapacity();
+  if (capacity.active >= capacity.limit) throw new SmallAgentCapacityError(capacity);
+
+  const agent = getDatabase().prepare('SELECT model FROM agents_config WHERE id = ?').get(SMALL_AGENT_ID) as { model: string } | undefined;
+  const model = agent?.model || d.model;
+
+  // The task text lives only in the encrypted run input, not in the
+  // orchestrator's task title/description.
+  const orchestrator = getOrchestrator();
+  const task = orchestrator.createTask({
+    title: `Small agent run (${kind})`,
+    description: 'Light task delegated to the small local agent (text kept encrypted in the task run).',
+    priority: 'normal',
+    origin: 'owner',
+    maxRetries: 0,
+  });
+  if (!orchestrator.assignTask(task.id, SMALL_AGENT_ID)) throw new Error('could not assign the task to the small agent');
+  orchestrator.startTask(task.id);
+
+  const run = await createRun({
+    taskId: task.id,
+    agentId: SMALL_AGENT_ID,
+    userId: input.ownerId,
+    prompt: input.task,
+    maxSteps,
+    maxDurationMs: d.maxDurationMs,
+  });
+  getDatabase().prepare(`
+    INSERT INTO small_agent_runs (run_id, task_id, requested_by, kind, requested_tools, granted_tools, drawers, model, warnings)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(run.id, task.id, input.ownerId, kind, JSON.stringify(tools.requested), JSON.stringify(tools.granted),
+    JSON.stringify(drawers.drawers), model, JSON.stringify(warnings));
+
+  return { run, kind, grantedTools: tools.granted, drawers: drawers.drawers, model, warnings, capacity: smallAgentCapacity() };
+}
+
+// ---------------------------------------------------------------------------
+// Executor hook
+// ---------------------------------------------------------------------------
+
+export interface SmallAgentRunScope {
+  /** Effective grants for this attempt (never wider than what was stored). */
+  grants: AgentToolGrants;
+  memoryDrawers: DrawerRef[];
+  userId: string | null;
+}
+
+/**
+ * Scope of a small-agent run for one attempt: the stored tools ∩ the safe
+ * set ∩ the agent's grants now (`current`), minus exec/approval tools; the
+ * stored drawers re-validated. A missing row -> nothing (fail closed).
+ */
+export function smallAgentRunScope(
+  run: Pick<TaskRunRow, 'id' | 'user_id'>,
+  current: AgentToolGrants,
+  registered: ReadonlyArray<ToolInfo>,
+): SmallAgentRunScope {
+  const row = getDatabase().prepare('SELECT granted_tools, drawers FROM small_agent_runs WHERE run_id = ?').get(run.id) as
+    Pick<SmallAgentRunRow, 'granted_tools' | 'drawers'> | undefined;
+  if (!row) return { grants: { agentId: SMALL_AGENT_ID, tools: new Map() }, memoryDrawers: [], userId: null };
+  const allowed = parseList(row.granted_tools).filter((name) => {
+    if (typeof name !== 'string' || !SMALL_AGENT_SAFE_TOOLS.includes(name)) return false;
+    const tool = registered.find((t) => t.name === name);
+    return !!tool && !isToolExecClass(tool) && approvalCategory(tool) === null;
+  });
+  const grants = intersectGrants(staticGrants(allowed, SMALL_AGENT_ID), current);
+  const memoryDrawers = selectDrawers({ audience: 'subagent', passed: parseList<DrawerRef>(row.drawers) });
+  return { grants, memoryDrawers, userId: run.user_id };
+}
+
+export function smallAgentSystemPrompt(stored: string | null | undefined): string {
+  return stored && stored.trim() ? stored : SYSTEM_PROMPT;
+}
+
+// ---------------------------------------------------------------------------
+// Result card
+// ---------------------------------------------------------------------------
+
+export interface ResultCard {
+  run_id: string;
+  status: TaskRunStatus;
+  kind: SmallAgentKind;
+  summary: string;
+  outputs: Array<{ type: 'text'; text: string }>;
+  steps_used: number;
+  max_steps: number;
+  duration_ms: number;
+  max_duration_ms: number;
+  model: string;
+  agent: string;
+  tools_granted: string[];
+  tools_used: string[];
+  drawers: string[];
+  needs_review: boolean;
+  review_reason: string | null;
+  warnings: string[];
+  created_at: string;
+  finished_at: string | null;
+}
+
+const FINAL: ReadonlySet<TaskRunStatus> = new Set(['completed', 'failed', 'cancelled']);
+
+function fullOutput(run: TaskRunRow): string {
+  try {
+    const task = getOrchestrator().getTask(run.task_id);
+    const out = (task?.output as any)?.output;
+    if (typeof out === 'string') return out;
+  } catch { /* orchestrator unavailable */ }
+  return run.output_preview ?? '';
+}
+
+function summaryOf(text: string): string {
+  const first = text.split('\n').map((l) => l.trim()).find((l) => l.length > 0) ?? '';
+  const clean = first.replace(/^#+\s*/, '').replace(/^\*\*(.*)\*\*$/, '$1');
+  return clean.length > 280 ? `${clean.slice(0, 277)}...` : clean;
+}
+
+/** Result card of a small-agent run, or null when it is not one. */
+export function smallAgentCard(runId: string): ResultCard | null {
+  const meta = getDatabase().prepare('SELECT * FROM small_agent_runs WHERE run_id = ?').get(runId) as SmallAgentRunRow | undefined;
+  const run = meta ? getRun(runId) : undefined;
+  if (!meta || !run) return null;
+  const steps = getSteps(run.id);
+  const warnings = [...parseList(meta.warnings)];
+  const runtime: string[] = [];
+
+  let output = run.status === 'completed' ? fullOutput(run) : '';
+  if (output.length > MAX_CARD_OUTPUT_CHARS) {
+    output = output.slice(0, MAX_CARD_OUTPUT_CHARS);
+    runtime.push(`output cut to ${MAX_CARD_OUTPUT_CHARS} characters`);
+  }
+  const failedTools = steps.filter((s) => s.kind === 'tool' && (s.status === 'failed' || s.status === 'unknown'));
+  if (failedTools.length) runtime.push(`${failedTools.length} tool step(s) failed`);
+  const toolsUsed = [...new Set(steps.filter((s) => s.kind === 'tool' && s.tool_name).map((s) => s.tool_name!))];
+  const outsideGrant = toolsUsed.filter((t) => !parseList(meta.granted_tools).includes(t));
+  if (outsideGrant.length) runtime.push(`the model asked for tools it was not given (refused): ${outsideGrant.join(', ')}`);
+  if (toolsUsed.includes('read')) runtime.push('the agent read workspace files; check that nothing private is quoted');
+  if (run.status === 'failed') runtime.push(`run failed: ${run.status_reason ?? 'unknown reason'}`);
+  if (run.status === 'cancelled') runtime.push('run was cancelled');
+  if (run.status === 'waiting_approval') runtime.push(`run is waiting for the owner (${run.status_reason ?? 'decision'})`);
+  if (run.status === 'completed' && !output.trim()) runtime.push('the agent returned no output');
+
+  // Unfinished runs are not reviewable yet; every finished run that is not
+  // a clean informational result needs a large agent's review.
+  const finished = FINAL.has(run.status) || run.status === 'waiting_approval';
+  const reviewReason = !finished ? 'the run has not finished'
+    : run.status !== 'completed' ? 'the run did not complete'
+    : !INFORMATIONAL_KINDS.has(meta.kind) ? `"${meta.kind}" output is not purely informational`
+    : runtime.length ? 'warnings during the run'
+    : null;
+
+  const summary = run.status === 'completed'
+    ? summaryOf(output) || '(no output)'
+    : run.status === 'failed' ? `Failed: ${run.status_reason ?? 'unknown reason'}`
+    : run.status === 'cancelled' ? 'Cancelled.'
+    : run.status === 'waiting_approval' ? `Waiting for the owner (${run.status_reason ?? 'decision'}).`
+    : run.status === 'running' ? 'Running.' : 'Queued.';
+
+  return {
+    run_id: run.id,
+    status: run.status,
+    kind: meta.kind,
+    summary,
+    outputs: output ? [{ type: 'text', text: output }] : [],
+    steps_used: run.steps_used,
+    max_steps: run.max_steps,
+    duration_ms: elapsedMs(run),
+    max_duration_ms: run.max_duration_ms,
+    model: meta.model,
+    agent: SMALL_AGENT_ID,
+    tools_granted: parseList(meta.granted_tools),
+    tools_used: toolsUsed,
+    drawers: parseList<DrawerRef>(meta.drawers).map((d) => drawerId(d)),
+    needs_review: reviewReason !== null,
+    review_reason: reviewReason,
+    warnings: [...warnings, ...runtime],
+    created_at: run.created_at,
+    finished_at: run.finished_at,
+  };
+}
+
+export interface SmallAgentRunSummary {
+  run_id: string; status: TaskRunStatus; kind: SmallAgentKind; summary: string | null;
+  steps_used: number; max_steps: number; created_at: string; finished_at: string | null;
+}
+
+export function listSmallAgentRuns(filter: { status?: string; limit?: number }): SmallAgentRunSummary[] {
+  const limit = Math.min(Math.max(Number(filter.limit) || 20, 1), 100);
+  const args: unknown[] = [];
+  let where = '';
+  if (filter.status) { where = 'WHERE r.status = ?'; args.push(filter.status); }
+  const rows = getDatabase().prepare(`
+    SELECT r.*, s.kind AS small_kind FROM small_agent_runs s JOIN task_runs r ON r.id = s.run_id
+    ${where} ORDER BY r.created_at DESC, r.rowid DESC LIMIT ?
+  `).all(...args, limit) as Array<TaskRunRow & { small_kind: SmallAgentKind }>;
+  return rows.map((r) => ({
+    run_id: r.id,
+    status: r.status,
+    kind: r.small_kind,
+    summary: r.output_preview ? summaryOf(r.output_preview) : (r.status === 'failed' ? r.status_reason : null),
+    steps_used: r.steps_used,
+    max_steps: r.max_steps,
+    created_at: r.created_at,
+    finished_at: r.finished_at,
+  }));
+}

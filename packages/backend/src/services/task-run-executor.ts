@@ -22,6 +22,8 @@ import type { ToolResult } from '../tools/types.js';
 import { UNKNOWN_PRINCIPAL } from '../tools/grants.js';
 import { logActivity } from './activity-logger.js';
 import { resolveProviderApiKey } from '../credentials/authority.js';
+import { ollamaToolChat } from '../llm/ollama-tool-chat.js';
+import { SMALL_AGENT_ID, smallAgentRunScope, smallAgentSystemPrompt } from './small-agent.js';
 import {
   BudgetExceededError,
   LeaseLostError,
@@ -93,6 +95,17 @@ interface StoredModelResponse {
   content: string;
   toolCalls?: Array<{ id: string; tool: string; arguments: Record<string, any> }>;
   rawBlocks?: any[];
+  /** Ollama (small agent): the assistant message to append. */
+  assistant?: any;
+}
+
+type LoopMessage = { role: string; content: string | any[]; [k: string]: any };
+
+/** How one provider's model is called and how its turns are appended. */
+interface ModelDriver {
+  call(messages: LoopMessage[]): Promise<StoredModelResponse>;
+  assistantMessage(r: StoredModelResponse): LoopMessage;
+  toolResultMessages(results: Array<{ id: string; tool: string; result: ToolResult; text: string }>): LoopMessage[];
 }
 
 function loadAgent(agentId: string): AgentRow | undefined {
@@ -146,6 +159,53 @@ function recreateIfRecurring(taskId: string, agentId: string): void {
   }
 }
 
+function claudeDriver(claude: ClaudeClient, agent: AgentRow, systemPrompt: string, tools: any[]): ModelDriver {
+  return {
+    async call(messages) {
+      const r = await claude.sendMessage(messages as any, {
+        systemPrompt,
+        tools: tools.length > 0 ? tools : undefined,
+        temperature: agent.temperature,
+        maxTokens: agent.max_tokens,
+      });
+      return { content: r.content, toolCalls: r.toolCalls, rawBlocks: r.rawBlocks };
+    },
+    assistantMessage: (r) => ({ role: 'assistant', content: r.rawBlocks || r.content }),
+    toolResultMessages: (results) => [{
+      role: 'user',
+      content: results.map(({ id, result, text }) => ({
+        type: 'tool_result',
+        tool_use_id: id,
+        content: result?.content ?? [{ type: 'text', text }],
+        ...(result?.error ? { is_error: true } : {}),
+      })),
+    }],
+  };
+}
+
+/** MCP-01: local Ollama model of the small agent (non-streaming, tools in function format). */
+function ollamaDriver(agent: AgentRow, systemPrompt: string, tools: any[]): ModelDriver {
+  return {
+    async call(messages) {
+      const r = await ollamaToolChat({
+        model: agent.model,
+        systemPrompt,
+        messages: messages as any,
+        tools,
+        temperature: agent.temperature,
+        maxTokens: agent.max_tokens,
+      });
+      return { content: r.content, toolCalls: r.toolCalls, assistant: r.assistant };
+    },
+    assistantMessage: (r) => r.assistant ?? { role: 'assistant', content: r.content ?? '' },
+    toolResultMessages: (results) => results.map(({ tool, result, text }) => ({
+      role: 'tool',
+      tool_name: tool,
+      content: result?.error ? `Error: ${text}` : text,
+    })),
+  };
+}
+
 /**
  * Claim and execute (or resume) one run. Returns without doing anything
  * when another worker holds a live lease.
@@ -176,16 +236,7 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
     if (!agent) return await fail(`Agent "${run.agent_id}" no longer exists.`, run.agent_id);
     if (!orchestrator.getTask(taskId)) return await fail(`Task ${taskId} no longer exists.`, agent.id);
 
-    // SECURITY (S1.1): key from the credential authority (agent's own key,
-    // then the historical cron fallback row); never another agent's key.
-    const apiKey = await resolveProviderApiKey('claude', { agentId: agent.id, noGlobal: true, legacySettingsRow: 'claude_api_key' });
-    if (!apiKey || agent.provider !== 'claude') {
-      const msg = `Agent "${agent.name}" has no Claude API key configured or provider is not claude.`;
-      console.warn(`[TaskRun] ⚠️  ${msg}`);
-      return await fail(msg, agent.id);
-    }
-
-    const claude = new ClaudeClient(apiKey, agent.model);
+    const isSmall = agent.id === SMALL_AGENT_ID;
     // SECURITY (S1.2): the agent's current grants, intersected with every
     // agent this task was delegated from; re-checked on every attempt.
     const registry = createToolsRegistry({
@@ -196,11 +247,32 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
       taskId,
       delegatedFrom: delegatingAgents(taskId),
     });
-    const tools = registry.getToolsForAPI();
-    const systemPrompt = agent.system_prompt ?? `You are ${agent.name}, an AI agent.`;
+    let driver: ModelDriver;
+    let systemPrompt: string;
+    if (isSmall) {
+      // MCP-01: the small local agent. Tools = what the run was given at
+      // spawn ∩ the agent's grants now (never wider); only the stored
+      // drawers; memory of the owner who spawned it.
+      if (agent.provider !== 'ollama') return await fail(`Agent "${agent.name}" must use the local ollama provider.`, agent.id);
+      const scope = smallAgentRunScope(run, registry.getContext().grants!, registry.listRegistered());
+      registry.updateContext({ grants: scope.grants, memoryDrawers: scope.memoryDrawers, userId: scope.userId ?? undefined });
+      systemPrompt = smallAgentSystemPrompt(agent.system_prompt);
+      driver = ollamaDriver(agent, systemPrompt, registry.getToolsForAPI());
+    } else {
+      // SECURITY (S1.1): key from the credential authority (agent's own key,
+      // then the historical cron fallback row); never another agent's key.
+      const apiKey = await resolveProviderApiKey('claude', { agentId: agent.id, noGlobal: true, legacySettingsRow: 'claude_api_key' });
+      if (!apiKey || agent.provider !== 'claude') {
+        const msg = `Agent "${agent.name}" has no Claude API key configured or provider is not claude.`;
+        console.warn(`[TaskRun] ⚠️  ${msg}`);
+        return await fail(msg, agent.id);
+      }
+      systemPrompt = agent.system_prompt ?? `You are ${agent.name}, an AI agent.`;
+      driver = claudeDriver(new ClaudeClient(apiKey, agent.model), agent, systemPrompt, registry.getToolsForAPI());
+    }
     const prompt = await runPrompt(run);
 
-    const loopMessages: Array<{ role: 'user' | 'assistant'; content: string | any[] }> = [{ role: 'user', content: prompt }];
+    const loopMessages: LoopMessage[] = [{ role: 'user', content: prompt }];
     let stepIndex = 0;
     let finalContent = '';
 
@@ -211,24 +283,16 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
         name: 'model',
         input: { messages: loopMessages },
         idempotent: true, // no external side effect: safe to call again
-        run: async () => {
-          const r = await claude.sendMessage(loopMessages, {
-            systemPrompt,
-            tools: tools.length > 0 ? tools : undefined,
-            temperature: agent.temperature,
-            maxTokens: agent.max_tokens,
-          });
-          return { content: r.content, toolCalls: r.toolCalls, rawBlocks: r.rawBlocks };
-        },
+        run: () => driver.call(loopMessages),
       });
 
       if (!response.toolCalls || response.toolCalls.length === 0) {
         finalContent = response.content ?? '';
         break;
       }
-      loopMessages.push({ role: 'assistant', content: response.rawBlocks || response.content });
+      loopMessages.push(driver.assistantMessage(response));
 
-      const toolResults: any[] = [];
+      const toolResults: Array<{ id: string; tool: string; result: ToolResult; text: string }> = [];
       for (const toolCall of response.toolCalls) {
         if (lost) throw new LeaseLostError();
         const tool = registry.get(toolCall.tool);
@@ -250,12 +314,7 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
           approvalOutcome,
         });
         const resultText = result?.content?.[0]?.text ?? JSON.stringify(result);
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolCall.id,
-          content: result?.content ?? [{ type: 'text', text: resultText }],
-          ...(result?.error ? { is_error: true } : {}),
-        });
+        toolResults.push({ id: toolCall.id, tool: toolCall.tool, result, text: resultText });
         if (!replayed) {
           await logActivity({
             agentId: agent.id, taskId, sessionId: `cron-${taskId}`,
@@ -263,7 +322,7 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
           });
         }
       }
-      loopMessages.push({ role: 'user', content: toolResults });
+      loopMessages.push(...driver.toolResultMessages(toolResults));
     }
 
     // The run is recorded completed first (fenced): a crash after this point
