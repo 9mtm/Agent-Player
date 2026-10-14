@@ -31,9 +31,9 @@ import { resolveProviderApiKey } from '../credentials/authority.js';
 import { ollamaToolChat } from '../llm/ollama-tool-chat.js';
 import { SMALL_AGENT_ID, smallAgentCard, smallAgentRunScope, smallAgentSystemPrompt } from './small-agent.js';
 import { intersectGrants, staticGrants } from '../tools/grants.js';
-import { sameDrawer } from '../memory/drawers.js';
+import { toolMemoryDrawers } from '../tools/memory/scope.js';
 import { CostBudgetError, recordPaidCall, releasePaidCall, reservePaidCall } from './cost-budget.js';
-import { contractDrawers, retryFeedback, verifyResult, type TaskContract } from './task-contracts.js';
+import { contractRunDrawers, retryFeedback, verifyResult, type TaskContract } from './task-contracts.js';
 import {
   BudgetExceededError,
   LeaseLostError,
@@ -361,9 +361,9 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
       registry.updateContext({ grants: intersectGrants(registry.getContext().grants!, staticGrants(contract.allowedTools)) });
     }
     if (contract?.allowedDrawers) {
-      const wanted = contractDrawers(contract);
-      const current = registry.getContext().memoryDrawers;
-      registry.updateContext({ memoryDrawers: current ? wanted.filter((d) => current.some((c) => sameDrawer(c, d))) : wanted });
+      // SECURITY: intersect with the run's effective drawers (the stored
+      // ones, or the audience default when none are set); never widen.
+      registry.updateContext({ memoryDrawers: contractRunDrawers(contract, toolMemoryDrawers(registry.getContext())) });
     }
     if (contract?.allowedTools || contract?.allowedDrawers) {
       // Rebuild the driver so the model is only offered the narrowed tools.

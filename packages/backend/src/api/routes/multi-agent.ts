@@ -292,9 +292,9 @@ export async function multiAgentRoutes(fastify: FastifyInstance): Promise<void> 
           ? createToolsRegistry({ workspaceDir: process.cwd(), agentId: assignee.id, delegatedFrom: isOwner ? [] : [UNKNOWN_PRINCIPAL] }).getContext().grants ?? null
           : null;
         const d = runDefaults();
-        contract = validateContract(body.contract, { grants, maxSteps: d.maxSteps, maxDurationMs: d.maxDurationMs });
+        contract = validateContract(body.contract, { grants, maxSteps: d.maxSteps, maxDurationMs: d.maxDurationMs, creatorIsOwner: isOwner });
       } catch (err) {
-        if (err instanceof ContractValidationError) return reply.status(400).send({ error: err.message });
+        if (err instanceof ContractValidationError) return reply.status(400).send({ error: err.message, code: err.code });
         throw err;
       }
     }

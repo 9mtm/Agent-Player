@@ -97,6 +97,8 @@ const { setAgentApiKey } = await import(join(backendDir, 'src/credentials/author
 await setAgentApiKey(AGENT, 'sk-ant-test-' + randomBytes(12).toString('hex'));
 
 const contracts = await import(join(backendDir, 'src/services/task-contracts.ts'));
+const scope = await import(join(backendDir, 'src/tools/memory/scope.ts'));
+const { selectDrawers } = await import(join(backendDir, 'src/memory/drawers.ts'));
 const runs = await import(join(backendDir, 'src/services/task-runs.ts'));
 const cron = await import(join(backendDir, 'src/services/agent-cron.ts'));
 const sandbox = await import(join(backendDir, 'src/tools/core/file-sandbox.ts'));
@@ -227,6 +229,46 @@ test('contract cannot exceed grants: a non-owner creator only gets the minimal d
   assert.ok(!JSON.stringify(row).includes('sk-ant-secretvalue'));
   // A member cannot create tasks at all (gate: admin tier for multi-agent writes).
   assert.equal((await createTask({ title: 'v', description: 'v', contract: { goal: 'x' } }, 'tc-member')).statusCode, 403);
+});
+
+test('contract drawers: a non-owner creator cannot request project/people drawers (400 contract_drawers_owner_only)', async () => {
+  for (const drawers of [['project:alpha'], ['people:sara'], ['owner', 'project:alpha']]) {
+    const res = await createTask({ title: 'v', description: 'v', assignedTo: AGENT, contract: { goal: 'x', allowedDrawers: drawers } }, 'tc-admin');
+    assert.equal(res.statusCode, 400, `${drawers} -> ${res.body}`);
+    assert.equal(res.json().code, 'contract_drawers_owner_only');
+    assert.match(res.json().error, /only the owner may request/);
+  }
+  const ok = await createTask({ title: 'v', description: 'v', assignedTo: AGENT, contract: { goal: 'x', allowedDrawers: ['owner', 'experience'] } }, 'tc-admin');
+  assert.equal(ok.statusCode, 201, ok.body);
+  // Direct validation fails closed when the creator is not stated.
+  assert.throws(() => contracts.validateContract({ goal: 'x', allowedDrawers: ['project:alpha'] }, { grants: null, maxSteps: 60, maxDurationMs: 60_000 }),
+    (e) => e instanceof contracts.ContractValidationError && e.code === 'contract_drawers_owner_only');
+  // The owner may name them (still within the selectDrawers limits).
+  const owner = await createTask({ title: 'v', description: 'v', assignedTo: AGENT, contract: { goal: 'x', allowedDrawers: ['owner', 'project:alpha', 'people:sara'] } });
+  assert.equal(owner.statusCode, 201, owner.body);
+  const ownerTooWide = await createTask({ title: 'v', description: 'v', assignedTo: AGENT, contract: { goal: 'x', allowedDrawers: ['project:a', 'project:b'] } });
+  assert.equal(ownerTooWide.statusCode, 400);
+});
+
+test('contract drawers never widen the run scope, also when the context has none set', () => {
+  const { contractRunDrawers } = contracts;
+  const { toolMemoryDrawers } = scope;
+  const ids = (ds) => ds.map((d) => (d.key ? `${d.kind}:${d.key}` : d.kind)).sort();
+  const c = contracts.validateContract({ goal: 'x', allowedDrawers: ['owner', 'experience', 'project:alpha', 'people:sara'] },
+    { grants: null, maxSteps: 60, maxDurationMs: 60_000, creatorIsOwner: true });
+  // No drawers on the context: the owner default (owner + experience) is the ceiling.
+  assert.deepEqual(ids(contractRunDrawers(c, toolMemoryDrawers({}))), ['experience', 'owner']);
+  assert.deepEqual(ids(contractRunDrawers(c, toolMemoryDrawers(undefined))), ['experience', 'owner']);
+  // Stored run drawers: only their intersection with the contract.
+  assert.deepEqual(ids(contractRunDrawers(c, toolMemoryDrawers({ memoryDrawers: [{ kind: 'owner' }, { kind: 'project', key: 'alpha' }] }))), ['owner', 'project:alpha']);
+  assert.deepEqual(ids(contractRunDrawers(c, toolMemoryDrawers({ memoryDrawers: [] }))), []);
+  // A run whose drawers come from selectDrawers keeps the contract inside them.
+  const sel = selectDrawers({ audience: 'owner', project: 'alpha', people: ['sara'] });
+  assert.deepEqual(ids(contractRunDrawers(c, sel)), ['experience', 'owner', 'people:sara', 'project:alpha']);
+  const otherProject = selectDrawers({ audience: 'owner', project: 'beta' });
+  assert.deepEqual(ids(contractRunDrawers(c, otherProject)), ['experience', 'owner']);
+  // Outsider audience: nothing.
+  assert.deepEqual(contractRunDrawers(c, selectDrawers({ audience: 'outsider' })), []);
 });
 
 // --- verification ----------------------------------------------------------------------------

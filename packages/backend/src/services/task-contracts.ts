@@ -38,7 +38,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { getEncryptionService } from '../credentials/encryption.js';
 import { getDatabase } from '../db/index.js';
-import { DrawerInputError, parseDrawerId, drawerId, type DrawerRef } from '../memory/drawers.js';
+import { DrawerInputError, parseDrawerId, drawerId, sameDrawer, type DrawerRef } from '../memory/drawers.js';
 import { TOOL_NAME_PATTERN, type AgentToolGrants } from '../tools/grants.js';
 import { agentWorkspacePath, resolveReadPath } from '../tools/core/file-sandbox.js';
 import { redactSecrets } from './secret-redact.js';
@@ -76,7 +76,12 @@ export interface TaskContract {
 
 export type VerificationStatus = 'verified' | 'failed_verification' | 'needs_review';
 
-export class ContractValidationError extends Error {}
+export class ContractValidationError extends Error {
+  constructor(message: string, readonly code: string = 'invalid_contract') { super(message); }
+}
+
+/** Drawer kinds any task creator may name in a contract; others are owner only. */
+export const NON_OWNER_CONTRACT_DRAWER_KINDS: ReadonlySet<string> = new Set(['owner', 'experience']);
 
 const SCHEMA_TYPES: ReadonlySet<string> = new Set(['object', 'array', 'string', 'number', 'integer', 'boolean', 'null']);
 const CHECK_TYPES: ReadonlySet<string> = new Set(['non_empty', 'schema_valid', 'max_length', 'contains', 'not_contains', 'file_exists', 'tool_called']);
@@ -182,6 +187,11 @@ export interface ContractLimits {
   grants: AgentToolGrants | null;
   maxSteps: number;
   maxDurationMs: number;
+  /**
+   * The task creator is the owner. Only the owner may name drawers beyond
+   * owner/experience (project, people). Missing = not the owner (fail closed).
+   */
+  creatorIsOwner?: boolean;
 }
 
 /**
@@ -268,6 +278,14 @@ export function validateContract(raw: unknown, limits: ContractLimits): TaskCont
     if (refs.filter((d) => d.kind === 'people').length > 10) fail('contract.allowedDrawers: at most 10 people drawers');
     // Task drawers are keyed by a run/task id that does not exist yet.
     if (refs.some((d) => d.kind === 'task')) fail('contract.allowedDrawers: task drawers cannot be set in a contract');
+    // Project and people drawers hold the owner's private memory: only the
+    // owner may name them in a contract.
+    if (!limits.creatorIsOwner) {
+      const extra = refs.filter((d) => !NON_OWNER_CONTRACT_DRAWER_KINDS.has(d.kind));
+      if (extra.length) {
+        throw new ContractValidationError(`contract.allowedDrawers: only the owner may request ${[...new Set(extra.map(drawerId))].join(', ')} (others may use owner, experience)`, 'contract_drawers_owner_only');
+      }
+    }
     c.allowedDrawers = [...new Set(refs.map(drawerId))];
   }
 
@@ -279,6 +297,15 @@ export function validateContract(raw: unknown, limits: ContractLimits): TaskCont
 
 export function contractDrawers(contract: TaskContract): DrawerRef[] {
   return (contract.allowedDrawers ?? []).map((id) => parseDrawerId(id));
+}
+
+/**
+ * Drawers a run gets under its contract: the contract's drawers that the run
+ * already has (`effective` = the run's drawers without the contract, e.g.
+ * toolMemoryDrawers(context)). A contract only narrows, never widens.
+ */
+export function contractRunDrawers(contract: TaskContract, effective: readonly DrawerRef[]): DrawerRef[] {
+  return contractDrawers(contract).filter((d) => effective.some((c) => sameDrawer(c, d)));
 }
 
 // ---------------------------------------------------------------------------
