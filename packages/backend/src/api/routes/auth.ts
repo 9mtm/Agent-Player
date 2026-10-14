@@ -24,6 +24,7 @@ import {
 } from '../../auth/account-lockout.js';
 import { logAuthEvent } from '../../services/audit-logger.js';
 import { authorizeActiveRole, OWNER_OR_ADMIN } from '../../auth/route-guards.js';
+import { changePasswordRateLimit, loginRateLimit, registerRateLimit } from '../rate-limit-config.js';
 
 /** Owner/admin actor (central rule), with this route's existing 403 wording. */
 function ownerOrAdmin(actor: Actor | null | undefined): Actor {
@@ -87,17 +88,9 @@ function validatePasswordStrength(password: string): { valid: boolean; error?: s
 export async function authRoutes(fastify: FastifyInstance) {
   const identity = () => repositories.identity;
 
-  // SECURITY: Rate limiting configuration for auth endpoints
-  const authRateLimit = {
-    max: 5, // Maximum 5 attempts
-    timeWindow: '15 minutes', // Per 15 minute window
-    errorResponseBuilder: (_request: unknown, context: { statusCode: number }) => ({
-      statusCode: context.statusCode,
-      error: 'Too many attempts',
-      code: 'rate_limited',
-      message: 'Too many authentication attempts. Please try again in 15 minutes.'
-    })
-  };
+  // SECURITY (S0-Q.22): route limits are keyed by email / account, never by
+  // the shared loopback IP alone; sign-in only has a CPU flood guard (see
+  // ../rate-limit-config.ts). The sign-in throttle (S0-Q.20) does the rest.
 
   /**
    * POST /api/auth/register
@@ -110,7 +103,7 @@ export async function authRoutes(fastify: FastifyInstance) {
    * here and accepts with /api/team/invitations/:token/accept.
    */
   fastify.post('/api/auth/register', {
-    config: { rateLimit: authRateLimit }
+    config: { rateLimit: registerRateLimit }
   }, async (request, reply) => {
     // Token check with the existing answers (401 bad token, 403 inactive or
     // not owner/admin), then the central rule on the request's actor.
@@ -141,7 +134,7 @@ export async function authRoutes(fastify: FastifyInstance) {
    * Login with email/password
    */
   fastify.post('/api/auth/login', {
-    config: { rateLimit: authRateLimit }
+    config: { rateLimit: loginRateLimit }
   }, async (request, reply) => {
     const body = (request.body ?? {}) as any;
     const { email, password } = body;
@@ -320,7 +313,7 @@ export async function authRoutes(fastify: FastifyInstance) {
    * Change user password (requires authentication)
    */
   fastify.post('/api/auth/change-password', {
-    config: { rateLimit: authRateLimit }
+    config: { rateLimit: changePasswordRateLimit }
   }, async (request, reply) => {
     const authHeader = request.headers.authorization;
 

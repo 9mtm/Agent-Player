@@ -11,6 +11,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
+import { RATE_LIMIT_PLUGIN_OPTIONS } from './rate-limit-config.js';
 import helmet from '@fastify/helmet';
 import fastifyStatic from '@fastify/static';
 import path from 'path';
@@ -136,11 +137,8 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
 
   // SECURITY: Register rate limiting
-  await fastify.register(rateLimit, {
-    global: false, // Don't apply to all routes by default
-    max: 100, // Global default: 100 requests
-    timeWindow: '1 minute' // Per minute
-  });
+  // Only routes with config.rateLimit are limited (see rate-limit-config.ts).
+  await fastify.register(rateLimit, { ...RATE_LIMIT_PLUGIN_OPTIONS });
 
   // SECURITY: Register helmet for security headers (M-05)
   await fastify.register(helmet, {
