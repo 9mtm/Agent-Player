@@ -79,6 +79,9 @@ test('login: inactive / unverified / system accounts -> account_inactive (messag
     assertCode(res, 403, 'account_inactive');
     assert.equal(res.json().message, 'Account access denied');
   }
+  // S0-Q.21: the state is only shown after the password matches. Older
+  // databases stored this published password for the system account.
+  db.prepare(`UPDATE users SET password_hash = ? WHERE id = 'mock-user'`).run(await bcrypt.hash('system-user-not-for-login', 4));
   const system = await login(loginApp, 'system@agent-player.local', 'system-user-not-for-login');
   assertCode(system, 403, 'account_inactive');
 });

@@ -189,6 +189,11 @@ async function start() {
     const { startTaskRunRecovery } = await import('../services/task-run-executor.js');
     startTaskRunRecovery();
 
+    // S0-Q.21: prune old sign-in attempts (30 days) and expired device
+    // tokens now and daily (unref'd timer, errors logged, never thrown).
+    const { startLoginRecordPruning } = await import('../auth/account-lockout.js');
+    startLoginRecordPruning();
+
     // Scheduled notifications — check every minute
     setInterval(() => {
       try { processScheduledNotifications(); } catch { /* non-fatal */ }

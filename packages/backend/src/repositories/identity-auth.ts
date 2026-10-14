@@ -9,7 +9,8 @@
  *   signIn             no actor: this is how a user actor comes to exist.
  *                      Internal system accounts, inactive or unverified
  *                      accounts and published default passwords are refused
- *                      (S0-Q.2); the token carries token_version (H-01)
+ *                      (S0-Q.2), but only after the password matched
+ *                      (S0-Q.21); the token carries token_version (H-01)
  *   endSessions        the account itself (guests too): bumps token_version,
  *                      so every token of the account stops working (F-02)
  *   changePassword     the account itself; the current password must match
@@ -99,17 +100,25 @@ export const sqliteIdentityAuth: IdentityAuthRepository = {
   },
 
   async signIn(email, password) {
+    // S0-Q.21: the password is checked first, for every account. A caller
+    // without the right password gets 'unknown' / 'bad_password' (the route
+    // answers both with the same 401 and records a failure), so account state
+    // (system, inactive, unverified, published password) is only revealed to
+    // someone who already knows the password. bcrypt runs once on every path.
+    const given = String(password ?? '');
     const user = users().findByEmail(email);
     if (!user) {
-      await users().verifyPassword({ password_hash: DUMMY_PASSWORD_HASH } as User, String(password ?? ''));
+      await users().verifyPassword({ password_hash: DUMMY_PASSWORD_HASH } as User, given);
       return { status: 'unknown' };
     }
     const who = { userId: user.id, username: user.username };
+    const hasHash = typeof user.password_hash === 'string' && user.password_hash.length > 0;
+    const matches = await users().verifyPassword(hasHash ? user : ({ password_hash: DUMMY_PASSWORD_HASH } as User), given);
+    if (!hasHash || !matches) return { status: 'bad_password', ...who };
     if (isSystemAccount(user.id)) return { status: 'system', ...who };
     if (user.status !== 'active') return { status: 'inactive', ...who };
     if (!user.email_verified) return { status: 'unverified', ...who };
-    if (!(await users().verifyPassword(user, password))) return { status: 'bad_password', ...who };
-    if (isPublishedDefaultPassword(password)) return { status: 'published_password', ...who };
+    if (isPublishedDefaultPassword(given)) return { status: 'published_password', ...who };
     users().updateLastLogin(user.id);
     // SECURITY (H-01): the token carries token_version for invalidation.
     const token = generateToken(user.id, (user as { token_version?: number }).token_version || 1);

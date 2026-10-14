@@ -85,8 +85,14 @@ test('login: system accounts and published default passwords are refused; a real
   assert.equal(legacy.statusCode, 403);
   assert.equal(legacy.json().token, undefined);
 
+  // S0-Q.21: a wrong password gets the generic 401; with the password older
+  // databases stored for it, the system account is refused with 403.
+  const systemWrong = await post('/api/auth/login', { email: 'system@agent-player.local', password: 'system-user-not-for-login' });
+  assert.equal(systemWrong.statusCode, 401);
+  db.prepare(`UPDATE users SET password_hash = ? WHERE id = 'mock-user'`).run(await bcrypt.hash('system-user-not-for-login', 4));
   const system = await post('/api/auth/login', { email: 'system@agent-player.local', password: 'system-user-not-for-login' });
   assert.equal(system.statusCode, 403);
+  assert.equal(system.json().token, undefined);
 
   const owner = await post('/api/auth/login', { email: 'owner@example.test', password: 'a-strong-passphrase-42' });
   assert.equal(owner.statusCode, 200, owner.body);

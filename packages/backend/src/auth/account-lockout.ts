@@ -291,9 +291,49 @@ export function handleSuccessfulLogin(
   return fresh;
 }
 
-/** Remove attempts older than 30 days (run periodically). */
-export function cleanupOldAttempts(): void {
-  getDatabase().execute(
-    `DELETE FROM login_attempts WHERE attempted_at < datetime('now', '-30 days')`
+/** Attempt rows are kept this long (far longer than THROTTLE_WINDOW_MINUTES). */
+export const ATTEMPT_RETENTION_DAYS = 30;
+/** How often the background prune runs. */
+export const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Delete `login_attempts` rows older than ATTEMPT_RETENTION_DAYS and expired
+ * `login_devices` rows. Returns how many rows went from each table.
+ */
+export function pruneLoginRecords(nowMs: number = Date.now()): { attempts: number; devices: number } {
+  const db = getDatabase();
+  const attempts = db.execute(
+    `DELETE FROM login_attempts WHERE attempted_at < datetime(?)`,
+    new Date(nowMs - ATTEMPT_RETENTION_DAYS * 86_400_000).toISOString()
   );
+  const devices = db.execute(
+    `DELETE FROM login_devices WHERE expires_at <= datetime(?)`,
+    new Date(nowMs).toISOString()
+  );
+  return { attempts: attempts.changes, devices: devices.changes };
+}
+
+/** Remove attempts older than 30 days and expired device tokens. */
+export function cleanupOldAttempts(): void {
+  pruneLoginRecords();
+}
+
+/**
+ * S0-Q.21: prune once now and then every PRUNE_INTERVAL_MS. Errors are
+ * logged (message only; the tables hold no secrets in clear) and never
+ * thrown. The timer is unref'd so it never keeps the process alive.
+ */
+export function startLoginRecordPruning(intervalMs: number = PRUNE_INTERVAL_MS): ReturnType<typeof setInterval> {
+  const run = () => {
+    try {
+      const { attempts, devices } = pruneLoginRecords();
+      if (attempts || devices) console.log(`[Auth] Pruned ${attempts} old sign-in attempts and ${devices} expired device tokens`);
+    } catch (err) {
+      console.warn('[Auth] Sign-in record prune failed:', (err as Error)?.message ?? 'unknown error');
+    }
+  };
+  run();
+  const timer = setInterval(run, intervalMs);
+  timer.unref();
+  return timer;
 }

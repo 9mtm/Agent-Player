@@ -182,25 +182,37 @@ export async function authRoutes(fastify: FastifyInstance) {
 
       const result = await identity().signIn(email, password);
       switch (result.status) {
+        // S0-Q.21: 'unknown' and 'bad_password' must look exactly alike (same
+        // 401 body, a failure row, bcrypt ran). signIn only reports account
+        // state (system / inactive / unverified / published password) after
+        // the password matched.
         case 'unknown':
           // SECURITY: Track + log the failed attempt (M-02, L-02); generic message (M-12)
           handleFailedLogin(email, ipAddress, userAgent, deviceToken);
           logAuthEvent('auth.login.failed', request, undefined, email, false, 'Invalid credentials');
           return reply.code(401).send(invalid);
+        case 'bad_password':
+          handleFailedLogin(email, ipAddress, userAgent, deviceToken);
+          logAuthEvent('auth.login.failed', request, result.userId, result.username, false, 'Invalid password');
+          return reply.code(401).send(invalid);
+        // The refusals below come with the right password, but they still count
+        // as failures for the throttle: no session is created, and otherwise a
+        // refused account would be an unthrottled password oracle. (A published
+        // password is public anyway, so it gets the same treatment.)
         case 'system':
           // SECURITY (S0-Q.2): internal system accounts can never log in
+          handleFailedLogin(email, ipAddress, userAgent, deviceToken);
           logAuthEvent('auth.login.failed', request, result.userId, result.username, false, 'System account login refused');
           return reply.code(403).send(denied);
         case 'inactive':
         case 'unverified':
           // SECURITY: generic "Forbidden" for account status / unverified e-mail (M-09, M-12)
-          return reply.code(403).send(denied);
-        case 'bad_password':
           handleFailedLogin(email, ipAddress, userAgent, deviceToken);
-          logAuthEvent('auth.login.failed', request, result.userId, result.username, false, 'Invalid password');
-          return reply.code(401).send(invalid);
+          logAuthEvent('auth.login.failed', request, result.userId, result.username, false, 'Account not active');
+          return reply.code(403).send(denied);
         case 'published_password':
           // SECURITY (S0-Q.2): passwords published in the source (old seed/demo accounts) are refused
+          handleFailedLogin(email, ipAddress, userAgent, deviceToken);
           logAuthEvent('auth.login.failed', request, result.userId, result.username, false, 'Published default password refused');
           return reply.code(403).send({
             error: 'Forbidden',
