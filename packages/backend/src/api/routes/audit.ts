@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import type { AuditQuery, AuditConfig } from '../../audit/index.js';
 import { handleError } from '../error-handler.js';
 import { repositories } from '../../repositories/index.js';
+import { requestMeta } from '../../repositories/audit.js';
 import { ScopeError, sendScopeError } from '../../repositories/scope.js';
 
 // B1-core: scope (admin read, owner config/cleanup) is enforced by the audit
@@ -150,7 +151,7 @@ export async function auditRoutes(fastify: FastifyInstance) {
   fastify.put('/api/audit/config', async (request, reply) => {
     try {
       const body = request.body as Partial<AuditConfig>;
-      const config = await repositories.audit.updateConfig(actorOf(request), body);
+      const config = await repositories.audit.updateConfig(actorOf(request), body, requestMeta(request));
 
       return {
         success: true,

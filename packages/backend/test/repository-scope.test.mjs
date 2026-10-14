@@ -421,7 +421,19 @@ test('audit: scope matrix', async () => {
   // record defaults user_id to the actor's user
   const r = db.prepare(`SELECT user_id FROM audit_logs WHERE action = 'scope-test.agent'`).get();
   assert.equal(r.user_id, 'rs-user');
-  checks += 1;
+  // B1.6: a config change records the real actor (no longer 'api/admin')
+  const { getAuditLogger } = await import(join(backendDir, 'src/audit/index.ts'));
+  const logger = getAuditLogger();
+  const original = logger.logConfigChange;
+  let seen;
+  logger.logConfigChange = function (actor, ...rest) { seen = actor; return original.call(this, actor, ...rest); };
+  try {
+    await R.updateConfig(ACTORS.owner, {}, { ip: '127.0.0.1' });
+  } finally {
+    logger.logConfigChange = original;
+  }
+  assert.deepEqual(seen, { type: 'user', id: 'rs-owner', ip: '127.0.0.1' });
+  checks += 2;
 });
 
 // --- identity -----------------------------------------------------------------

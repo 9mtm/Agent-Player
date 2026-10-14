@@ -16,12 +16,14 @@
 
 import type { FastifyRequest } from 'fastify';
 import type { Actor } from './actor.js';
+import { actorLabel } from './actor.js';
 import { requireActor, requireAdmin, requireOwner } from './scope.js';
 import { logAudit, type AuditLogEntry } from '../services/audit-logger.js';
 import {
   getAuditLogger,
   getAuditStatus,
   getAuditStorage,
+  type AuditActor,
   type AuditConfig,
   type AuditEvent,
   type AuditQuery,
@@ -57,8 +59,17 @@ export interface AuditRepository {
   get(actor: Actor | null | undefined, id: string): Promise<AuditEvent | null>;
   exportJson(actor: Actor | null | undefined, filters: AuditQuery): Promise<string>;
   config(actor: Actor | null | undefined): Promise<AuditConfig>;
-  updateConfig(actor: Actor | null | undefined, config: Partial<AuditConfig>): Promise<AuditConfig>;
+  updateConfig(actor: Actor | null | undefined, config: Partial<AuditConfig>, meta?: RequestMeta): Promise<AuditConfig>;
   cleanup(actor: Actor | null | undefined): Promise<number>;
+}
+
+/** The security-audit actor of an Actor (who really made a change; B1.6). */
+export function auditActorOf(actor: Actor, meta?: RequestMeta): AuditActor {
+  const ip = meta?.ip ? { ip: meta.ip } : {};
+  if (actor.kind === 'user') return { type: 'user', id: actor.userId ?? 'unknown', ...ip };
+  if (actor.kind === 'agent') return { type: 'agent', id: actor.agentId ?? 'unknown', name: actorLabel(actor), ...ip };
+  if (actor.kind === 'system') return { type: 'system', id: 'system', ...ip };
+  return { type: 'api', id: actorLabel(actor), ...ip };
 }
 
 export const sqliteAudit: AuditRepository = {
@@ -110,13 +121,13 @@ export const sqliteAudit: AuditRepository = {
     return getAuditLogger().getConfig();
   },
 
-  async updateConfig(actor, config) {
-    requireOwner(actor);
+  async updateConfig(actor, config, meta) {
+    const a = requireOwner(actor);
     const logger = getAuditLogger();
     logger.updateConfig(config);
-    // Same entry as before B1-core (actor recorded as the API admin).
+    // B1.6: the real actor (the owner account), no longer 'api/admin'.
     logger.logConfigChange(
-      { type: 'api', id: 'admin' },
+      auditActorOf(a, meta),
       { type: 'config', id: 'audit', name: 'Audit Configuration' },
       { after: config },
     );
