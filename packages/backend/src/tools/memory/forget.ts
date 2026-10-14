@@ -13,11 +13,10 @@
  */
 
 import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
-import { toolMemoryDrawers, toolMemoryUser } from './scope.js';
-import { forgetMemory, forgettableDrawer } from '../../memory/forget.js';
-import { sameDrawer } from '../../memory/drawers.js';
-import { agentActor } from '../../memory/versions.js';
-import { logAudit } from '../../services/audit-logger.js';
+import { toolMemoryUser } from './scope.js';
+import { repositories } from '../../repositories/index.js';
+import { toolActor } from '../../repositories/actor.js';
+import { ScopeError } from '../../repositories/scope.js';
 
 const fail = (msg: string): ToolResult => ({ content: [{ type: 'text', text: `Forget refused: ${msg}` }], error: msg });
 
@@ -39,16 +38,19 @@ each call first. For an ordinary correction use memory_edit / memory_delete.`,
     if (!userId) return fail('no user for this memory');
     if (context?.toolPolicy) return fail('not available when answering someone else');
     if (typeof params.id !== 'string' || !params.id) return fail('id is required');
-    // Only memories in drawers open for this run (same rule as memory_edit /
-    // memory_delete); for an already deleted memory, its last drawer.
-    const drawer = forgettableDrawer(userId, params.id);
-    if (!drawer) return fail('memory not found');
-    if (!toolMemoryDrawers(context).some((d) => sameDrawer(d, drawer))) {
-      return fail('that memory drawer is not open for this conversation');
+    // B1-core: the memory repository allows only the run user's memories in
+    // drawers open for this run (same rule as memory_edit / memory_delete);
+    // for an already deleted memory, its last drawer.
+    const actor = toolActor(context);
+    let result;
+    try {
+      result = await repositories.memory.forget(actor, params.id);
+    } catch (err) {
+      if (err instanceof ScopeError) return fail(err.message);
+      throw err;
     }
-    const result = await forgetMemory(userId, params.id, agentActor(context?.agentId));
     if (!result) return fail('memory not found');
-    logAudit({
+    void repositories.audit.record(actor, {
       event_type: 'data.delete', event_category: 'data_modification', severity: 'info', user_id: userId,
       resource_type: 'memory', resource_id: result.memoryId, action: 'memory.forget', success: true,
       metadata: { actor: result.actor, drawer: result.drawerId, cancelledProposals: result.cancelledProposals.length },

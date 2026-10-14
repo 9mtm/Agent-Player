@@ -4,6 +4,7 @@
  * RESTful endpoints for memory management
  */
 
+import { actorOf } from '../../auth/auth-gate.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { authenticateActiveUser, type UserRole } from '../../auth/route-guards.js';
 import { getDatabase } from '../../db/index.js';
@@ -15,10 +16,10 @@ import { getConsolidationService } from '../../services/memory-consolidation.js'
 import { MEMORY_TYPES, isMemoryType } from '../../memory/types.js';
 import { DrawerInputError, normalizeDrawer, ownerScopeFromInput, selectDrawers, type DrawerRef } from '../../memory/drawers.js';
 import type { Memory, MemoryType, ImportanceLevel, MultiTierLayer } from '../../memory/types.js';
-import { deleteVersioned, learn, saveVersioned, updateVersioned, type LearningCandidate } from '../../memory/learning.js';
-import { memoryVersions } from '../../memory/versions.js';
-import { forgetMemory, listTombstones } from '../../memory/forget.js';
-import { logAudit } from '../../services/audit-logger.js';
+import { learn, type LearningCandidate } from '../../memory/learning.js';
+import { repositories } from '../../repositories/index.js';
+import { requestMeta } from '../../repositories/audit.js';
+import { ScopeError, sendScopeError } from '../../repositories/scope.js';
 
 const MAX_CONTENT = 50_000;
 const MAX_METADATA_JSON = 64 * 1024;
@@ -91,10 +92,19 @@ function caller(request: FastifyRequest): MemoryCaller {
   return (request as any).memoryCaller as MemoryCaller;
 }
 
-/** Owner user id of a memory (no access-count side effect), or null. */
-function memoryOwner(id: string): string | null {
-  const row = getDatabase().prepare('SELECT user_id FROM memories WHERE id = ?').get(id) as { user_id: string } | undefined;
-  return row?.user_id ?? null;
+/**
+ * B1-core: the CRUD, drawers, versions, forget and tombstone routes go through
+ * the memory repository (repositories/memory.ts) with the request's actor,
+ * which enforces "own memories only" centrally. The remaining routes below
+ * (search, extract, relevant, layers, ...) still take the user from the
+ * preHandler (token) - B1-rest.
+ */
+const memoryRepo = repositories.memory;
+
+/** Repository 404s keep this route's message; other scope errors as sent. */
+function memoryError(reply: import('fastify').FastifyReply, err: unknown) {
+  if (err instanceof ScopeError && err.status === 404) return reply.code(404).send({ error: 'Memory not found' });
+  return sendScopeError(reply, err);
 }
 
 export async function memoryRoutes(fastify: FastifyInstance) {
@@ -111,15 +121,14 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     (request as any).memoryCaller = user satisfies MemoryCaller;
   });
 
-  const ownsMemory = (request: FastifyRequest, id: string) => !!id && memoryOwner(id) === caller(request).id;
-
   /**
    * GET /api/memory - Get all memories for a user
    */
   fastify.get('/api/memory', async (request, reply) => {
-    const userId = caller(request).id;
-
-    const memories = await storage.getByUser(userId);
+    let memories;
+    try {
+      memories = await memoryRepo.list(actorOf(request));
+    } catch (err) { return memoryError(reply, err); }
 
     return {
       success: true,
@@ -131,8 +140,10 @@ export async function memoryRoutes(fastify: FastifyInstance) {
   /**
    * GET /api/memory/drawers - The caller's drawers with memory counts (CORE-03)
    */
-  fastify.get('/api/memory/drawers', async (request) => {
-    return { success: true, drawers: storage.listDrawers(caller(request).id) };
+  fastify.get('/api/memory/drawers', async (request, reply) => {
+    try {
+      return { success: true, drawers: await memoryRepo.drawers(actorOf(request)) };
+    } catch (err) { return memoryError(reply, err); }
   });
 
   /**
@@ -143,11 +154,10 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const { id } = request.params;
 
-      const memory = ownsMemory(request, id) ? await storage.get(id) : null;
-
-      if (!memory) {
-        return reply.code(404).send({ error: 'Memory not found' });
-      }
+      let memory;
+      try {
+        memory = await memoryRepo.get(actorOf(request), id);
+      } catch (err) { return memoryError(reply, err); }
 
       return {
         success: true,
@@ -160,8 +170,7 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * POST /api/memory - Create a new memory
    */
   fastify.post('/api/memory', async (request, reply) => {
-    const body = { ...(request.body as object || {}), userId: caller(request).id } as {
-      userId: string;
+    const body = { ...(request.body as object || {}) } as {
       type: MemoryType;
       content: string;
       importance?: number;
@@ -215,9 +224,8 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     }
     // Low importance stays in working memory (24h expiry)
 
-    const memory: Memory = {
+    const draft: Omit<Memory, 'userId'> = {
       id: uuidv4(),
-      userId: body.userId,
       type: body.type,
       content: body.content,
       importance: importance as ImportanceLevel,
@@ -233,8 +241,12 @@ export async function memoryRoutes(fastify: FastifyInstance) {
       ...(drawer ? { drawer } : {}),
     };
 
-    // CORE-05: the account's own add, versioned (actor = the caller).
-    await saveVersioned(memory, caller(request).id, 'api');
+    // CORE-05: the account's own add, versioned (actor = the caller); the
+    // owner of the memory is always the actor (repository).
+    let memory: Memory;
+    try {
+      memory = await memoryRepo.create(actorOf(request), draft, 'api');
+    } catch (err) { return memoryError(reply, err); }
 
     return {
       success: true,
@@ -249,9 +261,9 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     '/api/memory/:id',
     async (request, reply) => {
       const { id } = request.params;
-      if (!ownsMemory(request, id)) {
-        return reply.code(404).send({ error: 'Memory not found' });
-      }
+      try {
+        await memoryRepo.assertAccess(actorOf(request), id);
+      } catch (err) { return memoryError(reply, err); }
       // Allowlist of editable fields; identity and bookkeeping fields never change.
       const picked = pickMemoryUpdates(request.body);
       if ('error' in picked) {
@@ -261,8 +273,7 @@ export async function memoryRoutes(fastify: FastifyInstance) {
 
       try {
         // CORE-05: baseline + new version, actor = the caller.
-        const updated = await updateVersioned(caller(request).id, id, updates, caller(request).id, 'api');
-        if (!updated) return reply.code(404).send({ error: 'Memory not found' });
+        const updated = await memoryRepo.update(actorOf(request), id, updates, 'api');
 
         return {
           success: true,
@@ -281,12 +292,10 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     '/api/memory/:id',
     async (request, reply) => {
       const { id } = request.params;
-      if (!ownsMemory(request, id)) {
-        return reply.code(404).send({ error: 'Memory not found' });
-      }
-
       // CORE-05: the history keeps the old text (reversible); forget (CORE-07) removes everything.
-      await deleteVersioned(caller(request).id, id, caller(request).id, 'api');
+      try {
+        await memoryRepo.delete(actorOf(request), id, 'api');
+      } catch (err) { return memoryError(reply, err); }
 
       return {
         success: true,
@@ -299,11 +308,10 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * GET /api/memory/:id/versions - Version history of one own memory (CORE-05)
    */
   fastify.get<{ Params: { id: string } }>('/api/memory/:id/versions', async (request, reply) => {
-    const userId = caller(request).id;
-    const versions = memoryVersions(userId, request.params.id);
-    if (versions.length === 0 && !ownsMemory(request, request.params.id)) {
-      return reply.code(404).send({ error: 'Memory not found' });
-    }
+    let versions;
+    try {
+      versions = await memoryRepo.versions(actorOf(request), request.params.id);
+    } catch (err) { return memoryError(reply, err); }
     return { success: true, memoryId: request.params.id, versions };
   });
 
@@ -313,24 +321,26 @@ export async function memoryRoutes(fastify: FastifyInstance) {
    * tombstone (id, time, actor) stays. Another user's memory -> 404.
    */
   fastify.post<{ Params: { id: string } }>('/api/memory/:id/forget', async (request, reply) => {
-    const userId = caller(request).id;
-    const result = await forgetMemory(userId, request.params.id, userId);
+    let result;
+    try {
+      result = await memoryRepo.forget(actorOf(request), request.params.id);
+    } catch (err) { return memoryError(reply, err); }
     if (!result) return reply.code(404).send({ error: 'Memory not found' });
-    logAudit({
+    void repositories.audit.record(actorOf(request), {
       event_type: 'data.delete', event_category: 'data_modification', severity: 'info',
-      user_id: userId, ip_address: request.ip, user_agent: request.headers['user-agent'],
-      request_method: request.method, request_path: request.routeOptions?.url ?? undefined,
       resource_type: 'memory', resource_id: result.memoryId, action: 'memory.forget', success: true,
       metadata: { drawer: result.drawerId, cancelledProposals: result.cancelledProposals.length },
-    });
+    }, requestMeta(request));
     return { success: true, forgotten: result };
   });
 
   /**
    * GET /api/memory/forgotten - The caller's tombstones (id, drawer, time, actor; no text)
    */
-  fastify.get('/api/memory/forgotten', async (request) => {
-    return { success: true, tombstones: listTombstones(caller(request).id) };
+  fastify.get('/api/memory/forgotten', async (request, reply) => {
+    try {
+      return { success: true, tombstones: await memoryRepo.tombstones(actorOf(request)) };
+    } catch (err) { return memoryError(reply, err); }
   });
 
   /**
@@ -604,9 +614,9 @@ export async function memoryRoutes(fastify: FastifyInstance) {
         error: 'memoryId and importanceScore are required'
       });
     }
-    if (!ownsMemory(request, body.memoryId)) {
-      return reply.code(404).send({ error: 'Memory not found' });
-    }
+    try {
+      await memoryRepo.assertAccess(actorOf(request), body.memoryId);
+    } catch (err) { return memoryError(reply, err); }
 
     const success = await MemoryTiersService.updateImportanceScore(
       body.memoryId,

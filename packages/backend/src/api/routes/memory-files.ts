@@ -21,35 +21,28 @@
  * except through an approved proposal.
  */
 
+import { actorOf } from '../../auth/auth-gate.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { logAudit } from '../../services/audit-logger.js';
 import { getMemoryStorage } from '../../memory/storage.js';
 import { DrawerInputError, drawerId, parseDrawerId, type DrawerRef } from '../../memory/drawers.js';
 import {
   MemoryFileError,
-  approveProposal,
-  createProposal,
   drawerFilePath,
   drawerRevision,
   displayPath,
-  drawerVersions,
-  exportDrawerFile,
-  getProposal,
-  listProposals,
-  readDrawerFile,
-  rejectProposal,
   resolveFileAgent,
-  viewDrawerFile,
   type MemoryProposal,
 } from '../../memory/memory-files.js';
+import { repositories } from '../../repositories/index.js';
+import { ScopeError, actorOrReply, requireOwner } from '../../repositories/scope.js';
 
 const STATUSES = new Set(['pending', 'approved', 'rejected', 'stale', 'cancelled']);
 
+/** Owner account id (central rule, repositories/scope.ts), else 401/403 sent and null. */
 function ownerOf(request: FastifyRequest, reply: FastifyReply): string | null {
-  const user = request.authUser;
-  if (!user) { reply.code(401).send({ error: 'Authentication required' }); return null; }
-  if (user.role !== 'owner') { reply.code(403).send({ error: 'This action requires the owner account' }); return null; }
-  return user.id;
+  const actor = actorOrReply(reply, actorOf(request), requireOwner);
+  return actor ? actor.userId ?? null : null;
 }
 
 function body(request: FastifyRequest): Record<string, unknown> {
@@ -60,6 +53,7 @@ function body(request: FastifyRequest): Record<string, unknown> {
 function fail(reply: FastifyReply, err: unknown) {
   if (err instanceof MemoryFileError) return reply.code(err.status).send({ error: err.message });
   if (err instanceof DrawerInputError) return reply.code(400).send({ error: err.message });
+  if (err instanceof ScopeError) return reply.code(err.status).send({ error: err.message });
   throw err;
 }
 
@@ -94,7 +88,7 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
     if (ownerId === null) return reply;
     try {
       const agentId = agentFrom(request);
-      const drawers = getMemoryStorage().listDrawers(ownerId).map((d) => {
+      const drawers = (await repositories.memory.drawers(actorOf(request))).map((d) => {
         const ref: DrawerRef = d.key ? { kind: d.kind, key: d.key } : { kind: d.kind };
         return { ...d, drawerId: drawerId(ref), revision: drawerRevision(ownerId, ref), path: displayPath(drawerFilePath(agentId, ownerId, ref)) };
       });
@@ -106,7 +100,7 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
     const ownerId = ownerOf(request, reply);
     if (ownerId === null) return reply;
     try {
-      return viewDrawerFile(ownerId, agentFrom(request), parseDrawerId(request.params.drawer));
+      return await repositories.memory.drawerFile(actorOf(request), agentFrom(request), parseDrawerId(request.params.drawer));
     } catch (err) { return fail(reply, err); }
   });
 
@@ -115,7 +109,7 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
     if (ownerId === null) return reply;
     try {
       const drawer = parseDrawerId(request.params.drawer);
-      return { drawerId: drawerId(drawer), revision: drawerRevision(ownerId, drawer), versions: drawerVersions(ownerId, drawer) };
+      return { drawerId: drawerId(drawer), revision: drawerRevision(ownerId, drawer), versions: await repositories.memory.drawerHistory(actorOf(request), drawer) };
     } catch (err) { return fail(reply, err); }
   });
 
@@ -123,7 +117,7 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
     const ownerId = ownerOf(request, reply);
     if (ownerId === null) return reply;
     try {
-      const view = await exportDrawerFile(ownerId, agentFrom(request), parseDrawerId(request.params.drawer));
+      const view = await repositories.memory.exportDrawer(actorOf(request), agentFrom(request), parseDrawerId(request.params.drawer));
       return { ...view, exported: true };
     } catch (err) { return fail(reply, err); }
   });
@@ -138,8 +132,8 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
       if (b.content !== undefined && typeof b.content !== 'string') return reply.code(400).send({ error: 'content must be text' });
       // Uploaded text, or the exported file as the owner saved it (read only on this request).
       const source = typeof b.content === 'string' ? 'upload' : 'file';
-      const text = typeof b.content === 'string' ? b.content : await readDrawerFile(ownerId, agentId, drawer);
-      const proposal = createProposal({ userId: ownerId, agentId, drawer, text, source, note: typeof b.note === 'string' ? b.note : null });
+      const text = typeof b.content === 'string' ? b.content : await repositories.memory.readExportedDrawer(actorOf(request), agentId, drawer);
+      const proposal = await repositories.memory.createProposal(actorOf(request), { agentId, drawer, text, source, note: typeof b.note === 'string' ? b.note : null });
       audit(request, ownerId, 'memory_proposal.create', true, proposal.id, { drawer: proposal.drawerId, source, counts: summary(proposal).counts });
       return reply.code(201).send(proposal);
     } catch (err) { return fail(reply, err); }
@@ -150,22 +144,22 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
     if (ownerId === null) return reply;
     const status = (request.query as any)?.status;
     if (status !== undefined && !STATUSES.has(status)) return reply.code(400).send({ error: 'Invalid status' });
-    return { proposals: listProposals(ownerId, status).map(summary) };
+    return { proposals: (await repositories.memory.proposals(actorOf(request), status)).map(summary) };
   });
 
   fastify.get<IdParams>('/api/memory/proposals/:id', { config }, async (request, reply) => {
     const ownerId = ownerOf(request, reply);
     if (ownerId === null) return reply;
-    const proposal = getProposal(ownerId, request.params.id);
-    if (!proposal) return reply.code(404).send({ error: 'Proposal not found' });
-    return proposal;
+    try {
+      return await repositories.memory.proposal(actorOf(request), request.params.id);
+    } catch (err) { return fail(reply, err); }
   });
 
   fastify.post<IdParams>('/api/memory/proposals/:id/approve', { config }, async (request, reply) => {
     const ownerId = ownerOf(request, reply);
     if (ownerId === null) return reply;
     try {
-      const result = await approveProposal(ownerId, request.params.id, ownerId);
+      const result = await repositories.memory.approveProposal(actorOf(request), request.params.id);
       audit(request, ownerId, 'memory_proposal.approve', true, request.params.id, {
         drawer: result.proposal.drawerId, revision: result.revision,
         added: result.applied.added.length, updated: result.applied.updated.length, deleted: result.applied.deleted.length,
@@ -183,7 +177,7 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
     const ownerId = ownerOf(request, reply);
     if (ownerId === null) return reply;
     try {
-      const proposal = rejectProposal(ownerId, request.params.id, ownerId, body(request).note);
+      const proposal = await repositories.memory.rejectProposal(actorOf(request), request.params.id, body(request).note);
       audit(request, ownerId, 'memory_proposal.reject', true, proposal.id, { drawer: proposal.drawerId });
       return proposal;
     } catch (err) {
