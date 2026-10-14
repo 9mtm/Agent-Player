@@ -32,6 +32,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { authenticateActiveUser, type UserRole } from './route-guards.js';
 import { CHANNEL_TURN_HEADER, channelTurnFromHeaders } from '../tools/channel-policy.js';
+import { serviceActor, userActor, type Actor } from '../repositories/actor.js';
 
 export type RouteAccess = 'public' | 'optional' | 'service' | 'user' | 'admin' | 'owner';
 
@@ -44,6 +45,12 @@ declare module 'fastify' {
   interface FastifyRequest {
     /** Set by the auth gate for every authenticated request. */
     authUser: AuthUser | null;
+    /**
+     * B1-core: who is acting, built once here (user account from the verified
+     * token, or the server-created channel turn). Repositories take it first.
+     * null for anonymous requests and extension routes.
+     */
+    actor: Actor | null;
   }
   interface FastifyContextConfig {
     /** Raise a route's access level (read by the gate; can never lower it). */
@@ -275,9 +282,26 @@ function roleAllowed(access: RouteAccess, role: UserRole): boolean {
   return role === 'owner' || role === 'admin' || role === 'user';
 }
 
+/**
+ * B1-core: the request's actor. Normally set by the gate; when a route plugin
+ * runs without the gate (unit tests mounting one plugin), it is built here
+ * once from the verified bearer token with the same rule as the gate
+ * (active user, role from the users table). Never from body or query.
+ */
+export function actorOf(request: FastifyRequest): Actor | null {
+  if (request.actor) return request.actor;
+  const hasBearer = typeof request.headers.authorization === 'string' && request.headers.authorization.length > 0;
+  if (!hasBearer) return null;
+  const user = authenticateActiveUser(request);
+  if (!user) return null;
+  request.actor = userActor(user);
+  return request.actor;
+}
+
 /** The onRequest hook. Exported for tests. */
 export async function authGate(request: FastifyRequest, reply: FastifyReply) {
   request.authUser = null;
+  request.actor = null;
   const url = request.routeOptions?.url;
   // Unmatched route: let Fastify answer 404.
   if (!url) return;
@@ -299,6 +323,7 @@ export async function authGate(request: FastifyRequest, reply: FastifyReply) {
       return deny(reply, 403, 'Guest accounts can only use public rooms');
     }
     request.authUser = user;
+    request.actor = userActor(user);
     return;
   }
 
@@ -307,6 +332,7 @@ export async function authGate(request: FastifyRequest, reply: FastifyReply) {
     // takes the user bound to the turn (S0-Q.9).
     const turn = channelTurnFromHeaders(request.headers);
     if (!turn) return deny(reply, 401, 'Authentication required');
+    request.actor = serviceActor({ channel: turn.policy.channel, userId: turn.userId });
     return;
   }
 
@@ -324,6 +350,7 @@ export async function authGate(request: FastifyRequest, reply: FastifyReply) {
       : 'This action requires an owner or admin account');
   }
   request.authUser = user;
+  request.actor = userActor(user);
 }
 
 /**
@@ -335,6 +362,7 @@ export function registerAuthGate(fastify: FastifyInstance): void {
   const table: GateRouteEntry[] = [];
   fastify.decorate('routeAccessTable', table);
   fastify.decorateRequest('authUser', null);
+  fastify.decorateRequest('actor', null);
   fastify.addHook('onRoute', (route) => {
     const methods = Array.isArray(route.method) ? route.method : [route.method];
     for (const method of methods) {

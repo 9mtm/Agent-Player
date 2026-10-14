@@ -10,6 +10,7 @@ import { execToolRefusal, isToolAllowedByExecPolicy, isToolObjectAllowedByExecPo
 import { channelToolCallRefusal, isToolAllowedInChannel } from './channel-policy.js';
 import { defaultGrants, grantCallRefusal, isToolGranted, type AgentToolGrants } from './grants.js';
 import { approvalCategory, consumeApprovalTicket, isConfinedChannelReply, requestApproval } from './approvals.js';
+import { actorFromToolContext } from '../repositories/actor.js';
 
 export class ToolsRegistry {
   private tools = new Map<string, Tool>();
@@ -136,7 +137,8 @@ export class ToolsRegistry {
       // Parameter names only: values may hold secrets (e.g. credentials_save).
       console.log(`[ToolsRegistry]   Params:`, Object.keys(params || {}).join(', '));
 
-      const result = await tool.execute(params, this.context);
+      // B1-core: one actor per tool call, from the trusted run context only.
+      const result = await tool.execute(params, { ...this.context, actor: actorFromToolContext(this.context) });
 
       console.log(`[ToolsRegistry] ✅ Tool executed successfully`);
       return result;

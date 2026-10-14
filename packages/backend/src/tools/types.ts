@@ -81,4 +81,9 @@ export interface ToolExecutionContext {
    * `write` ignores it and always stays in the agent's workspace.
    */
   fileReadRoot?: string;
+  /**
+   * B1-core: the actor of this tool call, attached by the tools registry
+   * (repositories/actor.ts actorFromToolContext). Repositories take it first.
+   */
+  actor?: import('../repositories/actor.js').Actor;
 }
