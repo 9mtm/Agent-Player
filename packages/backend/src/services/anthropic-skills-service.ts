@@ -7,7 +7,8 @@
 
 import { dataPathOr } from '../config/data-root.js';
 import { Octokit } from '@octokit/rest';
-import { getDatabase } from '../db/index.js';
+import { nowText } from '../db/pg/dialect.js';
+import { q } from '../repositories/sql-steps.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { isValidSkillName, isValidSkillSourcePath } from '../skills/skill-ids.js';
@@ -239,7 +240,6 @@ export class AnthropicSkillsService {
    * Install a skill locally
    */
   async installSkill(skillName: string, skillPath: string): Promise<string> {
-    const db = getDatabase();
 
     // SECURITY (S0-Q.19): the name becomes a local file name, the path a repo path.
     if (!isValidSkillName(skillName) || !isValidSkillSourcePath(skillPath)) {
@@ -272,9 +272,7 @@ export class AnthropicSkillsService {
       console.log(`[AnthropicSkills] ✅ File saved to: ${localPath}`);
 
       // 5. Get Anthropic source ID
-      const source = db.prepare(`
-        SELECT id FROM skill_sources WHERE name = 'Anthropic Official'
-      `).get() as { id: string } | undefined;
+      const source = await q.one<{ id: string }>(`SELECT id FROM skill_sources WHERE name = 'Anthropic Official'`);
 
       if (!source) {
         throw new Error('Anthropic source not found in database');
@@ -285,7 +283,7 @@ export class AnthropicSkillsService {
       const category = this.extractCategoryFromPath(skillPath);
       console.log(`[AnthropicSkills] 💾 Saving to database with category: ${category}`);
 
-      db.prepare(`
+      await q.run(`
         INSERT INTO installed_skills (
           source_id, skill_name, display_name, description,
           category, file_path, metadata, is_enabled
@@ -293,8 +291,7 @@ export class AnthropicSkillsService {
         ON CONFLICT(source_id, skill_name)
         DO UPDATE SET
           file_path = excluded.file_path,
-          metadata = excluded.metadata
-      `).run(
+          metadata = excluded.metadata`,
         source.id,
         skillName,
         metadata.name,
@@ -316,16 +313,15 @@ export class AnthropicSkillsService {
    * Search skills by query
    */
   async searchSkills(query: string): Promise<any[]> {
-    const db = getDatabase();
-
-    const skills = db.prepare(`
+    // SQLite LIKE ignores ASCII case; ILIKE gives the same match on PostgreSQL.
+    const like = q.dialect === 'postgres' ? 'ILIKE' : 'LIKE';
+    const skills = await q.all(`
       SELECT * FROM installed_skills
-      WHERE skill_name LIKE ?
-         OR display_name LIKE ?
-         OR description LIKE ?
-         OR category LIKE ?
-      ORDER BY usage_count DESC, install_date DESC
-    `).all(
+      WHERE skill_name ${like} ?
+         OR display_name ${like} ?
+         OR description ${like} ?
+         OR category ${like} ?
+      ORDER BY usage_count DESC, install_date DESC`,
       `%${query}%`,
       `%${query}%`,
       `%${query}%`,
@@ -338,10 +334,8 @@ export class AnthropicSkillsService {
   /**
    * Get all installed skills
    */
-  getInstalledSkills(): any[] {
-    const db = getDatabase();
-
-    return db.prepare(`
+  getInstalledSkills(): Promise<any[]> {
+    return q.all(`
       SELECT
         s.*,
         src.name as source_name,
@@ -349,20 +343,15 @@ export class AnthropicSkillsService {
       FROM installed_skills s
       JOIN skill_sources src ON s.source_id = src.id
       WHERE s.is_enabled = 1
-      ORDER BY s.category, s.skill_name
-    `).all();
+      ORDER BY s.category, s.skill_name`);
   }
 
   /**
    * Uninstall a skill
    */
   async uninstallSkill(skillId: string): Promise<void> {
-    const db = getDatabase();
-
     // Get skill info
-    const skill = db.prepare(`
-      SELECT file_path FROM installed_skills WHERE id = ?
-    `).get(skillId) as { file_path: string } | undefined;
+    const skill = await q.one<{ file_path: string }>('SELECT file_path FROM installed_skills WHERE id = ?', skillId);
 
     if (!skill) {
       throw new Error('Skill not found');
@@ -379,26 +368,24 @@ export class AnthropicSkillsService {
     }
 
     // Delete from database
-    db.prepare(`DELETE FROM installed_skills WHERE id = ?`).run(skillId);
+    await q.run('DELETE FROM installed_skills WHERE id = ?', skillId);
   }
 
   /**
    * Log skill usage
    */
-  logSkillUsage(skillId: string, userId?: string, agentId?: string, success: boolean = true): void {
-    const db = getDatabase();
-
-    db.prepare(`
+  async logSkillUsage(skillId: string, userId?: string, agentId?: string, success: boolean = true): Promise<void> {
+    await q.run(`
       INSERT INTO skill_usage_log (skill_id, user_id, agent_id, success)
-      VALUES (?, ?, ?, ?)
-    `).run(skillId, userId || null, agentId || null, success ? 1 : 0);
+      VALUES (?, ?, ?, ?)`,
+      skillId, userId || null, agentId || null, success ? 1 : 0);
 
-    // Increment usage count
-    db.prepare(`
+    // Increment usage count (last_used is TEXT 'YYYY-MM-DD HH:MM:SS' on both drivers)
+    await q.run(`
       UPDATE installed_skills
-      SET usage_count = usage_count + 1, last_used = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(skillId);
+      SET usage_count = usage_count + 1, last_used = ${nowText(q.dialect)}
+      WHERE id = ?`,
+      skillId);
   }
 
   // Helper methods
@@ -418,19 +405,16 @@ export class AnthropicSkillsService {
    * Get all enabled skills' content for chat system prompt
    */
   async getEnabledSkillsContent(): Promise<string> {
-    const db = getDatabase();
-
-    const enabledSkills = db.prepare(`
-      SELECT skill_name, display_name, file_path, description
-      FROM installed_skills
-      WHERE is_enabled = 1
-      ORDER BY category, skill_name
-    `).all() as Array<{
+    const enabledSkills = await q.all<{
       skill_name: string;
       display_name: string;
       file_path: string;
       description: string;
-    }>;
+    }>(`
+      SELECT skill_name, display_name, file_path, description
+      FROM installed_skills
+      WHERE is_enabled = 1
+      ORDER BY category, skill_name`);
 
     if (enabledSkills.length === 0) {
       return '';

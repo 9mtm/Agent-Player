@@ -8,6 +8,7 @@ import { getSkillsRegistry } from '../../skills/registry.js';
 import { getSkillsExecutor } from '../../skills/executor.js';
 import { handleError } from '../error-handler.js';
 import { anthropicSkillsService } from '../../services/anthropic-skills-service.js';
+import { q } from '../../repositories/sql-steps.js';
 import {
   authenticateActiveUser,
   authorizeActiveRole,
@@ -350,18 +351,10 @@ export async function skillsRoutes(fastify: FastifyInstance) {
   fastify.get('/api/skills/marketplace/sources', async (request, reply) => {
     if (requireUser(request, reply) === null) return reply;
     try {
-      const { getDatabase } = await import('../../db/index.js');
-      const db = getDatabase();
-
-      const sources = db
-        .prepare(
-          `
+      const sources = await q.all(`
         SELECT * FROM skill_sources
         WHERE is_enabled = 1
-        ORDER BY priority DESC, name
-      `
-        )
-        .all();
+        ORDER BY priority DESC, name`);
 
       return { success: true, sources };
     } catch (error: any) {
@@ -389,7 +382,7 @@ export async function skillsRoutes(fastify: FastifyInstance) {
   fastify.get('/api/skills/marketplace/installed', async (request, reply) => {
     if (requireUser(request, reply) === null) return reply;
     try {
-      const skills = anthropicSkillsService.getInstalledSkills();
+      const skills = await anthropicSkillsService.getInstalledSkills();
 
       return { success: true, skills, count: skills.length };
     } catch (error: any) {
@@ -492,36 +485,19 @@ export async function skillsRoutes(fastify: FastifyInstance) {
   fastify.get('/api/skills/marketplace/stats', async (request, reply) => {
     if (requireUser(request, reply) === null) return reply;
     try {
-      const { getDatabase } = await import('../../db/index.js');
-      const db = getDatabase();
-
       const stats = {
-        totalInstalled: db
-          .prepare(`SELECT COUNT(*) as count FROM installed_skills`)
-          .get() as { count: number },
-        enabled: db
-          .prepare(`SELECT COUNT(*) as count FROM installed_skills WHERE is_enabled = 1`)
-          .get() as { count: number },
-        byCategory: db
-          .prepare(
-            `
+        totalInstalled: await q.one<{ count: number }>(`SELECT COUNT(*) as count FROM installed_skills`),
+        enabled: await q.one<{ count: number }>(`SELECT COUNT(*) as count FROM installed_skills WHERE is_enabled = 1`),
+        byCategory: await q.all(`
           SELECT category, COUNT(*) as count
           FROM installed_skills
           GROUP BY category
-          ORDER BY count DESC
-        `
-          )
-          .all(),
-        mostUsed: db
-          .prepare(
-            `
+          ORDER BY count DESC`),
+        mostUsed: await q.all(`
           SELECT skill_name, display_name, usage_count
           FROM installed_skills
           ORDER BY usage_count DESC
-          LIMIT 5
-        `
-          )
-          .all(),
+          LIMIT 5`),
       };
 
       return { success: true, stats };
@@ -539,21 +515,14 @@ export async function skillsRoutes(fastify: FastifyInstance) {
       try {
         const { skillId } = request.params;
         if (!isValidInstalledSkillId(skillId)) return badId(reply);
-        const { getDatabase } = await import('../../db/index.js');
-        const db = getDatabase();
-
-        // Toggle is_enabled
-        db.prepare(
-          `
+        // Toggle is_enabled and read the new value in one statement (no
+        // read-after-write race between two concurrent toggles).
+        const skill = await q.one<{ is_enabled: number }>(`
         UPDATE installed_skills
         SET is_enabled = CASE WHEN is_enabled = 1 THEN 0 ELSE 1 END
         WHERE id = ?
-      `
-        ).run(skillId);
-
-        const skill = db
-          .prepare(`SELECT is_enabled FROM installed_skills WHERE id = ?`)
-          .get(skillId) as { is_enabled: number } | undefined;
+        RETURNING is_enabled`,
+          skillId);
 
         return {
           success: true,
