@@ -1,40 +1,98 @@
 /**
- * Start Command
+ * Start Command (INST-04)
+ *
+ * Starts the backend and the web UI together on 127.0.0.1 from any folder.
+ * The install folder comes from AGENT_PLAYER_ROOT, the CLI's own location or
+ * the path recorded by `agent-player setup` — never the shell's folder.
  */
 
 import chalk from 'chalk';
-import { spawn } from 'child_process';
-import { success, error, info } from '../utils/formatting.js';
+import fs from 'fs';
+import path from 'path';
+import { spawn as nodeSpawn, type SpawnOptions, type ChildProcess } from 'child_process';
+import { findInstall, recordInstallRoot, NOT_FOUND_MESSAGE, type InstallPaths } from '../utils/install-root.js';
+import {
+  AlreadyRunningError, LOOPBACK_HOST, FRONTEND_PORT, lockFilePath, lockIsLive, readLock, realProcessOps,
+  startProblem, supervise, type ProcessOps, type StartMode,
+} from '../utils/runtime.js';
 
-export async function startCommand(options: { daemon?: boolean }): Promise<void> {
-  info('Starting Agent Player backend...');
+export interface StartOptions {
+  daemon?: boolean;
+  dev?: boolean;
+}
 
+export interface StartDeps {
+  paths?: InstallPaths | null;
+  ops?: ProcessOps;
+  spawn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
+  log?: (message: string) => void;
+  entry?: string;
+  execArgv?: string[];
+  /** How long --daemon waits for the supervisor's lock file (ms). */
+  waitMs?: number;
+}
+
+export async function startCommand(options: StartOptions = {}, deps: StartDeps = {}): Promise<number> {
+  const log = deps.log ?? ((m: string) => console.log(m));
+  const paths = deps.paths === undefined ? findInstall() : deps.paths;
+  if (!paths) {
+    log(chalk.red(NOT_FOUND_MESSAGE));
+    return 1;
+  }
+  const ops = deps.ops ?? realProcessOps;
+  const mode: StartMode = options.dev ? 'dev' : 'production';
+  const problem = startProblem(paths, mode);
+  if (problem) {
+    log(chalk.red(problem));
+    return 1;
+  }
+  const lockFile = lockFilePath(paths);
+  const existing = readLock(lockFile);
+  if (lockIsLive(existing, ops)) {
+    log(chalk.yellow(new AlreadyRunningError(existing!.pid).message));
+    return 1;
+  }
+  try { recordInstallRoot(paths.root); } catch { /* recording is a convenience only */ }
+
+  const entry = deps.entry ?? process.argv[1];
   if (options.daemon) {
-    // Start as daemon
-    const child = spawn('npm', ['start'], {
-      cwd: '../../backend',
-      detached: true,
-      stdio: 'ignore'
-    });
-
-    child.unref();
-    success('Backend started in daemon mode');
-  } else {
-    // Start in foreground
-    console.log(chalk.gray('Starting backend in foreground mode...'));
-    console.log(chalk.gray('Press Ctrl+C to stop\n'));
-
-    const child = spawn('npm', ['start'], {
-      cwd: '../../backend',
-      stdio: 'inherit'
-    });
-
-    child.on('exit', (code) => {
-      if (code === 0) {
-        success('Backend stopped');
-      } else {
-        error(`Backend exited with code ${code}`);
+    fs.mkdirSync(paths.logsDir, { recursive: true, mode: 0o700 });
+    const logFile = path.join(paths.logsDir, 'agent-player.log');
+    const fd = fs.openSync(logFile, 'a', 0o600);
+    try {
+      const spawn = deps.spawn ?? nodeSpawn;
+      const args = [...(deps.execArgv ?? process.execArgv), entry, 'start', ...(options.dev ? ['--dev'] : [])];
+      const child = spawn(process.execPath, args, {
+        cwd: paths.root,
+        detached: true,
+        stdio: ['ignore', fd, fd],
+        env: { ...process.env, AGENT_PLAYER_ROOT: paths.root },
+      });
+      child.unref();
+    } finally {
+      fs.closeSync(fd);
+    }
+    const until = Date.now() + (deps.waitMs ?? 5000);
+    while (Date.now() < until) {
+      const lock = readLock(lockFile);
+      if (lock && lockIsLive(lock, ops)) {
+        log(chalk.green(`Agent Player started in the background (pid ${lock.pid}). Web UI: http://${LOOPBACK_HOST}:${FRONTEND_PORT}`));
+        log(chalk.gray(`Log: ${logFile}   Stop: agent-player stop`));
+        return 0;
       }
-    });
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    log(chalk.red(`Agent Player did not start; see ${logFile}`));
+    return 1;
+  }
+
+  log(chalk.gray(`Starting Agent Player (${mode}) from ${paths.root}. Press Ctrl+C to stop.`));
+  try {
+    const code = await supervise({ paths, mode, entry, ops, spawn: deps.spawn, log });
+    log(code === 0 ? chalk.green('Agent Player stopped') : chalk.red(`Agent Player stopped (exit code ${code})`));
+    return code;
+  } catch (err: any) {
+    log(chalk.red(err?.message ?? String(err)));
+    return 1;
   }
 }

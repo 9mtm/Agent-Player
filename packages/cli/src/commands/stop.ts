@@ -1,28 +1,37 @@
 /**
- * Stop Command
+ * Stop Command (INST-04)
+ *
+ * Stops the supervisor recorded in the pid file (it ends the backend and the
+ * web UI). Never kills processes by name.
  */
 
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import { success, error, info } from '../utils/formatting.js';
+import chalk from 'chalk';
+import { findInstall, NOT_FOUND_MESSAGE, type InstallPaths } from '../utils/install-root.js';
+import { stopRunning, type ProcessOps } from '../utils/runtime.js';
 
-const execAsync = promisify(exec);
-
-export async function stopCommand(): Promise<void> {
-  info('Stopping Agent Player backend...');
-
-  try {
-    if (process.platform === 'win32') {
-      // Windows
-      await execAsync('taskkill /F /IM node.exe /FI "WINDOWTITLE eq Agent Player*"');
-    } else {
-      // Unix
-      await execAsync('pkill -f "agent-player"');
-    }
-
-    success('Backend stopped');
-  } catch (err: any) {
-    error('Failed to stop backend');
-    console.log('You may need to stop it manually');
+export async function stopCommand(
+  options: { force?: boolean } = {},
+  deps: { paths?: InstallPaths | null; ops?: ProcessOps; log?: (m: string) => void; timeoutMs?: number; pollMs?: number } = {},
+): Promise<number> {
+  const log = deps.log ?? ((m: string) => console.log(m));
+  const paths = deps.paths === undefined ? findInstall() : deps.paths;
+  if (!paths) {
+    log(chalk.red(NOT_FOUND_MESSAGE));
+    return 1;
+  }
+  const result = await stopRunning(paths, { ops: deps.ops, force: options.force, timeoutMs: deps.timeoutMs, pollMs: deps.pollMs });
+  switch (result.state) {
+    case 'not-running':
+      log(chalk.gray('Agent Player is not running (no pid file).'));
+      return 0;
+    case 'stale':
+      log(chalk.gray(`Agent Player is not running (stale pid file for pid ${result.pid}).`));
+      return 0;
+    case 'stopped':
+      log(chalk.green('Agent Player stopped'));
+      return 0;
+    default:
+      log(chalk.red(`Agent Player (pid ${result.pid}) did not stop in time. Try "agent-player stop --force".`));
+      return 1;
   }
 }

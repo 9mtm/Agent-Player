@@ -1,55 +1,37 @@
 /**
- * Status Command
+ * Status Command (INST-04)
  *
- * Show Agent Player backend status
+ * Shows the supervisor, backend and web UI: pid, alive, and whether each
+ * answers on 127.0.0.1. Talks only to the loopback addresses.
  */
 
-import ora from 'ora';
 import chalk from 'chalk';
-import { getApiClient } from '../utils/api-client.js';
-import { success, error, header, createTable } from '../utils/formatting.js';
+import { findInstall, NOT_FOUND_MESSAGE, type InstallPaths } from '../utils/install-root.js';
+import { getRunStatus, type ProcessOps, type RunStatus } from '../utils/runtime.js';
 
-export async function statusCommand(): Promise<void> {
-  const spinner = ora('Checking backend status...').start();
-  const client = getApiClient();
-
-  try {
-    const isRunning = await client.isBackendRunning();
-
-    if (!isRunning) {
-      spinner.fail('Backend is not running');
-      console.log(chalk.gray('\nRun "agent-player start" to start the backend\n'));
-      return;
-    }
-
-    const status = await client.getStatus();
-    spinner.succeed('Backend is running');
-
-    // Get additional info
-    const skills = await client.getSkills();
-    const channels = await client.getChannels();
-    const jobs = await client.getJobs();
-
-    // Display status
-    header('Agent Player Status');
-
-    const table = createTable(['Component', 'Status', 'Details']);
-
-    table.push(
-      ['Backend', chalk.green('● Running'), `Version ${status.version}`],
-      ['Skills', chalk.cyan(skills.length.toString()), `${skills.filter((s: any) => s.enabled).length} enabled`],
-      ['Channels', chalk.cyan(channels.length.toString()), `${channels.filter((c: any) => c.connected).length} connected`],
-      ['Jobs', chalk.cyan(jobs.length.toString()), `${jobs.filter((j: any) => j.enabled).length} active`]
-    );
-
-    console.log(table.toString());
-
-    // API Info
-    console.log(chalk.gray(`\nAPI: ${client.getBaseUrl()}`));
-    console.log(chalk.gray(`Last check: ${new Date(status.timestamp).toLocaleTimeString()}\n`));
-
-  } catch (err: any) {
-    spinner.fail('Failed to get status');
-    error(err.message);
+export function formatStatus(status: RunStatus, root: string): string {
+  const lines: string[] = [];
+  lines.push(chalk.bold(`Agent Player — ${status.running ? chalk.green('running') : chalk.red('not running')}${status.stale ? chalk.gray(' (stale pid file)') : ''}`));
+  lines.push(chalk.gray(`Install: ${root}${status.mode ? `   Mode: ${status.mode}` : ''}${status.startedAt ? `   Since: ${status.startedAt}` : ''}`));
+  for (const p of status.parts) {
+    const proc = p.pid ? `pid ${p.pid} ${p.alive ? chalk.green('alive') : chalk.red('not alive')}` : chalk.gray('no pid');
+    const http = p.url ? `  ${p.responding ? chalk.green('answers') : chalk.red('no answer')} ${chalk.gray(p.url)}` : '';
+    lines.push(`  ${p.name.padEnd(10)} ${proc}${http}`);
   }
+  return lines.join('\n');
+}
+
+export async function statusCommand(
+  options: { json?: boolean } = {},
+  deps: { paths?: InstallPaths | null; ops?: ProcessOps; fetchFn?: typeof fetch; log?: (m: string) => void } = {},
+): Promise<number> {
+  const log = deps.log ?? ((m: string) => console.log(m));
+  const paths = deps.paths === undefined ? findInstall() : deps.paths;
+  if (!paths) {
+    log(chalk.red(NOT_FOUND_MESSAGE));
+    return 1;
+  }
+  const status = await getRunStatus(paths, { ops: deps.ops, fetchFn: deps.fetchFn });
+  log(options.json ? JSON.stringify({ root: paths.root, ...status }, null, 2) : formatStatus(status, paths.root));
+  return status.running ? 0 : 3;
 }
