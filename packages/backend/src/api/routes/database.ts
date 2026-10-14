@@ -5,22 +5,23 @@
 
 import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../../db/index.js';
-import { existsSync, readdirSync, statSync, copyFileSync, unlinkSync, readFileSync } from 'fs';
+import { existsSync, readdirSync, statSync, unlinkSync, readFileSync, mkdirSync } from 'fs';
 import { resolve, join } from 'path';
+import { dataPath, mainDatabasePath } from '../../config/data-root.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { validateTableName } from '../../db/sql-utils.js';
 import { handleError } from '../error-handler.js';
 
-export async function databaseRoutes(fastify: FastifyInstance) {
-  const dbPath = resolve('./.data/database.db');
-  const backupDir = resolve('./.data/backups');
+/** A backup file name: one plain segment ending in `.db` (no paths, no `..`). */
+export function isSafeBackupName(filename: unknown): filename is string {
+  return typeof filename === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,200}\.db$/.test(filename) && !filename.includes('..');
+}
 
-  // Ensure backup directory exists
-  import('fs').then(fs => {
-    if (!existsSync(backupDir)) {
-      fs.mkdirSync(backupDir, { recursive: true });
-    }
-  });
+export async function databaseRoutes(fastify: FastifyInstance) {
+  // BUG-01: the same file the main database opens (DATABASE_PATH, else the
+  // data root's agent-player.db), and backups next to the other data.
+  const dbPath = resolve(mainDatabasePath());
+  const backupDir = dataPath('backups');
 
   /**
    * GET /api/database/stats - Get database statistics
@@ -157,8 +158,9 @@ export async function databaseRoutes(fastify: FastifyInstance) {
       const filename = `database_${timestamp}.db`;
       const backupPath = join(backupDir, filename);
 
-      // Copy database file
-      copyFileSync(dbPath, backupPath);
+      // Online backup through SQLite (consistent while the database is open).
+      mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+      await getDatabase().backup(backupPath);
 
       const stats = statSync(backupPath);
 
@@ -198,9 +200,14 @@ export async function databaseRoutes(fastify: FastifyInstance) {
       getUserIdFromRequest(request);
 
       const { filename } = request.params;
+      if (!isSafeBackupName(filename)) {
+        return reply.status(404).send({
+          error: 'Backup not found',
+        });
+      }
       const backupPath = join(backupDir, filename);
 
-      if (!existsSync(backupPath) || !filename.endsWith('.db')) {
+      if (!existsSync(backupPath)) {
         return reply.status(404).send({
           error: 'Backup not found',
         });
@@ -236,9 +243,14 @@ export async function databaseRoutes(fastify: FastifyInstance) {
       getUserIdFromRequest(request);
 
       const { filename } = request.params;
+      if (!isSafeBackupName(filename)) {
+        return reply.status(404).send({
+          error: 'Backup not found',
+        });
+      }
       const backupPath = join(backupDir, filename);
 
-      if (!existsSync(backupPath) || !filename.endsWith('.db')) {
+      if (!existsSync(backupPath)) {
         return reply.status(404).send({
           error: 'Backup not found',
         });
@@ -314,30 +326,21 @@ export async function databaseRoutes(fastify: FastifyInstance) {
       getUserIdFromRequest(request);
 
       const { filename } = request.body;
-      const backupPath = join(backupDir, filename);
-
-      if (!existsSync(backupPath) || !filename.endsWith('.db')) {
+      if (!isSafeBackupName(filename) || !existsSync(join(backupDir, filename))) {
         return reply.status(404).send({
           error: 'Backup not found',
         });
       }
 
-      // Create a backup of current database before restoring
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('T')[0] + '_' +
-                        new Date().toISOString().split('T')[1].split('.')[0].replace(/:/g, '-');
-      const preRestoreBackup = `database_pre-restore_${timestamp}.db`;
-      copyFileSync(dbPath, join(backupDir, preRestoreBackup));
-
-      // Restore from backup
-      copyFileSync(backupPath, dbPath);
-
-      console.log(`[Database API] ✅ Database restored from: ${filename}`);
-
-      return {
-        success: true,
-        message: `Database restored from "${filename}"`,
-        preRestoreBackup,
-      };
+      // BUG-01: this route used to copy over a file the server never opened
+      // (`.data/database.db`). Now that it would hit the live database,
+      // overwriting the open SQLite file (and its WAL) in place could corrupt
+      // it, so an online restore is refused. Stop the server and copy the
+      // backup over the database file instead.
+      return reply.status(409).send({
+        error: 'Restore needs the server stopped: stop it, then copy the backup file over the database file',
+        code: 'restore_offline_only',
+      });
     } catch (error: any) {
       console.error('[Database API] ❌ Restore failed:', error);
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
