@@ -14,13 +14,15 @@
  * one transaction (all or nothing). A statement list rather than a callback,
  * because a better-sqlite3 transaction must be synchronous while a PostgreSQL
  * one is async: the list works the same on both. SQLite uses
- * transaction.ts withTransaction, PostgreSQL withPgActorTransaction.
+ * transaction.ts withSqliteTransaction, PostgreSQL withPgActorTransaction.
+ * (Logic with reads between the writes uses SQL steps instead:
+ * repositories/sql-steps.ts, B2.2b-3.)
  */
 
 import type { Actor } from './actor.js';
 import type { Dialect } from '../db/pg/dialect.js';
 import { getDatabase } from '../db/index.js';
-import { withTransaction } from './transaction.js';
+import { withSqliteTransaction } from './transaction.js';
 
 export type SqlParam = string | number | null;
 export type SqlStatement = readonly [sql: string, ...params: SqlParam[]];
@@ -41,7 +43,7 @@ export const sqliteRunner: SqlRunner = {
   all: async (sql, ...params) => db().prepare(sql).all(...params) as any[],
   run: async (sql, ...params) => ({ changes: db().prepare(sql).run(...params).changes }),
   async batch(actor, statements) {
-    await withTransaction(actor, () => {
+    await withSqliteTransaction(actor, () => {
       for (const [sql, ...params] of statements) db().prepare(sql).run(...params);
     });
   },

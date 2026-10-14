@@ -79,6 +79,48 @@ export function nowPlus(d: Dialect): string {
   return d === 'postgres' ? '(now() + (?)::interval)' : `datetime('now', ?)`;
 }
 
+/**
+ * now + a bound offset (bind offset(n, unit)) as TEXT in the SQLite format
+ * ('YYYY-MM-DD HH:MM:SS', UTC), for comparisons with TEXT timestamp columns
+ * (task_runs.finished_at, tool_approvals.requested_at, ...).
+ */
+export function nowPlusText(d: Dialect): string {
+  return d === 'postgres'
+    ? `to_char(((now() + (?)::interval) AT TIME ZONE 'UTC'), 'YYYY-MM-DD HH24:MI:SS')`
+    : `datetime('now', ?)`;
+}
+
+/**
+ * Current time as ISO-8601 TEXT with milliseconds and 'Z'
+ * (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), for the TEXT columns that store
+ * that form (personality_proposals / evolution_proposals decided_at).
+ */
+export function nowIsoText(d: Dialect): string {
+  return d === 'postgres'
+    ? `to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
+    : `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
+}
+
+/** The scalar maximum of its arguments: SQLite MAX(a, b), PostgreSQL GREATEST(a, b). */
+export function greatest(d: Dialect): string {
+  return d === 'postgres' ? 'GREATEST' : 'MAX';
+}
+
+/** Null-safe equality with one bound value: `col IS ?` (SQLite), `col IS NOT DISTINCT FROM ?` (PostgreSQL). */
+export function isParam(d: Dialect): string {
+  return d === 'postgres' ? 'IS NOT DISTINCT FROM ?' : 'IS ?';
+}
+
+/**
+ * Row lock suffix for a SELECT inside a transaction: ' FOR UPDATE' on
+ * PostgreSQL (a concurrent writer waits until this transaction ends), ''
+ * on SQLite (one connection; a write transaction already holds the
+ * database lock).
+ */
+export function forUpdate(d: Dialect): string {
+  return d === 'postgres' ? ' FOR UPDATE' : '';
+}
+
 /** Whole seconds since the epoch of `expr`, as an integer (strftime('%s', expr)). */
 export function epochSeconds(d: Dialect, expr: string, kind: TsKind = 'timestamptz'): string {
   if (d === 'sqlite') return `CAST(strftime('%s', ${expr}) AS INTEGER)`;

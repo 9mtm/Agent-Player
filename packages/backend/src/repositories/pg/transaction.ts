@@ -5,13 +5,11 @@
  * await depth) joins the transaction; a throw rolls it back. A nested call
  * becomes a SAVEPOINT (db/pg/pool.ts).
  *
- * repositories/transaction.ts (SQLite) is unchanged and still what
- * `withTransaction` exports: while B2 is partial, the SQLite repositories
- * (agents-config, ...) need their SQLite transaction even on 'postgres', so
- * a global switch would drop their atomicity. Ported repositories choose by
- * driver through their runner instead (B2.2b-1: teams via sql-runner.ts
- * batch -> this function on PostgreSQL). `withTransaction` itself switches
- * once every repository it wraps is ported.
+ * B2.2b-3: repositories/transaction.ts `withTransaction` now chooses by
+ * driver and is this function on PostgreSQL (every area it wraps is
+ * ported: identity, teams, credentials, audit, agents, task runs, ...).
+ * Ported modules also reach it through their runner (sql-runner.ts batch,
+ * sql-steps.ts tx/atomic).
  */
 
 import type { Actor } from '../actor.js';
