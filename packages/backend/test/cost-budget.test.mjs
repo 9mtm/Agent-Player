@@ -72,7 +72,7 @@ const AGENT = 'cb-agent';
 db.prepare(`INSERT INTO agents_config (id, name, provider, model) VALUES (?, ?, 'claude', 'claude-sonnet-test')`).run(AGENT, AGENT);
 orchestrator.registerAgent({ id: AGENT, name: AGENT, role: 'worker', capabilities: [], maxConcurrentTasks: 50 });
 const grants = await import(join(backendDir, 'src/tools/grants.ts'));
-grants.setAgentGrants(AGENT, { grants: ['idem_lookup'] }, 'cb-owner', tools.createToolsRegistry({ workspaceDir: dir }).listRegistered());
+await grants.setAgentGrants(AGENT, { grants: ['idem_lookup'] }, 'cb-owner', tools.createToolsRegistry({ workspaceDir: dir }).listRegistered());
 const { setAgentApiKey } = await import(join(backendDir, 'src/credentials/authority.ts'));
 await setAgentApiKey(AGENT, 'sk-ant-test-' + randomBytes(12).toString('hex'));
 // The primary agent answers interactive chat with a (stubbed) paid provider.
@@ -158,8 +158,8 @@ test('local model (Ollama) is free: a small-agent run completes with cap 0', asy
   const res = await app.inject({ method: 'POST', url: '/api/small-agent/runs', headers: bearer('cb-owner'), payload: { task: 'When is the release?', kind: 'lookup' } });
   assert.equal(res.statusCode, 201, res.body);
   const id = res.json().run_id;
-  for (let i = 0; i < 400 && runs.getRun(id)?.status !== 'completed'; i++) await sleep(20);
-  const run = runs.getRun(id);
+  for (let i = 0; i < 400 && (await runs.getRun(id))?.status !== 'completed'; i++) await sleep(20);
+  const run = await runs.getRun(id);
   assert.equal(run.status, 'completed', run.status_reason);
   assert.equal(run.cost_cents, 0);
   const s = stepsOf(id)[0];
@@ -212,11 +212,11 @@ test('usage per step is recorded from the provider; the per-run cost limit stops
 test('daily cap reached: the next autonomous paid call is refused; open reservations count', async () => {
   process.env.MODEL_PRICES_JSON = JSON.stringify({ claude: { default: { input: 1, output: 1 } } });
   try {
-    const spent = budget.spentCents();
+    const spent = await budget.spentCents();
     assert.equal(spent, 9, 'recorded spend of today');
     // A reservation left by a crash keeps counting (the provider may have billed it).
     db.prepare(`INSERT INTO paid_usage (day, provider, model, purpose, status, estimated_cents) VALUES (?, 'claude', 'x', 'task_run', 'reserved', 1)`).run(budget.utcDay());
-    assert.equal(budget.spentCents(), 10);
+    assert.equal(await budget.spentCents(), 10);
     process.env.DAILY_PAID_CAP_CENTS = '10';
     const before = calls.task;
     const { run } = await runScenario('C');

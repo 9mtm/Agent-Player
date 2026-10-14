@@ -77,7 +77,7 @@ tools.registerExtensionTool({
   async execute() { ran.push('demo_safe'); return { content: [{ type: 'text', text: 'ran' }] }; },
 });
 const avail = tools.createToolsRegistry({ workspaceDir: dir }).listRegistered();
-grants.setAgentGrants('ap-agent', { grants: ['demo_send', 'demo_risky', 'demo_safe', 'memory_search'] }, 'ap-owner', avail);
+await grants.setAgentGrants('ap-agent', { grants: ['demo_send', 'demo_risky', 'demo_safe', 'memory_search'] }, 'ap-owner', avail);
 await setAgentApiKey('ap-agent', 'sk-ant-test-' + randomBytes(12).toString('hex'));
 
 const app = Fastify();
@@ -197,14 +197,14 @@ test('expired requests cannot be approved; revoked grants are re-checked at appr
   assert.equal(db.prepare('SELECT status FROM tool_approvals WHERE id = ?').get(old).status, 'expired');
 
   const id = await requestSend('chat-6');
-  grants.setAgentGrants('ap-agent', { grants: ['demo_risky', 'demo_safe', 'memory_search'] }, 'ap-owner', avail);
+  await grants.setAgentGrants('ap-agent', { grants: ['demo_risky', 'demo_safe', 'memory_search'] }, 'ap-owner', avail);
   try {
     const res = await approve(id);
     assert.equal(res.statusCode, 200);
     assert.equal(res.json().approval.status, 'failed');
     assert.equal(sent.length, 0, 'not run after the grant was removed');
   } finally {
-    grants.setAgentGrants('ap-agent', { grants: ['demo_send', 'demo_risky', 'demo_safe', 'memory_search'] }, 'ap-owner', avail);
+    await grants.setAgentGrants('ap-agent', { grants: ['demo_send', 'demo_risky', 'demo_safe', 'memory_search'] }, 'ap-owner', avail);
   }
 });
 
@@ -229,7 +229,7 @@ test('chat: a model-emitted risky call returns "waiting for approval" and does n
   const result = modelRequests[1].messages.at(-1).content.find((b) => b.type === 'tool_result');
   assert.match(JSON.stringify(result.content), /Waiting for owner approval/);
   assert.notEqual(result.is_error, true);
-  const pending = approvals.listApprovals({ status: 'pending' }).filter((a) => a.paramsPreview?.to === 'chat-7');
+  const pending = (await approvals.listApprovals({ status: 'pending' })).filter((a) => a.paramsPreview?.to === 'chat-7');
   assert.equal(pending.length, 1);
 });
 
@@ -237,7 +237,7 @@ test('full view shows the exact parameters; lossy list previews are marked trunc
   const long = 'L'.repeat(1000);
   const res = await quietly(() => registry().execute('demo_send', { to: 'chat-8', text: long, extra: { nested: ['a', { deep: 1 }] }, apiKey: 'sk-secret-' + 'x'.repeat(20) }));
   const id = res.details.approvalId;
-  const item = approvals.listApprovals({ status: 'pending' }).find((a) => a.id === id);
+  const item = (await approvals.listApprovals({ status: 'pending' })).find((a) => a.id === id);
   assert.equal(item.truncated, true);
   const full = await detail(id);
   assert.equal(full.params.text, long, 'exact long text');
@@ -247,7 +247,7 @@ test('full view shows the exact parameters; lossy list previews are marked trunc
   assert.deepEqual(full.maskedFields, ['apiKey']);
   assert.match(full.paramsHash, /^[0-9a-f]{64}$/);
   const short = await requestSend('chat-short', 'hi');
-  assert.equal(approvals.listApprovals({ status: 'pending' }).find((a) => a.id === short).truncated, false);
+  assert.equal((await approvals.listApprovals({ status: 'pending' })).find((a) => a.id === short).truncated, false);
 });
 
 test('approve must carry the hash of the shown parameters; changed parameters never run', async () => {
@@ -292,7 +292,7 @@ test('CL-01: only secret string leaves are masked; objects are walked; generic `
   assert.equal(full.params.credentials.keys[1].masked, true);
   assert.deepEqual(full.maskedFields.sort(), ['auth.token', 'credentials.keys[0]', 'credentials.keys[1]', 'credentials.password', 'credentials.username'].sort());
   assert.ok(!JSON.stringify(full).includes(secret), 'secret never in the response');
-  const listed = approvals.listApprovals({ status: 'pending' }).find((a) => a.id === res.details.approvalId);
+  const listed = (await approvals.listApprovals({ status: 'pending' })).find((a) => a.id === res.details.approvalId);
   assert.equal(listed.paramsPreview.value, 'visible-value');
   assert.ok(!JSON.stringify(listed).includes(secret));
 });

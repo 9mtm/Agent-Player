@@ -19,10 +19,11 @@
  * expired are claimed again (one worker per run via the atomic claim).
  */
 
-import { getDatabase } from '../db/index.js';
+import { one, sql } from '../repositories/sql-steps.js';
+import { outsidePgTransaction } from '../db/pg/pool.js';
 import { getOrchestrator } from '../multi-agent/index.js';
 import { ClaudeClient } from '../llm/claude-client.js';
-import { createToolsRegistry } from '../tools/index.js';
+import { createAgentToolsRegistry } from '../tools/index.js';
 import { approvalCategory } from '../tools/approvals.js';
 import type { ToolResult } from '../tools/types.js';
 import { UNKNOWN_PRINCIPAL } from '../tools/grants.js';
@@ -138,15 +139,15 @@ interface ModelDriver {
   toolResultMessages(results: Array<{ id: string; tool: string; result: ToolResult; text: string }>): LoopMessage[];
 }
 
-function loadAgent(agentId: string): AgentRow | undefined {
-  return getDatabase().prepare(`
+function loadAgent(agentId: string): Promise<AgentRow | undefined> {
+  return sql().read(one<AgentRow>(`
     SELECT id, name, model, provider, system_prompt, temperature, max_tokens, cron_schedule, cron_enabled
     FROM agents_config WHERE id = ?
-  `).get(agentId) as AgentRow | undefined;
+  `, agentId));
 }
 
-function hasToolSteps(runId: string): boolean {
-  return !!getDatabase().prepare(`SELECT 1 FROM task_run_steps WHERE run_id = ? AND kind = 'tool' LIMIT 1`).get(runId);
+async function hasToolSteps(runId: string): Promise<boolean> {
+  return !!(await sql().read(one(`SELECT 1 AS ok FROM task_run_steps WHERE run_id = ? AND kind = 'tool' LIMIT 1`, runId)));
 }
 
 function approvalOutcome(a: { status: string; result_preview: string | null; error: string | null }): ToolResult {
@@ -252,7 +253,7 @@ function ollamaDriver(agent: AgentRow, systemPrompt: string, tools: any[]): Mode
  * never get here, so they cost nothing.
  */
 async function gatedStepCall(driver: ModelDriver, messages: LoopMessage[], runId: string, stepIndex: number): Promise<StoredModelResponse> {
-  const run = getRun(runId);
+  const run = await getRun(runId);
   let gated;
   try {
     // R2.2: the shared gate of src/llm/model-call.ts (reserve -> call -> record / release).
@@ -272,7 +273,7 @@ async function gatedStepCall(driver: ModelDriver, messages: LoopMessage[], runId
   }
   const { response, used, ticket } = gated;
   try {
-    recordStepUsage(runId, stepIndex, { provider: ticket.provider, model: driver.model, inputTokens: used.inputTokens, outputTokens: used.outputTokens, costCents: used.costCents, source: used.source });
+    await recordStepUsage(runId, stepIndex, { provider: ticket.provider, model: driver.model, inputTokens: used.inputTokens, outputTokens: used.outputTokens, costCents: used.costCents, source: used.source });
   } catch { /* usage bookkeeping must not fail the step */ }
   return response;
 }
@@ -282,36 +283,38 @@ async function gatedStepCall(driver: ModelDriver, messages: LoopMessage[], runId
  * when another worker holds a live lease.
  */
 export async function executeTaskRun(runId: string, owner: string = WORKER_ID): Promise<AttemptResult> {
-  const lease = claimRun(runId, owner);
+  const lease = await claimRun(runId, owner);
   if (!lease) return { status: 'not_claimed' };
 
   let lost = false;
+  // Fire-and-forget renewal: always on the pool, never inside a transaction
+  // that happens to be open when the timer was created (B2.2b-3).
   const hb = setInterval(() => {
-    try { if (!heartbeat(lease)) lost = true; } catch { lost = true; }
+    outsidePgTransaction(() => heartbeat(lease)).then((ok) => { if (!ok) lost = true; }, () => { lost = true; });
   }, runDefaults().heartbeatMs);
   hb.unref?.();
 
-  const run = getRun(runId)!;
+  const run = (await getRun(runId))!;
   const taskId = run.task_id;
   const orchestrator = getOrchestrator();
 
   const fail = async (reason: string, agentId: string, noRetry = false): Promise<AttemptResult> => {
-    if (!finishAttempt(lease, 'failed', reason)) return { status: 'lease_lost' };
+    if (!(await finishAttempt(lease, 'failed', reason))) return { status: 'lease_lost' };
     // A cost refusal would only be refused again: never auto-retry it.
-    orchestrator.failTask(taskId, reason, { noRetry: noRetry || hasToolSteps(runId) });
+    orchestrator.failTask(taskId, reason, { noRetry: noRetry || (await hasToolSteps(runId)) });
     await logActivity({ agentId, taskId, actionType: 'task_failed', summary: reason.slice(0, 200) });
     return { status: 'failed', reason, output: reason };
   };
 
   try {
-    const agent = loadAgent(run.agent_id);
+    const agent = await loadAgent(run.agent_id);
     if (!agent) return await fail(`Agent "${run.agent_id}" no longer exists.`, run.agent_id);
     if (!orchestrator.getTask(taskId)) return await fail(`Task ${taskId} no longer exists.`, agent.id);
 
     const isSmall = agent.id === SMALL_AGENT_ID;
     // SECURITY (S1.2): the agent's current grants, intersected with every
     // agent this task was delegated from; re-checked on every attempt.
-    const registry = createToolsRegistry({
+    const registry = await createAgentToolsRegistry({
       userId: agent.id,
       sessionId: `cron-${taskId}`,
       workspaceDir: process.cwd(),
@@ -327,7 +330,7 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
       // MCP-01: the small local agent. Tools = what the run was given at
       // spawn ∩ the agent's grants now (never wider); only the stored
       // drawers; memory of the owner who spawned it.
-      const scope = smallAgentRunScope(run, registry.getContext().grants!, registry.listRegistered());
+      const scope = await smallAgentRunScope(run, registry.getContext().grants!, registry.listRegistered());
       // MCP-01b: `read` only in the owner-chosen directory (or the agent's own
       // workspace); prompt, model and sampling are the built-in ones, never
       // the editable agents_config row.
@@ -431,8 +434,8 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
       if (!contract) break;
       // R1: deterministic verification of this round. A stored verdict (an
       // earlier attempt got this far) is replayed, never judged again.
-      const stored = getVerification(runId, round);
-      const v = stored ?? storeVerification(lease, round, verifyResult(contract, finalContent, {
+      const stored = await getVerification(runId, round);
+      const v = stored ?? await storeVerification(lease, round, verifyResult(contract, finalContent, {
         agentId: agent.id,
         toolCalls: await successfulToolCalls(runId),
       }), 'deterministic-checks/v1');
@@ -445,10 +448,10 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
       round++;
     }
 
-    if (verdict) setRunVerification(lease, verdict.status, verdict.reasons);
+    if (verdict) await setRunVerification(lease, verdict.status, verdict.reasons);
     // The run is recorded completed first (fenced): a crash after this point
     // never runs the task again.
-    if (!finishAttempt(lease, 'completed', null, finalContent.slice(0, 500))) return { status: 'lease_lost' };
+    if (!(await finishAttempt(lease, 'completed', null, finalContent.slice(0, 500)))) return { status: 'lease_lost' };
     if (verdict?.status === 'failed_verification') {
       const reason = `verification failed: ${verdict.reasons.join('; ')}`.slice(0, 500);
       orchestrator.failTask(taskId, reason, { noRetry: true });
@@ -467,8 +470,8 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
     if (isSmall) {
       // MCP-01: important small-agent outputs are reviewed by a large agent.
       try {
-        const card = smallAgentCard(runId);
-        if (card?.needs_review) markRunNeedsReview(runId, card.review_reason ?? 'the small-agent card asks for a review');
+        const card = await smallAgentCard(runId);
+        if (card?.needs_review) await markRunNeedsReview(runId, card.review_reason ?? 'the small-agent card asks for a review');
       } catch { /* card unavailable: leave as is */ }
     }
     await logActivity({ agentId: agent.id, taskId, actionType: 'task_completed', summary: finalContent.slice(0, 200) });
@@ -481,12 +484,12 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
       return { status: 'lease_lost' };
     }
     if (err instanceof RunPausedError) {
-      if (!finishAttempt(lease, 'waiting_approval', err.reason)) return { status: 'lease_lost' };
+      if (!(await finishAttempt(lease, 'waiting_approval', err.reason))) return { status: 'lease_lost' };
       await logActivity({ agentId: run.agent_id, taskId, actionType: 'task_started', summary: `Run waiting for the owner (${err.reason})` });
       return { status: 'waiting_approval', reason: err.reason };
     }
     if (err instanceof RunCancelledError) {
-      if (!finishAttempt(lease, 'cancelled', 'cancelled')) return { status: 'lease_lost' };
+      if (!(await finishAttempt(lease, 'cancelled', 'cancelled'))) return { status: 'lease_lost' };
       orchestrator.failTask(taskId, 'cancelled', { cancelled: true });
       return { status: 'cancelled', reason: 'cancelled' };
     }
@@ -512,7 +515,7 @@ export async function executeTaskRun(runId: string, owner: string = WORKER_ID): 
  * runs keep their card output) only gets the decision recorded.
  */
 export async function applyRunReview(runId: string, decision: ReviewDecision, by: string, reviewer: 'owner' | 'large_agent', note: string | null) {
-  const run = reviewRun(runId, decision, by, reviewer, note);
+  const run = await reviewRun(runId, decision, by, reviewer, note);
   const orchestrator = getOrchestrator();
   const task = orchestrator.getTask(run.task_id);
   if (task && task.status === 'review') {
@@ -548,9 +551,9 @@ export async function recoverTaskRuns(owner: string = WORKER_ID): Promise<number
     try {
       do {
         rescan = false;
-        settleCancelledDeadRuns();
-        requeueDecidedApprovalRuns();
-        for (const id of claimableRunIds()) {
+        await settleCancelledDeadRuns();
+        await requeueDecidedApprovalRuns();
+        for (const id of await claimableRunIds()) {
           if (inFlight.has(id)) continue;
           inFlight.add(id);
           try {
@@ -576,7 +579,9 @@ export function startTaskRunRecovery(): void {
   if (recoveryTimer) return;
   const every = Math.max(1_000, runDefaults().leaseMs);
   const pass = () => { recoverTaskRuns().catch((err) => console.warn('[TaskRun] recovery pass failed:', err?.message)); };
-  setRecoveryKick(() => setImmediate(pass));
+  // Fire-and-forget: the kick may come from inside a caller's transaction
+  // (an approval or owner decision); the pass always runs on the pool.
+  setRecoveryKick(() => setImmediate(() => outsidePgTransaction(pass)));
   recoveryTimer = setInterval(pass, every);
   recoveryTimer.unref?.();
   pass();

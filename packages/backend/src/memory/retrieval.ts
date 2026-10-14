@@ -34,8 +34,8 @@ function isValidClaudeKey(key: string): boolean {
  * Claude config for memory extraction, from the credential authority (S1.1).
  * The authority keeps the historical source so no new paid calls start.
  */
-function getClaudeConfig(): { apiKey: string; model: string } | null {
-  const config = getMemoryExtractionClaudeConfig();
+async function getClaudeConfig(): Promise<{ apiKey: string; model: string } | null> {
+  const config = await getMemoryExtractionClaudeConfig();
   if (!config) return null;
   if (!isValidClaudeKey(config.apiKey)) {
     console.warn('[Memory] Claude API key is not valid (does not start with sk-ant-)');
@@ -87,7 +87,7 @@ function parseExtractions(rawText: string): MemoryExtractionResult[] {
 async function extractWithModel(text: string, userId: string): Promise<MemoryExtractionResult[]> {
   const prompt = EXTRACTION_PROMPT(text);
   // The paid key is only read when the owner opted this purpose in.
-  const paidConfig = backgroundPaidPurposes().has('memory_extraction') ? getClaudeConfig() : null;
+  const paidConfig = backgroundPaidPurposes().has('memory_extraction') ? await getClaudeConfig() : null;
   const paid = paidConfig ? { provider: 'claude' as const, model: paidConfig.model, apiKey: paidConfig.apiKey } : null;
   const ctx = { actor: userId };
   const first = await modelCall(ctx, { purpose: 'memory_extraction', prompt, maxOutputTokens: 1024, paid, timeoutMs: 60_000 });

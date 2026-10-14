@@ -14,7 +14,8 @@
  */
 
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { getDatabase } from '../db/index.js';
+import { all, dialect, one, run, sql, type Step } from '../repositories/sql-steps.js';
+import { isParam, nowPlusText, nowText, offset } from '../db/pg/dialect.js';
 import { getEncryptionService } from '../credentials/encryption.js';
 import { isSecretKey } from '../credentials/secret-mask.js';
 import type { Tool, ToolResult, ToolExecutionContext } from './types.js';
@@ -271,11 +272,14 @@ function toRecord(row: any): ApprovalRecord {
   };
 }
 
-function expireOld(): void {
-  getDatabase().prepare(
-    `UPDATE tool_approvals SET status = 'expired' WHERE status = 'pending' AND requested_at < datetime('now', ?)`
-  ).run(`-${APPROVAL_TTL_HOURS} hours`);
+/** requested_at is TEXT ('YYYY-MM-DD HH:MM:SS', UTC) on both drivers. */
+function* expireOldStep(): Step<void> {
+  const d = yield* dialect();
+  yield* run(`UPDATE tool_approvals SET status = 'expired' WHERE status = 'pending' AND requested_at < ${nowPlusText(d)}`,
+    offset(-APPROVAL_TTL_HOURS, 'hours'));
 }
+
+const expireOld = () => sql().read(expireOldStep());
 
 /**
  * Store a pending approval for a tool call and return the result the agent
@@ -287,11 +291,11 @@ export async function requestApproval(
   context: ToolExecutionContext,
   category: ApprovalCategory
 ): Promise<ToolResult> {
-  const db = getDatabase();
   const agentId = context.agentId ?? null;
-  const pending = (db.prepare(
-    `SELECT COUNT(*) AS n FROM tool_approvals WHERE status = 'pending' AND agent_id IS ?`
-  ).get(agentId) as { n: number }).n;
+  const pending = await sql().read((function* () {
+    const d = yield* dialect();
+    return (yield* one<{ n: number }>(`SELECT COUNT(*) AS n FROM tool_approvals WHERE status = 'pending' AND agent_id ${isParam(d)}`, agentId))!.n;
+  })());
   if (pending >= MAX_PENDING_PER_AGENT) {
     return {
       content: [{ type: 'text', text: `Tool "${tool.name}" was not run: too many approval requests are already waiting for the owner. Do not retry; tell the user.` }],
@@ -309,18 +313,18 @@ export async function requestApproval(
   const origin = policy
     ? JSON.stringify({ channel: policy.channel, conversationId: policy.conversationId, allowedDestinations: policy.allowedDestinations })
     : null;
-  db.prepare(`
+  await sql().read(run(`
     INSERT INTO tool_approvals (id, status, agent_id, user_id, session_id, tool_name, category,
       params_encrypted, params_iv, params_tag, params_preview, origin, delegated_from,
       params_hash, params_salt, preview_truncated, run_scope, run_id, run_step)
     VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `,
     id, agentId, context.userId ?? null, context.sessionId ?? null, tool.name, category,
     encrypted, iv, authTag, preview, origin,
     context.delegatedFrom?.length ? JSON.stringify(context.delegatedFrom) : null,
     hash, salt, truncated ? 1 : 0, canonicalJson(runScope),
     runScope.runId ?? null, runScope.runStep ?? null,
-  );
+  ));
   console.log(`[Approvals] ⏸️  Pending approval ${id} for ${tool.name} (agent ${agentId ?? '(none)'})`);
 
   return {
@@ -334,18 +338,18 @@ export async function requestApproval(
   };
 }
 
-export function listApprovals(filter: { status?: string; limit?: number } = {}): ApprovalRecord[] {
-  expireOld();
+export async function listApprovals(filter: { status?: string; limit?: number } = {}): Promise<ApprovalRecord[]> {
+  await expireOld();
   const limit = Math.min(Math.max(Number(filter.limit) || 100, 1), 500);
   const rows = filter.status
-    ? getDatabase().prepare(`SELECT * FROM tool_approvals WHERE status = ? ORDER BY requested_at DESC LIMIT ?`).all(filter.status, limit)
-    : getDatabase().prepare(`SELECT * FROM tool_approvals ORDER BY requested_at DESC LIMIT ?`).all(limit);
-  return (rows as any[]).map(toRecord);
+    ? await sql().read(all(`SELECT * FROM tool_approvals WHERE status = ? ORDER BY requested_at DESC LIMIT ?`, filter.status, limit))
+    : await sql().read(all(`SELECT * FROM tool_approvals ORDER BY requested_at DESC LIMIT ?`, limit));
+  return rows.map(toRecord);
 }
 
-export function getApproval(id: string): ApprovalRecord | null {
-  expireOld();
-  const row = getDatabase().prepare('SELECT * FROM tool_approvals WHERE id = ?').get(id);
+export async function getApproval(id: string): Promise<ApprovalRecord | null> {
+  await expireOld();
+  const row = await sql().read(one('SELECT * FROM tool_approvals WHERE id = ?', id));
   return row ? toRecord(row) : null;
 }
 
@@ -362,8 +366,8 @@ export interface ApprovalDetail extends ApprovalRecord {
 
 /** Full view for the owner (decrypts the stored parameters). */
 export async function getApprovalDetail(id: string): Promise<ApprovalDetail | null> {
-  expireOld();
-  const row = getDatabase().prepare('SELECT * FROM tool_approvals WHERE id = ?').get(id) as any;
+  await expireOld();
+  const row = await sql().read(one('SELECT * FROM tool_approvals WHERE id = ?', id));
   if (!row) return null;
   let params: unknown = null;
   let maskedFields: string[] = [];
@@ -383,15 +387,16 @@ export class ApprovalStateError extends Error {
 }
 
 /** Deny a pending approval. It will never run. */
-export function denyApproval(id: string, ownerId: string): ApprovalRecord {
-  expireOld();
-  const res = getDatabase().prepare(
-    `UPDATE tool_approvals SET status = 'denied', decided_at = datetime('now'), decided_by = ? WHERE id = ? AND status = 'pending'`
-  ).run(ownerId, id);
-  const record = getApproval(id);
+export async function denyApproval(id: string, ownerId: string): Promise<ApprovalRecord> {
+  await expireOld();
+  const res = await sql().read((function* () {
+    const d = yield* dialect();
+    return yield* run(`UPDATE tool_approvals SET status = 'denied', decided_at = ${nowText(d)}, decided_by = ? WHERE id = ? AND status = 'pending'`, ownerId, id);
+  })());
+  const record = await getApproval(id);
   if (!record) throw new ApprovalStateError('Approval not found', 404);
   if (res.changes !== 1) throw new ApprovalStateError(`Approval is ${record.status}, not pending`, 409);
-  onApprovalDecided(id);
+  await onApprovalDecided(id);
   return record;
 }
 
@@ -401,26 +406,32 @@ export function denyApproval(id: string, ownerId: string): ApprovalRecord {
  * the exec gate and (for channel turns) the channel policy are checked again.
  */
 export async function approveAndRun(id: string, ownerId: string, expectedHash: unknown): Promise<{ record: ApprovalRecord; result: ToolResult }> {
-  expireOld();
-  const db = getDatabase();
-  const current = db.prepare('SELECT status, params_hash FROM tool_approvals WHERE id = ?').get(id) as { status: string; params_hash: string | null } | undefined;
+  await expireOld();
+  const current = await sql().read(one<{ status: string; params_hash: string | null }>('SELECT status, params_hash FROM tool_approvals WHERE id = ?', id));
   if (!current) throw new ApprovalStateError('Approval not found', 404);
   if (current.status === 'pending' && !sameHash(current.params_hash, expectedHash)) {
     // The owner must approve exactly what they saw in the full view.
     throw new ApprovalStateError('paramsHash does not match the stored parameters; open the full view and approve again', 409);
   }
-  const claimed = db.prepare(
-    `UPDATE tool_approvals SET status = 'approved', decided_at = datetime('now'), decided_by = ? WHERE id = ? AND status = 'pending' AND params_hash = ?`
-  ).run(ownerId, id, typeof expectedHash === 'string' ? expectedHash : '');
-  const row = db.prepare('SELECT * FROM tool_approvals WHERE id = ?').get(id) as any;
+  // One UPDATE claims the approval: on PostgreSQL a concurrent approve waits on
+  // the row lock, then sees it no longer 'pending' (runs at most once).
+  const claimed = await sql().read((function* () {
+    const d = yield* dialect();
+    return yield* run(`UPDATE tool_approvals SET status = 'approved', decided_at = ${nowText(d)}, decided_by = ? WHERE id = ? AND status = 'pending' AND params_hash = ?`,
+      ownerId, id, typeof expectedHash === 'string' ? expectedHash : '');
+  })());
+  const row = await sql().read(one('SELECT * FROM tool_approvals WHERE id = ?', id));
   if (!row) throw new ApprovalStateError('Approval not found', 404);
   if (claimed.changes !== 1) throw new ApprovalStateError(`Approval is ${row.status}, not pending`, 409);
 
-  const finish = (status: 'executed' | 'failed', resultPreview: string | null, error: string | null) => {
-    db.prepare(`UPDATE tool_approvals SET status = ?, executed_at = datetime('now'), result_preview = ?, error = ? WHERE id = ?`)
-      .run(status, resultPreview, error, id);
+  const finish = async (status: 'executed' | 'failed', resultPreview: string | null, error: string | null) => {
+    await sql().read((function* () {
+      const d = yield* dialect();
+      yield* run(`UPDATE tool_approvals SET status = ?, executed_at = ${nowText(d)}, result_preview = ?, error = ? WHERE id = ?`,
+        status, resultPreview, error, id);
+    })());
     // CORE-08: a run waiting on this approval continues (result replayed, never re-run).
-    onApprovalDecided(id);
+    await onApprovalDecided(id);
   };
 
   let params: Record<string, any>;
@@ -429,14 +440,14 @@ export async function approveAndRun(id: string, ownerId: string, expectedHash: u
     const plain = await getEncryptionService().decrypt(row.params_encrypted, row.params_iv, row.params_tag);
     params = JSON.parse(plain);
     if (runScope === 'invalid' || !row.params_salt || !sameHash(paramsHash(row.params_salt, hashedPayload(params, runScope)), row.params_hash)) {
-      finish('failed', null, 'Stored parameters changed after the request');
+      await finish('failed', null, 'Stored parameters changed after the request');
       const result: ToolResult = { content: [{ type: 'text', text: 'Approval failed: the parameters changed after the request; nothing was run.' }], error: 'params mismatch' };
-      return { record: getApproval(id)!, result };
+      return { record: (await getApproval(id))!, result };
     }
   } catch {
-    finish('failed', null, 'Stored parameters could not be decrypted');
+    await finish('failed', null, 'Stored parameters could not be decrypted');
     const result: ToolResult = { content: [{ type: 'text', text: 'Approval failed: stored parameters could not be read.' }], error: 'decrypt failed' };
-    return { record: getApproval(id)!, result };
+    return { record: (await getApproval(id))!, result };
   }
 
   let toolPolicy: ChannelToolPolicy | undefined;
@@ -457,13 +468,13 @@ export async function approveAndRun(id: string, ownerId: string, expectedHash: u
   // CORE-08: the call keeps the idempotency key of the run step that asked.
   let taskRun: ToolExecutionContext['taskRun'];
   if (runScope && typeof runScope === 'object' && runScope.runId && Number.isInteger(runScope.runStep)) {
-    const step = db.prepare('SELECT idempotency_key FROM task_run_steps WHERE run_id = ? AND step_index = ?')
-      .get(runScope.runId, runScope.runStep) as { idempotency_key: string } | undefined;
+    const step = await sql().read(one<{ idempotency_key: string }>('SELECT idempotency_key FROM task_run_steps WHERE run_id = ? AND step_index = ?',
+      runScope.runId, runScope.runStep ?? null));
     if (step) taskRun = { runId: runScope.runId, stepIndex: runScope.runStep!, idempotencyKey: step.idempotency_key };
   }
 
-  const { createToolsRegistry } = await import('./index.js');
-  const registry = createToolsRegistry({
+  const { createAgentToolsRegistry } = await import('./index.js');
+  const registry = await createAgentToolsRegistry({
     workspaceDir: process.cwd(),
     userId: row.user_id ?? undefined,
     sessionId: row.session_id ?? undefined,
@@ -482,6 +493,6 @@ export async function approveAndRun(id: string, ownerId: string, expectedHash: u
     liveTickets.delete(ticket);
   }
   const text = (result.content || []).filter((b) => b.type === 'text').map((b) => b.text || '').join('\n');
-  finish(result.error ? 'failed' : 'executed', text.slice(0, 500) || null, result.error ? String(result.error).slice(0, 300) : null);
-  return { record: getApproval(id)!, result };
+  await finish(result.error ? 'failed' : 'executed', text.slice(0, 500) || null, result.error ? String(result.error).slice(0, 300) : null);
+  return { record: (await getApproval(id))!, result };
 }

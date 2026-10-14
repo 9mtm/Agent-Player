@@ -13,7 +13,8 @@
  *
  * Before a paid autonomous call, its worst case (estimated input tokens +
  * max output tokens) is RESERVED in `paid_usage` inside one immediate
- * transaction, so two workers cannot both pass the cap. After the call the
+ * transaction (SQLite BEGIN IMMEDIATE; PostgreSQL a transaction-scoped
+ * advisory lock), so two workers cannot both pass the cap. After the call the
  * reservation is replaced by the provider-reported usage (or the estimate
  * when the provider reports none); a call that failed releases it. A
  * reservation left by a crash keeps counting (we cannot know whether the
@@ -25,7 +26,15 @@
  * recorded separately (`interactive_usage`) and shown by budgetView().
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, dialect, one, run, sql, type Step } from '../repositories/sql-steps.js';
+import { nowText, returningId } from '../db/pg/dialect.js';
+
+/**
+ * pg_advisory_xact_lock key of the paid-call reservation (PostgreSQL): the
+ * check of the cap and the insert of the reservation run one at a time, as
+ * BEGIN IMMEDIATE does on SQLite. ('AP' 'B$' in hex; db/pg/migrate.ts uses 'AP_M'.)
+ */
+export const BUDGET_LOCK_KEY = 0x41504224;
 
 export interface Price { input: number; output: number }
 interface ProviderPrices { default: Price; models?: Array<{ match: string; price: Price }> }
@@ -148,20 +157,24 @@ export function utcDay(now = Date.now()): string {
 }
 
 /** Spend of a day in cents: recorded usage plus open reservations (worst case). */
-export function spentCents(day = utcDay()): number {
-  const row = getDatabase().prepare(`
+function* spentStep(day: string): Step<number> {
+  const row = yield* one<{ c: number }>(`
     SELECT COALESCE(SUM(CASE WHEN status = 'reserved' THEN estimated_cents WHEN status = 'recorded' THEN cost_cents ELSE 0 END), 0) AS c
     FROM paid_usage WHERE day = ?
-  `).get(day) as { c: number };
-  return Math.round(row.c * 10_000) / 10_000;
+  `, day);
+  return Math.round(Number(row!.c) * 10_000) / 10_000;
 }
 
-function runSpentCents(runId: string): number {
-  const row = getDatabase().prepare(`
+export function spentCents(day = utcDay()): Promise<number> {
+  return sql().read(spentStep(day));
+}
+
+function* runSpentStep(runId: string): Step<number> {
+  const row = yield* one<{ c: number }>(`
     SELECT COALESCE(SUM(CASE WHEN status = 'reserved' THEN estimated_cents WHEN status = 'recorded' THEN cost_cents ELSE 0 END), 0) AS c
     FROM paid_usage WHERE run_id = ?
-  `).get(runId) as { c: number };
-  return row.c;
+  `, runId);
+  return Number(row!.c);
 }
 
 export class CostBudgetError extends Error {
@@ -195,7 +208,7 @@ export interface PaidCallTicket {
  * Check the budget before an autonomous model call and reserve its worst
  * case. Free providers pass without a reservation. Throws CostBudgetError.
  */
-export function reservePaidCall(req: PaidCallRequest, now = Date.now()): PaidCallTicket {
+export async function reservePaidCall(req: PaidCallRequest, now = Date.now()): Promise<PaidCallTicket> {
   const price = priceFor(req.provider, req.model);
   const estimatedInputTokens = estimateTokens(req.payload);
   const estimatedCents = costCents(price, estimatedInputTokens, Math.max(1, req.maxOutputTokens || 0));
@@ -204,26 +217,29 @@ export function reservePaidCall(req: PaidCallRequest, now = Date.now()): PaidCal
 
   const day = utcDay(now);
   const cap = dailyCapCents();
-  const raw = getDatabase().getDb();
-  const id = raw.transaction(() => {
-    const spent = spentCents(day);
+  const id = await sql().tx(function* () {
+    const d = yield* dialect();
+    if (d === 'postgres') yield* one('SELECT pg_advisory_xact_lock(?)', BUDGET_LOCK_KEY);
+    const spent = yield* spentStep(day);
     if (spent + estimatedCents > cap) {
       throw new CostBudgetError('daily_cap', cap === 0
         ? 'daily paid cap is 0: autonomous paid model calls are off until the owner sets DAILY_PAID_CAP_CENTS'
         : `daily paid cap ${cap} cents would be exceeded (spent ${spent.toFixed(2)}, this call up to ${estimatedCents.toFixed(2)})`);
     }
     if (req.runId && req.runLimitCents !== null && req.runLimitCents !== undefined) {
-      const used = runSpentCents(req.runId);
+      const used = yield* runSpentStep(req.runId);
       if (used + estimatedCents > req.runLimitCents) {
         throw new CostBudgetError('run_limit', `max cost ${req.runLimitCents} cents would be exceeded (used ${used.toFixed(2)}, this call up to ${estimatedCents.toFixed(2)})`);
       }
     }
-    const res = raw.prepare(`
+    // RETURNING id instead of lastInsertRowid (paid_usage.id is the INTEGER
+    // PRIMARY KEY on SQLite, an identity column on PostgreSQL).
+    const row = yield* one<{ id: number }>(returningId(d, `
       INSERT INTO paid_usage (day, provider, model, run_id, step_index, purpose, status, estimated_cents)
       VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?)
-    `).run(day, base.provider, base.model, req.runId ?? null, req.stepIndex ?? null, req.purpose, estimatedCents);
-    return Number(res.lastInsertRowid);
-  }).immediate();
+    `), day, base.provider, base.model, req.runId ?? null, req.stepIndex ?? null, req.purpose, estimatedCents);
+    return Number(row!.id);
+  }, { immediate: true });
   return { id, ...base, paid: true };
 }
 
@@ -234,25 +250,33 @@ export interface RecordedUsage {
 }
 
 /** Replace a reservation by the real usage (provider-reported, else the estimate). */
-export function recordPaidCall(ticket: PaidCallTicket, usage: Usage | null | undefined, outputText = ''): RecordedUsage {
+export async function recordPaidCall(ticket: PaidCallTicket, usage: Usage | null | undefined, outputText = ''): Promise<RecordedUsage> {
   const fromProvider = !!usage && Number.isFinite(usage.inputTokens) && Number.isFinite(usage.outputTokens);
   const inputTokens = fromProvider ? Number(usage!.inputTokens) : ticket.estimatedInputTokens;
   const outputTokens = fromProvider ? Number(usage!.outputTokens) : estimateTokens(outputText);
   const cost = costCents(ticket.price, inputTokens, outputTokens);
   const out: RecordedUsage = { inputTokens, outputTokens, costCents: cost, source: fromProvider ? 'provider' : 'estimate' };
   if (ticket.id !== null) {
-    getDatabase().prepare(`
-      UPDATE paid_usage SET status = 'recorded', cost_cents = ?, input_tokens = ?, output_tokens = ?, usage_source = ?, updated_at = datetime('now')
-      WHERE id = ? AND status = 'reserved'
-    `).run(cost, inputTokens, outputTokens, out.source, ticket.id);
+    const id = ticket.id;
+    await sql().read((function* () {
+      const d = yield* dialect();
+      yield* run(`
+        UPDATE paid_usage SET status = 'recorded', cost_cents = ?, input_tokens = ?, output_tokens = ?, usage_source = ?, updated_at = ${nowText(d)}
+        WHERE id = ? AND status = 'reserved'
+      `, cost, inputTokens, outputTokens, out.source, id);
+    })());
   }
   return out;
 }
 
 /** The call failed before the provider answered: drop its reservation. */
-export function releasePaidCall(ticket: PaidCallTicket): void {
+export async function releasePaidCall(ticket: PaidCallTicket): Promise<void> {
   if (ticket.id === null) return;
-  getDatabase().prepare(`UPDATE paid_usage SET status = 'released', updated_at = datetime('now') WHERE id = ? AND status = 'reserved'`).run(ticket.id);
+  const id = ticket.id;
+  await sql().read((function* () {
+    const d = yield* dialect();
+    yield* run(`UPDATE paid_usage SET status = 'released', updated_at = ${nowText(d)} WHERE id = ? AND status = 'reserved'`, id);
+  })());
 }
 
 export interface BudgetView {
@@ -271,23 +295,22 @@ export interface BudgetView {
   scope: string;
 }
 
-export function budgetView(now = Date.now()): BudgetView {
+export async function budgetView(now = Date.now()): Promise<BudgetView> {
   const day = utcDay(now);
   const cap = dailyCapCents();
-  const db = getDatabase();
-  const spent = spentCents(day);
-  const reserved = (db.prepare(`SELECT COALESCE(SUM(estimated_cents), 0) AS c FROM paid_usage WHERE day = ? AND status = 'reserved'`).get(day) as { c: number }).c;
-  const byProvider = (db.prepare(`
+  const spent = await spentCents(day);
+  const reserved = Number((await sql().read(one<{ c: number }>(`SELECT COALESCE(SUM(estimated_cents), 0) AS c FROM paid_usage WHERE day = ? AND status = 'reserved'`, day)))!.c);
+  const byProvider = await sql().read(all<{ provider: string; calls: number; cents: number }>(`
     SELECT provider, COUNT(*) AS calls,
       COALESCE(SUM(CASE WHEN status = 'reserved' THEN estimated_cents WHEN status = 'recorded' THEN cost_cents ELSE 0 END), 0) AS cents
     FROM paid_usage WHERE day = ? AND status != 'released' GROUP BY provider ORDER BY provider
-  `).all(day) as Array<{ provider: string; calls: number; cents: number }>);
+  `, day));
   let interactiveBy: Array<{ provider: string; calls: number; cents: number }> = [];
   try {
-    interactiveBy = db.prepare(`
+    interactiveBy = await sql().read(all<{ provider: string; calls: number; cents: number }>(`
       SELECT provider, COUNT(*) AS calls, COALESCE(SUM(cost_cents), 0) AS cents
       FROM interactive_usage WHERE day = ? GROUP BY provider ORDER BY provider
-    `).all(day) as Array<{ provider: string; calls: number; cents: number }>;
+    `, day));
   } catch { /* table missing on an old DB: nothing recorded yet */ }
   return {
     day,

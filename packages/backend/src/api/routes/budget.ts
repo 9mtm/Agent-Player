@@ -16,6 +16,6 @@ export async function budgetRoutes(fastify: FastifyInstance) {
     const user = request.authUser;
     if (!user) return reply.code(401).send({ error: 'Authentication required' });
     if (user.role !== 'owner') return reply.code(403).send({ error: 'This action requires the owner account' });
-    return { budget: budgetView() };
+    return { budget: await budgetView() };
   });
 }

@@ -8,7 +8,8 @@
  *   cancel                owner or the run's own user (not agents/services)
  *   resolveStep / review  owner only
  *
- * SQLite implementation over services/task-runs.ts (sync under the hood).
+ * Over services/task-runs.ts, on the process driver (B2.2b-3: SQLite or
+ * PostgreSQL through repositories/sql-steps.ts).
  */
 
 import type { Actor } from './actor.js';
@@ -40,8 +41,8 @@ export interface TaskRunsRepository {
 
 const NOT_FOUND = 'Run not found';
 
-function visibleRun(actor: Actor, runId: string): TaskRunRow {
-  const run = getRun(runId);
+async function visibleRun(actor: Actor, runId: string): Promise<TaskRunRow> {
+  const run = await getRun(runId);
   if (!run || !canSeeRecord(actor, run.user_id, { ownerWide: true })) throw new ScopeError(404, NOT_FOUND);
   return run;
 }
@@ -50,7 +51,7 @@ function actorId(actor: Actor): string {
   return actor.userId ?? 'system';
 }
 
-export const sqliteTaskRuns: TaskRunsRepository = {
+export const taskRunsRepository: TaskRunsRepository = {
   async list(actor, filter = {}) {
     const a = requireOwnUser(actor);
     // Agent runs never get the owner-wide view, whatever the user's role.
@@ -63,19 +64,19 @@ export const sqliteTaskRuns: TaskRunsRepository = {
   },
 
   async steps(actor, runId) {
-    const run = visibleRun(requireOwnUser(actor), runId);
+    const run = await visibleRun(requireOwnUser(actor), runId);
     return getSteps(run.id);
   },
 
   async detail(actor, runId) {
-    const run = visibleRun(requireOwnUser(actor), runId);
-    return { run: await runDetailView(run), steps: getSteps(run.id) };
+    const run = await visibleRun(requireOwnUser(actor), runId);
+    return { run: await runDetailView(run), steps: await getSteps(run.id) };
   },
 
   async cancel(actor, runId) {
     const a = requireMember(actor);
-    const before = visibleRun(a, runId);
-    return { before, after: cancelRun(before.id, actorId(a)) };
+    const before = await visibleRun(a, runId);
+    return { before, after: await cancelRun(before.id, actorId(a)) };
   },
 
   async resolveStep(actor, runId, stepIndex, outcome) {

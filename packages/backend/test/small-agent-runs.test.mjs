@@ -212,17 +212,17 @@ test('granted tools = requested ∩ safe set ∩ grants; never exec or approval-
 });
 
 test('the owner narrowing the small agent\'s grants narrows every run (also already created ones)', async () => {
-  grants.setAgentGrants(small.SMALL_AGENT_ID, { grants: ['memory_search'] }, 'sa-owner', available());
+  await grants.setAgentGrants(small.SMALL_AGENT_ID, { grants: ['memory_search'] }, 'sa-owner', available());
   try {
     const res = await spawn({ task: 'SCENARIO:plain', tools: ['memory_search', 'read'] });
     assert.deepEqual(res.json().granted_tools, ['memory_search']);
     assert.ok(res.json().warnings.some((w) => /"read".*not granted/.test(w)));
     // A stored grant that the agent no longer has is not used at run time.
-    const scope = small.smallAgentRunScope({ id: res.json().run_id, user_id: 'sa-owner' }, grants.staticGrants(['storage_search']), available());
+    const scope = await small.smallAgentRunScope({ id: res.json().run_id, user_id: 'sa-owner' }, grants.staticGrants(['storage_search']), available());
     assert.deepEqual([...scope.grants.tools.keys()], []);
     await finalCard(res.json().run_id);
   } finally {
-    grants.setAgentGrants(small.SMALL_AGENT_ID, { grants: [...small.SMALL_AGENT_SAFE_TOOLS] }, 'sa-owner', available());
+    await grants.setAgentGrants(small.SMALL_AGENT_ID, { grants: [...small.SMALL_AGENT_SAFE_TOOLS] }, 'sa-owner', available());
   }
 });
 
@@ -250,18 +250,18 @@ test('drawers: only the requested ones an owner turn may open; none requested ->
   assert.ok(body.warnings.some((w) => w.includes('"project:beta"')));
   assert.ok(body.warnings.some((w) => w.includes('"task:t2"')));
   assert.ok(!body.drawers.includes('owner'), 'the owner drawer only when asked for');
-  const scope = small.smallAgentRunScope({ id: body.run_id, user_id: 'sa-owner' }, grants.staticGrants(small.SMALL_AGENT_SAFE_TOOLS), available());
+  const scope = await small.smallAgentRunScope({ id: body.run_id, user_id: 'sa-owner' }, grants.staticGrants(small.SMALL_AGENT_SAFE_TOOLS), available());
   assert.deepEqual(scope.memoryDrawers.map((d) => (d.key ? `${d.kind}:${d.key}` : d.kind)).sort(), body.drawers.sort());
   assert.equal(scope.userId, 'sa-owner');
   await finalCard(body.run_id);
 
   const none = await spawn({ task: 'SCENARIO:plain' });
-  const s2 = small.smallAgentRunScope({ id: none.json().run_id, user_id: 'sa-owner' }, grants.staticGrants(small.SMALL_AGENT_SAFE_TOOLS), available());
+  const s2 = await small.smallAgentRunScope({ id: none.json().run_id, user_id: 'sa-owner' }, grants.staticGrants(small.SMALL_AGENT_SAFE_TOOLS), available());
   assert.deepEqual(s2.memoryDrawers, [], 'no drawers at all (not the owner default)');
   await finalCard(none.json().run_id);
 
   // Unknown run id -> nothing (fail closed).
-  const s3 = small.smallAgentRunScope({ id: 'nope', user_id: 'sa-owner' }, grants.staticGrants(small.SMALL_AGENT_SAFE_TOOLS), available());
+  const s3 = await small.smallAgentRunScope({ id: 'nope', user_id: 'sa-owner' }, grants.staticGrants(small.SMALL_AGENT_SAFE_TOOLS), available());
   assert.equal(s3.grants.tools.size, 0);
   assert.deepEqual(s3.memoryDrawers, []);
 });

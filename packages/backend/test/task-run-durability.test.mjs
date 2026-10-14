@@ -59,7 +59,7 @@ db.prepare(`INSERT INTO agents_config (id, name, provider, model) VALUES (?, ?, 
 const tools = await import(join(backendDir, 'src/tools/index.ts'));
 const grants = await import(join(backendDir, 'src/tools/grants.ts'));
 const avail = tools.createToolsRegistry({ workspaceDir: dir }).listRegistered();
-grants.setAgentGrants(fixture.AGENT_ID, { grants: fixture.STUB_TOOLS }, 'tr-owner', avail);
+await grants.setAgentGrants(fixture.AGENT_ID, { grants: fixture.STUB_TOOLS }, 'tr-owner', avail);
 const { setAgentApiKey } = await import(join(backendDir, 'src/credentials/authority.ts'));
 await setAgentApiKey(fixture.AGENT_ID, 'sk-ant-test-' + randomBytes(12).toString('hex'));
 
@@ -348,7 +348,7 @@ test('task-runs API: owner sees all, others only their own (404), guests refused
   // Owner may cancel anyone's run; a cancelled queued run is never claimed.
   const ownerCancel = await app.inject({ method: 'POST', url: `/api/task-runs/${theirs.id}/cancel`, headers: bearer('tr-owner') });
   assert.equal(ownerCancel.statusCode, 200);
-  assert.equal(runs.claimRun(theirs.id), null);
+  assert.equal(await runs.claimRun(theirs.id), null);
 });
 
 test('cancel a run waiting for approval: its pending approval is denied and can never run', async () => {

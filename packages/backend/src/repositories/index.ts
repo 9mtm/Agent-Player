@@ -5,28 +5,32 @@
  * The driver is chosen once, at load, by db/pg/config.ts dbDriver():
  * SQLite unless AGENT_PLAYER_DB=postgres (with AGENT_PLAYER_PG_URL).
  *
- * B2.2a/B2.2b-1/B2.2b-2 (partial PostgreSQL): on 'postgres' identity
- * (accounts, sign-in, profile, teams and invitations), audit.record, the
- * sign-in throttle and its background prune, the auth gate's token check,
- * the route guards' hooks, credentials (repository, manager, storage) and the
- * encryption vault and key manager use PostgreSQL; agents, memory, task runs
- * and every other non-repository module still use SQLite (so do the
- * agents_config reads of credentials/authority.ts, until agents-config moves
- * in B2.2b-3). So 'postgres' is for the
- * B2 integration tests, not for running the app yet (B2.2b ports the rest).
+ * B2.2a/B2.2b-1/B2.2b-2/B2.2b-3 (partial PostgreSQL): on 'postgres'
+ * identity (accounts, sign-in, profile, teams and invitations), audit.record,
+ * the sign-in throttle and its background prune, the auth gate's token
+ * check, the route guards' hooks, credentials (repository, manager, storage),
+ * the encryption vault and key manager, and (B2.2b-3) agents (configs,
+ * names, personality versions and proposals, tool grants), Evolution
+ * proposals, task runs and their steps, verifications, contracts, tool
+ * approvals, the small agent's runs, the cost budget and the agents_config /
+ * settings reads of credentials/authority.ts use PostgreSQL. Memory and every
+ * other non-repository module still use SQLite (B2.2b-4 and later), so
+ * 'postgres' is for the B2 integration tests, not for running the app yet.
  *
- * Transactions: `withTransaction` (SQLite) stays the export for the SQLite
- * repositories (agents-config); the identity area picks its driver's
- * transaction through its store/runner (sql-runner.ts batch,
- * withPgActorTransaction on PostgreSQL).
+ * Transactions: `withTransaction` chooses by driver (transaction.ts):
+ * withPgActorTransaction on PostgreSQL (async fn; every ported call inside
+ * joins it), the synchronous better-sqlite3 transaction on SQLite. Ported
+ * modules write their multi-statement work as SQL steps
+ * (sql-steps.ts), which run synchronously in db.transaction on SQLite and in
+ * withPgTransaction on PostgreSQL.
  */
 
-import { sqliteAgents, type AgentsRepository } from './agents.js';
+import { agentsRepository, type AgentsRepository } from './agents.js';
 import { sqliteAudit, type AuditRepository } from './audit.js';
 import { sqliteCredentials, type CredentialsRepository } from './credentials.js';
 import { sqliteIdentity, type IdentityRepository } from './identity.js';
 import { sqliteMemory, type MemoryRepository } from './memory.js';
-import { sqliteTaskRuns, type TaskRunsRepository } from './task-runs.js';
+import { taskRunsRepository, type TaskRunsRepository } from './task-runs.js';
 import { pgIdentity } from './pg/identity.js';
 import { pgAudit } from './pg/audit.js';
 import { pgCredentials } from './pg/credentials.js';
@@ -51,9 +55,9 @@ export function repositoriesFor(driver: DbDriver): ScopedRepositories {
   return {
     identity: pg ? pgIdentity : sqliteIdentity,
     credentials: pg ? pgCredentials : sqliteCredentials,
-    agents: sqliteAgents,
+    agents: agentsRepository,
     memory: sqliteMemory,
-    taskRuns: sqliteTaskRuns,
+    taskRuns: taskRunsRepository,
     audit: pg ? pgAudit : sqliteAudit,
   };
 }

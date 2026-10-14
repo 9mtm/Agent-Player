@@ -89,14 +89,14 @@ export async function smallAgentRoutes(fastify: FastifyInstance) {
     if (!user) return reply;
     const { status, limit } = request.query ?? {};
     if (status !== undefined && !STATUSES.has(status)) return reply.code(400).send({ error: 'Invalid status' });
-    return { runs: listSmallAgentRuns({ status, limit: Number(limit) || undefined }), capacity: smallAgentCapacity() };
+    return { runs: await listSmallAgentRuns({ status, limit: Number(limit) || undefined }), capacity: await smallAgentCapacity() };
   });
 
   fastify.get<{ Params: { id: string } }>('/api/small-agent/runs/:id', ownerOnly, async (request, reply) => {
     const user = owner(request, reply);
     if (!user) return reply;
     if (!ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid id' });
-    const card = smallAgentCard(request.params.id);
+    const card = await smallAgentCard(request.params.id);
     if (!card) return reply.code(404).send({ error: 'Run not found' });
     return { card };
   });

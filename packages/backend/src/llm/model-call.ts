@@ -30,7 +30,7 @@
 
 import { ClaudeClient } from './claude-client.js';
 import { DEFAULT_OLLAMA_MODEL, OLLAMA_URL, ollamaThinkOption } from './ollama.js';
-import { getDatabase } from '../db/index.js';
+import { run, sql } from '../repositories/sql-steps.js';
 import {
   CostBudgetError,
   costCents,
@@ -121,15 +121,15 @@ export async function gatedModelCall<T extends { usage?: Usage | null; content?:
   meta: PaidCallRequest,
   call: () => Promise<T>,
 ): Promise<{ response: T; used: RecordedUsage; ticket: PaidCallTicket }> {
-  const ticket = reservePaidCall(meta);
+  const ticket = await reservePaidCall(meta);
   let response: T;
   try {
     response = await call();
   } catch (err) {
-    releasePaidCall(ticket);
+    await releasePaidCall(ticket);
     throw err;
   }
-  const used = recordPaidCall(ticket, response?.usage, response?.content ?? '');
+  const used = await recordPaidCall(ticket, response?.usage, response?.content ?? '');
   return { response, used, ticket };
 }
 
@@ -150,7 +150,7 @@ export async function modelCall(ctx: ModelCallContext, req: ModelCallRequest): P
     if (ctx.interactive) {
       try {
         const r = await send();
-        const used = recordInteractiveUsage({ provider: paid.provider, model: paid.model, usage: r.usage, outputText: r.content, purpose: req.purpose });
+        const used = await recordInteractiveUsage({ provider: paid.provider, model: paid.model, usage: r.usage, outputText: r.content, purpose: req.purpose });
         return { ok: true, text: r.content ?? '', provider: paid.provider, model: paid.model, paid: true, usage: { inputTokens: used.inputTokens, outputTokens: used.outputTokens }, costCents: used.costCents };
       } catch (err) {
         return { ok: false, text: '', provider: paid.provider, model: paid.model, paid: true, usage: null, costCents: 0, error: (err as Error).message };
@@ -212,9 +212,9 @@ export async function modelCall(ctx: ModelCallContext, req: ModelCallRequest): P
  * part of the autonomous daily cap; shown separately by GET /api/budget.
  * Free providers are not recorded. Never throws.
  */
-export function recordInteractiveUsage(input: {
+export async function recordInteractiveUsage(input: {
   provider: string; model?: string | null; usage?: Usage | null; outputText?: string | null; inputEstimate?: unknown; purpose?: string;
-}): RecordedUsage {
+}): Promise<RecordedUsage> {
   const price = priceFor(input.provider, input.model);
   const fromProvider = !!input.usage && Number.isFinite(input.usage.inputTokens) && Number.isFinite(input.usage.outputTokens);
   const inputTokens = fromProvider ? Number(input.usage!.inputTokens) : 0;
@@ -223,11 +223,11 @@ export function recordInteractiveUsage(input: {
   const out: RecordedUsage = { inputTokens, outputTokens, costCents: cost, source: fromProvider ? 'provider' : 'estimate' };
   if (price.input <= 0 && price.output <= 0) return out;
   try {
-    getDatabase().prepare(`
+    await sql().read(run(`
       INSERT INTO interactive_usage (day, provider, model, purpose, cost_cents, input_tokens, output_tokens, usage_source)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(utcDay(), String(input.provider).toLowerCase() === 'anthropic' ? 'claude' : String(input.provider).toLowerCase(), input.model ?? null,
-      input.purpose || 'interactive_chat', cost, inputTokens, outputTokens, out.source);
+    `, utcDay(), String(input.provider).toLowerCase() === 'anthropic' ? 'claude' : String(input.provider).toLowerCase(), input.model ?? null,
+      input.purpose || 'interactive_chat', cost, inputTokens, outputTokens, out.source));
   } catch (err) {
     console.warn('[ModelCall] could not record interactive usage:', (err as Error).message);
   }

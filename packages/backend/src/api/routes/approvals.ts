@@ -72,7 +72,7 @@ export async function approvalsRoutes(fastify: FastifyInstance) {
     if (ownerOf(request, reply) === null) return reply;
     const status = request.query?.status;
     if (status !== undefined && !STATUSES.has(status)) return reply.code(400).send({ error: 'Invalid status' });
-    return { approvals: listApprovals({ status, limit: Number(request.query?.limit) || undefined }).map(view) };
+    return { approvals: (await listApprovals({ status, limit: Number(request.query?.limit) || undefined })).map(view) };
   });
 
   fastify.get<{ Params: { id: string } }>('/api/approvals/:id', { config }, async (request, reply) => {
@@ -106,7 +106,7 @@ export async function approvalsRoutes(fastify: FastifyInstance) {
     if (ownerId === null) return reply;
     if (!ID.test(request.params.id)) return reply.code(400).send({ error: 'Invalid id' });
     try {
-      const record = denyApproval(request.params.id, ownerId);
+      const record = await denyApproval(request.params.id, ownerId);
       audit(request, ownerId, 'deny', record.id, true, { tool: record.toolName, agentId: record.agentId });
       return { approval: view(record) };
     } catch (err: any) {

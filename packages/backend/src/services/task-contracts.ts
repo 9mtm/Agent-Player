@@ -37,7 +37,8 @@
 
 import { existsSync, statSync } from 'node:fs';
 import { getEncryptionService } from '../credentials/encryption.js';
-import { getDatabase } from '../db/index.js';
+import { dialect, one, run, sql } from '../repositories/sql-steps.js';
+import { nowText } from '../db/pg/dialect.js';
 import { DrawerInputError, parseDrawerId, drawerId, sameDrawer, type DrawerRef } from '../memory/drawers.js';
 import { TOOL_NAME_PATTERN, type AgentToolGrants } from '../tools/grants.js';
 import { agentWorkspacePath, resolveReadPath } from '../tools/core/file-sandbox.js';
@@ -323,16 +324,20 @@ export async function decryptContract(enc: string | null, iv: string | null, tag
 
 export async function storeTaskContract(taskId: string, contract: TaskContract, createdBy: string | null): Promise<void> {
   const { encrypted, iv, authTag } = await encryptContract(contract);
-  getDatabase().prepare(`
-    INSERT INTO task_contracts (task_id, contract_encrypted, contract_iv, contract_tag, created_by) VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(task_id) DO UPDATE SET contract_encrypted = excluded.contract_encrypted, contract_iv = excluded.contract_iv,
-      contract_tag = excluded.contract_tag, created_by = excluded.created_by, created_at = datetime('now')
-  `).run(taskId, encrypted, iv, authTag, createdBy);
+  await sql().read((function* () {
+    const d = yield* dialect();
+    // ON CONFLICT ... DO UPDATE: the same upsert on both drivers (created_at is TEXT).
+    yield* run(`
+      INSERT INTO task_contracts (task_id, contract_encrypted, contract_iv, contract_tag, created_by) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(task_id) DO UPDATE SET contract_encrypted = excluded.contract_encrypted, contract_iv = excluded.contract_iv,
+        contract_tag = excluded.contract_tag, created_by = excluded.created_by, created_at = ${nowText(d)}
+    `, taskId, encrypted, iv, authTag, createdBy);
+  })());
 }
 
 export async function getTaskContract(taskId: string): Promise<TaskContract | null> {
-  const row = getDatabase().prepare('SELECT contract_encrypted, contract_iv, contract_tag FROM task_contracts WHERE task_id = ?').get(taskId) as
-    { contract_encrypted: string; contract_iv: string; contract_tag: string } | undefined;
+  const row = await sql().read(one<{ contract_encrypted: string; contract_iv: string; contract_tag: string }>(
+    'SELECT contract_encrypted, contract_iv, contract_tag FROM task_contracts WHERE task_id = ?', taskId));
   return row ? decryptContract(row.contract_encrypted, row.contract_iv, row.contract_tag) : null;
 }
 

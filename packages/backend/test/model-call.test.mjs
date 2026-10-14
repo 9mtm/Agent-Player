@@ -220,7 +220,7 @@ test('cap > 0 and opted in: the paid call is reserved first and its usage record
       ['heartbeat', 'recorded', 3, 2000, 1000, 'provider'],
     ]);
     assert.ok(ledger().every((u) => u.estimated_cents > 0), 'worst case reserved before the call');
-    assert.equal(budget.spentCents(), 6);
+    assert.equal((await budget.spentCents()), 6);
 
     // The cap reached: the next one is refused, the local model answers.
     process.env.DAILY_PAID_CAP_CENTS = '7';
@@ -296,7 +296,7 @@ test('interactive owner chat is not gated (cap 0) but its paid usage is recorded
     const b = (await app.inject({ method: 'GET', url: '/api/budget', headers: bearer('mc-owner') })).json().budget;
     assert.equal(b.interactive.calls, 1);
     assert.equal(b.interactive.cents, 3);
-    assert.equal(b.spentTodayCents, budget.spentCents(), 'interactive spend is not part of the cap');
+    assert.equal(b.spentTodayCents, (await budget.spentCents()), 'interactive spend is not part of the cap');
     assert.match(b.scope, /Interactive chat .* not blocked/);
     assert.ok(!JSON.stringify(b).includes('sk-ant-'), 'no keys in the budget view');
   } finally {
@@ -377,7 +377,7 @@ test('public room, opted in and cap > 0: the paid reply is reserved first and re
     assert.ok(rows[0].estimated_cents > 0, 'worst case reserved before the call');
 
     // Cap reached: the next reply is refused before the call and falls back to local.
-    process.env.DAILY_PAID_CAP_CENTS = String(Math.ceil(budget.spentCents()));
+    process.env.DAILY_PAID_CAP_CENTS = String(Math.ceil((await budget.spentCents())));
     reset();
     const again = await silent(() => roomPost(bearer('mc-member')));
     assert.equal(sseText(again.body), 'local room reply');

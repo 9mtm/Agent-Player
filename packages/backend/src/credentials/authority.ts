@@ -17,9 +17,12 @@
  *
  * A key is never returned to an HTTP client; routes use `hasAgentApiKey` /
  * the masked forms.
+ *
+ * B2.2b-3: the agents_config / settings SQL runs on the process driver
+ * (repositories/sql-steps.ts), so every reader here is async.
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, one, run, sql } from '../repositories/sql-steps.js';
 import { getCredentialManager } from './manager.js';
 import { isMaskedSecret } from './secret-mask.js';
 import { CredentialType } from './types.js';
@@ -41,12 +44,11 @@ export function agentKeyCredentialName(agentId: string): string {
   return `agent:${agentId}:api_key`;
 }
 
-function agentRow(agentId: string): { id: string; name: string; provider: string; api_key_credential_id: string | null } | undefined {
+async function agentRow(agentId: string): Promise<{ id: string; name: string; provider: string; api_key_credential_id: string | null } | undefined> {
   if (typeof agentId !== 'string' || !AGENT_ID.test(agentId)) return undefined;
   try {
-    return getDatabase()
-      .prepare('SELECT id, name, provider, api_key_credential_id FROM agents_config WHERE id = ?')
-      .get(agentId) as any;
+    return await sql().read(one<{ id: string; name: string; provider: string; api_key_credential_id: string | null }>(
+      'SELECT id, name, provider, api_key_credential_id FROM agents_config WHERE id = ?', agentId));
   } catch {
     return undefined;
   }
@@ -67,7 +69,7 @@ export async function setAgentApiKey(agentId: string, value: string): Promise<st
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (!trimmed || isMaskedSecret(trimmed)) return null;
-  const row = agentRow(agentId);
+  const row = await agentRow(agentId);
   if (!row) throw new Error('Agent not found');
 
   const manager = getCredentialManager();
@@ -92,24 +94,22 @@ export async function setAgentApiKey(agentId: string, value: string): Promise<st
       credentialId = created.id;
     }
   }
-  getDatabase()
-    .prepare(`UPDATE agents_config SET api_key_credential_id = ?, api_key = '' WHERE id = ?`)
-    .run(credentialId, agentId);
+  await sql().read(run(`UPDATE agents_config SET api_key_credential_id = ?, api_key = '' WHERE id = ?`, credentialId, agentId));
   return credentialId;
 }
 
 /** Remove an agent's key credential (used when the agent is deleted). */
 export async function removeAgentApiKey(agentId: string): Promise<void> {
-  const row = agentRow(agentId);
+  const row = await agentRow(agentId);
   if (!row?.api_key_credential_id) return;
   const manager = getCredentialManager();
   if (await manager.get(row.api_key_credential_id)) await manager.delete(row.api_key_credential_id);
-  getDatabase().prepare(`UPDATE agents_config SET api_key_credential_id = NULL WHERE id = ?`).run(agentId);
+  await sql().read(run(`UPDATE agents_config SET api_key_credential_id = NULL WHERE id = ?`, agentId));
 }
 
 /** True when the agent has its own stored key (value never returned). */
-export function hasAgentApiKey(agentId: string): boolean {
-  const row = agentRow(agentId);
+export async function hasAgentApiKey(agentId: string): Promise<boolean> {
+  const row = await agentRow(agentId);
   return !!row?.api_key_credential_id;
 }
 
@@ -123,11 +123,11 @@ let warnedLegacy = false;
  */
 export async function getAgentApiKey(agentId: string | undefined): Promise<string> {
   if (!agentId) return '';
-  const row = agentRow(agentId);
+  const row = await agentRow(agentId);
   if (!row) return '';
   if (!row.api_key_credential_id) {
     try {
-      const legacy = getDatabase().prepare('SELECT api_key FROM agents_config WHERE id = ?').get(agentId) as { api_key?: string } | undefined;
+      const legacy = await sql().read(one<{ api_key?: string }>('SELECT api_key FROM agents_config WHERE id = ?', agentId));
       const value = (legacy?.api_key || '').trim();
       if (value && !isMaskedSecret(value)) {
         if (!warnedLegacy) {
@@ -182,9 +182,9 @@ export interface ResolveKeyOptions {
   legacySettingsRow?: 'claude_api_key';
 }
 
-function legacySettingsValue(key: string): string {
+async function legacySettingsValue(key: string): Promise<string> {
   try {
-    const row = getDatabase().prepare('SELECT value FROM settings WHERE key = ? LIMIT 1').get(key) as { value?: string } | undefined;
+    const row = await sql().read(one<{ value?: string }>('SELECT value FROM settings WHERE key = ? LIMIT 1', key));
     const value = typeof row?.value === 'string' ? row.value : '';
     return value && isSettingsEncrypted(value) ? decryptSettingsValue(value) : value;
   } catch {
@@ -200,7 +200,7 @@ export async function resolveProviderApiKey(provider: ProviderName, opts: Resolv
   const own = await getAgentApiKey(opts.agentId);
   if (own) return own;
   if (opts.legacySettingsRow) {
-    const legacy = legacySettingsValue(opts.legacySettingsRow);
+    const legacy = await legacySettingsValue(opts.legacySettingsRow);
     if (legacy) return legacy;
   }
   if (!opts.noGlobal) {
@@ -216,11 +216,9 @@ export async function resolveProviderApiKey(provider: ProviderName, opts: Resolv
  * `settings` table row `agent_settings`) so this change does not start paid
  * LLM calls that did not happen before; see HANDOFF Q-16.
  */
-export function getMemoryExtractionClaudeConfig(): { apiKey: string; model: string } | null {
+export async function getMemoryExtractionClaudeConfig(): Promise<{ apiKey: string; model: string } | null> {
   try {
-    const row = getDatabase()
-      .prepare("SELECT value FROM settings WHERE key = 'agent_settings' LIMIT 1")
-      .get() as { value?: string } | undefined;
+    const row = await sql().read(one<{ value?: string }>("SELECT value FROM settings WHERE key = 'agent_settings' LIMIT 1"));
     if (!row?.value) return null;
     const settings = JSON.parse(row.value);
     let apiKey: string = settings?.claude?.apiKey || '';
@@ -251,12 +249,10 @@ export interface AgentKeyMigrationResult {
  * changed (a temporary key would make the keys unreadable after a restart).
  */
 export async function migrateAgentApiKeys(): Promise<AgentKeyMigrationResult> {
-  const db = getDatabase();
   let rows: Array<{ id: string; api_key: string | null; api_key_credential_id: string | null }>;
   try {
-    rows = db.prepare(
-      `SELECT id, api_key, api_key_credential_id FROM agents_config WHERE api_key IS NOT NULL AND api_key != ''`
-    ).all() as any[];
+    rows = await sql().read(all<{ id: string; api_key: string | null; api_key_credential_id: string | null }>(
+      `SELECT id, api_key, api_key_credential_id FROM agents_config WHERE api_key IS NOT NULL AND api_key != ''`));
   } catch {
     return { migrated: 0, skipped: 0, failed: 0 };
   }
@@ -272,7 +268,7 @@ export async function migrateAgentApiKeys(): Promise<AgentKeyMigrationResult> {
     const value = (row.api_key || '').trim();
     if (!value || isMaskedSecret(value)) {
       // A masked placeholder is not a secret: drop it, keep any stored credential.
-      db.prepare(`UPDATE agents_config SET api_key = '' WHERE id = ?`).run(row.id);
+      await sql().read(run(`UPDATE agents_config SET api_key = '' WHERE id = ?`, row.id));
       result.skipped++;
       continue;
     }
@@ -299,8 +295,8 @@ export async function migrateAgentApiKeys(): Promise<AgentKeyMigrationResult> {
       // Verify the round-trip before the plaintext is removed.
       const check = await manager.getValue(credentialId!);
       if (check !== value) throw new Error('verification failed');
-      db.prepare(`UPDATE agents_config SET api_key_credential_id = ?, api_key = '' WHERE id = ? AND api_key = ?`)
-        .run(credentialId, row.id, row.api_key);
+      await sql().read(run(`UPDATE agents_config SET api_key_credential_id = ?, api_key = '' WHERE id = ? AND api_key = ?`,
+        credentialId, row.id, row.api_key));
       result.migrated++;
     } catch (err: any) {
       result.failed++;

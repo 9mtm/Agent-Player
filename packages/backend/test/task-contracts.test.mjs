@@ -92,7 +92,7 @@ orchestrator.registerAgent({ id: AGENT, name: AGENT, role: 'worker', capabilitie
 const tools = await import(join(backendDir, 'src/tools/index.ts'));
 const grants = await import(join(backendDir, 'src/tools/grants.ts'));
 const avail = tools.createToolsRegistry({ workspaceDir: dir }).listRegistered();
-grants.setAgentGrants(AGENT, { grants: [...fixture.STUB_TOOLS, 'memory_search'] }, 'tr-owner', avail);
+await grants.setAgentGrants(AGENT, { grants: [...fixture.STUB_TOOLS, 'memory_search'] }, 'tr-owner', avail);
 const { setAgentApiKey } = await import(join(backendDir, 'src/credentials/authority.ts'));
 await setAgentApiKey(AGENT, 'sk-ant-test-' + randomBytes(12).toString('hex'));
 
@@ -166,7 +166,7 @@ function spawnRunner(mode, scenario, env = {}) {
 async function waitFor(pred, what, ms = 30_000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
-    if (pred()) return;
+    if (await pred()) return;
     await sleep(25);
   }
   throw new Error(`timed out waiting for ${what}; ledger: ${ledger().join(' | ')}`);
@@ -424,8 +424,8 @@ test('small-agent card says needs_review -> the run is needs_review (free local 
   const res = await app.inject({ method: 'POST', url: '/api/small-agent/runs', headers: bearer('tr-owner'), payload: { task: 'Draft a note', kind: 'draft' } });
   assert.equal(res.statusCode, 201, res.body);
   const id = res.json().run_id;
-  await waitFor(() => runs.getRun(id)?.status === 'completed', 'the small-agent run');
-  const run = runs.getRun(id);
+  await waitFor(async () => (await runs.getRun(id))?.status === 'completed', 'the small-agent run');
+  const run = await runs.getRun(id);
   assert.equal(run.verification_status, 'needs_review');
   assert.match(JSON.parse(run.verification_reasons)[0], /not purely informational/);
   assert.equal(run.cost_cents, 0, 'local model costs nothing');

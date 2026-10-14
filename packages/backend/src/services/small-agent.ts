@@ -37,10 +37,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-import { getDatabase } from '../db/index.js';
+import { all, dialect, one, run as runSql, sql } from '../repositories/sql-steps.js';
+import { insertOrIgnore } from '../db/pg/dialect.js';
 import { getOrchestrator } from '../multi-agent/index.js';
 import { DEFAULT_OLLAMA_MODEL } from '../llm/ollama.js';
-import { createToolsRegistry } from '../tools/index.js';
+import { createAgentToolsRegistry, createToolsRegistry } from '../tools/index.js';
 import { approvalCategory } from '../tools/approvals.js';
 import { isToolExecClass } from '../tools/exec-policy.js';
 import { TOOL_NAME_PATTERN, intersectGrants, setAgentGrants, staticGrants, type AgentToolGrants } from '../tools/grants.js';
@@ -121,14 +122,15 @@ export class SmallAgentCapacityError extends Error {
  * registration). Its stored grants are exactly the safe set; the owner can
  * narrow them later through the grants API, and runs respect that.
  */
-export function ensureSmallAgent(): void {
-  const db = getDatabase();
-  const exists = db.prepare('SELECT 1 FROM agents_config WHERE id = ?').get(SMALL_AGENT_ID);
+export async function ensureSmallAgent(): Promise<void> {
+  const exists = await sql().read(one('SELECT 1 AS ok FROM agents_config WHERE id = ?', SMALL_AGENT_ID));
   if (!exists) {
-    db.prepare(`
-      INSERT OR IGNORE INTO agents_config (id, name, description, system_prompt, model, provider, temperature, max_tokens, cron_enabled)
+    await sql().read((function* () {
+      const d = yield* dialect();
+      return yield* runSql(insertOrIgnore(d, `
+      INSERT INTO agents_config (id, name, description, system_prompt, model, provider, temperature, max_tokens, cron_enabled)
       VALUES (?, ?, ?, ?, ?, 'ollama', ?, ?, 0)
-    `).run(
+    `),
       SMALL_AGENT_ID,
       'Small local agent',
       'Local Qwen helper for light tasks delegated by a large agent (lookups, summaries, classification, drafts).',
@@ -137,8 +139,9 @@ export function ensureSmallAgent(): void {
       SMALL_AGENT_TEMPERATURE,
       SMALL_AGENT_MAX_TOKENS,
     );
+    })());
     const available = createToolsRegistry({ workspaceDir: process.cwd() }).listRegistered();
-    setAgentGrants(SMALL_AGENT_ID, { grants: [...SMALL_AGENT_SAFE_TOOLS] }, 'system:small-agent', available);
+    await setAgentGrants(SMALL_AGENT_ID, { grants: [...SMALL_AGENT_SAFE_TOOLS] }, 'system:small-agent', available);
   }
   const orchestrator = getOrchestrator();
   if (!orchestrator.getAgent(SMALL_AGENT_ID)) {
@@ -300,9 +303,9 @@ export function validateSmallAgentReadDir(input: unknown): string {
 }
 
 /** Fields of the small agent's agents_config row that differ from the built-in defaults. */
-export function smallAgentConfigDrift(): string[] {
-  const row = getDatabase().prepare('SELECT system_prompt, model, provider, temperature, max_tokens FROM agents_config WHERE id = ?')
-    .get(SMALL_AGENT_ID) as { system_prompt: string | null; model: string; provider: string; temperature: number; max_tokens: number } | undefined;
+export async function smallAgentConfigDrift(): Promise<string[]> {
+  const row = await sql().read(one<{ system_prompt: string | null; model: string; provider: string; temperature: number; max_tokens: number }>(
+    'SELECT system_prompt, model, provider, temperature, max_tokens FROM agents_config WHERE id = ?', SMALL_AGENT_ID));
   if (!row) return [];
   const drift: string[] = [];
   if ((row.system_prompt ?? '') !== SYSTEM_PROMPT) drift.push('system_prompt');
@@ -321,11 +324,11 @@ export interface SmallAgentCapacity {
   active: number; running: number; queued: number; waiting: number; limit: number; available: number;
 }
 
-export function smallAgentCapacity(): SmallAgentCapacity {
-  const rows = getDatabase().prepare(`
+export async function smallAgentCapacity(): Promise<SmallAgentCapacity> {
+  const rows = await sql().read(all<{ status: string; n: number }>(`
     SELECT status, COUNT(*) AS n FROM task_runs
     WHERE agent_id = ? AND status IN ('queued', 'running', 'waiting_approval') GROUP BY status
-  `).all(SMALL_AGENT_ID) as Array<{ status: string; n: number }>;
+  `, SMALL_AGENT_ID));
   const by = (s: string) => rows.find((r) => r.status === s)?.n ?? 0;
   const limit = smallAgentDefaults().maxConcurrent;
   const active = by('queued') + by('running') + by('waiting_approval');
@@ -400,8 +403,8 @@ async function doSpawn(input: SpawnInput): Promise<SpawnResult> {
     maxSteps = Math.min(n, d.maxSteps);
   }
 
-  ensureSmallAgent();
-  const registry = createToolsRegistry({ workspaceDir: process.cwd(), agentId: SMALL_AGENT_ID });
+  await ensureSmallAgent();
+  const registry = await createAgentToolsRegistry({ workspaceDir: process.cwd(), agentId: SMALL_AGENT_ID });
   const tools = resolveSmallAgentTools(input.tools, registry.listRegistered(), registry.getContext().grants!);
   const drawers = resolveSmallAgentDrawers(input.drawers);
   for (const x of tools.dropped) warnings.push(`tool "${x.item}" not given: ${x.reason}`);
@@ -413,7 +416,7 @@ async function doSpawn(input: SpawnInput): Promise<SpawnResult> {
     else warnings.push('read_dir ignored: the "read" tool was not given to this run');
   }
 
-  const capacity = smallAgentCapacity();
+  const capacity = await smallAgentCapacity();
   if (capacity.active >= capacity.limit) throw new SmallAgentCapacityError(capacity);
 
   // MCP-01b: always the env/default model, never the editable agents_config row.
@@ -440,13 +443,13 @@ async function doSpawn(input: SpawnInput): Promise<SpawnResult> {
     maxSteps,
     maxDurationMs: d.maxDurationMs,
   });
-  getDatabase().prepare(`
+  await sql().read(runSql(`
     INSERT INTO small_agent_runs (run_id, task_id, requested_by, kind, requested_tools, granted_tools, drawers, model, warnings, read_root)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(run.id, task.id, input.ownerId, kind, JSON.stringify(tools.requested), JSON.stringify(tools.granted),
-    JSON.stringify(drawers.drawers), model, JSON.stringify(warnings), readRoot);
+  `, run.id, task.id, input.ownerId, kind, JSON.stringify(tools.requested), JSON.stringify(tools.granted),
+    JSON.stringify(drawers.drawers), model, JSON.stringify(warnings), readRoot));
 
-  return { run, kind, grantedTools: tools.granted, drawers: drawers.drawers, model, warnings, capacity: smallAgentCapacity(), readRoot };
+  return { run, kind, grantedTools: tools.granted, drawers: drawers.drawers, model, warnings, capacity: await smallAgentCapacity(), readRoot };
 }
 
 // ---------------------------------------------------------------------------
@@ -472,13 +475,13 @@ export interface SmallAgentRunScope {
  * set ∩ the agent's grants now (`current`), minus exec/approval tools; the
  * stored drawers re-validated. A missing row -> nothing (fail closed).
  */
-export function smallAgentRunScope(
+export async function smallAgentRunScope(
   run: Pick<TaskRunRow, 'id' | 'user_id'>,
   current: AgentToolGrants,
   registered: ReadonlyArray<ToolInfo>,
-): SmallAgentRunScope {
-  const row = getDatabase().prepare('SELECT granted_tools, drawers, model, read_root FROM small_agent_runs WHERE run_id = ?').get(run.id) as
-    Pick<SmallAgentRunRow, 'granted_tools' | 'drawers' | 'model' | 'read_root'> | undefined;
+): Promise<SmallAgentRunScope> {
+  const row = await sql().read(one<Pick<SmallAgentRunRow, 'granted_tools' | 'drawers' | 'model' | 'read_root'>>(
+    'SELECT granted_tools, drawers, model, read_root FROM small_agent_runs WHERE run_id = ?', run.id));
   const settings = {
     model: row?.model || smallAgentDefaults().model,
     systemPrompt: SYSTEM_PROMPT,
@@ -555,11 +558,11 @@ function summaryOf(text: string): string {
 }
 
 /** Result card of a small-agent run, or null when it is not one. */
-export function smallAgentCard(runId: string): ResultCard | null {
-  const meta = getDatabase().prepare('SELECT * FROM small_agent_runs WHERE run_id = ?').get(runId) as SmallAgentRunRow | undefined;
-  const run = meta ? getRun(runId) : undefined;
+export async function smallAgentCard(runId: string): Promise<ResultCard | null> {
+  const meta = await sql().read(one<SmallAgentRunRow>('SELECT * FROM small_agent_runs WHERE run_id = ?', runId));
+  const run = meta ? await getRun(runId) : undefined;
   if (!meta || !run) return null;
-  const steps = getSteps(run.id);
+  const steps = await getSteps(run.id);
   const warnings = [...parseList(meta.warnings)];
   const runtime: string[] = [];
 
@@ -572,7 +575,7 @@ export function smallAgentCard(runId: string): ResultCard | null {
   const redacted = redactSecrets(output);
   output = redacted.text;
   if (redacted.count) runtime.push(`${redacted.count} secret-looking value(s) redacted from the output`);
-  const drift = smallAgentConfigDrift();
+  const drift = await smallAgentConfigDrift();
   if (drift.length) runtime.push(`the small-local-agent settings were edited (${drift.join(', ')}); the built-in settings were used`);
   const failedTools = steps.filter((s) => s.kind === 'tool' && (s.status === 'failed' || s.status === 'unknown'));
   if (failedTools.length) runtime.push(`${failedTools.length} tool step(s) failed`);
@@ -630,15 +633,16 @@ export interface SmallAgentRunSummary {
   steps_used: number; max_steps: number; created_at: string; finished_at: string | null;
 }
 
-export function listSmallAgentRuns(filter: { status?: string; limit?: number }): SmallAgentRunSummary[] {
+export async function listSmallAgentRuns(filter: { status?: string; limit?: number }): Promise<SmallAgentRunSummary[]> {
   const limit = Math.min(Math.max(Number(filter.limit) || 20, 1), 100);
-  const args: unknown[] = [];
+  const args: Array<string | number> = [];
   let where = '';
   if (filter.status) { where = 'WHERE r.status = ?'; args.push(filter.status); }
-  const rows = getDatabase().prepare(`
+  // Ties on created_at (second precision) by the run id (B2.2b-3: no rowid).
+  const rows = await sql().read(all<TaskRunRow & { small_kind: SmallAgentKind }>(`
     SELECT r.*, s.kind AS small_kind FROM small_agent_runs s JOIN task_runs r ON r.id = s.run_id
-    ${where} ORDER BY r.created_at DESC, r.rowid DESC LIMIT ?
-  `).all(...args, limit) as Array<TaskRunRow & { small_kind: SmallAgentKind }>;
+    ${where} ORDER BY r.created_at DESC, r.id DESC LIMIT ?
+  `, ...args, limit));
   return rows.map((r) => ({
     run_id: r.id,
     status: r.status,

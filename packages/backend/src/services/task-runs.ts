@@ -32,8 +32,10 @@
 import { isoUtc } from '../api/timestamps.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
-import { getDatabase } from '../db/index.js';
+import { all, atomic, dialect, one, run, sql, type Step } from '../repositories/sql-steps.js';
+import { forUpdate, greatest, insertOrIgnore, isParam, nowPlusText, nowText, offset } from '../db/pg/dialect.js';
 import { getEncryptionService } from '../credentials/encryption.js';
+import { orderedId } from '../repositories/ordered-id.js';
 import { decryptContract, encryptContract, type TaskContract, type Verdict, type VerificationStatus, contractView, type ContractView } from './task-contracts.js';
 
 export type TaskRunStatus = 'queued' | 'running' | 'waiting_approval' | 'completed' | 'failed' | 'cancelled';
@@ -133,18 +135,30 @@ export interface TaskRunStepRow {
   cost_cents: number | null; usage_source: string | null;
 }
 
-export function getRun(id: string): TaskRunRow | undefined {
-  return getDatabase().prepare('SELECT * FROM task_runs WHERE id = ?').get(id) as TaskRunRow | undefined;
+/** The run row; `lock` (inside a transaction): FOR UPDATE on PostgreSQL. */
+function* runRow(id: string, lock = false): Step<TaskRunRow | undefined> {
+  const d = yield* dialect();
+  return yield* one<TaskRunRow>(`SELECT * FROM task_runs WHERE id = ?${lock ? forUpdate(d) : ''}`, id);
 }
 
-export function activeRunForTask(taskId: string): TaskRunRow | undefined {
-  return getDatabase().prepare(
-    `SELECT * FROM task_runs WHERE task_id = ? AND status IN ('queued', 'running', 'waiting_approval') LIMIT 1`
-  ).get(taskId) as TaskRunRow | undefined;
+export function getRun(id: string): Promise<TaskRunRow | undefined> {
+  return sql().read(runRow(id));
 }
 
-export function getSteps(runId: string): TaskRunStepRow[] {
-  return getDatabase().prepare('SELECT * FROM task_run_steps WHERE run_id = ? ORDER BY step_index').all(runId) as TaskRunStepRow[];
+function* activeRunStep(taskId: string): Step<TaskRunRow | undefined> {
+  return yield* one<TaskRunRow>(`SELECT * FROM task_runs WHERE task_id = ? AND status IN ('queued', 'running', 'waiting_approval') LIMIT 1`, taskId);
+}
+
+export function activeRunForTask(taskId: string): Promise<TaskRunRow | undefined> {
+  return sql().read(activeRunStep(taskId));
+}
+
+function* stepsOf(runId: string): Step<TaskRunStepRow[]> {
+  return yield* all<TaskRunStepRow>('SELECT * FROM task_run_steps WHERE run_id = ? ORDER BY step_index', runId);
+}
+
+export function getSteps(runId: string): Promise<TaskRunStepRow[]> {
+  return sql().read(stepsOf(runId));
 }
 
 export interface CreateRunInput {
@@ -160,34 +174,38 @@ export interface CreateRunInput {
 
 /** Create a queued run, or return the task's unfinished run (one per task). */
 export async function createRun(input: CreateRunInput): Promise<TaskRunRow> {
-  const existing = activeRunForTask(input.taskId);
+  const existing = await activeRunForTask(input.taskId);
   if (existing) return existing;
   const d = runDefaults();
   const { encrypted, iv, authTag } = await getEncryptionService().encrypt(JSON.stringify({ prompt: input.prompt }));
-  const id = randomUUID();
+  const id = orderedId(); // sorts in creation order (listRuns ties on created_at)
   const contract = input.contract ?? null;
   let maxSteps = clampInt(input.maxSteps, d.maxSteps, 1, 10_000);
   let maxDurationMs = clampInt(input.maxDurationMs, d.maxDurationMs, 1, 24 * 3_600_000);
   if (contract?.budget?.maxSteps) maxSteps = Math.min(maxSteps, contract.budget.maxSteps);
   if (contract?.budget?.maxDurationMs) maxDurationMs = Math.min(maxDurationMs, contract.budget.maxDurationMs);
   const enc = contract ? await encryptContract(contract) : null;
-  try {
-    getDatabase().prepare(`
-      INSERT INTO task_runs (id, task_id, agent_id, user_id, status, max_steps, max_duration_ms, input_encrypted, input_iv, input_tag,
-        contract_encrypted, contract_iv, contract_tag, max_verification_retries, review_mode, max_cost_cents)
-      VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, input.taskId, input.agentId, input.userId ?? null, maxSteps, maxDurationMs,
-      encrypted, iv, authTag,
-      enc?.encrypted ?? null, enc?.iv ?? null, enc?.authTag ?? null,
-      contract ? contract.maxVerificationRetries : 0, contract?.review ?? null,
-      contract?.budget?.maxCostCents ?? null);
-  } catch (err: any) {
-    // Another process created the task's run at the same moment.
-    const raced = activeRunForTask(input.taskId);
-    if (raced) return raced;
-    throw err;
-  }
-  return getRun(id)!;
+  return sql().read((function* () {
+    try {
+      // Its own transaction (a SAVEPOINT inside a caller's): on PostgreSQL a
+      // failed INSERT must not abort the caller's transaction.
+      yield* atomic(() => run(`
+        INSERT INTO task_runs (id, task_id, agent_id, user_id, status, max_steps, max_duration_ms, input_encrypted, input_iv, input_tag,
+          contract_encrypted, contract_iv, contract_tag, max_verification_retries, review_mode, max_cost_cents)
+        VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, id, input.taskId, input.agentId, input.userId ?? null, maxSteps, maxDurationMs,
+        encrypted, iv, authTag,
+        enc?.encrypted ?? null, enc?.iv ?? null, enc?.authTag ?? null,
+        contract ? contract.maxVerificationRetries : 0, contract?.review ?? null,
+        contract?.budget?.maxCostCents ?? null));
+    } catch (err: any) {
+      // Another process created the task's run at the same moment (one active run per task).
+      const raced = yield* activeRunStep(input.taskId);
+      if (raced) return raced;
+      throw err;
+    }
+    return (yield* runRow(id))!;
+  })());
 }
 
 function clampInt(v: unknown, fallback: number, min: number, max: number): number {
@@ -212,55 +230,76 @@ export interface Lease { runId: string; owner: string; generation: number }
  * Atomic claim: succeeds only for a queued run, or a running run whose lease
  * expired. Exactly one of several concurrent claimers wins.
  */
-export function claimRun(runId: string, owner = WORKER_ID, now = Date.now()): Lease | null {
+export function claimRun(runId: string, owner = WORKER_ID, now = Date.now()): Promise<Lease | null> {
   const { leaseMs } = runDefaults();
-  const res = getDatabase().prepare(`
-    UPDATE task_runs SET
-      status = 'running', status_reason = NULL,
-      lease_owner = ?, lease_expires_at = ?, lease_generation = lease_generation + 1,
-      attempt = attempt + 1, segment_started_ms = ?,
-      started_at = COALESCE(started_at, datetime('now')), updated_at = datetime('now')
-    WHERE id = ? AND cancel_requested = 0 AND (
-      status = 'queued' OR (status = 'running' AND (lease_owner IS NULL OR lease_expires_at IS NULL OR lease_expires_at < ?))
-    )
-  `).run(owner, now + leaseMs, now, runId, now);
-  if (res.changes !== 1) return null;
-  const row = getRun(runId)!;
-  return { runId, owner, generation: row.lease_generation };
+  return sql().read((function* () {
+    const d = yield* dialect();
+    // One UPDATE: on PostgreSQL a concurrent claimer waits on the row lock and
+    // then re-checks the WHERE (READ COMMITTED), so exactly one wins.
+    const res = yield* run(`
+      UPDATE task_runs SET
+        status = 'running', status_reason = NULL,
+        lease_owner = ?, lease_expires_at = ?, lease_generation = lease_generation + 1,
+        attempt = attempt + 1, segment_started_ms = ?,
+        started_at = COALESCE(started_at, ${nowText(d)}), updated_at = ${nowText(d)}
+      WHERE id = ? AND cancel_requested = 0 AND (
+        status = 'queued' OR (status = 'running' AND (lease_owner IS NULL OR lease_expires_at IS NULL OR lease_expires_at < ?))
+      )
+    `, owner, now + leaseMs, now, runId, now);
+    if (res.changes !== 1) return null;
+    const row = (yield* runRow(runId))!;
+    return { runId, owner, generation: row.lease_generation };
+  })());
 }
 
 const FENCE = `id = ? AND lease_owner = ? AND lease_generation = ? AND status = 'running'`;
 
 /** Renew the lease and fold active time. False = lease lost. */
-export function heartbeat(lease: Lease, now = Date.now()): boolean {
+export function heartbeat(lease: Lease, now = Date.now()): Promise<boolean> {
   const { leaseMs } = runDefaults();
-  const res = getDatabase().prepare(`
-    UPDATE task_runs SET lease_expires_at = ?,
-      active_ms = active_ms + MAX(0, ? - COALESCE(segment_started_ms, ?)), segment_started_ms = ?, updated_at = datetime('now')
-    WHERE ${FENCE}
-  `).run(now + leaseMs, now, now, now, lease.runId, lease.owner, lease.generation);
-  return res.changes === 1;
+  return sql().read((function* () {
+    const d = yield* dialect();
+    const res = yield* run(`
+      UPDATE task_runs SET lease_expires_at = ?,
+        active_ms = active_ms + ${greatest(d)}(0, ? - COALESCE(segment_started_ms, ?)), segment_started_ms = ?, updated_at = ${nowText(d)}
+      WHERE ${FENCE}
+    `, now + leaseMs, now, now, now, lease.runId, lease.owner, lease.generation);
+    return res.changes === 1;
+  })());
 }
 
-export function holdsLease(lease: Lease): boolean {
-  const row = getDatabase().prepare(`SELECT 1 AS ok FROM task_runs WHERE ${FENCE}`).get(lease.runId, lease.owner, lease.generation);
-  return !!row;
+/**
+ * The lease is still ours. Inside a transaction (`lock`) the run row is
+ * locked on PostgreSQL, so a concurrent claim cannot take the lease between
+ * this check and the write that follows it (SQLite: the write transaction is
+ * exclusive already).
+ */
+function* holdsLeaseStep(lease: Lease, lock = false): Step<boolean> {
+  const d = yield* dialect();
+  return !!(yield* one(`SELECT 1 AS ok FROM task_runs WHERE ${FENCE}${lock ? forUpdate(d) : ''}`, lease.runId, lease.owner, lease.generation));
+}
+
+export function holdsLease(lease: Lease): Promise<boolean> {
+  return sql().read(holdsLeaseStep(lease));
 }
 
 /** Leave the running state (fenced). Folds active time and releases the lease. */
-export function finishAttempt(lease: Lease, status: TaskRunStatus, reason: string | null, outputPreview?: string | null): boolean {
+export function finishAttempt(lease: Lease, status: TaskRunStatus, reason: string | null, outputPreview?: string | null): Promise<boolean> {
   const now = Date.now();
   const terminal = status === 'completed' || status === 'failed' || status === 'cancelled';
-  const res = getDatabase().prepare(`
-    UPDATE task_runs SET status = ?, status_reason = ?,
-      output_preview = COALESCE(?, output_preview),
-      active_ms = active_ms + MAX(0, ? - COALESCE(segment_started_ms, ?)), segment_started_ms = NULL,
-      lease_owner = NULL, lease_expires_at = NULL,
-      finished_at = CASE WHEN ? THEN datetime('now') ELSE finished_at END,
-      updated_at = datetime('now')
-    WHERE ${FENCE}
-  `).run(status, reason, outputPreview ?? null, now, now, terminal ? 1 : 0, lease.runId, lease.owner, lease.generation);
-  return res.changes === 1;
+  return sql().read((function* () {
+    const d = yield* dialect();
+    const res = yield* run(`
+      UPDATE task_runs SET status = ?, status_reason = ?,
+        output_preview = COALESCE(?, output_preview),
+        active_ms = active_ms + ${greatest(d)}(0, ? - COALESCE(segment_started_ms, ?)), segment_started_ms = NULL,
+        lease_owner = NULL, lease_expires_at = NULL,
+        finished_at = CASE WHEN ? = 1 THEN ${nowText(d)} ELSE finished_at END,
+        updated_at = ${nowText(d)}
+      WHERE ${FENCE}
+    `, status, reason, outputPreview ?? null, now, now, terminal ? 1 : 0, lease.runId, lease.owner, lease.generation);
+    return res.changes === 1;
+  })());
 }
 
 export function elapsedMs(run: TaskRunRow, now = Date.now()): number {
@@ -283,40 +322,38 @@ async function stepResult<T>(row: TaskRunStepRow): Promise<T> {
 /** Store a completed step result (fenced by the lease). */
 async function completeStep(lease: Lease, index: number, result: unknown, extra: { resolvedBy?: string } = {}): Promise<void> {
   const enc = await encryptJson(result);
-  const db = getDatabase();
-  db.transaction(() => {
-    if (!holdsLease(lease)) throw new LeaseLostError();
-    db.prepare(`
+  await sql().tx(function* () {
+    const d = yield* dialect();
+    if (!(yield* holdsLeaseStep(lease, true))) throw new LeaseLostError();
+    yield* run(`
       UPDATE task_run_steps SET status = 'completed', result_encrypted = ?, result_iv = ?, result_tag = ?,
-        error = NULL, completed_at = datetime('now'), resolved_by = COALESCE(?, resolved_by)
+        error = NULL, completed_at = ${nowText(d)}, resolved_by = COALESCE(?, resolved_by)
       WHERE run_id = ? AND step_index = ?
-    `).run(enc.encrypted, enc.iv, enc.authTag, extra.resolvedBy ?? null, lease.runId, index);
-    db.prepare(`UPDATE task_runs SET checkpoint_step = MAX(checkpoint_step, ?), updated_at = datetime('now') WHERE id = ?`)
-      .run(index, lease.runId);
+    `, enc.encrypted, enc.iv, enc.authTag, extra.resolvedBy ?? null, lease.runId, index);
+    yield* run(`UPDATE task_runs SET checkpoint_step = ${greatest(d)}(checkpoint_step, ?), updated_at = ${nowText(d)} WHERE id = ?`,
+      index, lease.runId);
   });
 }
 
-function setStepStatus(lease: Lease, index: number, status: StepStatus, error: string | null, approvalId?: string | null): void {
-  const db = getDatabase();
-  db.transaction(() => {
-    if (!holdsLease(lease)) throw new LeaseLostError();
-    db.prepare(`UPDATE task_run_steps SET status = ?, error = ?, approval_id = COALESCE(?, approval_id) WHERE run_id = ? AND step_index = ?`)
-      .run(status, error, approvalId ?? null, lease.runId, index);
+function setStepStatus(lease: Lease, index: number, status: StepStatus, error: string | null, approvalId?: string | null): Promise<void> {
+  return sql().tx(function* () {
+    if (!(yield* holdsLeaseStep(lease, true))) throw new LeaseLostError();
+    yield* run(`UPDATE task_run_steps SET status = ?, error = ?, approval_id = COALESCE(?, approval_id) WHERE run_id = ? AND step_index = ?`,
+      status, error, approvalId ?? null, lease.runId, index);
   });
 }
 
 /** Budget + cancellation check before a fresh execution; reserves one step. */
-function reserveFreshStep(lease: Lease): number {
-  const db = getDatabase();
-  return db.transaction(() => {
-    const run = getRun(lease.runId);
-    if (!run || run.lease_owner !== lease.owner || run.lease_generation !== lease.generation || run.status !== 'running') throw new LeaseLostError();
-    if (run.cancel_requested) throw new RunCancelledError();
-    if (run.steps_used >= run.max_steps) throw new BudgetExceededError('steps', `max steps ${run.max_steps} reached`);
-    const elapsed = elapsedMs(run);
-    if (elapsed >= run.max_duration_ms) throw new BudgetExceededError('duration', `max duration ${run.max_duration_ms} ms reached`);
-    db.prepare(`UPDATE task_runs SET steps_used = steps_used + 1 WHERE id = ?`).run(lease.runId);
-    return run.max_duration_ms - elapsed;
+function reserveFreshStep(lease: Lease): Promise<number> {
+  return sql().tx(function* () {
+    const run_ = yield* runRow(lease.runId, true);
+    if (!run_ || run_.lease_owner !== lease.owner || run_.lease_generation !== lease.generation || run_.status !== 'running') throw new LeaseLostError();
+    if (run_.cancel_requested) throw new RunCancelledError();
+    if (run_.steps_used >= run_.max_steps) throw new BudgetExceededError('steps', `max steps ${run_.max_steps} reached`);
+    const elapsed = elapsedMs(run_);
+    if (elapsed >= run_.max_duration_ms) throw new BudgetExceededError('duration', `max duration ${run_.max_duration_ms} ms reached`);
+    yield* run(`UPDATE task_runs SET steps_used = steps_used + 1 WHERE id = ?`, lease.runId);
+    return run_.max_duration_ms - elapsed;
   });
 }
 
@@ -339,20 +376,20 @@ export interface StepOutcome<T> { result: T; replayed: boolean }
 
 const APPROVAL_FINAL = new Set(['executed', 'denied', 'expired', 'failed']);
 
-function approvalFor(runId: string, index: number, approvalId: string | null): { id: string; status: string; result_preview: string | null; error: string | null; tool_name: string } | undefined {
-  const db = getDatabase();
+type ApprovalRow = { id: string; status: string; result_preview: string | null; error: string | null; tool_name: string };
+
+function approvalFor(runId: string, index: number, approvalId: string | null): Promise<ApprovalRow | undefined> {
   if (approvalId) {
-    return db.prepare('SELECT id, status, result_preview, error, tool_name FROM tool_approvals WHERE id = ?').get(approvalId) as any;
+    return sql().read(one<ApprovalRow>('SELECT id, status, result_preview, error, tool_name FROM tool_approvals WHERE id = ?', approvalId));
   }
-  return db.prepare('SELECT id, status, result_preview, error, tool_name FROM tool_approvals WHERE run_id = ? AND run_step = ? ORDER BY requested_at DESC LIMIT 1')
-    .get(runId, index) as any;
+  return sql().read(one<ApprovalRow>('SELECT id, status, result_preview, error, tool_name FROM tool_approvals WHERE run_id = ? AND run_step = ? ORDER BY requested_at DESC LIMIT 1',
+    runId, index));
 }
 
-/** Expire pending approvals past their TTL (same rule as tools/approvals.ts). */
-function expireApprovals(): void {
-  getDatabase().prepare(
-    `UPDATE tool_approvals SET status = 'expired' WHERE status = 'pending' AND requested_at < datetime('now', '-24 hours')`
-  ).run();
+/** Expire pending approvals past their TTL (same rule as tools/approvals.ts; requested_at is TEXT). */
+function* expireApprovalsStep(): Step<void> {
+  const d = yield* dialect();
+  yield* run(`UPDATE tool_approvals SET status = 'expired' WHERE status = 'pending' AND requested_at < ${nowPlusText(d)}`, offset(-24, 'hours'));
 }
 
 /**
@@ -361,9 +398,8 @@ function expireApprovals(): void {
  * ReplayMismatchError to stop the attempt.
  */
 export async function durableStep<T>(lease: Lease, index: number, spec: StepSpec<T>): Promise<StepOutcome<T>> {
-  const db = getDatabase();
   const key = idempotencyKey(lease.runId, index, spec.kind, spec.name, spec.input);
-  const row = db.prepare('SELECT * FROM task_run_steps WHERE run_id = ? AND step_index = ?').get(lease.runId, index) as TaskRunStepRow | undefined;
+  const row = await sql().read(one<TaskRunStepRow>('SELECT * FROM task_run_steps WHERE run_id = ? AND step_index = ?', lease.runId, index));
 
   let attempt = 1;
   if (row) {
@@ -374,43 +410,44 @@ export async function durableStep<T>(lease: Lease, index: number, spec: StepSpec
     // An approval linked to this step decides it (also when the crash came
     // after the approval was stored but before the step was marked).
     if (row.status === 'waiting_approval' || row.status === 'started' || row.status === 'unknown') {
-      expireApprovals();
-      const approval = spec.kind === 'tool' ? approvalFor(lease.runId, index, row.approval_id) : undefined;
+      await sql().read(expireApprovalsStep());
+      const approval = spec.kind === 'tool' ? await approvalFor(lease.runId, index, row.approval_id) : undefined;
       if (approval && approval.tool_name === spec.name) {
         if (APPROVAL_FINAL.has(approval.status) && spec.approvalOutcome) {
           const result = spec.approvalOutcome(approval);
           await completeStep(lease, index, result);
           return { result, replayed: true };
         }
-        setStepStatus(lease, index, 'waiting_approval', null, approval.id);
+        await setStepStatus(lease, index, 'waiting_approval', null, approval.id);
         throw new RunPausedError('approval');
       }
     }
 
     if (row.status === 'waiting_approval') {
       // Approval row missing: never guess; the owner decides.
-      setStepStatus(lease, index, 'unknown', 'linked approval not found');
+      await setStepStatus(lease, index, 'unknown', 'linked approval not found');
       throw new RunPausedError(`uncertain_step:${index}`);
     }
     if ((row.status === 'started' || row.status === 'unknown') && !row.idempotent) {
-      setStepStatus(lease, index, 'unknown', 'interrupted after it started; it may or may not have happened. Not repeated automatically.');
+      await setStepStatus(lease, index, 'unknown', 'interrupted after it started; it may or may not have happened. Not repeated automatically.');
       throw new RunPausedError(`uncertain_step:${index}`);
     }
     // idempotent started/unknown, or owner-chosen retry: run again with the same key
     attempt = row.attempt + 1;
   }
 
-  const remainingMs = reserveFreshStep(lease);
-  db.transaction(() => {
-    if (!holdsLease(lease)) throw new LeaseLostError();
+  const remainingMs = await reserveFreshStep(lease);
+  await sql().tx(function* () {
+    const d = yield* dialect();
+    if (!(yield* holdsLeaseStep(lease, true))) throw new LeaseLostError();
     if (row) {
-      db.prepare(`UPDATE task_run_steps SET status = 'started', attempt = ?, error = NULL, started_at = datetime('now') WHERE run_id = ? AND step_index = ?`)
-        .run(attempt, lease.runId, index);
+      yield* run(`UPDATE task_run_steps SET status = 'started', attempt = ?, error = NULL, started_at = ${nowText(d)} WHERE run_id = ? AND step_index = ?`,
+        attempt, lease.runId, index);
     } else {
-      db.prepare(`
+      yield* run(`
         INSERT INTO task_run_steps (run_id, step_index, kind, tool_name, idempotency_key, idempotent, status, attempt)
         VALUES (?, ?, ?, ?, ?, ?, 'started', 1)
-      `).run(lease.runId, index, spec.kind, spec.kind === 'tool' ? spec.name : null, key, spec.idempotent ? 1 : 0);
+      `, lease.runId, index, spec.kind, spec.kind === 'tool' ? spec.name : null, key, spec.idempotent ? 1 : 0);
     }
   });
 
@@ -426,10 +463,10 @@ export async function durableStep<T>(lease: Lease, index: number, spec: StepSpec
     if (err instanceof BudgetExceededError) {
       // Outcome of the interrupted step is unknown.
       const why = err.which === 'cost' ? err.message.slice(0, 300) : 'stopped by the duration budget while running';
-      try { setStepStatus(lease, index, spec.idempotent || err.which === 'cost' ? 'failed' : 'unknown', why); } catch { /* lease gone */ }
+      try { await setStepStatus(lease, index, spec.idempotent || err.which === 'cost' ? 'failed' : 'unknown', why); } catch { /* lease gone */ }
       throw err;
     }
-    try { setStepStatus(lease, index, 'failed', String((err as any)?.message ?? err).slice(0, 300)); } catch { /* lease gone */ }
+    try { await setStepStatus(lease, index, 'failed', String((err as any)?.message ?? err).slice(0, 300)); } catch { /* lease gone */ }
     throw err;
   } finally {
     if (timer) clearTimeout(timer);
@@ -437,7 +474,7 @@ export async function durableStep<T>(lease: Lease, index: number, spec: StepSpec
 
   const approvalId = spec.pendingApprovalOf?.(result) ?? null;
   if (approvalId) {
-    setStepStatus(lease, index, 'waiting_approval', null, approvalId);
+    await setStepStatus(lease, index, 'waiting_approval', null, approvalId);
     throw new RunPausedError('approval');
   }
   await completeStep(lease, index, result);
@@ -454,16 +491,19 @@ let kick: RecoveryKick | null = null;
 export function setRecoveryKick(fn: RecoveryKick | null): void { kick = fn; }
 
 /** Called by tools/approvals.ts after an approval was executed/failed/denied. */
-export function onApprovalDecided(approvalId: string): void {
+export async function onApprovalDecided(approvalId: string): Promise<void> {
   try {
-    const db = getDatabase();
-    const a = db.prepare('SELECT run_id FROM tool_approvals WHERE id = ?').get(approvalId) as { run_id: string | null } | undefined;
-    if (!a?.run_id) return;
-    const res = db.prepare(`
-      UPDATE task_runs SET status = 'queued', status_reason = 'approval decided', updated_at = datetime('now')
-      WHERE id = ? AND status = 'waiting_approval' AND status_reason = 'approval' AND cancel_requested = 0
-    `).run(a.run_id);
-    if (res.changes === 1) kick?.();
+    const changed = await sql().read((function* () {
+      const d = yield* dialect();
+      const a = yield* one<{ run_id: string | null }>('SELECT run_id FROM tool_approvals WHERE id = ?', approvalId);
+      if (!a?.run_id) return false;
+      const res = yield* run(`
+        UPDATE task_runs SET status = 'queued', status_reason = 'approval decided', updated_at = ${nowText(d)}
+        WHERE id = ? AND status = 'waiting_approval' AND status_reason = 'approval' AND cancel_requested = 0
+      `, a.run_id);
+      return res.changes === 1;
+    })());
+    if (changed) kick?.();
   } catch (err: any) {
     console.warn('[TaskRuns] could not continue run after approval:', err?.message);
   }
@@ -473,16 +513,19 @@ export function onApprovalDecided(approvalId: string): void {
  * Runs waiting for an approval that has been decided meanwhile (e.g. the
  * decision came while this process was down) are queued again.
  */
-export function requeueDecidedApprovalRuns(): number {
-  expireApprovals();
-  const res = getDatabase().prepare(`
-    UPDATE task_runs SET status = 'queued', status_reason = 'approval decided', updated_at = datetime('now')
-    WHERE status = 'waiting_approval' AND status_reason = 'approval' AND cancel_requested = 0
-      AND EXISTS (SELECT 1 FROM task_run_steps s JOIN tool_approvals a ON a.id = s.approval_id
-                  WHERE s.run_id = task_runs.id AND s.status = 'waiting_approval'
-                    AND a.status IN ('executed', 'denied', 'expired', 'failed'))
-  `).run();
-  return res.changes;
+export function requeueDecidedApprovalRuns(): Promise<number> {
+  return sql().read((function* () {
+    const d = yield* dialect();
+    yield* expireApprovalsStep();
+    const res = yield* run(`
+      UPDATE task_runs SET status = 'queued', status_reason = 'approval decided', updated_at = ${nowText(d)}
+      WHERE status = 'waiting_approval' AND status_reason = 'approval' AND cancel_requested = 0
+        AND EXISTS (SELECT 1 FROM task_run_steps s JOIN tool_approvals a ON a.id = s.approval_id
+                    WHERE s.run_id = task_runs.id AND s.status = 'waiting_approval'
+                      AND a.status IN ('executed', 'denied', 'expired', 'failed'))
+    `);
+    return res.changes;
+  })());
 }
 
 export class RunStateError extends Error { constructor(message: string, readonly status: number) { super(message); } }
@@ -492,28 +535,28 @@ export class RunStateError extends Error { constructor(message: string, readonly
  * stop at once; a live running run stops before its next step. Pending
  * approvals of the run are denied so they can never run later.
  */
-export function cancelRun(runId: string, actor: string): TaskRunRow {
-  const db = getDatabase();
+export function cancelRun(runId: string, actor: string): Promise<TaskRunRow> {
   const now = Date.now();
-  db.transaction(() => {
-    const run = getRun(runId);
-    if (!run) throw new RunStateError('Run not found', 404);
-    if (!ACTIVE_RUN_STATUSES.includes(run.status)) throw new RunStateError(`Run is ${run.status}`, 409);
-    db.prepare(`UPDATE task_runs SET cancel_requested = 1, updated_at = datetime('now') WHERE id = ?`).run(runId);
-    const live = run.status === 'running' && run.lease_owner && (run.lease_expires_at ?? 0) >= now;
+  return sql().tx(function* () {
+    const d = yield* dialect();
+    const r = yield* runRow(runId, true);
+    if (!r) throw new RunStateError('Run not found', 404);
+    if (!ACTIVE_RUN_STATUSES.includes(r.status)) throw new RunStateError(`Run is ${r.status}`, 409);
+    yield* run(`UPDATE task_runs SET cancel_requested = 1, updated_at = ${nowText(d)} WHERE id = ?`, runId);
+    const live = r.status === 'running' && r.lease_owner && (r.lease_expires_at ?? 0) >= now;
     if (!live) {
-      db.prepare(`
+      yield* run(`
         UPDATE task_runs SET status = 'cancelled', status_reason = ?, lease_owner = NULL, lease_expires_at = NULL,
-          segment_started_ms = NULL, finished_at = datetime('now'), updated_at = datetime('now')
+          segment_started_ms = NULL, finished_at = ${nowText(d)}, updated_at = ${nowText(d)}
         WHERE id = ?
-      `).run(`cancelled by ${actor}`, runId);
+      `, `cancelled by ${actor}`, runId);
     }
-    db.prepare(`
-      UPDATE tool_approvals SET status = 'denied', decided_at = datetime('now'), decided_by = 'run-cancelled'
+    yield* run(`
+      UPDATE tool_approvals SET status = 'denied', decided_at = ${nowText(d)}, decided_by = 'run-cancelled'
       WHERE run_id = ? AND status = 'pending'
-    `).run(runId);
+    `, runId);
+    return (yield* runRow(runId))!;
   });
-  return getRun(runId)!;
 }
 
 export type UncertainOutcome = 'done' | 'skip' | 'retry';
@@ -525,12 +568,11 @@ export type UncertainOutcome = 'done' | 'skip' | 'retry';
  *  - retry: it runs again (same idempotency key) when the run resumes.
  */
 export async function resolveUncertainStep(runId: string, stepIndex: number, outcome: UncertainOutcome, ownerId: string): Promise<TaskRunRow> {
-  const db = getDatabase();
-  const run = getRun(runId);
-  if (!run) throw new RunStateError('Run not found', 404);
-  const step = db.prepare('SELECT * FROM task_run_steps WHERE run_id = ? AND step_index = ?').get(runId, stepIndex) as TaskRunStepRow | undefined;
+  const r = await getRun(runId);
+  if (!r) throw new RunStateError('Run not found', 404);
+  const step = await sql().read(one<TaskRunStepRow>('SELECT * FROM task_run_steps WHERE run_id = ? AND step_index = ?', runId, stepIndex));
   if (!step) throw new RunStateError('Step not found', 404);
-  if (run.status !== 'waiting_approval' || step.status !== 'unknown' || run.status_reason !== `uncertain_step:${stepIndex}`) {
+  if (r.status !== 'waiting_approval' || step.status !== 'unknown' || r.status_reason !== `uncertain_step:${stepIndex}`) {
     throw new RunStateError('This step is not waiting for an owner decision', 409);
   }
   let enc: { encrypted: string; iv: string; authTag: string } | null = null;
@@ -541,42 +583,50 @@ export async function resolveUncertainStep(runId: string, stepIndex: number, out
     const result = { content: [{ type: 'text', text }], ...(outcome === 'skip' ? { error: 'skipped by owner' } : {}) };
     enc = await encryptJson(result);
   }
-  db.transaction(() => {
-    const cur = getRun(runId)!;
+  const out = await sql().tx(function* () {
+    const d = yield* dialect();
+    const cur = (yield* runRow(runId, true))!;
     if (cur.status !== 'waiting_approval' || cur.status_reason !== `uncertain_step:${stepIndex}`) throw new RunStateError('Run changed meanwhile', 409);
     if (enc) {
-      db.prepare(`
+      yield* run(`
         UPDATE task_run_steps SET status = 'completed', result_encrypted = ?, result_iv = ?, result_tag = ?,
-          completed_at = datetime('now'), resolved_by = ? WHERE run_id = ? AND step_index = ?
-      `).run(enc.encrypted, enc.iv, enc.authTag, `${ownerId}:${outcome}`, runId, stepIndex);
+          completed_at = ${nowText(d)}, resolved_by = ? WHERE run_id = ? AND step_index = ?
+      `, enc.encrypted, enc.iv, enc.authTag, `${ownerId}:${outcome}`, runId, stepIndex);
     } else {
-      db.prepare(`UPDATE task_run_steps SET status = 'retry', resolved_by = ? WHERE run_id = ? AND step_index = ?`)
-        .run(`${ownerId}:retry`, runId, stepIndex);
+      yield* run(`UPDATE task_run_steps SET status = 'retry', resolved_by = ? WHERE run_id = ? AND step_index = ?`,
+        `${ownerId}:retry`, runId, stepIndex);
     }
-    db.prepare(`UPDATE task_runs SET status = 'queued', status_reason = ?, updated_at = datetime('now') WHERE id = ?`)
-      .run(`owner resolved step ${stepIndex}: ${outcome}`, runId);
+    yield* run(`UPDATE task_runs SET status = 'queued', status_reason = ?, updated_at = ${nowText(d)} WHERE id = ?`,
+      `owner resolved step ${stepIndex}: ${outcome}`, runId);
+    return (yield* runRow(runId))!;
   });
   kick?.();
-  return getRun(runId)!;
+  return out;
 }
 
 /** Runs a recovery worker may claim now: queued, or running with an expired lease. */
-export function claimableRunIds(now = Date.now(), limit = 20): string[] {
-  return (getDatabase().prepare(`
-    SELECT id FROM task_runs
-    WHERE cancel_requested = 0 AND (status = 'queued' OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at < ?)))
-    ORDER BY created_at LIMIT ?
-  `).all(now, limit) as Array<{ id: string }>).map((r) => r.id);
+export function claimableRunIds(now = Date.now(), limit = 20): Promise<string[]> {
+  return sql().read((function* () {
+    const rows = yield* all<{ id: string }>(`
+      SELECT id FROM task_runs
+      WHERE cancel_requested = 0 AND (status = 'queued' OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at < ?)))
+      ORDER BY created_at LIMIT ?
+    `, now, limit);
+    return rows.map((r) => r.id);
+  })());
 }
 
 /** Running runs whose lease expired and that were asked to cancel: cancel them now. */
-export function settleCancelledDeadRuns(now = Date.now()): number {
-  return getDatabase().prepare(`
-    UPDATE task_runs SET status = 'cancelled', status_reason = COALESCE(status_reason, 'cancelled'),
-      lease_owner = NULL, lease_expires_at = NULL, segment_started_ms = NULL,
-      finished_at = datetime('now'), updated_at = datetime('now')
-    WHERE cancel_requested = 1 AND status IN ('queued', 'running') AND (status = 'queued' OR lease_expires_at IS NULL OR lease_expires_at < ?)
-  `).run(now).changes;
+export function settleCancelledDeadRuns(now = Date.now()): Promise<number> {
+  return sql().read((function* () {
+    const d = yield* dialect();
+    return (yield* run(`
+      UPDATE task_runs SET status = 'cancelled', status_reason = COALESCE(status_reason, 'cancelled'),
+        lease_owner = NULL, lease_expires_at = NULL, segment_started_ms = NULL,
+        finished_at = ${nowText(d)}, updated_at = ${nowText(d)}
+      WHERE cancel_requested = 1 AND status IN ('queued', 'running') AND (status = 'queued' OR lease_expires_at IS NULL OR lease_expires_at < ?)
+    `, now)).changes;
+  })());
 }
 
 // ---------------------------------------------------------------------------
@@ -646,16 +696,20 @@ export function stepView(row: TaskRunStepRow): TaskRunStepView {
   };
 }
 
-export function listRuns(filter: { userId?: string | null; status?: string; taskId?: string; limit?: number }): TaskRunRow[] {
-  const where: string[] = [];
-  const args: unknown[] = [];
-  if (filter.userId !== undefined) { where.push('user_id IS ?'); args.push(filter.userId); }
-  if (filter.status) { where.push('status = ?'); args.push(filter.status); }
-  if (filter.taskId) { where.push('task_id = ?'); args.push(filter.taskId); }
-  const limit = Math.min(Math.max(Number(filter.limit) || 50, 1), 200);
-  return getDatabase().prepare(
-    `SELECT * FROM task_runs ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC, rowid DESC LIMIT ?`
-  ).all(...args, limit) as TaskRunRow[];
+/** Newest first; ties on created_at (second precision) by id (B2.2b-3: no rowid). */
+export function listRuns(filter: { userId?: string | null; status?: string; taskId?: string; limit?: number }): Promise<TaskRunRow[]> {
+  return sql().read((function* () {
+    const d = yield* dialect();
+    const where: string[] = [];
+    const args: Array<string | number | null> = [];
+    if (filter.userId !== undefined) { where.push(`user_id ${isParam(d)}`); args.push(filter.userId); }
+    if (filter.status) { where.push('status = ?'); args.push(filter.status); }
+    if (filter.taskId) { where.push('task_id = ?'); args.push(filter.taskId); }
+    const limit = Math.min(Math.max(Number(filter.limit) || 50, 1), 200);
+    return yield* all<TaskRunRow>(
+      `SELECT * FROM task_runs ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC, id DESC LIMIT ?`,
+      ...args, limit);
+  })());
 }
 
 function roundCents(n: number): number { return Math.round((Number(n) || 0) * 10_000) / 10_000; }
@@ -670,14 +724,14 @@ function parseReasons(raw: string | null): string[] {
 // ---------------------------------------------------------------------------
 
 /** Record a model step's usage (provider, model, tokens, cost) and add it to the run total. */
-export function recordStepUsage(runId: string, stepIndex: number, u: { provider: string; model: string | null; inputTokens: number; outputTokens: number; costCents: number; source: string }): void {
-  const db = getDatabase();
-  db.transaction(() => {
-    db.prepare(`
+export function recordStepUsage(runId: string, stepIndex: number, u: { provider: string; model: string | null; inputTokens: number; outputTokens: number; costCents: number; source: string }): Promise<void> {
+  return sql().tx(function* () {
+    const d = yield* dialect();
+    yield* run(`
       UPDATE task_run_steps SET provider = ?, model = ?, input_tokens = ?, output_tokens = ?, cost_cents = COALESCE(cost_cents, 0) + ?, usage_source = ?
       WHERE run_id = ? AND step_index = ?
-    `).run(u.provider, u.model, u.inputTokens, u.outputTokens, u.costCents, u.source, runId, stepIndex);
-    db.prepare(`UPDATE task_runs SET cost_cents = cost_cents + ?, updated_at = datetime('now') WHERE id = ?`).run(u.costCents, runId);
+    `, u.provider, u.model, u.inputTokens, u.outputTokens, u.costCents, u.source, runId, stepIndex);
+    yield* run(`UPDATE task_runs SET cost_cents = cost_cents + ?, updated_at = ${nowText(d)} WHERE id = ?`, u.costCents, runId);
   });
 }
 
@@ -687,54 +741,70 @@ export function recordStepUsage(runId: string, stepIndex: number, u: { provider:
 
 export interface StoredVerdict extends Verdict { round: number; verifier: string; createdAt: string }
 
-export function getVerification(runId: string, round: number): StoredVerdict | null {
-  const row = getDatabase().prepare('SELECT * FROM task_run_verifications WHERE run_id = ? AND round = ?').get(runId, round) as
-    { round: number; status: VerificationStatus; reasons: string; checks: string; verifier: string; created_at: string } | undefined;
+function* verificationStep(runId: string, round: number): Step<StoredVerdict | null> {
+  const row = yield* one<{ round: number; status: VerificationStatus; reasons: string; checks: string; verifier: string; created_at: string }>(
+    'SELECT * FROM task_run_verifications WHERE run_id = ? AND round = ?', runId, round);
   if (!row) return null;
   return { round: row.round, status: row.status, reasons: parseReasons(row.reasons), checks: JSON.parse(row.checks), verifier: row.verifier, createdAt: isoUtc(row.created_at) as string };
 }
 
-export function listVerifications(runId: string): StoredVerdict[] {
-  const rows = getDatabase().prepare('SELECT round FROM task_run_verifications WHERE run_id = ? ORDER BY round').all(runId) as Array<{ round: number }>;
-  return rows.map((r) => getVerification(runId, r.round)!).filter(Boolean);
+export function getVerification(runId: string, round: number): Promise<StoredVerdict | null> {
+  return sql().read(verificationStep(runId, round));
+}
+
+export function listVerifications(runId: string): Promise<StoredVerdict[]> {
+  return sql().read((function* () {
+    const rows = yield* all<{ round: number }>('SELECT round FROM task_run_verifications WHERE run_id = ? ORDER BY round', runId);
+    const out: StoredVerdict[] = [];
+    for (const r of rows) {
+      const v = yield* verificationStep(runId, r.round);
+      if (v) out.push(v);
+    }
+    return out;
+  })());
 }
 
 /**
  * Store a round's verdict (fenced). A verdict already stored for the round
  * wins: a resumed run replays the same decision instead of judging again.
  */
-export function storeVerification(lease: Lease, round: number, verdict: Verdict, verifier: string): StoredVerdict {
-  const db = getDatabase();
-  db.transaction(() => {
-    if (!holdsLease(lease)) throw new LeaseLostError();
-    db.prepare(`
-      INSERT OR IGNORE INTO task_run_verifications (run_id, round, status, reasons, checks, verifier) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(lease.runId, round, verdict.status, JSON.stringify(verdict.reasons), JSON.stringify(verdict.checks), verifier);
-    db.prepare(`UPDATE task_runs SET verification_round = MAX(verification_round, ?), updated_at = datetime('now') WHERE id = ?`).run(round, lease.runId);
+export function storeVerification(lease: Lease, round: number, verdict: Verdict, verifier: string): Promise<StoredVerdict> {
+  return sql().tx(function* () {
+    const d = yield* dialect();
+    if (!(yield* holdsLeaseStep(lease, true))) throw new LeaseLostError();
+    yield* run(insertOrIgnore(d, `
+      INSERT INTO task_run_verifications (run_id, round, status, reasons, checks, verifier) VALUES (?, ?, ?, ?, ?, ?)
+    `), lease.runId, round, verdict.status, JSON.stringify(verdict.reasons), JSON.stringify(verdict.checks), verifier);
+    yield* run(`UPDATE task_runs SET verification_round = ${greatest(d)}(verification_round, ?), updated_at = ${nowText(d)} WHERE id = ?`, round, lease.runId);
+    return (yield* verificationStep(lease.runId, round))!;
   });
-  return getVerification(lease.runId, round)!;
 }
 
 /** Set the run's verification status (fenced while the run is running). */
-export function setRunVerification(lease: Lease, status: VerificationStatus, reasons: string[]): void {
-  const db = getDatabase();
-  const res = db.prepare(`UPDATE task_runs SET verification_status = ?, verification_reasons = ?, updated_at = datetime('now') WHERE ${FENCE}`)
-    .run(status, JSON.stringify(reasons), lease.runId, lease.owner, lease.generation);
+export async function setRunVerification(lease: Lease, status: VerificationStatus, reasons: string[]): Promise<void> {
+  const res = await sql().read((function* () {
+    const d = yield* dialect();
+    return yield* run(`UPDATE task_runs SET verification_status = ?, verification_reasons = ?, updated_at = ${nowText(d)} WHERE ${FENCE}`,
+      status, JSON.stringify(reasons), lease.runId, lease.owner, lease.generation);
+  })());
   if (res.changes !== 1) throw new LeaseLostError();
 }
 
 /** After the run finished (unfenced): mark it needs_review (e.g. the small-agent card asks for it). */
-export function markRunNeedsReview(runId: string, reason: string): void {
-  getDatabase().prepare(`
-    UPDATE task_runs SET verification_status = 'needs_review', verification_reasons = ?, updated_at = datetime('now')
-    WHERE id = ? AND status = 'completed' AND (verification_status IS NULL OR verification_status = 'verified') AND review_decision IS NULL
-  `).run(JSON.stringify([reason]), runId);
+export async function markRunNeedsReview(runId: string, reason: string): Promise<void> {
+  await sql().read((function* () {
+    const d = yield* dialect();
+    yield* run(`
+      UPDATE task_runs SET verification_status = 'needs_review', verification_reasons = ?, updated_at = ${nowText(d)}
+      WHERE id = ? AND status = 'completed' AND (verification_status IS NULL OR verification_status = 'verified') AND review_decision IS NULL
+    `, JSON.stringify([reason]), runId);
+  })());
 }
 
 /** Successful tool calls of a run (completed tool steps whose result has no error). */
 export async function successfulToolCalls(runId: string): Promise<Map<string, number>> {
   const out = new Map<string, number>();
-  for (const s of getSteps(runId)) {
+  for (const s of await getSteps(runId)) {
     if (s.kind !== 'tool' || s.status !== 'completed' || !s.tool_name) continue;
     let ok = false;
     try { const r = await stepResult<any>(s); ok = !!r && !r.error; } catch { ok = false; }
@@ -749,19 +819,20 @@ export type ReviewDecision = 'accept' | 'reject';
  * Owner decision for a run whose result needs review. Only once; only for
  * a completed run in needs_review.
  */
-export function reviewRun(runId: string, decision: ReviewDecision, by: string, reviewer: 'owner' | 'large_agent', note: string | null): TaskRunRow {
-  const db = getDatabase();
-  db.transaction(() => {
-    const run = getRun(runId);
-    if (!run) throw new RunStateError('Run not found', 404);
-    if (run.status !== 'completed' || run.verification_status !== 'needs_review') throw new RunStateError('This run is not waiting for a review', 409);
-    if (run.review_decision) throw new RunStateError('This run was already reviewed', 409);
-    db.prepare(`
-      UPDATE task_runs SET review_decision = ?, reviewed_by = ?, reviewer_kind = ?, review_note = ?, reviewed_at = datetime('now'), updated_at = datetime('now')
+export function reviewRun(runId: string, decision: ReviewDecision, by: string, reviewer: 'owner' | 'large_agent', note: string | null): Promise<TaskRunRow> {
+  return sql().tx(function* () {
+    const d = yield* dialect();
+    // Locked (PostgreSQL): a second concurrent review waits, then sees review_decision set.
+    const r = yield* runRow(runId, true);
+    if (!r) throw new RunStateError('Run not found', 404);
+    if (r.status !== 'completed' || r.verification_status !== 'needs_review') throw new RunStateError('This run is not waiting for a review', 409);
+    if (r.review_decision) throw new RunStateError('This run was already reviewed', 409);
+    yield* run(`
+      UPDATE task_runs SET review_decision = ?, reviewed_by = ?, reviewer_kind = ?, review_note = ?, reviewed_at = ${nowText(d)}, updated_at = ${nowText(d)}
       WHERE id = ?
-    `).run(decision === 'accept' ? 'accepted' : 'rejected', by, reviewer, note, runId);
+    `, decision === 'accept' ? 'accepted' : 'rejected', by, reviewer, note, runId);
+    return (yield* runRow(runId))!;
   });
-  return getRun(runId)!;
 }
 
 export interface TaskRunDetailView extends TaskRunView {
@@ -776,5 +847,5 @@ export async function runDetailView(row: TaskRunRow): Promise<TaskRunDetailView>
     const c = await runContract(row);
     contract = c ? contractView(c) : null;
   } catch { contract = null; }
-  return { ...runView(row), contract, verificationRounds: listVerifications(row.id) };
+  return { ...runView(row), contract, verificationRounds: await listVerifications(row.id) };
 }

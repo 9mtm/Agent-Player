@@ -12,7 +12,7 @@ import * as os from 'node:os';
 import type { FastifyReply } from 'fastify';
 import { ClaudeClient } from '../../llm/claude-client.js';
 import { recordInteractiveUsage } from '../../llm/model-call.js';
-import { createToolsRegistry } from '../../tools/index.js';
+import { createAgentToolsRegistry } from '../../tools/index.js';
 import type { ChannelToolPolicy } from '../../tools/channel-policy.js';
 import { loadClaudeProjectMemory } from './claude-local.js';
 import { buildAiToolsContext } from './ai-tools.js';
@@ -119,7 +119,7 @@ export async function streamChatClaude(
 
     // Build tools registry for execution
     // Same tool policy and agent grants as the offered list: a turn cannot run a tool it was not offered.
-    const toolsRegistry = createToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers });
+    const toolsRegistry = await createAgentToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers });
 
     // Convert messages to Claude format (filter out system role)
     let loopMessages: Array<{ role: 'user' | 'assistant'; content: string | any[] }> = messages
@@ -231,7 +231,7 @@ export async function streamChatClaude(
           maxTokens: maxTokens ?? 4096,
         });
         // R2.2: interactive owner chat is not gated; its paid usage is recorded for GET /api/budget.
-        recordInteractiveUsage({ provider: 'claude', model, usage: r.usage, outputText: r.content, purpose: 'interactive_chat' });
+        await recordInteractiveUsage({ provider: 'claude', model, usage: r.usage, outputText: r.content, purpose: 'interactive_chat' });
         return r;
       } catch (err: any) {
         const isRateLimit = err.message?.includes('rate_limit_error') || err.message?.includes('rate limit');

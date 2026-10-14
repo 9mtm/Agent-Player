@@ -11,7 +11,7 @@
 import cron from 'node-cron';
 import path from 'path';
 import { existsSync, readFileSync } from 'fs';
-import { getDatabase } from '../db/index.js';
+import { all, one, run, sql } from '../repositories/sql-steps.js';
 import { getOrchestrator } from '../multi-agent/index.js';
 import { logActivity } from './activity-logger.js';
 import { resolveProviderApiKey } from '../credentials/authority.js';
@@ -162,10 +162,8 @@ function registerAgentCron(agent: AgentRow): void {
   }
 
   const task = cron.schedule(agent.cron_schedule, async () => {
-    const db = getDatabase();
-
-    // Update last_heartbeat
-    db.prepare(`UPDATE agents_config SET last_heartbeat = CURRENT_TIMESTAMP WHERE id = ?`).run(agent.id);
+    // Update last_heartbeat (timestamptz on PostgreSQL; CURRENT_TIMESTAMP on both drivers)
+    await sql().read(run(`UPDATE agents_config SET last_heartbeat = CURRENT_TIMESTAMP WHERE id = ?`, agent.id));
 
     // Check for an assigned task
     const orchestrator = getOrchestrator();
@@ -212,13 +210,11 @@ function registerAgentCron(agent: AgentRow): void {
  * Called once at server startup.
  */
 export async function startAgentCronService(): Promise<void> {
-  const db = getDatabase();
-
-  const agents = db.prepare(`
+  const agents = await sql().read(all<AgentRow>(`
     SELECT id, name, model, provider, system_prompt, temperature, max_tokens, cron_schedule, cron_enabled
     FROM agents_config
     WHERE cron_enabled = 1 AND cron_schedule IS NOT NULL
-  `).all() as AgentRow[];
+  `));
 
   if (agents.length === 0) {
     console.log('[AgentCron] ℹ️  No agents with cron enabled at startup');
@@ -236,12 +232,11 @@ export async function startAgentCronService(): Promise<void> {
  * Refresh cron jobs when an agent's config changes.
  * Call this from the agents-config PUT route when cron fields are updated.
  */
-export function refreshAgentCron(agentId: string): void {
-  const db = getDatabase();
-  const agent = db.prepare(`
+export async function refreshAgentCron(agentId: string): Promise<void> {
+  const agent = await sql().read(one<AgentRow>(`
     SELECT id, name, model, provider, system_prompt, temperature, max_tokens, cron_schedule, cron_enabled
     FROM agents_config WHERE id = ?
-  `).get(agentId) as AgentRow | undefined;
+  `, agentId));
 
   if (!agent) return;
 
