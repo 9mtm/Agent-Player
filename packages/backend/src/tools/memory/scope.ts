@@ -11,7 +11,7 @@
  */
 
 import type { ToolExecutionContext } from '../types.js';
-import { selectDrawers, type DrawerRef } from '../../memory/drawers.js';
+import { MAX_PEOPLE_DRAWERS, normalizeDrawer, sameDrawer, selectDrawers, type DrawerRef } from '../../memory/drawers.js';
 import { outsiderAgentMemoryEnabled } from '../../services/outsider-memory.js';
 
 /** The run's user, or null (fail closed). A `userId` in tool params is never used. */
@@ -35,4 +35,31 @@ export function toolMemoryDrawers(context?: ToolExecutionContext): DrawerRef[] {
   if (context?.toolPolicy && !outsiderAgentMemoryEnabled()) return selectDrawers({ audience: 'outsider' });
   if (context?.memoryDrawers) return context.memoryDrawers;
   return selectDrawers({ audience: 'owner' });
+}
+
+/** At most this many drawers are kept in an approval's stored run scope. */
+export const MAX_APPROVAL_DRAWERS = 4 + MAX_PEOPLE_DRAWERS;
+
+/**
+ * Drawers an approved tool call re-runs with (CORE-07b): exactly the drawers
+ * stored with the approval at request time, intersected with what the
+ * policies allow now. A channel/outsider policy (without the server opt-in)
+ * allows none; invalid or duplicate entries are dropped; at most 10 people
+ * drawers and MAX_APPROVAL_DRAWERS in total. Never wider than the stored
+ * list; not a list -> none (fail closed).
+ */
+export function approvalRunDrawers(stored: unknown, context: Pick<ToolExecutionContext, 'toolPolicy'>): DrawerRef[] {
+  if (!Array.isArray(stored)) return [];
+  if (context.toolPolicy && !outsiderAgentMemoryEnabled()) return [];
+  const out: DrawerRef[] = [];
+  let people = 0;
+  for (const raw of stored) {
+    let d: DrawerRef;
+    try { d = normalizeDrawer(raw); } catch { continue; }
+    if (out.some((x) => sameDrawer(x, d))) continue;
+    if (d.kind === 'people' && ++people > MAX_PEOPLE_DRAWERS) continue;
+    out.push(d);
+    if (out.length >= MAX_APPROVAL_DRAWERS) break;
+  }
+  return out;
 }

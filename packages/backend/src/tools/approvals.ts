@@ -19,6 +19,8 @@ import { getEncryptionService } from '../credentials/encryption.js';
 import { isSecretKey } from '../credentials/secret-mask.js';
 import type { Tool, ToolResult, ToolExecutionContext } from './types.js';
 import { CHANNEL_SEND_TOOLS, createChannelToolPolicy, type ChannelToolPolicy } from './channel-policy.js';
+import { approvalRunDrawers, toolMemoryDrawers } from './memory/scope.js';
+import type { DrawerRef } from '../memory/drawers.js';
 
 export type ApprovalCategory = 'message' | 'delete' | 'money' | 'install' | 'settings' | 'other';
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'executed' | 'failed' | 'expired';
@@ -173,6 +175,42 @@ function paramsHash(salt: string, params: unknown): string {
   return createHmac('sha256', salt).update(canonicalJson(params)).digest('hex');
 }
 
+/**
+ * Non-secret scope of the run that asked (CORE-07b): the drawers the turn
+ * could reach (effective, see tools/memory/scope.ts) and its task id. Stored
+ * with the approval and shown to the owner; the call re-runs with it.
+ */
+export interface ApprovalRunScope {
+  memoryDrawers: DrawerRef[];
+  taskId?: string;
+}
+
+export function runScopeOf(context: ToolExecutionContext): ApprovalRunScope {
+  const scope: ApprovalRunScope = { memoryDrawers: toolMemoryDrawers(context).map((d) => (d.key ? { kind: d.kind, key: d.key } : { kind: d.kind })) };
+  if (typeof context.taskId === 'string' && context.taskId) scope.taskId = context.taskId;
+  return scope;
+}
+
+/**
+ * What the hash binds: the parameters, plus the run scope when one was stored.
+ * Rows from before run_scope (null) keep the old hash over the parameters only.
+ */
+function hashedPayload(params: unknown, scope: ApprovalRunScope | null): unknown {
+  return scope ? { params, runScope: scope } : params;
+}
+
+function parseRunScope(raw: unknown): ApprovalRunScope | null | 'invalid' {
+  if (raw === null || raw === undefined) return null;
+  try {
+    const v = JSON.parse(String(raw));
+    if (!v || typeof v !== 'object' || Array.isArray(v) || !Array.isArray(v.memoryDrawers)) return 'invalid';
+    if (v.taskId !== undefined && typeof v.taskId !== 'string') return 'invalid';
+    return v as ApprovalRunScope;
+  } catch {
+    return 'invalid';
+  }
+}
+
 function sameHash(a: unknown, b: unknown): boolean {
   if (typeof a !== 'string' || typeof b !== 'string' || !/^[0-9a-f]{64}$/.test(a) || !/^[0-9a-f]{64}$/.test(b)) return false;
   return timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
@@ -254,7 +292,8 @@ export async function requestApproval(
   const { encrypted, iv, authTag } = await getEncryptionService().encrypt(JSON.stringify(params ?? {}));
   const id = randomUUID();
   const salt = randomBytes(16).toString('hex');
-  const hash = paramsHash(salt, params ?? {});
+  const runScope = runScopeOf(context);
+  const hash = paramsHash(salt, hashedPayload(params ?? {}, runScope));
   const { preview, truncated } = previewParams(tool.name, params);
   const policy = context.toolPolicy;
   const origin = policy
@@ -263,13 +302,13 @@ export async function requestApproval(
   db.prepare(`
     INSERT INTO tool_approvals (id, status, agent_id, user_id, session_id, tool_name, category,
       params_encrypted, params_iv, params_tag, params_preview, origin, delegated_from,
-      params_hash, params_salt, preview_truncated)
-    VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      params_hash, params_salt, preview_truncated, run_scope)
+    VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, agentId, context.userId ?? null, context.sessionId ?? null, tool.name, category,
     encrypted, iv, authTag, preview, origin,
     context.delegatedFrom?.length ? JSON.stringify(context.delegatedFrom) : null,
-    hash, salt, truncated ? 1 : 0,
+    hash, salt, truncated ? 1 : 0, canonicalJson(runScope),
   );
   console.log(`[Approvals] ⏸️  Pending approval ${id} for ${tool.name} (agent ${agentId ?? '(none)'})`);
 
@@ -304,8 +343,10 @@ export interface ApprovalDetail extends ApprovalRecord {
   params: unknown;
   /** Paths (e.g. `apiKey`, `auth.token`, `keys[0]`) of every masked leaf in `params`. */
   maskedFields: string[];
-  /** Send this back with the approve call; binds the approval to these parameters. */
+  /** Send this back with the approve call; binds the approval to these parameters and this scope. */
   paramsHash: string | null;
+  /** Scope the call re-runs with (∩ policies at approval time); null for old rows. */
+  runScope: ApprovalRunScope | null;
 }
 
 /** Full view for the owner (decrypts the stored parameters). */
@@ -322,7 +363,8 @@ export async function getApprovalDetail(id: string): Promise<ApprovalDetail | nu
     params = null;
     maskedFields = [];
   }
-  return { ...toRecord(row), params, maskedFields, paramsHash: row.params_hash ?? null };
+  const scope = parseRunScope(row.run_scope);
+  return { ...toRecord(row), params, maskedFields, paramsHash: row.params_hash ?? null, runScope: scope === 'invalid' ? null : scope };
 }
 
 export class ApprovalStateError extends Error {
@@ -368,10 +410,11 @@ export async function approveAndRun(id: string, ownerId: string, expectedHash: u
   };
 
   let params: Record<string, any>;
+  const runScope = parseRunScope(row.run_scope);
   try {
     const plain = await getEncryptionService().decrypt(row.params_encrypted, row.params_iv, row.params_tag);
     params = JSON.parse(plain);
-    if (!row.params_salt || !sameHash(paramsHash(row.params_salt, params), row.params_hash)) {
+    if (runScope === 'invalid' || !row.params_salt || !sameHash(paramsHash(row.params_salt, hashedPayload(params, runScope)), row.params_hash)) {
       finish('failed', null, 'Stored parameters changed after the request');
       const result: ToolResult = { content: [{ type: 'text', text: 'Approval failed: the parameters changed after the request; nothing was run.' }], error: 'params mismatch' };
       return { record: getApproval(id)!, result };
@@ -391,6 +434,13 @@ export async function approveAndRun(id: string, ownerId: string, expectedHash: u
   let delegatedFrom: string[] = [];
   try { delegatedFrom = row.delegated_from ? JSON.parse(row.delegated_from) : []; } catch { delegatedFrom = ['(invalid)']; }
 
+  // CORE-07b: the turn's own scope, never wider than the policies allow now.
+  // Old rows without a stored scope keep the previous default (owner +
+  // experience drawers).
+  const scoped = runScope && typeof runScope === 'object'
+    ? { memoryDrawers: approvalRunDrawers(runScope.memoryDrawers, { toolPolicy }), ...(runScope.taskId ? { taskId: runScope.taskId } : {}) }
+    : {};
+
   const { createToolsRegistry } = await import('./index.js');
   const registry = createToolsRegistry({
     workspaceDir: process.cwd(),
@@ -399,6 +449,7 @@ export async function approveAndRun(id: string, ownerId: string, expectedHash: u
     agentId: row.agent_id ?? undefined,
     delegatedFrom,
     toolPolicy,
+    ...scoped,
   });
   const ticket: ApprovalTicket = Object.freeze({ approvalId: id, toolName: row.tool_name });
   liveTickets.add(ticket);

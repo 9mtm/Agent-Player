@@ -6,8 +6,9 @@
  * Irreversible, so every call needs one-time owner approval (S1.3,
  * APPROVAL_REQUIRED_TOOLS 'delete'). Never in a turn that answers an
  * outsider. Only the run user's own memories, and only in drawers open for
- * the run (an approved call re-runs without a turn scope, so it then reaches
- * only the owner + experience drawers; fail closed). The result never repeats the
+ * the run (an approved call re-runs with the drawers stored with the approval
+ * at request time, intersected with what the policies allow at approval
+ * time; CORE-07b). The result never repeats the
  * memory text (it is kept in the approval record).
  */
 

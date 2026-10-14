@@ -340,3 +340,69 @@ test('embeddings keep no vocabulary of seen words (no cache of forgotten text)',
   const b = await svc.embed('stable vector words');
   assert.deepEqual(a, b);
 });
+
+test('CORE-07b: an approved memory_forget re-runs with the turn\'s stored drawer scope, never wider', async () => {
+  const tools = await import(join(backendDir, 'src/tools/index.ts'));
+  const A = await import(join(backendDir, 'src/tools/approvals.ts'));
+  const S = await import(join(backendDir, 'src/tools/memory/scope.ts'));
+  const inDelta = await create('mg-owner', 'Okapi-31 delta note', { drawer: { kind: 'project', key: 'delta' } });
+  const inEps = await create('mg-owner', 'Okapi-32 epsilon note', { drawer: { kind: 'project', key: 'epsilon' } });
+  const turn = { workspaceDir: dir, userId: 'mg-owner', agentId: 'mg-agent', sessionId: 's-07b', taskId: 'task-07b', memoryDrawers: D.selectDrawers({ audience: 'owner', project: 'delta' }) };
+  const ask = async (id, ctx = turn) => {
+    const res = await quietly(() => tools.createToolsRegistry(ctx).execute('memory_forget', { id }));
+    assert.equal(res.details?.status, 'pending_approval', res.content?.[0]?.text);
+    return res.details.approvalId;
+  };
+  const approveIt = async (id) => {
+    const full = await A.getApprovalDetail(id);
+    return quietly(() => A.approveAndRun(id, 'mg-owner', full.paramsHash));
+  };
+
+  // The owner sees the scope; it is bound by the hash.
+  const a1 = await ask(inDelta.id);
+  const full = await A.getApprovalDetail(a1);
+  assert.deepEqual(full.runScope, { memoryDrawers: [{ kind: 'owner' }, { kind: 'experience' }, { kind: 'project', key: 'delta' }], taskId: 'task-07b' });
+  // Project delta memory: reachable because the turn had delta open.
+  const r1 = await approveIt(a1);
+  assert.equal(r1.record.status, 'executed', r1.result.content?.[0]?.text);
+  assert.ok(!getMemoryStorage().getOwned('mg-owner', inDelta.id));
+
+  // Same turn asking for an epsilon memory: still refused after approval.
+  const a2 = await ask(inEps.id);
+  const r2 = await approveIt(a2);
+  assert.equal(r2.record.status, 'failed');
+  assert.match(r2.result.error, /not open/);
+  assert.ok(getMemoryStorage().getOwned('mg-owner', inEps.id));
+
+  // Widening the stored scope after the request breaks the hash: nothing runs.
+  const a3 = await ask(inEps.id);
+  const shown = (await A.getApprovalDetail(a3)).paramsHash;
+  db.prepare('UPDATE tool_approvals SET run_scope = ? WHERE id = ?')
+    .run(JSON.stringify({ memoryDrawers: [{ kind: 'project', key: 'epsilon' }] }), a3);
+  const r3 = await quietly(() => A.approveAndRun(a3, 'mg-owner', shown));
+  assert.equal(r3.record.status, 'failed');
+  // Removing the stored scope (to fall back to the default) breaks it too.
+  const a3n = await ask(inEps.id);
+  const shownN = (await A.getApprovalDetail(a3n)).paramsHash;
+  db.prepare('UPDATE tool_approvals SET run_scope = NULL WHERE id = ?').run(a3n);
+  assert.equal((await quietly(() => A.approveAndRun(a3n, 'mg-owner', shownN))).record.status, 'failed');
+  assert.ok(getMemoryStorage().getOwned('mg-owner', inEps.id));
+
+  // Approval-time intersection: an outsider policy allows no drawers; bad entries dropped.
+  assert.deepEqual(S.approvalRunDrawers([{ kind: 'project', key: 'epsilon' }], { toolPolicy: { channel: 'telegram' } }), []);
+  assert.deepEqual(S.approvalRunDrawers([{ kind: 'project', key: '..' }, { kind: 'owner' }, { kind: 'owner' }, { kind: 'nope' }], {}), [{ kind: 'owner' }]);
+  assert.deepEqual(S.approvalRunDrawers('owner', {}), []);
+  const many = Array.from({ length: 15 }, (_, i) => ({ kind: 'people', key: `p-${i}` }));
+  assert.equal(S.approvalRunDrawers(many, {}).length, 10);
+
+  // A turn whose drawers did not include the owner drawer: the approved call cannot reach it either.
+  const own = await create('mg-owner', 'Okapi-33 owner note');
+  const a4 = await ask(own.id, { ...turn, memoryDrawers: [{ kind: 'task', key: 'task-07b' }] });
+  const r4 = await approveIt(a4);
+  assert.equal(r4.record.status, 'failed');
+  assert.ok(getMemoryStorage().getOwned('mg-owner', own.id));
+  // An epsilon turn reaches the epsilon memory.
+  const a5 = await ask(inEps.id, { ...turn, memoryDrawers: D.selectDrawers({ audience: 'owner', project: 'epsilon' }) });
+  assert.equal((await approveIt(a5)).record.status, 'executed');
+  assert.ok(!getMemoryStorage().getOwned('mg-owner', inEps.id));
+});
