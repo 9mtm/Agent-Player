@@ -76,12 +76,22 @@ export const PORTED = [
   'src/mcp-client/service.ts',
   'src/mcp-client/tools.ts',
   'src/mcp-client/grant-binding.ts',
+  'src/settings/settings-manager.ts',
+  'src/services/notification-service.ts',
+  'src/api/routes/notifications.ts',
+  'src/tools/notifications/create-reminder.tool.ts',
+  'src/services/extension-analytics.ts',
+  'src/auth/account-lockout.ts',
+  'src/repositories/pg/login-throttle.ts',
+  'src/repositories/login-throttle.ts',
 ];
 
 /** Ported modules without SQL of their own (they compose ported services). */
 const NO_SQL = new Set(['src/repositories/agents.ts', 'src/repositories/task-runs.ts', 'src/repositories/memory-owner.ts', 'src/memory/retrieval.ts',
   // B2.2c: compose the cron store
-  'src/scheduler/engine.ts', 'src/api/routes/scheduler.ts']);
+  'src/scheduler/engine.ts', 'src/api/routes/scheduler.ts',
+  'src/api/routes/notifications.ts', 'src/tools/notifications/create-reminder.tool.ts', 'src/repositories/pg/login-throttle.ts',
+  'src/repositories/login-throttle.ts']);
 
 const FORBIDDEN = [
   [/\bgetDatabase\s*\(/, 'getDatabase() (a raw SQLite handle)'],
@@ -224,5 +234,67 @@ test('B2.2b-4: with AGENT_PLAYER_DB=postgres the memory paths take PostgreSQL', 
     if (saved.db === undefined) delete process.env.AGENT_PLAYER_DB; else process.env.AGENT_PLAYER_DB = saved.db;
     if (saved.url !== undefined) process.env.AGENT_PLAYER_PG_URL = saved.url;
     await closePgPool();
+  }
+});
+
+test('B2.2c part 1: with AGENT_PLAYER_DB=postgres the scheduler, MCP, settings, notifications, audit reads, analytics and sign-in throttle take PostgreSQL', async () => {
+  const saved = { db: process.env.AGENT_PLAYER_DB, url: process.env.AGENT_PLAYER_PG_URL };
+  const { PgConfigError } = await import('../src/db/pg/config.ts');
+  const { closePgPool } = await import('../src/db/pg/pool.ts');
+  const cron = await import('../src/scheduler/store.ts');
+  const mcpStore = await import('../src/mcp-client/store.ts');
+  const mcpSvc = await import('../src/mcp-client/service.ts');
+  const mcpTools = await import('../src/mcp-client/tools.ts');
+  const binding = await import('../src/mcp-client/grant-binding.ts');
+  const { SettingsManager } = await import('../src/settings/settings-manager.ts');
+  const notif = await import('../src/services/notification-service.ts');
+  const auditLog = await import('../src/services/audit-logger.ts');
+  const analytics = await import('../src/services/extension-analytics.ts');
+  const lockout = await import('../src/auth/account-lockout.ts');
+  const { pgLoginThrottle, sqliteLoginThrottle } = await import('../src/repositories/login-throttle.ts');
+  const pgErr = (e) => e instanceof PgConfigError;
+  try {
+    process.env.AGENT_PLAYER_DB = 'postgres';
+    delete process.env.AGENT_PLAYER_PG_URL;
+    await assert.rejects(() => cron.listEnabledJobs(), pgErr);
+    await assert.rejects(() => cron.claimRun('j-1', new Date()), pgErr);
+    await assert.rejects(() => cron.ensureNamedJob('j-1', { name: 'n', description: null, cronExpression: '* * * * *', actionType: 'custom', actionData: {} }), pgErr);
+    await assert.rejects(() => mcpStore.listServerRows(), pgErr);
+    await assert.rejects(() => mcpSvc.listServers(), pgErr);
+    await assert.rejects(() => binding.currentMcpTool('mcp__a__b'), pgErr);
+    mcpTools.invalidateMcpTools();
+    assert.deepEqual(await mcpTools.getMcpTools(), [], 'no database: no MCP tools (not cached)');
+    assert.deepEqual(mcpTools.getMcpToolsSync(), [], 'PostgreSQL: the synchronous registry uses the cache only');
+    const settings = new SettingsManager(); // no SQLite DDL on PostgreSQL
+    await assert.rejects(() => settings.getSettings(), pgErr);
+    await assert.rejects(() => settings.updateSettings({ provider: 'local' }), pgErr);
+    assert.throws(() => settings.getSettingsSync(), /SQLite only/);
+    await assert.rejects(() => notif.notify({ userId: 'u-1', title: 't' }), pgErr);
+    await assert.rejects(() => notif.getNotificationSettings('u-1'), pgErr);
+    await assert.rejects(() => notif.processScheduledNotifications(), pgErr);
+    await assert.rejects(() => auditLog.queryAuditLogs(), pgErr);
+    await assert.rejects(() => auditLog.cleanupAuditLogs(30), pgErr);
+    await assert.rejects(() => analytics.getExtensionAnalytics('e-1'), pgErr);
+    await assert.rejects(() => lockout.checkLoginThrottle('a@b.test', '10.0.0.1'), pgErr);
+    await assert.rejects(() => pgLoginThrottle.prune(), pgErr);
+  } finally {
+    if (saved.db === undefined) delete process.env.AGENT_PLAYER_DB; else process.env.AGENT_PLAYER_DB = saved.db;
+    if (saved.url !== undefined) process.env.AGENT_PLAYER_PG_URL = saved.url;
+    await closePgPool();
+  }
+  // The SQLite store is bound to the SQLite runner, whatever the process driver.
+  assert.equal(typeof sqliteLoginThrottle.check, 'function');
+});
+
+test('B2.2c part 1: the cron engine claims each tick on PostgreSQL; the MCP service has no SQLite-only branch left', () => {
+  const engine = stripComments(readFileSync(join(backend, 'src/scheduler/engine.ts'), 'utf8'));
+  assert.match(engine, /await claimRun\(job\.id, tickSlot\(job\.cronExpression\)\)/);
+  assert.ok(engine.indexOf('claimRun(') < engine.indexOf('this.executeJob(job.id)'), 'claim before the run');
+  const svc = stripComments(readFileSync(join(backend, 'src/mcp-client/service.ts'), 'utf8'));
+  assert.doesNotMatch(svc, /grantsOnPg|revokeMcpGrantsSync|dialect === 'postgres'/);
+  for (const fn of ['createServer', 'updateServer', 'deleteServer', 'refreshServer']) {
+    const body = svc.slice(svc.indexOf(`export async function ${fn}`), svc.indexOf('\n}\n', svc.indexOf(`export async function ${fn}`)));
+    assert.match(body, /sql\(\)\.tx\(/, `${fn}: one transaction`);
+    assert.match(body, /revokeMcpGrantsStep\(/, `${fn}: grants revoked inside it`);
   }
 });
