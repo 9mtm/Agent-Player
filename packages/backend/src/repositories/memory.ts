@@ -1,0 +1,231 @@
+/**
+ * Memory repository (B1-core): memories, drawers, versions, forget and the
+ * owner's edit proposals / readable drawer files. Scope rules (scope.ts):
+ *
+ *   memories, drawers, versions, forget, tombstones
+ *       a member account: its OWN memories only (S0-Q.11, there is no
+ *       owner-wide memory view; another user's memory -> 404);
+ *       an agent run: its run user's memories, and only in the drawers open
+ *       for the run (CORE-03); forget is refused in a turn that answers an
+ *       outsider; guests and channel turns: refused.
+ *   proposals, drawer files (CORE-04)
+ *       the owner account only, on the owner's own memory.
+ *
+ * Errors: out of scope -> ScopeError 404 (`Memory not found` /
+ * `Proposal not found`); a closed drawer for an agent run -> ScopeError 403.
+ *
+ * SQLite implementation over memory/storage.ts, learning.ts, versions.ts,
+ * forget.ts and memory-files.ts. Not yet here (B1-rest): search, extract,
+ * relevant, summary, consolidation, layers (routes/memory.ts; they already
+ * take the user from the token), import and retention.
+ */
+
+import type { Actor } from './actor.js';
+import { ScopeError, MSG, drawerOpen, requireActor, requireMember, requireOwnUser, requireOwner } from './scope.js';
+import { getDatabase } from '../db/index.js';
+import { getMemoryStorage } from '../memory/storage.js';
+import { defaultDrawerForType, normalizeDrawer, sameDrawer, type DrawerRef } from '../memory/drawers.js';
+import { deleteVersioned, saveVersioned, updateVersioned } from '../memory/learning.js';
+import { agentActor, memoryVersions } from '../memory/versions.js';
+import { forgetMemory, forgettableDrawer, listTombstones, type ForgetResult } from '../memory/forget.js';
+import {
+  approveProposal,
+  createProposal,
+  drawerVersions,
+  exportDrawerFile,
+  getProposal,
+  listProposals,
+  readDrawerFile,
+  rejectProposal,
+  viewDrawerFile,
+  type ApplyResult,
+  type DrawerFileView,
+  type MemoryProposal,
+} from '../memory/memory-files.js';
+import type { Memory } from '../memory/types.js';
+
+const NOT_FOUND = 'Memory not found';
+const PROPOSAL_NOT_FOUND = 'Proposal not found';
+/** Same wording the memory tools used before B1-core. */
+export const DRAWER_CLOSED = 'that memory drawer is not open for this conversation';
+export const OUTSIDER_REFUSED = 'not available when answering someone else';
+
+export interface MemoryRepository {
+  list(actor: Actor | null | undefined): Promise<Memory[]>;
+  drawers(actor: Actor | null | undefined): Promise<Array<DrawerRef & { count: number }>>;
+  get(actor: Actor | null | undefined, id: string): Promise<Memory>;
+  /** Throws like get() when the memory is out of scope; no access-count side effect. */
+  assertAccess(actor: Actor | null | undefined, id: string): Promise<void>;
+  create(actor: Actor | null | undefined, memory: Omit<Memory, 'userId'>, reason: string): Promise<Memory>;
+  update(actor: Actor | null | undefined, id: string, updates: Partial<Memory>, reason: string): Promise<Memory>;
+  delete(actor: Actor | null | undefined, id: string, reason: string): Promise<void>;
+  versions(actor: Actor | null | undefined, id: string): Promise<any[]>;
+  /** null when the memory does not exist (or is not the actor's). */
+  forget(actor: Actor | null | undefined, id: string): Promise<ForgetResult | null>;
+  tombstones(actor: Actor | null | undefined): Promise<ReturnType<typeof listTombstones>>;
+
+  // Owner only (CORE-04)
+  drawerFile(actor: Actor | null | undefined, agentId: string, drawer: DrawerRef): Promise<DrawerFileView>;
+  drawerHistory(actor: Actor | null | undefined, drawer: DrawerRef): Promise<any[]>;
+  exportDrawer(actor: Actor | null | undefined, agentId: string, drawer: DrawerRef): Promise<DrawerFileView>;
+  readExportedDrawer(actor: Actor | null | undefined, agentId: string, drawer: DrawerRef): Promise<string>;
+  createProposal(actor: Actor | null | undefined, input: { agentId: string; drawer: DrawerRef; text: string; source: 'upload' | 'file'; note: string | null }): Promise<MemoryProposal>;
+  proposals(actor: Actor | null | undefined, status?: string): Promise<MemoryProposal[]>;
+  proposal(actor: Actor | null | undefined, id: string): Promise<MemoryProposal>;
+  approveProposal(actor: Actor | null | undefined, id: string): Promise<ApplyResult>;
+  rejectProposal(actor: Actor | null | undefined, id: string, note?: unknown): Promise<MemoryProposal>;
+}
+
+/** Member account or agent run with a user; returns the user whose memories are reached. */
+function memoryUser(actor: Actor | null | undefined): { a: Actor; userId: string } {
+  // Outsider turns: the drawers on the actor already follow the outsider
+  // policy (none unless OUTSIDER_AGENT_MEMORY=true, S0-A.14).
+  const a = requireOwnUser(actor, { allowOutsider: true });
+  if (!a.userId) throw new ScopeError(403, a.kind === 'system' ? 'A memory needs a user' : MSG.agent);
+  return { a, userId: a.userId };
+}
+
+/** Version/audit actor label: the account, or `agent:<id>` for an agent run. */
+function versionActor(a: Actor): string {
+  return a.kind === 'agent' ? agentActor(a.agentId) : (a.userId ?? 'system');
+}
+
+function memoryOwner(id: string): string | null {
+  if (typeof id !== 'string' || !id) return null;
+  const row = getDatabase().prepare('SELECT user_id FROM memories WHERE id = ?').get(id) as { user_id: string } | undefined;
+  return row?.user_id ?? null;
+}
+
+/** The own memory row (no access-count side effect), drawer-checked for agent runs. */
+function ownMemory(a: Actor, userId: string, id: string): Memory {
+  const m = getMemoryStorage().getOwned(userId, id);
+  if (!m) throw new ScopeError(404, NOT_FOUND);
+  if (!drawerOpen(a, m.drawer ?? defaultDrawerForType(m.type))) throw new ScopeError(403, DRAWER_CLOSED);
+  return m;
+}
+
+function owner(actor: Actor | null | undefined): string {
+  const a = requireOwner(actor);
+  if (!a.userId) throw new ScopeError(403, MSG.owner);
+  return a.userId;
+}
+
+export const sqliteMemory: MemoryRepository = {
+  async list(actor) {
+    const { a, userId } = memoryUser(actor);
+    if (a.kind === 'agent') return getMemoryStorage().getByDrawers(userId, [...(a.drawers ?? [])]);
+    return getMemoryStorage().getByUser(userId);
+  },
+
+  async drawers(actor) {
+    const { a, userId } = memoryUser(actor);
+    const all = getMemoryStorage().listDrawers(userId);
+    return a.kind === 'agent' ? all.filter((d) => drawerOpen(a, d)) : all;
+  },
+
+  async get(actor, id) {
+    const { a, userId } = memoryUser(actor);
+    ownMemory(a, userId, id);
+    const m = await getMemoryStorage().get(id);
+    if (!m) throw new ScopeError(404, NOT_FOUND);
+    return m;
+  },
+
+  async assertAccess(actor, id) {
+    const { a, userId } = memoryUser(actor);
+    ownMemory(a, userId, id);
+  },
+
+  async create(actor, memory, reason) {
+    const { a, userId } = memoryUser(actor);
+    const drawer = memory.drawer ? normalizeDrawer(memory.drawer) : defaultDrawerForType(memory.type);
+    if (!drawerOpen(a, drawer)) throw new ScopeError(403, DRAWER_CLOSED);
+    return saveVersioned({ ...memory, userId } as Memory, versionActor(a), reason);
+  },
+
+  async update(actor, id, updates, reason) {
+    const { a, userId } = memoryUser(actor);
+    ownMemory(a, userId, id);
+    if (a.kind === 'agent' && updates.drawer && !drawerOpen(a, normalizeDrawer(updates.drawer))) throw new ScopeError(403, DRAWER_CLOSED);
+    const updated = await updateVersioned(userId, id, updates, versionActor(a), reason);
+    if (!updated) throw new ScopeError(404, NOT_FOUND);
+    return updated;
+  },
+
+  async delete(actor, id, reason) {
+    const { a, userId } = memoryUser(actor);
+    ownMemory(a, userId, id);
+    await deleteVersioned(userId, id, versionActor(a), reason);
+  },
+
+  async versions(actor, id) {
+    const { a, userId } = memoryUser(actor);
+    const versions = memoryVersions(userId, id);
+    if (versions.length === 0 && memoryOwner(id) !== userId) throw new ScopeError(404, NOT_FOUND);
+    if (a.kind === 'agent') {
+      const drawer = forgettableDrawer(userId, id);
+      if (!drawer || !drawerOpen(a, drawer)) throw new ScopeError(403, DRAWER_CLOSED);
+    }
+    return versions;
+  },
+
+  async forget(actor, id) {
+    const a0 = requireActor(actor);
+    if (a0.kind === 'agent' && a0.channel) throw new ScopeError(403, OUTSIDER_REFUSED);
+    const { a, userId } = memoryUser(a0);
+    if (a.kind === 'agent') {
+      // Only memories in drawers open for this run; for an already deleted
+      // memory, its last drawer (CORE-07).
+      const drawer = forgettableDrawer(userId, id);
+      if (!drawer) return null;
+      if (!(a.drawers ?? []).some((d) => sameDrawer(d, drawer))) throw new ScopeError(403, DRAWER_CLOSED);
+    }
+    return forgetMemory(userId, id, versionActor(a));
+  },
+
+  async tombstones(actor) {
+    const { userId } = memoryUser(requireMember(actor));
+    return listTombstones(userId);
+  },
+
+  async drawerFile(actor, agentId, drawer) {
+    return viewDrawerFile(owner(actor), agentId, drawer);
+  },
+
+  async drawerHistory(actor, drawer) {
+    return drawerVersions(owner(actor), drawer);
+  },
+
+  async exportDrawer(actor, agentId, drawer) {
+    return exportDrawerFile(owner(actor), agentId, drawer);
+  },
+
+  async readExportedDrawer(actor, agentId, drawer) {
+    return readDrawerFile(owner(actor), agentId, drawer);
+  },
+
+  async createProposal(actor, input) {
+    const userId = owner(actor);
+    return createProposal({ userId, ...input });
+  },
+
+  async proposals(actor, status) {
+    return listProposals(owner(actor), status);
+  },
+
+  async proposal(actor, id) {
+    const p = getProposal(owner(actor), id);
+    if (!p) throw new ScopeError(404, PROPOSAL_NOT_FOUND);
+    return p;
+  },
+
+  async approveProposal(actor, id) {
+    const userId = owner(actor);
+    return approveProposal(userId, id, userId);
+  },
+
+  async rejectProposal(actor, id, note) {
+    const userId = owner(actor);
+    return rejectProposal(userId, id, userId, note);
+  },
+};
