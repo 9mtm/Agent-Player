@@ -9,7 +9,8 @@
  * - Clarity: Clear, understandable explanations
  */
 
-import { getDatabase } from '../db/index.js';
+import { tsParam } from '../db/pg/dialect.js';
+import { q } from '../repositories/sql-steps.js';
 import { v4 as uuidv4 } from 'uuid';
 
 interface ReasoningAnalysis {
@@ -32,21 +33,23 @@ export async function analyzeReasoning(
     startDate: Date,
     endDate: Date
 ): Promise<number> {
-    const db = getDatabase();
+    // created_at is CURRENT_TIMESTAMP text on SQLite, timestamptz on PostgreSQL:
+    // tsParam compares the ISO bounds correctly on both.
+    const ts = tsParam(q.dialect);
 
     // Get assistant messages from the period
     // Note: chat_messages doesn't have agent_id, so we analyze all assistant messages
-    const messages = db.prepare(`
+    const messages = await q.all(`
         SELECT m.id, m.content, m.created_at, s.title as session_name
         FROM chat_messages m
         LEFT JOIN chat_sessions s ON m.session_id = s.id
         WHERE m.role = 'assistant'
-        AND m.created_at >= ?
-        AND m.created_at <= ?
+        AND m.created_at >= ${ts}
+        AND m.created_at <= ${ts}
         AND LENGTH(m.content) > 100
         ORDER BY m.created_at DESC
-        LIMIT 50
-    `).all(startDate.toISOString(), endDate.toISOString()) as any[];
+        LIMIT 50`,
+        startDate.toISOString(), endDate.toISOString());
 
     if (messages.length === 0) {
         // No data to analyze
@@ -60,13 +63,12 @@ export async function analyzeReasoning(
         const analysis = analyzeMessageReasoning(message.content);
 
         // Save reasoning score to DB
-        db.prepare(`
+        await q.run(`
             INSERT INTO reasoning_scores (
                 id, session_id, agent_id, message_id,
                 coherence_score, logical_flow_score, context_awareness_score,
                 completeness_score, clarity_score, analysis, sample_text
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             uuidv4(),
             sessionId,
             agentId,

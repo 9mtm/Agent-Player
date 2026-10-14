@@ -57,7 +57,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
         const limit = parseInt(request.query.limit || '10');
 
         try {
-            const history = getEvaluationHistory(agentId, limit);
+            const history = await getEvaluationHistory(agentId, limit);
             return reply.send({ history });
         } catch (error: any) {
             return sendInternalError(reply, '[Evaluation] GET /api/evaluation/:agentId/history', error);
@@ -74,7 +74,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
         const { agentId } = request.params;
 
         try {
-            const latest = getLatestEvaluation(agentId);
+            const latest = await getLatestEvaluation(agentId);
             if (!latest) {
                 return reply.status(404).send({
                     error: 'No evaluation found',
@@ -173,7 +173,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
         const periodDays = parseInt(request.query.periodDays || '7');
 
         try {
-            const summary = getToolUsageSummary(agentId, periodDays);
+            const summary = await getToolUsageSummary(agentId, periodDays);
             return reply.send({ summary });
         } catch (error: any) {
             return sendInternalError(reply, '[Evaluation] GET /api/evaluation/:agentId/tool-accuracy', error);
@@ -192,7 +192,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
         const periodDays = parseInt(request.query.periodDays || '7');
 
         try {
-            const summary = getSafetyIssuesSummary(agentId, periodDays);
+            const summary = await getSafetyIssuesSummary(agentId, periodDays);
             return reply.send({ summary });
         } catch (error: any) {
             return sendInternalError(reply, '[Evaluation] GET /api/evaluation/:agentId/safety', error);
@@ -211,7 +211,7 @@ export default async function evaluationRoutes(fastify: FastifyInstance) {
         const periodDays = parseInt(request.query.periodDays || '7');
 
         try {
-            const summary = getPerformanceSummary(agentId, periodDays);
+            const summary = await getPerformanceSummary(agentId, periodDays);
             return reply.send({ summary });
         } catch (error: any) {
             return sendInternalError(reply, '[Evaluation] GET /api/evaluation/:agentId/performance', error);

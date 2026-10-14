@@ -9,7 +9,8 @@
  * - Cache efficiency: Hit rates
  */
 
-import { getDatabase } from '../db/index.js';
+import { tsParam } from '../db/pg/dialect.js';
+import { q } from '../repositories/sql-steps.js';
 import { v4 as uuidv4 } from 'uuid';
 
 interface PerformanceResult {
@@ -27,16 +28,16 @@ export async function analyzePerformance(
     startDate: Date,
     endDate: Date
 ): Promise<PerformanceResult> {
-    const db = getDatabase();
+    const ts = tsParam(q.dialect);
 
     // Get performance data from agent_activity (basic count only)
-    const activities = db.prepare(`
+    const activities = await q.one(`
         SELECT COUNT(*) as count
         FROM agent_activity
         WHERE agent_id = ?
-        AND created_at >= ?
-        AND created_at <= ?
-    `).get(agentId, startDate.toISOString(), endDate.toISOString()) as any;
+        AND created_at >= ${ts}
+        AND created_at <= ${ts}`,
+        agentId, startDate.toISOString(), endDate.toISOString());
 
     const activityCount = activities?.count || 0;
 
@@ -77,7 +78,7 @@ export async function analyzePerformance(
     const avgCostPerRequest = activityCount > 0 ? totalCost / activityCount : 0;
 
     // Save performance profile
-    db.prepare(`
+    await q.run(`
         INSERT INTO performance_profiles (
             id, session_id, agent_id,
             total_requests, total_tokens_input, total_tokens_output,
@@ -85,8 +86,7 @@ export async function analyzePerformance(
             throughput_per_minute, total_cost_usd, avg_cost_per_request_usd,
             cache_hit_rate, error_rate, timeout_rate,
             period_start, period_end
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         uuidv4(),
         sessionId,
         agentId,
@@ -167,11 +167,10 @@ function calculateCostEfficiencyScore(avgCostPerRequest: number, totalCost: numb
 /**
  * Get performance summary for display
  */
-export function getPerformanceSummary(agentId: string, periodDays: number = 7) {
-    const db = getDatabase();
+export async function getPerformanceSummary(agentId: string, periodDays: number = 7) {
     const startDate = new Date(Date.now() - (periodDays * 24 * 60 * 60 * 1000));
 
-    const perfData = db.prepare(`
+    const perfData = await q.one(`
         SELECT
             2000 as avg_latency,
             1000 as min_latency,
@@ -180,8 +179,8 @@ export function getPerformanceSummary(agentId: string, periodDays: number = 7) {
             0 as errors
         FROM agent_activity
         WHERE agent_id = ?
-        AND created_at >= ?
-    `).get(agentId, startDate.toISOString()) as any;
+        AND created_at >= ${tsParam(q.dialect)}`,
+        agentId, startDate.toISOString());
 
     const costSummary = {
         total_cost: 0,
