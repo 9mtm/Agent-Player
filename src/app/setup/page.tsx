@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { CheckCircle, Circle, Loader2, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
+import { readJsonBody, setupErrorMessage } from '@/lib/setup/setup-errors';
 
 interface SetupStep {
   id: number;
@@ -136,8 +137,8 @@ export default function SetupPage() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
-        throw new Error(errorData.message || `Server error: ${response.status}`);
+        const errorData = await readJsonBody(response);
+        throw new Error(setupErrorMessage(response.status, errorData, 'Failed to initialize database'));
       }
 
       const data = await response.json();
@@ -199,8 +200,8 @@ export default function SetupPage() {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to create admin account');
+        const errorData = await readJsonBody(response);
+        throw new Error(setupErrorMessage(response.status, errorData, 'Failed to create admin account'));
       }
 
       updateStepStatus(2, 'complete');
@@ -228,7 +229,8 @@ export default function SetupPage() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to complete setup');
+        const errorData = await readJsonBody(response);
+        throw new Error(setupErrorMessage(response.status, errorData, 'Failed to complete setup'));
       }
 
       updateStepStatus(3, 'complete');
@@ -237,10 +239,10 @@ export default function SetupPage() {
       setTimeout(() => {
         window.location.href = '/login';
       }, 2000);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Setup completion failed:', error);
       updateStepStatus(3, 'error');
-      toast.error('Failed to complete setup');
+      toast.error(error?.message || 'Failed to complete setup');
     }
   };
 
@@ -286,8 +288,8 @@ export default function SetupPage() {
                           toast.success('Python environment installed!');
                           await checkSystemRequirements();
                         } else {
-                          const err = await res.json().catch(() => ({}));
-                          toast.error(err.message || 'Python setup failed. Try running the command manually.');
+                          const err = await readJsonBody(res);
+                          toast.error(setupErrorMessage(res.status, err, 'Python setup failed. Try running the command manually.'));
                         }
                       } catch {
                         toast.error('Could not reach backend. Run the command manually in terminal.');

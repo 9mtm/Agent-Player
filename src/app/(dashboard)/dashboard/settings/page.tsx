@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { extensionsAPI, Extension, ChannelConfig, SetupGuide } from '@/lib/backend/client';
 import { authHeaders } from '@/lib/auth/headers';
+import { connectionTestNotice, isKeyTestProvider } from '@/lib/settings/connection-test';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -1386,6 +1387,23 @@ function AgentTab() {
     setConnectionStatus(null);
 
     try {
+      // FU-04: key providers are checked with the stored key; the notice comes
+      // from the reply code only, never from server or provider text.
+      if (isKeyTestProvider(providerSettings.provider)) {
+        const res = await fetch(`${BACKEND_URL}/api/settings/test`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ provider: providerSettings.provider }),
+        });
+        const body = await res.json().catch(() => null);
+        if (res.ok && body?.success) {
+          setConnectionStatus({ success: true, message: `${providerSettings.provider === 'claude' ? 'Claude' : 'OpenAI'} API connection successful` });
+        } else {
+          setConnectionStatus({ success: false, message: connectionTestNotice(res.status, body) });
+        }
+        return;
+      }
+
       const response = await fetch(`${BACKEND_URL}/api/agents/status`);
       const data = await response.json();
 
