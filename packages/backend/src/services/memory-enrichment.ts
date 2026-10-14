@@ -8,7 +8,8 @@
  * - Related memory suggestions
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, one, run, sql } from '../repositories/sql-steps.js';
+import { insertOrIgnore, nowText } from '../db/pg/dialect.js';
 import { MemoryQualityScorer } from './memory-quality-scorer.js';
 
 export interface EnrichmentResult {
@@ -28,10 +29,8 @@ export class MemoryEnrichmentService {
      * Enrich a memory with auto-generated metadata
      */
     static async enrichMemory(memoryId: string, content: string, existingMetadata?: any): Promise<EnrichmentResult> {
-        const db = getDatabase();
-
         // Get old quality score
-        const oldMemory = db.prepare('SELECT quality_score FROM memories WHERE id = ?').get(memoryId) as any;
+        const oldMemory = await sql().read(one('SELECT quality_score FROM memories WHERE id = ?', memoryId));
         const oldQuality = oldMemory?.quality_score || 50;
 
         const enrichments: EnrichmentResult['enrichments'] = {};
@@ -79,22 +78,22 @@ export class MemoryEnrichmentService {
             ...enrichments
         };
 
-        db.prepare(`
+        await sql().read(run(`
             UPDATE memories
             SET metadata = ?,
                 tags = ?,
                 emotions = ?,
                 related_memory_ids = ?,
                 auto_enriched = 1,
-                enriched_at = datetime('now')
+                enriched_at = ${nowText(sql().dialect)}
             WHERE id = ?
-        `).run(
+        `,
             JSON.stringify(updatedMetadata),
             enrichments.tags ? JSON.stringify(enrichments.tags) : null,
             enrichments.emotions ? JSON.stringify(enrichments.emotions) : null,
             enrichments.relatedMemories ? JSON.stringify(enrichments.relatedMemories) : null,
             memoryId
-        );
+        ));
 
         // Re-calculate quality score
         const newScores = await MemoryQualityScorer.scoreMemory(memoryId, content, updatedMetadata);
@@ -233,10 +232,8 @@ export class MemoryEnrichmentService {
      * Find related memories using content similarity
      */
     private static async findRelatedMemories(memoryId: string, content: string, limit = 5): Promise<string[]> {
-        const db = getDatabase();
-
         // Get memories from same user
-        const memory = db.prepare('SELECT user_id, type FROM memories WHERE id = ?').get(memoryId) as any;
+        const memory = await sql().read(one('SELECT user_id, type FROM memories WHERE id = ?', memoryId));
         if (!memory) return [];
 
         // Simple keyword-based similarity (in production, use vector similarity)
@@ -246,13 +243,13 @@ export class MemoryEnrichmentService {
         const relatedMemories: string[] = [];
 
         // Search for memories with similar keywords
-        const candidates = db.prepare(`
+        const candidates = await sql().read(all(`
             SELECT id, content, type
             FROM memories
             WHERE user_id = ? AND id != ? AND status = 'active'
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT 50
-        `).all(memory.user_id, memoryId) as any[];
+        `, memory.user_id, memoryId));
 
         for (const candidate of candidates) {
             const candidateKeywords = this.extractKeywords(candidate.content);
@@ -295,14 +292,13 @@ export class MemoryEnrichmentService {
         type: string,
         strength: number
     ): Promise<void> {
-        const db = getDatabase();
         const relationshipId = `rel_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
         try {
-            db.prepare(`
-                INSERT OR IGNORE INTO memory_relationships (id, source_memory_id, target_memory_id, relationship_type, strength, auto_detected)
+            await sql().read(run(insertOrIgnore(sql().dialect, `
+                INSERT INTO memory_relationships (id, source_memory_id, target_memory_id, relationship_type, strength, auto_detected)
                 VALUES (?, ?, ?, ?, ?, 1)
-            `).run(relationshipId, sourceId, targetId, type, strength);
+            `), relationshipId, sourceId, targetId, type, strength));
         } catch (err) {
             // Ignore duplicate relationship errors
         }
@@ -318,31 +314,28 @@ export class MemoryEnrichmentService {
         afterValue: string,
         confidence: number
     ): Promise<void> {
-        const db = getDatabase();
         const logId = `enr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-        db.prepare(`
+        await sql().read(run(`
             INSERT INTO memory_enrichment_log (id, memory_id, enrichment_type, before_value, after_value, confidence)
             VALUES (?, ?, ?, ?, ?, ?)
-        `).run(logId, memoryId, type, beforeValue, afterValue, confidence);
+        `, logId, memoryId, type, beforeValue, afterValue, confidence));
     }
 
     /**
      * Batch enrich multiple memories
      */
     static async batchEnrich(userId: string, limit = 10): Promise<EnrichmentResult[]> {
-        const db = getDatabase();
-
         // Get memories that haven't been enriched yet or have low quality
-        const memories = db.prepare(`
+        const memories = await sql().read(all(`
             SELECT id, content, metadata
             FROM memories
             WHERE user_id = ?
               AND status = 'active'
               AND (auto_enriched = 0 OR quality_score < 60)
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT ?
-        `).all(userId, limit) as any[];
+        `, userId, limit));
 
         const results: EnrichmentResult[] = [];
 

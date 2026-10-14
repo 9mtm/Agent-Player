@@ -312,9 +312,9 @@ test('weekly summary: deterministic digest per drawer, stubbed model, owner only
 });
 
 test('weekly summary job: in-process, owner-scoped, created once per owner', async () => {
-  const created = J.ensureMemoryJobs();
+  const created = await J.ensureMemoryJobs();
   assert.deepEqual(created.map((j) => j.name), ['memory-weekly-summary-ml-owner', 'memory-retention-ml-owner']);
-  assert.deepEqual(J.ensureMemoryJobs(), [], 'idempotent');
+  assert.deepEqual(await J.ensureMemoryJobs(), [], 'idempotent');
   const row = db.prepare(`SELECT action_type, action_data, cron_expression FROM cron_jobs WHERE name = 'memory-weekly-summary-ml-owner'`).get();
   assert.equal(row.action_type, 'memory-job');
   assert.deepEqual(JSON.parse(row.action_data), { job: 'weekly-summary', userId: 'ml-owner' });
@@ -334,7 +334,7 @@ test('concurrent double approve of an add-only learning proposal: one memory, on
   const content = 'Prefers the quarterly report in Arabic and English';
   for (const source of ['learning', 'agent']) {
     const text = `${content} (${source})`;
-    const p = MF.createChangeProposal({
+    const p = await MF.createChangeProposal({
       userId: 'ml-owner', agentId: 'ml-agent', drawer: { kind: 'owner' }, source, reasons: ['owner-preference'], createdBy: 'test',
       changes: [{ op: 'add', after: { type: 'preference', importance: 8, content: text } }],
     });

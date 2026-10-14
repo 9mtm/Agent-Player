@@ -225,7 +225,7 @@ async function start() {
     // CORE-05/07: owner-scoped memory jobs (weekly summary), in-process.
     try {
       const { ensureMemoryJobs } = await import('../memory/jobs.js');
-      for (const job of ensureMemoryJobs()) {
+      for (const job of await ensureMemoryJobs()) {
         cronEngine.scheduleJob({
           id: job.id, name: job.name, cronExpression: job.cronExpression, actionType: 'memory-job',
           actionData: job.actionData as any, enabled: true, createdAt: new Date(), updatedAt: new Date(),

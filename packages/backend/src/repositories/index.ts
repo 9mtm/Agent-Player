@@ -13,9 +13,13 @@
  * names, personality versions and proposals, tool grants), Evolution
  * proposals, task runs and their steps, verifications, contracts, tool
  * approvals, the small agent's runs, the cost budget and the agents_config /
- * settings reads of credentials/authority.ts use PostgreSQL. Memory and every
- * other non-repository module still use SQLite (B2.2b-4 and later), so
- * 'postgres' is for the B2 integration tests, not for running the app yet.
+ * settings reads of credentials/authority.ts use PostgreSQL; since B2.2b-4
+ * memory too (memories, drawers, versions, forget and tombstones, proposals,
+ * drawer files, retention, weekly summaries, the import pipeline, embeddings
+ * and re-embedding, tiers, consolidation, deduplication, enrichment, quality,
+ * sharing, the hybrid index). Other modules (routes with raw SQL, the
+ * scheduler, MCP servers, the orchestrator, ...) still use SQLite (B2.2c),
+ * so 'postgres' is for the B2 integration tests, not for running the app yet.
  *
  * Transactions: `withTransaction` chooses by driver (transaction.ts):
  * withPgActorTransaction on PostgreSQL (async fn; every ported call inside
@@ -29,7 +33,7 @@ import { agentsRepository, type AgentsRepository } from './agents.js';
 import { sqliteAudit, type AuditRepository } from './audit.js';
 import { sqliteCredentials, type CredentialsRepository } from './credentials.js';
 import { sqliteIdentity, type IdentityRepository } from './identity.js';
-import { sqliteMemory, type MemoryRepository } from './memory.js';
+import { memoryRepository, type MemoryRepository } from './memory.js';
 import { taskRunsRepository, type TaskRunsRepository } from './task-runs.js';
 import { pgIdentity } from './pg/identity.js';
 import { pgAudit } from './pg/audit.js';
@@ -56,7 +60,7 @@ export function repositoriesFor(driver: DbDriver): ScopedRepositories {
     identity: pg ? pgIdentity : sqliteIdentity,
     credentials: pg ? pgCredentials : sqliteCredentials,
     agents: agentsRepository,
-    memory: sqliteMemory,
+    memory: memoryRepository,
     taskRuns: taskRunsRepository,
     audit: pg ? pgAudit : sqliteAudit,
   };

@@ -111,7 +111,7 @@ test('setup: memory in search, hybrid index, versions, copies, exports, proposal
   keep = await create('mg-owner', 'Alpha deploys on Tuesdays', { drawer: { kind: 'project', key: 'alpha' } });
   // An edit: the old text sits in the version history.
   assert.equal((await call('PUT', `/api/memory/${target.id}`, 'mg-owner', { content: `${SECRET} v2` })).statusCode, 200);
-  target = getMemoryStorage().getOwned('mg-owner', target.id);
+  target = await getMemoryStorage().getOwned('mg-owner', target.id);
   // Hybrid index (vector + full text) holds it too.
   const indexer = getMemoryIndexer();
   await indexer.index({ ...target, layer: 'session', importance: 7, accessCount: 0 });
@@ -204,7 +204,7 @@ test('forget after a plain delete erases the kept history', async () => {
 test('only the memory\'s own user forgets it; forget-all and retention are owner-only', async () => {
   const mine = await create('mg-user', 'Member private note Okapi-12');
   assert.equal((await call('POST', `/api/memory/${pref.id}/forget`, 'mg-user')).statusCode, 404, 'another user\'s memory');
-  assert.ok(getMemoryStorage().getOwned('mg-owner', pref.id));
+  assert.ok(await getMemoryStorage().getOwned('mg-owner', pref.id));
   assert.equal((await call('POST', `/api/memory/${mine.id}/forget`, 'mg-owner')).statusCode, 404);
   assert.equal((await call('POST', `/api/memory/${mine.id}/forget`, 'mg-user')).statusCode, 200, 'own memory');
   for (const [method, url] of [['POST', '/api/memory/forget-all'], ['GET', '/api/memory/retention'], ['PUT', '/api/memory/retention'], ['POST', '/api/memory/retention/run']]) {
@@ -222,7 +222,7 @@ test('forget-all: a drawer, with explicit confirmation', async () => {
   const res = await call('POST', '/api/memory/forget-all', 'mg-owner', { drawer: 'project:beta', confirm: 'FORGET' });
   assert.equal(res.statusCode, 200, res.body);
   assert.deepEqual(res.json().memoryIds.sort(), [b1.id, b2.id].sort());
-  assert.ok(getMemoryStorage().getOwned('mg-owner', keep.id) && getMemoryStorage().getOwned('mg-owner', pref.id), 'other drawers kept');
+  assert.ok((await getMemoryStorage().getOwned('mg-owner', keep.id)) && (await getMemoryStorage().getOwned('mg-owner', pref.id)), 'other drawers kept');
   assert.ok(!dbText().includes('Beta note'));
 });
 
@@ -234,7 +234,7 @@ test('memory_forget tool: needs one-time owner approval; own memory only; never 
   assert.ok((await quietly(() => memoryForgetTool.execute({ id: m.id }, channel))).error);
   assert.ok((await quietly(() => memoryForgetTool.execute({ id: m.id }, { workspaceDir: dir }))).error);
   assert.ok((await quietly(() => memoryForgetTool.execute({ id: m.id }, { ...ctx, userId: 'mg-user' }))).error);
-  assert.ok(getMemoryStorage().getOwned('mg-owner', m.id));
+  assert.ok(await getMemoryStorage().getOwned('mg-owner', m.id));
   // Drawer scope: a task-only run cannot forget owner or project memories,
   // live or already deleted (history only).
   const taskOnly = { ...ctx, memoryDrawers: [{ kind: 'task', key: 't-x' }] };
@@ -248,7 +248,7 @@ test('memory_forget tool: needs one-time owner approval; own memory only; never 
   const gammaCtx = { ...ctx, memoryDrawers: D.selectDrawers({ audience: 'owner', project: 'gamma' }) };
   assert.ok((await quietly(() => memoryForgetTool.execute({ id: proj.id }, gammaCtx))).data?.success);
   assert.ok(!dbText().includes('Kudu-88'));
-  assert.ok(getMemoryStorage().getOwned('mg-owner', m.id));
+  assert.ok(await getMemoryStorage().getOwned('mg-owner', m.id));
   const ok = await quietly(() => memoryForgetTool.execute({ id: m.id }, ctx));
   assert.ok(ok.data?.success, ok.content?.[0]?.text);
   assert.ok(!ok.content[0].text.includes('Tapir'), 'result does not repeat the text');
@@ -278,20 +278,22 @@ test('retention: explicit owner job; task TTL summarizes + forgets, experience c
   const expImportant = await oldMemory('Key lesson kept', { kind: 'experience' }, 400, { type: 'insight', importance: 9 });
   const ownerOld = await oldMemory('Owner fact from long ago', { kind: 'owner' }, 2000);
   const peopleOld = await oldMemory('Person fact from long ago', { kind: 'people', key: 'p1' }, 2000);
-  const exists = (id) => !!getMemoryStorage().getOwned('mg-owner', id);
+  const exists = async (id) => !!(await getMemoryStorage().getOwned('mg-owner', id));
+  const allExist = async (list) => (await Promise.all(list.map(exists))).every(Boolean);
+  const noneExist = async (list) => !(await Promise.all(list.map(exists))).some(Boolean);
 
   // Defaults: off; the scheduled job does nothing (but the run is recorded).
   const cfg = (await call('GET', '/api/memory/retention')).json();
   assert.deepEqual(cfg.config, { enabled: false, taskTtlDays: 90, experienceAfterDays: 180, experienceMinGroup: 3 });
   const off = await J.runMemoryJob({ job: 'retention', userId: 'mg-owner' });
   assert.equal(off.skipped, 'disabled');
-  assert.ok([...done, running, recent, ...exp].every(exists));
+  assert.ok(await allExist([...done, running, recent, ...exp]));
 
   // Dry run: reports, changes nothing.
   const dry = (await call('POST', '/api/memory/retention/run', 'mg-owner', { dryRun: true })).json();
   assert.equal(dry.dryRun, true);
   assert.deepEqual(dry.actions.map((a) => [a.kind, a.drawerId, a.items]), [['task-summary', 'task:t-done', 2], ['experience-consolidation', 'experience', 3]]);
-  assert.ok([...done, ...exp].every(exists));
+  assert.ok(await allExist([...done, ...exp]));
 
   // Validation, then turn it on.
   assert.equal((await call('PUT', '/api/memory/retention', 'mg-owner', { taskTtlDays: 0 })).statusCode, 400);
@@ -303,12 +305,12 @@ test('retention: explicit owner job; task TTL summarizes + forgets, experience c
   const ran = await J.runMemoryJob({ job: 'retention', userId: 'mg-owner' });
   assert.equal(ran.skipped, null);
   assert.equal(ran.forgotten, 5);
-  assert.ok(!done.some(exists) && !exp.some(exists), 'originals forgotten');
-  assert.ok(exists(running) && exists(recent) && exists(expImportant) && exists(ownerOld) && exists(peopleOld), 'running/recent tasks, important lessons, owner and people drawers kept');
+  assert.ok((await noneExist(done)) && (await noneExist(exp)), 'originals forgotten');
+  assert.ok(await allExist([running, recent, expImportant, ownerOld, peopleOld]), 'running/recent tasks, important lessons, owner and people drawers kept');
   for (const id of [...done, ...exp]) {
     assert.deepEqual(db.prepare('SELECT change, content FROM memory_versions WHERE memory_id = ?').all(id).map((r) => [r.change, r.content]), [['forget', null]]);
   }
-  const summaries = getMemoryStorage().getByDrawers('mg-owner', [{ kind: 'experience' }]).filter((m) => m.metadata?.source === 'retention');
+  const summaries = (await getMemoryStorage().getByDrawers('mg-owner', [{ kind: 'experience' }])).filter((m) => m.metadata?.source === 'retention');
   assert.equal(summaries.length, 2);
   const taskSummary = summaries.find((m) => m.metadata.retention === 'task-summary');
   assert.match(taskSummary.content, /^Summary of task t-done \(2 items, /);
@@ -332,8 +334,8 @@ test('tier expiry never removes owner, project or people memories (forgetting ru
   await storage.save({ ...base, id: 'exp-people', content: 'expired people note', drawer: { kind: 'people', key: 'p2' } });
   await storage.save({ ...base, id: 'exp-task', content: 'expired task note', drawer: { kind: 'task', key: 't9' } });
   await quietly(() => MemoryTiersService.expireWorkingMemory());
-  assert.ok(storage.getOwned('mg-owner', 'exp-owner') && storage.getOwned('mg-owner', 'exp-people'));
-  assert.equal(storage.getOwned('mg-owner', 'exp-task'), null);
+  assert.ok((await storage.getOwned('mg-owner', 'exp-owner')) && (await storage.getOwned('mg-owner', 'exp-people')));
+  assert.equal(await storage.getOwned('mg-owner', 'exp-task'), null);
 });
 
 test('embeddings keep no vocabulary of seen words (no cache of forgotten text)', async () => {
@@ -369,14 +371,14 @@ test('CORE-07b: an approved memory_forget re-runs with the turn\'s stored drawer
   // Project delta memory: reachable because the turn had delta open.
   const r1 = await approveIt(a1);
   assert.equal(r1.record.status, 'executed', r1.result.content?.[0]?.text);
-  assert.ok(!getMemoryStorage().getOwned('mg-owner', inDelta.id));
+  assert.ok(!(await getMemoryStorage().getOwned('mg-owner', inDelta.id)));
 
   // Same turn asking for an epsilon memory: still refused after approval.
   const a2 = await ask(inEps.id);
   const r2 = await approveIt(a2);
   assert.equal(r2.record.status, 'failed');
   assert.match(r2.result.error, /not open/);
-  assert.ok(getMemoryStorage().getOwned('mg-owner', inEps.id));
+  assert.ok(await getMemoryStorage().getOwned('mg-owner', inEps.id));
 
   // Widening the stored scope after the request breaks the hash: nothing runs.
   const a3 = await ask(inEps.id);
@@ -390,7 +392,7 @@ test('CORE-07b: an approved memory_forget re-runs with the turn\'s stored drawer
   const shownN = (await A.getApprovalDetail(a3n)).paramsHash;
   db.prepare('UPDATE tool_approvals SET run_scope = NULL WHERE id = ?').run(a3n);
   assert.equal((await quietly(() => A.approveAndRun(a3n, 'mg-owner', shownN))).record.status, 'failed');
-  assert.ok(getMemoryStorage().getOwned('mg-owner', inEps.id));
+  assert.ok(await getMemoryStorage().getOwned('mg-owner', inEps.id));
 
   // Approval-time intersection: an outsider policy allows no drawers; bad entries dropped.
   assert.deepEqual(S.approvalRunDrawers([{ kind: 'project', key: 'epsilon' }], { toolPolicy: { channel: 'telegram' } }), []);
@@ -404,9 +406,9 @@ test('CORE-07b: an approved memory_forget re-runs with the turn\'s stored drawer
   const a4 = await ask(own.id, { ...turn, memoryDrawers: [{ kind: 'task', key: 'task-07b' }] });
   const r4 = await approveIt(a4);
   assert.equal(r4.record.status, 'failed');
-  assert.ok(getMemoryStorage().getOwned('mg-owner', own.id));
+  assert.ok(await getMemoryStorage().getOwned('mg-owner', own.id));
   // An epsilon turn reaches the epsilon memory.
   const a5 = await ask(inEps.id, { ...turn, memoryDrawers: D.selectDrawers({ audience: 'owner', project: 'epsilon' }) });
   assert.equal((await approveIt(a5)).record.status, 'executed');
-  assert.ok(!getMemoryStorage().getOwned('mg-owner', inEps.id));
+  assert.ok(!(await getMemoryStorage().getOwned('mg-owner', inEps.id)));
 });

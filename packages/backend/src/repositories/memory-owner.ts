@@ -50,13 +50,13 @@ export interface MemoryOwnerRepository {
   cancelImport(actor: A, id: string): Promise<Ret<typeof cancelImport>>;
 }
 
-export const sqliteMemoryOwner: MemoryOwnerRepository = {
+export const memoryOwnerRepository: MemoryOwnerRepository = {
   async weeklySummary(actor) {
     const ownerId = memoryOwner(actor);
-    const latest = latestWeeklySummary(ownerId);
-    const history = listWeeklySummaries(ownerId).map((r) => ({ id: r.id, periodStart: r.periodStart, periodEnd: r.periodEnd, totals: r.digest.totals }));
+    const latest = await latestWeeklySummary(ownerId);
+    const history = (await listWeeklySummaries(ownerId)).map((r) => ({ id: r.id, periodStart: r.periodStart, periodEnd: r.periodEnd, totals: r.digest.totals }));
     if (latest) return { stored: true, summary: latest, history };
-    const digest = buildWeeklyDigest(ownerId);
+    const digest = await buildWeeklyDigest(ownerId);
     return { stored: false, summary: { digest, text: renderDigest(digest), modelText: null, model: null }, history };
   },
 
@@ -80,7 +80,7 @@ export const sqliteMemoryOwner: MemoryOwnerRepository = {
 
   async retention(actor) {
     const ownerId = memoryOwner(actor);
-    return { config: getRetentionConfig(ownerId), runs: listRetentionRuns(ownerId) };
+    return { config: await getRetentionConfig(ownerId), runs: await listRetentionRuns(ownerId) };
   },
 
   async setRetention(actor, input) {
@@ -125,3 +125,4 @@ export const sqliteMemoryOwner: MemoryOwnerRepository = {
     return cancelImport(memoryOwner(actor), id);
   },
 };
+

@@ -12,9 +12,9 @@
  * fails, the deterministic text is the summary.
  */
 
-import { v4 as uuidv4 } from 'uuid';
-import { getDatabase } from '../db/index.js';
-import { getMemoryStorage } from './storage.js';
+import { all, one, run, sql } from '../repositories/sql-steps.js';
+import { orderedId } from '../repositories/ordered-id.js';
+import { listDrawersStep } from './storage.js';
 import { drawerId, normalizeDrawer, type DrawerRef } from './drawers.js';
 import { modelCall } from '../llm/model-call.js';
 
@@ -55,8 +55,7 @@ function drawerOf(kind: string, key: string): DrawerRef | null {
 }
 
 /** Build the digest for one user (no writes). */
-export function buildWeeklyDigest(userId: string, now = new Date(), days = SUMMARY_DAYS): WeeklyDigest {
-  const db = getDatabase();
+export async function buildWeeklyDigest(userId: string, now = new Date(), days = SUMMARY_DAYS): Promise<WeeklyDigest> {
   const end = now.toISOString();
   const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
   const byDrawer = new Map<string, DrawerDigest>();
@@ -67,16 +66,16 @@ export function buildWeeklyDigest(userId: string, now = new Date(), days = SUMMA
     return entry;
   };
 
-  for (const d of getMemoryStorage().listDrawers(userId)) {
+  for (const d of await sql().read(listDrawersStep(userId))) {
     get(d.key ? { kind: d.kind, key: d.key } : { kind: d.kind }).total = d.count;
   }
 
-  const rows = db.prepare(`
+  const rows = await sql().read(all<{ memory_id: string; drawer_kind: string; drawer_key: string; change: 'create' | 'update' | 'delete' | 'forget'; created_at: string; current: string | null }>(`
     SELECT v.memory_id, v.drawer_kind, v.drawer_key, v.change, v.created_at, m.content AS current
       FROM memory_versions v LEFT JOIN memories m ON m.id = v.memory_id AND m.user_id = v.user_id
      WHERE v.user_id = ? AND v.created_at >= ? AND v.created_at <= ? AND v.change IN ('create', 'update', 'delete', 'forget')
-     ORDER BY v.created_at ASC, v.memory_id
-  `).all(userId, start, end) as Array<{ memory_id: string; drawer_kind: string; drawer_key: string; change: 'create' | 'update' | 'delete' | 'forget'; created_at: string; current: string | null }>;
+     ORDER BY v.created_at ASC, v.memory_id, v.version
+  `, userId, start, end));
   for (const r of rows) {
     const d = drawerOf(r.drawer_kind, r.drawer_key);
     if (!d) continue;
@@ -90,10 +89,10 @@ export function buildWeeklyDigest(userId: string, now = new Date(), days = SUMMA
     e.items.push({ memoryId: r.memory_id, change: r.change, preview: r.change === 'delete' ? null : preview(r.current), at: r.created_at });
   }
 
-  const pending = db.prepare(`
+  const pending = await sql().read(all<{ drawer_kind: string; drawer_key: string; n: number }>(`
     SELECT drawer_kind, drawer_key, COUNT(*) AS n FROM memory_file_proposals
      WHERE user_id = ? AND status = 'pending' GROUP BY 1, 2
-  `).all(userId) as Array<{ drawer_kind: string; drawer_key: string; n: number }>;
+  `, userId));
   for (const p of pending) {
     const d = drawerOf(p.drawer_kind, p.drawer_key);
     if (d) get(d).pending = p.n;
@@ -168,30 +167,30 @@ function rowToRecord(row: any): WeeklySummaryRecord {
 
 /** Build, (optionally) summarize and store this week's summary for a user. */
 export async function runWeeklySummary(userId: string, opts: { now?: Date; summarizer?: Summarizer | null; actor?: string } = {}): Promise<WeeklySummaryRecord> {
-  const digest = buildWeeklyDigest(userId, opts.now ?? new Date());
+  const digest = await buildWeeklyDigest(userId, opts.now ?? new Date());
   const text = renderDigest(digest);
   const summarizer = opts.summarizer === undefined ? configuredSummarizer() : opts.summarizer;
   let model: { text: string; model: string } | null = null;
   if (summarizer) {
     try { model = await summarizer(text); } catch { model = null; }
   }
-  const id = uuidv4();
-  getDatabase().prepare(`
+  // Time-ordered id: it breaks created_at ties (was rowid) on both drivers.
+  const id = orderedId();
+  await sql().read(run(`
     INSERT INTO memory_weekly_summaries (id, user_id, period_start, period_end, digest, text, model_text, model, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, userId, digest.periodStart, digest.periodEnd, JSON.stringify(digest), text, model?.text ?? null, model?.model ?? null, opts.actor ?? 'scheduler');
-  return latestWeeklySummary(userId)!;
+  `, id, userId, digest.periodStart, digest.periodEnd, JSON.stringify(digest), text, model?.text ?? null, model?.model ?? null, opts.actor ?? 'scheduler'));
+  return (await latestWeeklySummary(userId))!;
 }
 
-export function latestWeeklySummary(userId: string): WeeklySummaryRecord | null {
-  const row = getDatabase().prepare(
-    'SELECT * FROM memory_weekly_summaries WHERE user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1'
-  ).get(userId);
+export async function latestWeeklySummary(userId: string): Promise<WeeklySummaryRecord | null> {
+  const row = await sql().read(one(
+    'SELECT * FROM memory_weekly_summaries WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 1', userId));
   return row ? rowToRecord(row) : null;
 }
 
-export function listWeeklySummaries(userId: string, limit = 12): WeeklySummaryRecord[] {
-  return (getDatabase().prepare(
-    'SELECT * FROM memory_weekly_summaries WHERE user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?'
-  ).all(userId, Math.max(1, Math.min(52, limit))) as any[]).map(rowToRecord);
+export async function listWeeklySummaries(userId: string, limit = 12): Promise<WeeklySummaryRecord[]> {
+  return (await sql().read(all(
+    'SELECT * FROM memory_weekly_summaries WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?', userId, Math.max(1, Math.min(52, limit)))))
+    .map(rowToRecord);
 }

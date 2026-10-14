@@ -14,8 +14,9 @@
  * Errors: out of scope -> ScopeError 404 (`Memory not found` /
  * `Proposal not found`); a closed drawer for an agent run -> ScopeError 403.
  *
- * SQLite implementation over memory/storage.ts, learning.ts, versions.ts,
- * forget.ts and memory-files.ts. Recall, learning and layers (search,
+ * One implementation for both drivers (B2.2b-4: the memory modules run their
+ * SQL as SQL steps on the process driver) over memory/storage.ts,
+ * learning.ts, versions.ts, forget.ts and memory-files.ts. Recall, learning and layers (search,
  * relevant, extract, save/edit/delete/reflect/stats tools) are in
  * memory-recall.ts; the owner's weekly summary, retention, embeddings,
  * forget-all and import pipeline in memory-owner.ts (B1.6); quality, sharing
@@ -25,10 +26,10 @@
 import type { Actor } from './actor.js';
 import { ScopeError, drawerOpen, requireActor, requireMember } from './scope.js';
 import { memoryOwner, memoryUser, versionActor } from './memory-actor.js';
-import { sqliteMemoryRecall, type MemoryRecallRepository } from './memory-recall.js';
-import { sqliteMemoryOwner, type MemoryOwnerRepository } from './memory-owner.js';
-import { sqliteMemoryShared, type MemorySharedRepository } from './memory-shared.js';
-import { getDatabase } from '../db/index.js';
+import { memoryRecall, type MemoryRecallRepository } from './memory-recall.js';
+import { memoryOwnerRepository, type MemoryOwnerRepository } from './memory-owner.js';
+import { memoryShared, type MemorySharedRepository } from './memory-shared.js';
+import { one, sql } from './sql-steps.js';
 import { getMemoryStorage } from '../memory/storage.js';
 import { defaultDrawerForType, normalizeDrawer, sameDrawer, type DrawerRef } from '../memory/drawers.js';
 import { deleteVersioned, saveVersioned, updateVersioned } from '../memory/learning.js';
@@ -68,7 +69,7 @@ export interface MemoryRepository extends MemoryRecallRepository, MemoryOwnerRep
   versions(actor: Actor | null | undefined, id: string): Promise<any[]>;
   /** null when the memory does not exist (or is not the actor's). */
   forget(actor: Actor | null | undefined, id: string): Promise<ForgetResult | null>;
-  tombstones(actor: Actor | null | undefined): Promise<ReturnType<typeof listTombstones>>;
+  tombstones(actor: Actor | null | undefined): Promise<Awaited<ReturnType<typeof listTombstones>>>;
 
   // Owner only (CORE-04)
   drawerFile(actor: Actor | null | undefined, agentId: string, drawer: DrawerRef): Promise<DrawerFileView>;
@@ -83,15 +84,15 @@ export interface MemoryRepository extends MemoryRecallRepository, MemoryOwnerRep
   rejectProposal(actor: Actor | null | undefined, id: string, expectedReviewHash: unknown, note?: unknown): Promise<MemoryProposal>;
 }
 
-function memoryRowOwner(id: string): string | null {
+async function memoryRowOwner(id: string): Promise<string | null> {
   if (typeof id !== 'string' || !id) return null;
-  const row = getDatabase().prepare('SELECT user_id FROM memories WHERE id = ?').get(id) as { user_id: string } | undefined;
+  const row = await sql().read(one<{ user_id: string }>('SELECT user_id FROM memories WHERE id = ?', id));
   return row?.user_id ?? null;
 }
 
 /** The own memory row (no access-count side effect), drawer-checked for agent runs. */
-function ownMemory(a: Actor, userId: string, id: string): Memory {
-  const m = getMemoryStorage().getOwned(userId, id);
+async function ownMemory(a: Actor, userId: string, id: string): Promise<Memory> {
+  const m = await getMemoryStorage().getOwned(userId, id);
   if (!m) throw new ScopeError(404, NOT_FOUND);
   if (!drawerOpen(a, m.drawer ?? defaultDrawerForType(m.type))) throw new ScopeError(403, DRAWER_CLOSED);
   return m;
@@ -99,10 +100,10 @@ function ownMemory(a: Actor, userId: string, id: string): Memory {
 
 const owner = memoryOwner;
 
-export const sqliteMemory: MemoryRepository = {
-  ...sqliteMemoryRecall,
-  ...sqliteMemoryOwner,
-  ...sqliteMemoryShared,
+export const memoryRepository: MemoryRepository = {
+  ...memoryRecall,
+  ...memoryOwnerRepository,
+  ...memoryShared,
 
   async list(actor) {
     const { a, userId } = memoryUser(actor);
@@ -112,13 +113,13 @@ export const sqliteMemory: MemoryRepository = {
 
   async drawers(actor) {
     const { a, userId } = memoryUser(actor);
-    const all = getMemoryStorage().listDrawers(userId);
+    const all = await getMemoryStorage().listDrawers(userId);
     return a.kind === 'agent' ? all.filter((d) => drawerOpen(a, d)) : all;
   },
 
   async get(actor, id) {
     const { a, userId } = memoryUser(actor);
-    ownMemory(a, userId, id);
+    await ownMemory(a, userId, id);
     const m = await getMemoryStorage().get(id);
     if (!m) throw new ScopeError(404, NOT_FOUND);
     return m;
@@ -126,7 +127,7 @@ export const sqliteMemory: MemoryRepository = {
 
   async assertAccess(actor, id) {
     const { a, userId } = memoryUser(actor);
-    ownMemory(a, userId, id);
+    await ownMemory(a, userId, id);
   },
 
   async create(actor, memory, reason) {
@@ -138,7 +139,7 @@ export const sqliteMemory: MemoryRepository = {
 
   async update(actor, id, updates, reason) {
     const { a, userId } = memoryUser(actor);
-    ownMemory(a, userId, id);
+    await ownMemory(a, userId, id);
     if (a.kind === 'agent' && updates.drawer && !drawerOpen(a, normalizeDrawer(updates.drawer))) throw new ScopeError(403, DRAWER_CLOSED);
     const updated = await updateVersioned(userId, id, updates, versionActor(a), reason);
     if (!updated) throw new ScopeError(404, NOT_FOUND);
@@ -147,16 +148,16 @@ export const sqliteMemory: MemoryRepository = {
 
   async delete(actor, id, reason) {
     const { a, userId } = memoryUser(actor);
-    ownMemory(a, userId, id);
+    await ownMemory(a, userId, id);
     await deleteVersioned(userId, id, versionActor(a), reason);
   },
 
   async versions(actor, id) {
     const { a, userId } = memoryUser(actor);
-    const versions = memoryVersions(userId, id);
-    if (versions.length === 0 && memoryRowOwner(id) !== userId) throw new ScopeError(404, NOT_FOUND);
+    const versions = await memoryVersions(userId, id);
+    if (versions.length === 0 && (await memoryRowOwner(id)) !== userId) throw new ScopeError(404, NOT_FOUND);
     if (a.kind === 'agent') {
-      const drawer = forgettableDrawer(userId, id);
+      const drawer = await forgettableDrawer(userId, id);
       if (!drawer || !drawerOpen(a, drawer)) throw new ScopeError(403, DRAWER_CLOSED);
     }
     return versions;
@@ -169,7 +170,7 @@ export const sqliteMemory: MemoryRepository = {
     if (a.kind === 'agent') {
       // Only memories in drawers open for this run; for an already deleted
       // memory, its last drawer (CORE-07).
-      const drawer = forgettableDrawer(userId, id);
+      const drawer = await forgettableDrawer(userId, id);
       if (!drawer) return null;
       if (!(a.drawers ?? []).some((d) => sameDrawer(d, drawer))) throw new ScopeError(403, DRAWER_CLOSED);
     }
@@ -207,7 +208,7 @@ export const sqliteMemory: MemoryRepository = {
   },
 
   async proposal(actor, id) {
-    const p = getProposal(owner(actor), id);
+    const p = await getProposal(owner(actor), id);
     if (!p) throw new ScopeError(404, PROPOSAL_NOT_FOUND);
     return p;
   },
@@ -222,3 +223,4 @@ export const sqliteMemory: MemoryRepository = {
     return rejectProposal(userId, id, userId, expectedReviewHash, note);
   },
 };
+

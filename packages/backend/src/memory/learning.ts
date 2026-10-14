@@ -28,7 +28,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { getDatabase } from '../db/index.js';
+import { one, sql } from '../repositories/sql-steps.js';
 import { getMemoryStorage } from './storage.js';
 import { defaultDrawerForType, normalizeDrawer, sameDrawer, type DrawerRef } from './drawers.js';
 import {
@@ -38,7 +38,7 @@ import {
   type MemoryChange,
   type MemoryProposal,
 } from './memory-files.js';
-import { recordBaselineIfMissing, recordVersion, versionEntryOf, type VersionEntry } from './versions.js';
+import { recordBaselineIfMissing, recordVersion, recordVersionStep, versionEntryOf, type VersionEntry } from './versions.js';
 import type { ImportanceLevel, Memory, MemoryType, MultiTierLayer } from './types.js';
 import { textSimilarity } from './embedding.js';
 
@@ -159,14 +159,14 @@ function clampImportance(v: unknown): number {
   return Math.max(1, Math.min(10, n));
 }
 
-export function userRole(userId: string): string | null {
-  const row = getDatabase().prepare('SELECT role FROM users WHERE id = ?').get(userId) as { role: string } | undefined;
+export async function userRole(userId: string): Promise<string | null> {
+  const row = await sql().read(one<{ role: string }>('SELECT role FROM users WHERE id = ?', userId));
   return row?.role ?? null;
 }
 
-function proposalAgent(agentId?: string | null): string {
-  try { return resolveFileAgent(agentId || undefined); } catch { /* no agent folder */ }
-  try { return resolveFileAgent(); } catch { return '(none)'; }
+async function proposalAgent(agentId?: string | null): Promise<string> {
+  try { return await resolveFileAgent(agentId || undefined); } catch { /* no agent folder */ }
+  try { return await resolveFileAgent(); } catch { return '(none)'; }
 }
 
 /** Build a new memory row (not yet saved). */
@@ -188,20 +188,25 @@ export function newMemory(userId: string, drawer: DrawerRef, entry: VersionEntry
  */
 export async function saveVersioned(memory: Memory, actor: string, reason: string): Promise<Memory> {
   const storage = getMemoryStorage();
-  await storage.save(memory);
-  recordVersion({ memoryId: memory.id, userId: memory.userId, drawer: memory.drawer!, change: 'create', entry: versionEntryOf(memory), actor, reason });
+  // The row and its `create` version in one transaction; the readable copy after.
+  await storage.ensureEmbedding(memory);
+  await sql().tx(function* () {
+    yield* storage.writeRowStep(memory);
+    yield* recordVersionStep({ memoryId: memory.id, userId: memory.userId, drawer: memory.drawer!, change: 'create', entry: versionEntryOf(memory), actor, reason });
+  });
+  await storage.writeMarkdownCopy(memory);
   return memory;
 }
 
 /** Update a memory (allowlisted fields) with baseline + `update` version. */
 export async function updateVersioned(userId: string, id: string, updates: Partial<Memory>, actor: string, reason: string): Promise<Memory | null> {
   const storage = getMemoryStorage();
-  const old = storage.getOwned(userId, id);
+  const old = await storage.getOwned(userId, id);
   if (!old) return null;
-  recordBaselineIfMissing(old, actor);
+  await recordBaselineIfMissing(old, actor);
   await storage.update(id, updates);
-  const updated = storage.getOwned(userId, id)!;
-  recordVersion({ memoryId: id, userId, drawer: updated.drawer!, change: 'update', entry: versionEntryOf(updated), actor, reason });
+  const updated = (await storage.getOwned(userId, id))!;
+  await recordVersion({ memoryId: id, userId, drawer: updated.drawer!, change: 'update', entry: versionEntryOf(updated), actor, reason });
   return updated;
 }
 
@@ -212,11 +217,11 @@ export async function updateVersioned(userId: string, id: string, updates: Parti
  */
 export async function deleteVersioned(userId: string, id: string, actor: string, reason: string): Promise<boolean> {
   const storage = getMemoryStorage();
-  const old = storage.getOwned(userId, id);
+  const old = await storage.getOwned(userId, id);
   if (!old) return false;
-  recordBaselineIfMissing(old, actor);
+  await recordBaselineIfMissing(old, actor);
   await storage.delete(id);
-  recordVersion({ memoryId: id, userId, drawer: old.drawer!, change: 'delete', entry: null, actor, reason });
+  await recordVersion({ memoryId: id, userId, drawer: old.drawer!, change: 'delete', entry: null, actor, reason });
   return true;
 }
 
@@ -250,7 +255,7 @@ function preview(s: string): string {
 export async function learn(input: LearnInput): Promise<LearnOutcome> {
   const out: LearnOutcome = { saved: [], proposed: [], skipped: [], classified: [] };
   const storage = getMemoryStorage();
-  const ownerReview = userRole(input.userId) === 'owner';
+  const ownerReview = (await userRole(input.userId)) === 'owner';
   for (const c of input.candidates) {
     const content = typeof c?.content === 'string' ? c.content.trim() : '';
     if (!content || content.length > MAX_LEARNED_CONTENT) { out.skipped.push({ content: preview(content), reason: 'invalid content' }); continue; }
@@ -287,8 +292,8 @@ export async function learn(input: LearnInput): Promise<LearnOutcome> {
     }
     try {
       const reasons = cls.conflictsWith.length ? [...cls.reasons, ...cls.conflictsWith.slice(0, 5).map((id) => `conflicts-with:${id}`)] : cls.reasons;
-      const proposal = createChangeProposal({
-        userId: input.userId, agentId: proposalAgent(input.agentId), drawer, changes: [{ op: 'add', after: entry }],
+      const proposal = await createChangeProposal({
+        userId: input.userId, agentId: await proposalAgent(input.agentId), drawer, changes: [{ op: 'add', after: entry }],
         source: c.origin === 'agent' ? 'agent' : 'learning', reasons, createdBy: input.actor,
       });
       out.proposed.push(proposal);
@@ -316,7 +321,7 @@ export async function agentChange(input: {
   actor: string; agentId?: string | null; openDrawers?: readonly DrawerRef[] | null; outsider?: boolean; reason?: string | null;
 }): Promise<AgentChangeResult> {
   const storage = getMemoryStorage();
-  const old = storage.getOwned(input.userId, input.memoryId);
+  const old = await storage.getOwned(input.userId, input.memoryId);
   if (!old) return { status: 'refused', reason: 'Memory not found' };
   const drawer = old.drawer!;
   if (input.openDrawers && !input.openDrawers.some((d) => sameDrawer(d, drawer))) {
@@ -349,13 +354,13 @@ export async function agentChange(input: {
     }, input.actor, actorReason);
     return { status: 'applied', memory: updated };
   }
-  if (userRole(input.userId) !== 'owner') return { status: 'refused', reason: 'This change needs owner approval' };
+  if ((await userRole(input.userId)) !== 'owner') return { status: 'refused', reason: 'This change needs owner approval' };
   const change: MemoryChange = input.op === 'delete'
     ? { op: 'delete', id: old.id, before }
     : { op: 'update', id: old.id, before, after: after! };
   try {
-    const proposal = createChangeProposal({
-      userId: input.userId, agentId: proposalAgent(input.agentId), drawer, changes: [change],
+    const proposal = await createChangeProposal({
+      userId: input.userId, agentId: await proposalAgent(input.agentId), drawer, changes: [change],
       source: 'agent', reasons: cls.reasons, note: reasonText, createdBy: input.actor,
     });
     return { status: 'proposed', proposal, reasons: cls.reasons };

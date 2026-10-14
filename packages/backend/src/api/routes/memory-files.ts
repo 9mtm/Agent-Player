@@ -90,11 +90,12 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
     const ownerId = ownerOf(request, reply);
     if (ownerId === null) return reply;
     try {
-      const agentId = agentFrom(request);
-      const drawers = (await repositories.memory.drawers(actorOf(request))).map((d) => {
+      const agentId = await agentFrom(request);
+      const drawers = [];
+      for (const d of await repositories.memory.drawers(actorOf(request))) {
         const ref: DrawerRef = d.key ? { kind: d.kind, key: d.key } : { kind: d.kind };
-        return { ...d, drawerId: drawerId(ref), revision: drawerRevision(ownerId, ref), path: displayPath(drawerFilePath(agentId, ownerId, ref)) };
-      });
+        drawers.push({ ...d, drawerId: drawerId(ref), revision: await drawerRevision(ownerId, ref), path: displayPath(drawerFilePath(agentId, ownerId, ref)) });
+      }
       return { agentId, drawers };
     } catch (err) { return fail(reply, err); }
   });
@@ -103,7 +104,7 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
     const ownerId = ownerOf(request, reply);
     if (ownerId === null) return reply;
     try {
-      return await repositories.memory.drawerFile(actorOf(request), agentFrom(request), parseDrawerId(request.params.drawer));
+      return await repositories.memory.drawerFile(actorOf(request), await agentFrom(request), parseDrawerId(request.params.drawer));
     } catch (err) { return fail(reply, err); }
   });
 
@@ -112,7 +113,7 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
     if (ownerId === null) return reply;
     try {
       const drawer = parseDrawerId(request.params.drawer);
-      return { drawerId: drawerId(drawer), revision: drawerRevision(ownerId, drawer), versions: await repositories.memory.drawerHistory(actorOf(request), drawer) };
+      return { drawerId: drawerId(drawer), revision: await drawerRevision(ownerId, drawer), versions: await repositories.memory.drawerHistory(actorOf(request), drawer) };
     } catch (err) { return fail(reply, err); }
   });
 
@@ -120,7 +121,7 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
     const ownerId = ownerOf(request, reply);
     if (ownerId === null) return reply;
     try {
-      const view = await repositories.memory.exportDrawer(actorOf(request), agentFrom(request), parseDrawerId(request.params.drawer));
+      const view = await repositories.memory.exportDrawer(actorOf(request), await agentFrom(request), parseDrawerId(request.params.drawer));
       return { ...view, exported: true };
     } catch (err) { return fail(reply, err); }
   });
@@ -130,7 +131,7 @@ export async function memoryFilesRoutes(fastify: FastifyInstance) {
     if (ownerId === null) return reply;
     try {
       const drawer = parseDrawerId(request.params.drawer);
-      const agentId = agentFrom(request);
+      const agentId = await agentFrom(request);
       const b = body(request);
       if (b.content !== undefined && typeof b.content !== 'string') return reply.code(400).send({ error: 'content must be text' });
       // Uploaded text, or the exported file as the owner saved it (read only on this request).

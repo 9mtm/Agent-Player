@@ -21,7 +21,7 @@
  *    - Current `.data/memory/` system
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, run, sql } from '../repositories/sql-steps.js';
 
 export type MemoryLayer = 'working' | 'experiential' | 'factual';
 export type ConsolidationStatus = 'pending' | 'consolidated' | 'promoted';
@@ -46,19 +46,18 @@ export class MemoryTiersService {
    * Get statistics for all memory layers
    */
   static async getLayerStats(userId: string): Promise<MemoryTierStats[]> {
-    const db = getDatabase();
-
-    const stats = db.prepare(`
+    const stats = await sql().read(all(`
       SELECT
         memory_layer as layer,
         COUNT(*) as count,
-        AVG(importance_score) as avgImportance,
-        MIN(created_at) as oldestTimestamp,
-        MAX(created_at) as newestTimestamp
+        AVG(importance_score) as "avgImportance",
+        MIN(created_at) as "oldestTimestamp",
+        MAX(created_at) as "newestTimestamp"
       FROM memories
       WHERE user_id = ?
       GROUP BY memory_layer
-    `).all(userId) as any[];
+      ORDER BY memory_layer
+    `, userId));
 
     return stats.map(s => ({
       layer: s.layer,
@@ -74,21 +73,18 @@ export class MemoryTiersService {
    * Criteria: high importance score, accessed multiple times
    */
   static async promoteToExperiential(userId: string, memoryId: string): Promise<boolean> {
-    const db = getDatabase();
-
     try {
-      const result = db.prepare(`
+      const result = await sql().read(run(`
         UPDATE memories
         SET
           memory_layer = 'experiential',
           consolidation_status = 'promoted',
           expiry_timestamp = ?
         WHERE id = ? AND user_id = ? AND memory_layer = 'working'
-      `).run(
-        Date.now() + (90 * 24 * 60 * 60 * 1000), // 90 days TTL
+      `, Date.now() + (90 * 24 * 60 * 60 * 1000), // 90 days TTL
         memoryId,
         userId
-      );
+      ));
 
       return result.changes > 0;
     } catch (error: any) {
@@ -102,17 +98,15 @@ export class MemoryTiersService {
    * Criteria: very high importance, accessed frequently, verified
    */
   static async promoteToFactual(userId: string, memoryId: string): Promise<boolean> {
-    const db = getDatabase();
-
     try {
-      const result = db.prepare(`
+      const result = await sql().read(run(`
         UPDATE memories
         SET
           memory_layer = 'factual',
           consolidation_status = 'promoted',
           expiry_timestamp = NULL
         WHERE id = ? AND user_id = ? AND memory_layer = 'experiential'
-      `).run(memoryId, userId);
+      `, memoryId, userId));
 
       return result.changes > 0;
     } catch (error: any) {
@@ -126,18 +120,17 @@ export class MemoryTiersService {
    * Called automatically on session end or periodically
    */
   static async expireWorkingMemory(): Promise<number> {
-    const db = getDatabase();
     const now = Date.now();
 
     try {
-      const result = db.prepare(`
+      const result = await sql().read(run(`
         DELETE FROM memories
         WHERE memory_layer = 'working'
           AND expiry_timestamp IS NOT NULL
           AND expiry_timestamp < ?
           -- CORE-07 forgetting rule 1: owner, project and people drawers are never expired.
           AND COALESCE(drawer_kind, CASE WHEN type IN ('skill', 'insight') THEN 'experience' ELSE 'owner' END) NOT IN ('owner', 'project', 'people')
-      `).run(now);
+      `, now));
 
       if (result.changes > 0) {
         console.log(`[MemoryTiers] Expired ${result.changes} working memories`);
@@ -154,11 +147,10 @@ export class MemoryTiersService {
    * Expire old experiential memory (older than 90 days)
    */
   static async expireExperientialMemory(): Promise<number> {
-    const db = getDatabase();
     const now = Date.now();
 
     try {
-      const result = db.prepare(`
+      const result = await sql().read(run(`
         DELETE FROM memories
         WHERE memory_layer = 'experiential'
           AND expiry_timestamp IS NOT NULL
@@ -166,7 +158,7 @@ export class MemoryTiersService {
           AND importance_score < 0.7
           -- CORE-07 forgetting rule 1: owner, project and people drawers are never expired.
           AND COALESCE(drawer_kind, CASE WHEN type IN ('skill', 'insight') THEN 'experience' ELSE 'owner' END) NOT IN ('owner', 'project', 'people')
-      `).run(now);
+      `, now));
 
       if (result.changes > 0) {
         console.log(`[MemoryTiers] Expired ${result.changes} experiential memories`);
@@ -184,16 +176,14 @@ export class MemoryTiersService {
    * Used to track importance and determine promotion
    */
   static async incrementAccessCount(memoryId: string): Promise<void> {
-    const db = getDatabase();
-
     try {
-      db.prepare(`
+      await sql().read(run(`
         UPDATE memories
         SET
           access_count = access_count + 1,
           last_accessed_at = ?
         WHERE id = ?
-      `).run(Date.now(), memoryId);
+      `, Date.now(), memoryId));
     } catch (error: any) {
       console.error('[MemoryTiers] Failed to increment access count:', error.message);
     }
@@ -203,14 +193,12 @@ export class MemoryTiersService {
    * Update importance score for a memory
    */
   static async updateImportanceScore(memoryId: string, score: number): Promise<boolean> {
-    const db = getDatabase();
-
     try {
-      const result = db.prepare(`
+      const result = await sql().read(run(`
         UPDATE memories
         SET importance_score = ?
         WHERE id = ?
-      `).run(Math.max(0, Math.min(1, score)), memoryId);
+      `, Math.max(0, Math.min(1, score)), memoryId));
 
       return result.changes > 0;
     } catch (error: any) {
@@ -224,10 +212,8 @@ export class MemoryTiersService {
    * Criteria: access_count >= 3, importance_score >= 0.6
    */
   static async getPromotionCandidates(userId: string): Promise<any[]> {
-    const db = getDatabase();
-
     try {
-      return db.prepare(`
+      return await sql().read(all(`
         SELECT id, content, importance_score, access_count
         FROM memories
         WHERE user_id = ?
@@ -236,7 +222,7 @@ export class MemoryTiersService {
           AND importance_score >= 0.6
         ORDER BY importance_score DESC, access_count DESC
         LIMIT 50
-      `).all(userId) as any[];
+      `, userId));
     } catch (error: any) {
       console.error('[MemoryTiers] Failed to get promotion candidates:', error.message);
       return [];
@@ -247,15 +233,13 @@ export class MemoryTiersService {
    * Get consolidation log (recent runs)
    */
   static async getConsolidationLog(limit: number = 10): Promise<any[]> {
-    const db = getDatabase();
-
     try {
-      return db.prepare(`
+      return await sql().read(all(`
         SELECT *
         FROM memory_consolidation_log
         ORDER BY run_timestamp DESC
         LIMIT ?
-      `).all(limit) as any[];
+      `, limit));
     } catch (error: any) {
       console.error('[MemoryTiers] Failed to get consolidation log:', error.message);
       return [];
@@ -266,10 +250,8 @@ export class MemoryTiersService {
    * Log consolidation run
    */
   static async logConsolidation(result: ConsolidationResult & { status: string; error?: string }): Promise<void> {
-    const db = getDatabase();
-
     try {
-      db.prepare(`
+      await sql().read(run(`
         INSERT INTO memory_consolidation_log (
           run_timestamp,
           memories_consolidated,
@@ -279,15 +261,14 @@ export class MemoryTiersService {
           status,
           error_message
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        Date.now(),
+      `, Date.now(),
         result.consolidated,
         result.promoted,
         result.expired,
         result.durationMs,
         result.status,
         result.error || null
-      );
+      ));
     } catch (error: any) {
       console.error('[MemoryTiers] Failed to log consolidation:', error.message);
     }

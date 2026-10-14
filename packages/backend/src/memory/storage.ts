@@ -1,21 +1,25 @@
 /**
  * Memory Storage
  *
- * Stores memories in markdown files + SQLite database
- * Markdown files for human readability, SQLite for vector search
+ * Stores memories in the database (canonical) + markdown files (readable
+ * copies). B2.2b-4: the SQL runs as SQL steps (repositories/sql-steps.ts) on
+ * the process driver, SQLite or PostgreSQL. Vectors stay JSON text in
+ * memories.embedding (a text column on both drivers); similarity and the
+ * BM25 lexical score are computed here in JS on both drivers, so recall
+ * ranks the same rows the same way on SQLite and PostgreSQL.
  */
 
 import fs from 'fs/promises';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { getDatabase } from '../db/index.js';
+import { all, columnExists, dialect, one, run, sql, type Step } from '../repositories/sql-steps.js';
 import { LEGACY_HASH_MODEL, getEmbeddingService } from './embedding.js';
 import { lexicalTokens } from './text-normalize.js';
 import { MIN_RECALL_SCORE, WORKING_LAYER_BOOST, bm25Scores, hybridScore, vectorScore } from './hybrid.js';
 import {
   DRAWER_KEY_SQL,
   DRAWER_KIND_SQL,
-  backfillMemoryDrawers,
+  backfillMemoryDrawersStep,
   defaultDrawerForType,
   drawerSqlFilter,
   normalizeDrawer,
@@ -37,31 +41,9 @@ function isSafeSegment(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9_.@-]{1,200}$/.test(value) && value !== '.' && value !== '..';
 }
 
-export class MemoryStorage implements IMemoryStorage {
-  private memoryDir: string;
-  private db: ReturnType<typeof getDatabase>;
-
-  constructor(memoryDir = '../../.data/memory') {
-    this.memoryDir = memoryDir;
-    this.db = getDatabase();
-  }
-
-  private get embeddingService(): ReturnType<typeof getEmbeddingService> {
-    return getEmbeddingService();
-  }
-
-  /**
-   * Initialize storage (create directories and tables)
-   */
-  async initialize(): Promise<void> {
-    // Create memory directory
-    await fs.mkdir(this.memoryDir, { recursive: true });
-
-    const db = this.db.getDb();
-
-    // Create database table (using getDb() to access raw SQLite instance)
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS memories (
+/** SQLite only: the legacy runtime DDL of `memories` (PostgreSQL: migrations-pg 040b and later). */
+const SQLITE_MEMORIES_DDL = [
+  `CREATE TABLE IF NOT EXISTS memories (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
         type TEXT NOT NULL,
@@ -77,64 +59,87 @@ export class MemoryStorage implements IMemoryStorage {
         access_count INTEGER DEFAULT 0,
         expiry_timestamp INTEGER,
         consolidation_status TEXT DEFAULT 'pending'
-      );
+      )`,
+  'CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id)',
+  'CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type)',
+  'CREATE INDEX IF NOT EXISTS idx_memories_layer ON memories(memory_layer)',
+  'CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance_score)',
+];
 
-      CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
-      CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
-      CREATE INDEX IF NOT EXISTS idx_memories_layer ON memories(memory_layer);
-      CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance_score);
-    `);
+/** SQLite only: columns added to old databases (normally by the migrations). */
+const SQLITE_MEMORIES_COLUMNS: Array<[string, string]> = [
+  // Multi-Tier Memory columns
+  ['memory_layer', "TEXT DEFAULT 'factual'"],
+  ['expiry_timestamp', 'INTEGER'],
+  ['consolidation_status', "TEXT DEFAULT 'pending'"],
+  ['importance_score', 'REAL DEFAULT 0.5'],
+  ['last_accessed_at', 'INTEGER'],
+  // CORE-03 drawers (normally added by migration 058)
+  ['drawer_kind', 'TEXT'],
+  ['drawer_key', 'TEXT'],
+  // CORE-06 embedding model per vector (normally added by migration 063)
+  ['embedding_model', 'TEXT'],
+  ['embedding_dims', 'INTEGER'],
+];
 
-    // Migration: Add new columns if they don't exist (for backward compatibility)
-    try {
-      const tableInfo = db.prepare("PRAGMA table_info(memories)").all() as any[];
-      const columns = tableInfo.map((col: any) => col.name);
+const SQLITE_MEMORIES_INDEXES = [
+  'CREATE INDEX IF NOT EXISTS idx_memories_layer ON memories(memory_layer)',
+  'CREATE INDEX IF NOT EXISTS idx_memories_expiry ON memories(expiry_timestamp) WHERE expiry_timestamp IS NOT NULL',
+  "CREATE INDEX IF NOT EXISTS idx_memories_consolidation ON memories(consolidation_status) WHERE memory_layer = 'experiential'",
+];
 
-      // Add Multi-Tier Memory columns if missing
-      if (!columns.includes('memory_layer')) {
-        db.exec("ALTER TABLE memories ADD COLUMN memory_layer TEXT DEFAULT 'factual'");
-      }
-      if (!columns.includes('expiry_timestamp')) {
-        db.exec("ALTER TABLE memories ADD COLUMN expiry_timestamp INTEGER");
-      }
-      if (!columns.includes('consolidation_status')) {
-        db.exec("ALTER TABLE memories ADD COLUMN consolidation_status TEXT DEFAULT 'pending'");
-      }
-      if (!columns.includes('importance_score')) {
-        db.exec("ALTER TABLE memories ADD COLUMN importance_score REAL DEFAULT 0.5");
-      }
-      if (!columns.includes('last_accessed_at')) {
-        db.exec("ALTER TABLE memories ADD COLUMN last_accessed_at INTEGER");
-      }
-      // CORE-03 drawers (normally added by migration 058)
-      if (!columns.includes('drawer_kind')) {
-        db.exec("ALTER TABLE memories ADD COLUMN drawer_kind TEXT");
-      }
-      if (!columns.includes('drawer_key')) {
-        db.exec("ALTER TABLE memories ADD COLUMN drawer_key TEXT");
-      }
-      // CORE-06 embedding model per vector (normally added by migration 063)
-      if (!columns.includes('embedding_model')) {
-        db.exec("ALTER TABLE memories ADD COLUMN embedding_model TEXT");
-      }
-      if (!columns.includes('embedding_dims')) {
-        db.exec("ALTER TABLE memories ADD COLUMN embedding_dims INTEGER");
-      }
+const UPSERT_COLUMNS = [
+  'id', 'user_id', 'type', 'content', 'embedding', 'memory_layer', 'status',
+  'metadata', 'importance_score', 'tags', 'created_at', 'last_accessed_at', 'access_count',
+  'expiry_timestamp', 'consolidation_status', 'drawer_kind', 'drawer_key',
+  'embedding_model', 'embedding_dims',
+];
 
-      // Create indexes for Multi-Tier Memory System
-      db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_memories_layer ON memories(memory_layer);
-        CREATE INDEX IF NOT EXISTS idx_memories_expiry ON memories(expiry_timestamp) WHERE expiry_timestamp IS NOT NULL;
-        CREATE INDEX IF NOT EXISTS idx_memories_consolidation ON memories(consolidation_status) WHERE memory_layer = 'experiential';
-      `);
-    } catch (err) {
-      // Columns already exist or other error, continue
-      console.log('[Memory] Migration check completed');
+/**
+ * Insert or update a memory row. Was INSERT OR REPLACE (SQLite only); an
+ * upsert on the id keeps the columns it does not list (sharing, quality)
+ * and the rows that reference the memory, and never moves a memory id to
+ * another user (`changes` is 0 then).
+ */
+const UPSERT_SQL = `
+  INSERT INTO memories (${UPSERT_COLUMNS.join(', ')})
+  VALUES (${UPSERT_COLUMNS.map(() => '?').join(', ')})
+  ON CONFLICT (id) DO UPDATE SET ${UPSERT_COLUMNS.filter((c) => c !== 'id').map((c) => `${c} = excluded.${c}`).join(', ')}
+  WHERE memories.user_id = excluded.user_id`;
+
+export class MemoryStorage implements IMemoryStorage {
+  private memoryDir: string;
+
+  constructor(memoryDir = '../../.data/memory') {
+    this.memoryDir = memoryDir;
+  }
+
+  private get embeddingService(): ReturnType<typeof getEmbeddingService> {
+    return getEmbeddingService();
+  }
+
+  /**
+   * Initialize storage (create directories and tables)
+   */
+  async initialize(): Promise<void> {
+    // Create memory directory
+    await fs.mkdir(this.memoryDir, { recursive: true });
+
+    // SQLite: the legacy runtime DDL. PostgreSQL: the table and its columns
+    // come from migrations-pg (040b, 041, 047, 048, 058, 063).
+    if (sql().dialect === 'sqlite') {
+      await sql().read(sqliteDdlStep(SQLITE_MEMORIES_DDL));
+      try {
+        await sql().read(sqliteColumnsStep());
+      } catch (err) {
+        // Columns already exist or other error, continue
+        console.log('[Memory] Migration check completed');
+      }
     }
 
     // CORE-03: rows saved before drawers get the default drawer for their type.
     try {
-      backfillMemoryDrawers(db);
+      await sql().tx(() => backfillMemoryDrawersStep());
     } catch (err) {
       console.warn('[Memory] Drawer backfill failed:', (err as Error).message);
     }
@@ -145,36 +150,49 @@ export class MemoryStorage implements IMemoryStorage {
    */
   async save(memory: Memory): Promise<void> {
     // Validate the file location first (throws on a bad id/userId/type), so an
-    // invalid memory is never written to the database either.
-    this.getMarkdownPath(memory);
+    // invalid memory is never written to the database either; then the
+    // embedding if not provided.
+    await this.ensureEmbedding(memory);
 
-    // Generate embedding if not provided
-    if (!memory.embedding) {
-      const e = await this.embeddingService.embedDetailed(memory.content);
-      memory.embedding = e.vector;
-      memory.embeddingModel = e.model;
-    }
-
-    this.writeRow(memory);
+    await sql().read(this.writeRowStep(memory));
 
     // Save to markdown file
     await this.saveToMarkdown(memory);
   }
 
   /**
+   * Validate the memory's file location and set its embedding when it has
+   * none (async work done before a transaction that writes the row).
+   */
+  async ensureEmbedding(memory: Memory): Promise<void> {
+    this.getMarkdownPath(memory);
+    if (!memory.embedding) {
+      const e = await this.embeddingService.embedDetailed(memory.content);
+      memory.embedding = e.vector;
+      memory.embeddingModel = e.model;
+    }
+  }
+
+  /**
    * Embedding for a text (exposed so callers can prepare rows before a
-   * synchronous database transaction, e.g. applying a reviewed proposal).
+   * database transaction, e.g. applying a reviewed proposal).
    */
   async embed(text: string): Promise<number[]> {
     return this.embeddingService.embed(text);
   }
 
+  /** writeRowStep on the process driver. */
+  async writeRow(memory: Memory): Promise<void> {
+    await sql().read(this.writeRowStep(memory));
+  }
+
   /**
-   * Write (insert or replace) the database row of a memory, synchronously.
-   * The embedding must already be set. The drawer defaults by type (CORE-03).
-   * Does not write the per-memory markdown copy (see writeMarkdownCopy).
+   * Write (insert or update) the database row of a memory as a SQL step
+   * (joins the caller's transaction). The embedding must already be set.
+   * The drawer defaults by type (CORE-03). Does not write the per-memory
+   * markdown copy (see writeMarkdownCopy).
    */
-  writeRow(memory: Memory): void {
+  *writeRowStep(memory: Memory): Step<void> {
     this.getMarkdownPath(memory);
     if (!memory.embedding) throw new Error('Memory embedding missing');
     const drawer = memory.drawer ? normalizeDrawer(memory.drawer) : defaultDrawerForType(memory.type);
@@ -184,16 +202,7 @@ export class MemoryStorage implements IMemoryStorage {
     const embeddingModel = this.embeddingService.modelOf(memory.embedding) ?? memory.embeddingModel ?? 'unknown';
     memory.embeddingModel = embeddingModel;
 
-    const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO memories (
-        id, user_id, type, content, embedding, memory_layer, status,
-        metadata, importance_score, tags, created_at, last_accessed_at, access_count,
-        expiry_timestamp, consolidation_status, drawer_kind, drawer_key,
-        embedding_model, embedding_dims
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.run(
+    const res = yield* run(UPSERT_SQL,
       memory.id,
       memory.userId,
       memory.type,
@@ -214,6 +223,7 @@ export class MemoryStorage implements IMemoryStorage {
       embeddingModel,
       memory.embedding.length
     );
+    if (res.changes !== 1) throw new Error('Memory id belongs to another user');
   }
 
   /** Write the per-memory markdown copy (human-readable, not canonical). */
@@ -234,27 +244,39 @@ export class MemoryStorage implements IMemoryStorage {
    * Memories of one user in the given drawers (no access-count side effect),
    * oldest first. CORE-03/04.
    */
-  getByDrawers(userId: string, drawers: DrawerRef[]): Memory[] {
+  async getByDrawers(userId: string, drawers: DrawerRef[]): Promise<Memory[]> {
+    return sql().read(this.getByDrawersStep(userId, drawers));
+  }
+
+  /**
+   * getByDrawers as a SQL step (joins the caller's transaction); `lock`
+   * takes the rows' locks on PostgreSQL (FOR UPDATE, inside a transaction).
+   */
+  *getByDrawersStep(userId: string, drawers: DrawerRef[], lock = false): Step<Memory[]> {
+    const d = yield* dialect();
     const filter = drawerSqlFilter(drawers);
-    const rows = this.db.prepare(
-      `SELECT * FROM memories WHERE user_id = ? AND ${filter.sql} ORDER BY created_at ASC, id ASC`
-    ).all(userId, ...filter.params) as any[];
+    const rows = yield* all(
+      `SELECT * FROM memories WHERE user_id = ? AND ${filter.sql} ORDER BY created_at ASC, id ASC${lock && d === 'postgres' ? ' FOR UPDATE' : ''}`,
+      userId, ...filter.params,
+    );
     return rows.map((row) => this.rowToMemory(row));
   }
 
   /** The user's drawers that hold memories, with counts. */
-  listDrawers(userId: string): Array<DrawerRef & { count: number }> {
-    const rows = this.db.prepare(
-      `SELECT ${DRAWER_KIND_SQL} AS kind, ${DRAWER_KEY_SQL} AS key, COUNT(*) AS count
-         FROM memories WHERE user_id = ? GROUP BY 1, 2 ORDER BY 1, 2`
-    ).all(userId) as Array<{ kind: DrawerRef['kind']; key: string; count: number }>;
-    return rows.map((r) => (r.key ? { kind: r.kind, key: r.key, count: r.count } : { kind: r.kind, count: r.count }));
+  async listDrawers(userId: string): Promise<Array<DrawerRef & { count: number }>> {
+    return sql().read(listDrawersStep(userId));
   }
 
   /** A memory of this user by id, without the access-count side effect (or null). */
-  getOwned(userId: string, id: string): Memory | null {
+  async getOwned(userId: string, id: string): Promise<Memory | null> {
+    return sql().read(this.getOwnedStep(userId, id));
+  }
+
+  /** getOwned as a SQL step; `lock` takes the row lock on PostgreSQL (inside a transaction). */
+  *getOwnedStep(userId: string, id: string, lock = false): Step<Memory | null> {
     if (typeof id !== 'string' || !id) return null;
-    const row = this.db.prepare('SELECT * FROM memories WHERE id = ? AND user_id = ?').get(id, userId) as any;
+    const d = yield* dialect();
+    const row = yield* one(`SELECT * FROM memories WHERE id = ? AND user_id = ?${lock && d === 'postgres' ? ' FOR UPDATE' : ''}`, id, userId);
     return row ? this.rowToMemory(row) : null;
   }
 
@@ -262,17 +284,16 @@ export class MemoryStorage implements IMemoryStorage {
    * Get a memory by ID
    */
   async get(id: string): Promise<Memory | null> {
-    const stmt = this.db.prepare('SELECT * FROM memories WHERE id = ?');
-    const row = stmt.get(id) as any;
+    const row = await sql().read(one('SELECT * FROM memories WHERE id = ?', id));
 
     if (!row) return null;
 
     // Update access tracking
-    this.db.getDb().prepare(`
+    await sql().read(run(`
       UPDATE memories
       SET last_accessed_at = ?, access_count = access_count + 1
       WHERE id = ?
-    `).run(Date.now(), id);
+    `, Date.now(), id));
 
     return this.rowToMemory(row);
   }
@@ -281,21 +302,20 @@ export class MemoryStorage implements IMemoryStorage {
    * Get all memories for a user (with optional layer filter)
    */
   async getByUser(userId: string, layer?: string): Promise<Memory[]> {
-    let sql = `
+    let query = `
       SELECT * FROM memories
       WHERE user_id = ?
     `;
     const params: any[] = [userId];
 
     if (layer) {
-      sql += ' AND memory_layer = ?';
+      query += ' AND memory_layer = ?';
       params.push(layer);
     }
 
-    sql += ' ORDER BY importance_score DESC, created_at DESC';
+    query += ' ORDER BY importance_score DESC, created_at DESC';
 
-    const stmt = this.db.prepare(sql);
-    const rows = stmt.all(...params) as any[];
+    const rows = await sql().read(all(query, ...params));
     return rows.map(row => this.rowToMemory(row));
   }
 
@@ -307,7 +327,7 @@ export class MemoryStorage implements IMemoryStorage {
     if (!memory) return;
 
     // Delete from database
-    this.db.getDb().prepare('DELETE FROM memories WHERE id = ?').run(id);
+    await sql().read(run('DELETE FROM memories WHERE id = ?', id));
 
     // Delete markdown file (a legacy row with an unsafe id/type has no valid file path)
     try {
@@ -355,37 +375,38 @@ export class MemoryStorage implements IMemoryStorage {
   async search(query: MemorySearchQuery): Promise<MemorySearchResult[]> {
     const q = await this.embeddingService.embedQuery(query.query);
 
-    let sql = 'SELECT * FROM memories WHERE user_id = ?';
+    // Ordered by (created_at, id) so equal scores keep one order on both drivers.
+    let where = 'SELECT * FROM memories WHERE user_id = ?';
     const params: any[] = [query.userId];
 
     if (query.type) {
-      sql += ' AND type = ?';
+      where += ' AND type = ?';
       params.push(query.type);
     }
 
     if (query.layer) {
-      sql += ' AND memory_layer = ?';
+      where += ' AND memory_layer = ?';
       params.push(query.layer);
     }
 
     // CORE-03: only the selected drawers ([] selects nothing).
     if (query.drawers) {
       const filter = drawerSqlFilter(query.drawers);
-      sql += ` AND ${filter.sql}`;
+      where += ` AND ${filter.sql}`;
       params.push(...filter.params);
     }
 
     // Support both legacy minImportance (1-10) and new minImportanceScore (0-1)
     if (query.minImportanceScore !== undefined) {
-      sql += ' AND importance_score >= ?';
+      where += ' AND importance_score >= ?';
       params.push(query.minImportanceScore);
     } else if (query.minImportance !== undefined) {
       // Convert legacy 1-10 scale to 0-1 scale
-      sql += ' AND importance_score >= ?';
+      where += ' AND importance_score >= ?';
       params.push(query.minImportance / 10);
     }
 
-    const rows = this.db.prepare(sql).all(...params) as any[];
+    const rows = await sql().read(all(`${where} ORDER BY created_at ASC, id ASC`, ...params));
     const memories = rows.map((row) => this.rowToMemory(row));
     if (q.model === this.embeddingService.targetModel()) await this.reembedStale(memories, q.model);
 
@@ -416,24 +437,26 @@ export class MemoryStorage implements IMemoryStorage {
     const stale = memories.filter((m) => m.embeddingModel !== model).slice(0, LAZY_REEMBED_PER_SEARCH);
     if (stale.length === 0) return;
     const fresh = await this.embeddingService.embedManyDetailed(stale.map((m) => m.content));
-    stale.forEach((m, i) => {
+    for (const [i, m] of stale.entries()) {
       const e = fresh[i];
-      if (e.model !== model) return; // provider fell back meanwhile: keep the old vector
-      if (this.setEmbedding(m.userId, m.id, m.content, e.vector, e.model)) {
+      if (e.model !== model) continue; // provider fell back meanwhile: keep the old vector
+      if (await this.setEmbedding(m.userId, m.id, m.content, e.vector, e.model)) {
         m.embedding = e.vector;
         m.embeddingModel = e.model;
       }
-    });
+    }
   }
 
   /**
    * Store a new vector for a memory if its content is still `content`
    * (a concurrent edit wins). True when written.
    */
-  setEmbedding(userId: string, id: string, content: string, vector: number[], model: string): boolean {
-    return this.db.prepare(
-      'UPDATE memories SET embedding = ?, embedding_model = ?, embedding_dims = ? WHERE id = ? AND user_id = ? AND content = ?'
-    ).run(JSON.stringify(vector), model, vector.length, id, userId, content).changes === 1;
+  async setEmbedding(userId: string, id: string, content: string, vector: number[], model: string): Promise<boolean> {
+    const res = await sql().read(run(
+      'UPDATE memories SET embedding = ?, embedding_model = ?, embedding_dims = ? WHERE id = ? AND user_id = ? AND content = ?',
+      JSON.stringify(vector), model, vector.length, id, userId, content,
+    ));
+    return res.changes === 1;
   }
 
   /**
@@ -528,6 +551,29 @@ ${JSON.stringify(memory.metadata, null, 2)}
       drawer: rowDrawer(row),
     };
   }
+}
+
+/** The user's drawers that hold memories, with counts (SQL step). */
+export function* listDrawersStep(userId: string): Step<Array<DrawerRef & { count: number }>> {
+  const rows = yield* all<{ kind: DrawerRef['kind']; key: string; count: number }>(
+    `SELECT ${DRAWER_KIND_SQL} AS kind, ${DRAWER_KEY_SQL} AS key, COUNT(*) AS count
+       FROM memories WHERE user_id = ? GROUP BY 1, 2 ORDER BY 1, 2`,
+    userId,
+  );
+  return rows.map((r) => (r.key ? { kind: r.kind, key: r.key, count: r.count } : { kind: r.kind, count: r.count }));
+}
+
+/** SQLite only: run DDL statements one by one. */
+function* sqliteDdlStep(statements: readonly string[]): Step<void> {
+  for (const stmt of statements) yield* run(stmt);
+}
+
+/** SQLite only: add the columns an old memories table lacks, then their indexes. */
+function* sqliteColumnsStep(): Step<void> {
+  for (const [name, type] of SQLITE_MEMORIES_COLUMNS) {
+    if (!(yield* columnExists('memories', name))) yield* run(`ALTER TABLE memories ADD COLUMN ${name} ${type}`);
+  }
+  yield* sqliteDdlStep(SQLITE_MEMORIES_INDEXES);
 }
 
 function rowDrawer(row: any): DrawerRef {

@@ -10,6 +10,14 @@
  *            with per-memory history in memory_versions; re-exports the file
  *   reject   nothing changes
  *
+ * B2.2b-4: the database work is SQL steps (repositories/sql-steps.ts), so
+ * one copy runs on SQLite and PostgreSQL. A decision locks the proposal row
+ * (FOR UPDATE on PostgreSQL) and claims it with a conditional UPDATE: of two
+ * decisions at the same time exactly one wins, the other gets 409
+ * `already_decided` and writes nothing. The drawer's next revision is taken
+ * under a per-drawer transaction lock (lockName), so two approvals of one
+ * drawer never share a revision number.
+ *
  * Nothing watches the files: a file edit never reaches the database unless
  * the owner submits it and approves the resulting proposal.
  *
@@ -28,8 +36,10 @@ import fs from 'fs/promises';
 import path from 'path';
 import { createHash } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
-import { getDatabase } from '../db/index.js';
+import { all, dialect, lockName, one, run, sql, type Step } from '../repositories/sql-steps.js';
+import { forUpdate, nowIsoText } from '../db/pg/dialect.js';
 import { getMemoryStorage } from './storage.js';
+import { drawerRevisionStep, lastVersionStep, lockMemoryHistory } from './versions.js';
 import { isMemoryType, type Memory, type MemoryType, type ImportanceLevel, type MultiTierLayer } from './types.js';
 import { drawerId, normalizeDrawer, parseDrawerId, type DrawerRef } from './drawers.js';
 
@@ -102,16 +112,19 @@ export function isValidAgentId(id: unknown): id is string {
 }
 
 /** The agent the files belong to: the given one if it exists, else the primary agent. */
-export function resolveFileAgent(requested?: unknown): string {
-  const db = getDatabase();
+export function resolveFileAgent(requested?: unknown): Promise<string> {
+  return sql().read(resolveFileAgentStep(requested));
+}
+
+export function* resolveFileAgentStep(requested?: unknown): Step<string> {
   if (requested !== undefined && requested !== null && requested !== '') {
     if (!isValidAgentId(requested)) throw new MemoryFileError('Invalid agent id');
-    const row = db.prepare('SELECT id FROM agents_config WHERE id = ?').get(requested) as { id: string } | undefined;
+    const row = yield* one<{ id: string }>('SELECT id FROM agents_config WHERE id = ?', requested);
     if (!row) throw new MemoryFileError('Agent not found', 404);
     return row.id;
   }
-  const row = (db.prepare('SELECT id FROM agents_config WHERE is_primary = 1 LIMIT 1').get()
-    ?? db.prepare('SELECT id FROM agents_config ORDER BY id LIMIT 1').get()) as { id: string } | undefined;
+  const row = (yield* one<{ id: string }>('SELECT id FROM agents_config WHERE is_primary = 1 ORDER BY id LIMIT 1'))
+    ?? (yield* one<{ id: string }>('SELECT id FROM agents_config ORDER BY id LIMIT 1'));
   if (!row || !isValidAgentId(row.id)) throw new MemoryFileError('No agent to export memory for', 404);
   return row.id;
 }
@@ -290,15 +303,20 @@ export function diffDrawer(current: Memory[], parsed: ParsedFile): MemoryChange[
 // Database helpers
 // ---------------------------------------------------------------------------
 
-export function drawerRevision(userId: string, drawer: DrawerRef): number {
-  const row = getDatabase().prepare(
-    'SELECT MAX(drawer_revision) AS rev FROM memory_versions WHERE user_id = ? AND drawer_kind = ? AND drawer_key = ?'
-  ).get(userId, drawer.kind, drawer.key || '') as { rev: number | null } | undefined;
-  return row?.rev ?? 0;
+export function drawerRevision(userId: string, drawer: DrawerRef): Promise<number> {
+  return sql().read(drawerRevisionStep(userId, drawer));
 }
 
-function currentMemories(userId: string, drawer: DrawerRef): Memory[] {
-  return getMemoryStorage().getByDrawers(userId, [drawer]);
+function currentMemories(userId: string, drawer: DrawerRef): Step<Memory[]> {
+  return getMemoryStorage().getByDrawersStep(userId, [drawer]);
+}
+
+/**
+ * Transaction lock for one drawer of one user (PostgreSQL): a change that
+ * reads the drawer's content or revision and then writes runs alone.
+ */
+function* lockDrawer(userId: string, drawer: DrawerRef): Step<void> {
+  yield* lockName(`memory-drawer:${userId}:${drawerId(drawer)}`);
 }
 
 export interface DrawerFileView {
@@ -313,10 +331,14 @@ export interface DrawerFileView {
 }
 
 /** The export text of a drawer (no write). */
-export function viewDrawerFile(userId: string, agentId: string, drawer: DrawerRef): DrawerFileView {
+export function viewDrawerFile(userId: string, agentId: string, drawer: DrawerRef): Promise<DrawerFileView> {
+  return sql().read(viewDrawerFileStep(userId, agentId, drawer));
+}
+
+function* viewDrawerFileStep(userId: string, agentId: string, drawer: DrawerRef): Step<DrawerFileView> {
   const d = normalizeDrawer(drawer);
-  const memories = currentMemories(userId, d);
-  const revision = drawerRevision(userId, d);
+  const memories = yield* currentMemories(userId, d);
+  const revision = yield* drawerRevisionStep(userId, d);
   return {
     drawer: d, drawerId: drawerId(d), agentId, revision, hash: drawerHash(memories), count: memories.length,
     path: displayPath(drawerFilePath(agentId, userId, d)),
@@ -338,7 +360,7 @@ async function refuseNonRegular(file: string): Promise<boolean> {
 
 /** Write a drawer's export file (DB -> file only). */
 export async function exportDrawerFile(userId: string, agentId: string, drawer: DrawerRef): Promise<DrawerFileView> {
-  const view = viewDrawerFile(userId, agentId, drawer);
+  const view = await viewDrawerFile(userId, agentId, drawer);
   const file = drawerFilePath(agentId, userId, view.drawer);
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   await refuseNonRegular(file);
@@ -416,9 +438,21 @@ function parseReasons(value: unknown): string[] {
 /** Pending proposals per user before new learning/agent proposals are refused. */
 export const MAX_PENDING_PROPOSALS = 200;
 
-export function pendingProposalCount(userId: string): number {
-  const row = getDatabase().prepare(`SELECT COUNT(*) AS n FROM memory_file_proposals WHERE user_id = ? AND status = 'pending'`).get(userId) as { n: number };
-  return row.n;
+export function pendingProposalCount(userId: string): Promise<number> {
+  return sql().read(pendingProposalCountStep(userId));
+}
+
+export function* pendingProposalCountStep(userId: string): Step<number> {
+  const row = yield* one<{ n: number }>(`SELECT COUNT(*) AS n FROM memory_file_proposals WHERE user_id = ? AND status = 'pending'`, userId);
+  return row?.n ?? 0;
+}
+
+/**
+ * Transaction lock for a user's proposal queue (PostgreSQL), so two writers
+ * cannot both pass the MAX_PENDING_PROPOSALS check.
+ */
+export function* lockProposalQueue(userId: string): Step<void> {
+  yield* lockName(`memory-proposals:${userId}`);
 }
 
 /**
@@ -427,27 +461,38 @@ export function pendingProposalCount(userId: string): number {
  * per changed memory: on approval every updated/deleted memory must still
  * be exactly as `before`, otherwise the proposal goes stale.
  */
-export function createChangeProposal(input: {
+export interface ChangeProposalInput {
   userId: string; agentId: string; drawer: DrawerRef; changes: MemoryChange[]; source: 'learning' | 'agent' | 'import';
   reasons: string[]; note?: string | null; createdBy: string; importBatchId?: string | null;
   /** Import (CLI-02) checks capacity for the whole batch up front. */
   skipPendingLimit?: boolean;
-}): MemoryProposal {
+}
+
+export function createChangeProposal(input: ChangeProposalInput): Promise<MemoryProposal> {
+  return sql().tx(() => createChangeProposalStep(input));
+}
+
+/** createChangeProposal as a SQL step (inside a transaction: the import commit). */
+export function* createChangeProposalStep(input: ChangeProposalInput): Step<MemoryProposal> {
   const d = normalizeDrawer(input.drawer);
   if (!Array.isArray(input.changes) || input.changes.length === 0) throw new MemoryFileError('The proposal has no changes');
   if (input.changes.length > MAX_CHANGES) throw new MemoryFileError('Too many changes in one proposal');
-  if (!input.skipPendingLimit && pendingProposalCount(input.userId) >= MAX_PENDING_PROPOSALS) {
-    throw new MemoryFileError('Too many proposals are waiting for review', 409);
+  if (!input.skipPendingLimit) {
+    yield* lockProposalQueue(input.userId);
+    if ((yield* pendingProposalCountStep(input.userId)) >= MAX_PENDING_PROPOSALS) {
+      throw new MemoryFileError('Too many proposals are waiting for review', 409);
+    }
   }
-  const current = currentMemories(input.userId, d);
+  const current = yield* currentMemories(input.userId, d);
+  const revision = yield* drawerRevisionStep(input.userId, d);
   const id = uuidv4();
-  getDatabase().prepare(`
+  yield* run(`
     INSERT INTO memory_file_proposals (id, user_id, agent_id, drawer_kind, drawer_key, base_hash, base_revision, changes, status, source, note, created_by, reasons, import_batch_id)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
-  `).run(id, input.userId, input.agentId, d.kind, d.key || '', drawerHash(current), drawerRevision(input.userId, d),
+  `, id, input.userId, input.agentId, d.kind, d.key || '', drawerHash(current), revision,
     JSON.stringify(input.changes), input.source, typeof input.note === 'string' ? input.note.slice(0, 500) : null,
     input.createdBy, JSON.stringify(input.reasons.slice(0, 20)), input.importBatchId ?? null);
-  return getProposal(input.userId, id)!;
+  return (yield* getProposalStep(input.userId, id))!;
 }
 
 /**
@@ -457,41 +502,55 @@ export function createChangeProposal(input: {
  */
 export function createProposal(input: {
   userId: string; agentId: string; drawer: DrawerRef; text: string; source: 'upload' | 'file'; note?: string | null;
-}): MemoryProposal {
+}): Promise<MemoryProposal> {
+  return sql().tx(() => createProposalStep(input));
+}
+
+function* createProposalStep(input: {
+  userId: string; agentId: string; drawer: DrawerRef; text: string; source: 'upload' | 'file'; note?: string | null;
+}): Step<MemoryProposal> {
   const d = normalizeDrawer(input.drawer);
   const parsed = parseDrawerFile(input.text);
   let fileDrawer: DrawerRef;
   try { fileDrawer = parseDrawerId(parsed.drawer); } catch { throw new MemoryFileError('The file names an invalid drawer'); }
   if (drawerId(fileDrawer) !== drawerId(d)) throw new MemoryFileError('This file belongs to another drawer');
-  const current = currentMemories(input.userId, d);
+  const current = yield* currentMemories(input.userId, d);
   if (parsed.baseHash !== drawerHash(current)) {
     throw new MemoryFileError('The memory changed since this file was exported; export it again and redo the edit', 409);
   }
   const changes = diffDrawer(current, parsed);
   if (changes.length === 0) throw new MemoryFileError('The file has no changes');
   const note = typeof input.note === 'string' ? input.note.slice(0, 500) : null;
+  const revision = yield* drawerRevisionStep(input.userId, d);
   const id = uuidv4();
-  getDatabase().prepare(`
+  yield* run(`
     INSERT INTO memory_file_proposals (id, user_id, agent_id, drawer_kind, drawer_key, base_hash, base_revision, changes, status, source, note, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-  `).run(id, input.userId, input.agentId, d.kind, d.key || '', parsed.baseHash, drawerRevision(input.userId, d),
+  `, id, input.userId, input.agentId, d.kind, d.key || '', parsed.baseHash, revision,
     JSON.stringify(changes), input.source, note, input.userId);
-  return getProposal(input.userId, id)!;
+  return (yield* getProposalStep(input.userId, id))!;
 }
 
+const PROPOSAL_ID = /^[A-Za-z0-9-]{1,64}$/;
+
 /** A proposal of this user, or null (another user's proposal is invisible). */
-export function getProposal(userId: string, id: string): MemoryProposal | null {
-  if (typeof id !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(id)) return null;
-  const row = getDatabase().prepare('SELECT * FROM memory_file_proposals WHERE id = ? AND user_id = ?').get(id, userId);
+export function getProposal(userId: string, id: string): Promise<MemoryProposal | null> {
+  return sql().read(getProposalStep(userId, id));
+}
+
+/** getProposal as a SQL step; `lock` = FOR UPDATE on PostgreSQL (inside a transaction). */
+export function* getProposalStep(userId: string, id: string, lock = false): Step<MemoryProposal | null> {
+  if (typeof id !== 'string' || !PROPOSAL_ID.test(id)) return null;
+  const d = yield* dialect();
+  const row = yield* one(`SELECT * FROM memory_file_proposals WHERE id = ? AND user_id = ?${lock ? forUpdate(d) : ''}`, id, userId);
   return row ? rowToProposal(row) : null;
 }
 
-export function listProposals(userId: string, status?: string): MemoryProposal[] {
-  const db = getDatabase();
+export async function listProposals(userId: string, status?: string): Promise<MemoryProposal[]> {
   const rows = status
-    ? db.prepare('SELECT * FROM memory_file_proposals WHERE user_id = ? AND status = ? ORDER BY created_at DESC, id LIMIT 200').all(userId, status)
-    : db.prepare('SELECT * FROM memory_file_proposals WHERE user_id = ? ORDER BY created_at DESC, id LIMIT 200').all(userId);
-  return (rows as any[]).map(rowToProposal);
+    ? await sql().read(all('SELECT * FROM memory_file_proposals WHERE user_id = ? AND status = ? ORDER BY created_at DESC, id LIMIT 200', userId, status))
+    : await sql().read(all('SELECT * FROM memory_file_proposals WHERE user_id = ? ORDER BY created_at DESC, id LIMIT 200', userId));
+  return rows.map(rowToProposal);
 }
 
 function layerFor(importance: number): { memoryLayer: MultiTierLayer; expiryTimestamp: number | null } {
@@ -507,10 +566,12 @@ const REVIEW_HASH = /^[0-9a-f]{64}$/;
 /**
  * The checks every decision makes on a proposal row: it exists for this user,
  * is still pending, and the caller reviewed exactly its current content.
- * Run before the slow work and again inside the deciding transaction.
+ * Run before the slow work and again inside the deciding transaction, where
+ * `lock` takes the row lock on PostgreSQL (a concurrent decision waits here
+ * and then sees the decided status).
  */
-function decidable(userId: string, id: string, expectedReviewHash: unknown): MemoryProposal {
-  const proposal = getProposal(userId, id);
+function* decidable(userId: string, id: string, expectedReviewHash: unknown, lock = false): Step<MemoryProposal> {
+  const proposal = yield* getProposalStep(userId, id, lock);
   if (!proposal) throw new MemoryFileError('Proposal not found', 404);
   if (proposal.status !== 'pending') throw new MemoryFileError(`Proposal is already ${proposal.status}`, 409, 'already_decided');
   if (typeof expectedReviewHash !== 'string' || !REVIEW_HASH.test(expectedReviewHash)) {
@@ -523,11 +584,12 @@ function decidable(userId: string, id: string, expectedReviewHash: unknown): Mem
 }
 
 /** Atomically move a pending proposal to its decided status; 409 if another decision won. */
-function claimDecision(userId: string, id: string, status: 'approved' | 'rejected' | 'stale', decidedBy: string, note: string | null = null): void {
-  const res = getDatabase().prepare(`
-    UPDATE memory_file_proposals SET status = ?, decided_by = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), note = COALESCE(?, note)
+function* claimDecision(userId: string, id: string, status: 'approved' | 'rejected' | 'stale', decidedBy: string, note: string | null = null): Step<void> {
+  const d = yield* dialect();
+  const res = yield* run(`
+    UPDATE memory_file_proposals SET status = ?, decided_by = ?, decided_at = ${nowIsoText(d)}, note = COALESCE(?, note)
     WHERE id = ? AND user_id = ? AND status = 'pending'
-  `).run(status, decidedBy, note, id, userId) as { changes: number };
+  `, status, decidedBy, note, id, userId);
   if (res.changes !== 1) throw new MemoryFileError('Proposal was already decided', 409, 'already_decided');
 }
 
@@ -550,12 +612,11 @@ async function bestEffort(what: string, fn: () => Promise<unknown>): Promise<voi
  * and nothing is written (409 `already_decided`).
  */
 export async function approveProposal(userId: string, id: string, decidedBy: string, expectedReviewHash: unknown): Promise<ApplyResult> {
-  const proposal = decidable(userId, id, expectedReviewHash);
+  const proposal = await sql().read(decidable(userId, id, expectedReviewHash));
   const storage = getMemoryStorage();
-  const db = getDatabase().getDb();
   const drawer = proposal.drawer;
 
-  // Embeddings first (async); the database work below is one synchronous transaction.
+  // Embeddings first (async); the database work below is one transaction (SQL steps).
   const embeddings = new Map<number, number[]>();
   for (const [i, c] of proposal.changes.entries()) {
     if (c.op !== 'delete') embeddings.set(i, await storage.embed(c.after.content));
@@ -567,25 +628,29 @@ export async function approveProposal(userId: string, id: string, decidedBy: str
   let revision = 0;
   let stale = false;
 
-  const versionStmt = db.prepare(`
-    INSERT INTO memory_versions (id, memory_id, user_id, drawer_kind, drawer_key, drawer_revision, version, change, type, content, importance_score, proposal_id, created_by, reason)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
   const reason = `proposal:${proposal.source}`;
-  const lastVersion = db.prepare('SELECT MAX(version) AS v FROM memory_versions WHERE memory_id = ?');
-  const record = (memoryId: string, change: string, e: Entry | null, rev: number) => {
-    const v = ((lastVersion.get(memoryId) as { v: number | null }).v ?? 0) + 1;
-    versionStmt.run(uuidv4(), memoryId, userId, drawer.kind, drawer.key || '', rev, v, change,
+  function* record(memoryId: string, change: string, e: Entry | null, rev: number): Step<void> {
+    yield* lockMemoryHistory(memoryId);
+    const v = ((yield* lastVersionStep(memoryId)) ?? 0) + 1;
+    yield* run(`
+      INSERT INTO memory_versions (id, memory_id, user_id, drawer_kind, drawer_key, drawer_revision, version, change, type, content, importance_score, proposal_id, created_by, reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, uuidv4(), memoryId, userId, drawer.kind, drawer.key || '', rev, v, change,
       e?.type ?? null, e?.content ?? null, e ? e.importance / 10 : null, proposal.id, decidedBy, change === 'baseline' ? 'before first change' : reason);
-  };
-  const recordBaseline = (m: Memory, rev: number) => {
-    if ((lastVersion.get(m.id) as { v: number | null }).v === null) record(m.id, 'baseline', entryOf(m), rev);
-  };
+  }
+  function* recordBaseline(m: Memory, rev: number): Step<void> {
+    yield* lockMemoryHistory(m.id);
+    if ((yield* lastVersionStep(m.id)) === null) yield* record(m.id, 'baseline', entryOf(m), rev);
+  }
 
-  db.transaction(() => {
-    // Re-check now (a decision may have happened during the embedding await).
-    decidable(userId, id, expectedReviewHash);
-    const current = storage.getByDrawers(userId, [drawer]);
+  await sql().tx(function* () {
+    // Re-check now, with the row locked (a decision may have happened during the embedding await).
+    yield* decidable(userId, id, expectedReviewHash, true);
+    // One approval per drawer at a time: the content check and the next revision belong together.
+    yield* lockDrawer(userId, drawer);
+    // The drawer's rows are locked too (PostgreSQL), so a concurrent forget or
+    // edit of one of them waits for this decision, or wins before the check.
+    const current = yield* storage.getByDrawersStep(userId, [drawer], true);
     const byId = new Map(current.map((m) => [m.id, m]));
     if (isFileProposal(proposal)) {
       if (drawerHash(current) !== proposal.baseHash) stale = true;
@@ -597,10 +662,10 @@ export async function approveProposal(userId: string, id: string, decidedBy: str
         if (!now || JSON.stringify(entryOf(now)) !== JSON.stringify(c.before)) { stale = true; break; }
       }
     }
-    if (stale) { claimDecision(userId, id, 'stale', decidedBy); return; }
+    if (stale) { yield* claimDecision(userId, id, 'stale', decidedBy); return; }
     // The claim: exactly one decision moves the row out of 'pending'.
-    claimDecision(userId, id, 'approved', decidedBy);
-    const prev = drawerRevision(userId, drawer);
+    yield* claimDecision(userId, id, 'approved', decidedBy);
+    const prev = yield* drawerRevisionStep(userId, drawer);
     revision = prev + 1;
     for (const [i, c] of proposal.changes.entries()) {
       if (c.op === 'add') {
@@ -612,36 +677,36 @@ export async function approveProposal(userId: string, id: string, decidedBy: str
           metadata: { source: isFileProposal(proposal) ? 'memory_file' : proposal.source, proposalId: proposal.id }, createdAt: new Date(now), lastAccessedAt: now,
           accessCount: 0, embedding: embeddings.get(i), drawer,
         };
-        storage.writeRow(mem);
-        record(mem.id, 'create', c.after, revision);
+        yield* storage.writeRowStep(mem);
+        yield* record(mem.id, 'create', c.after, revision);
         applied.added.push(mem.id);
         written.push(mem);
       } else if (c.op === 'update') {
         const old = byId.get(c.id);
         if (!old) throw new MemoryFileError('Proposal does not match the drawer', 409, 'stale');
-        recordBaseline(old, prev);
+        yield* recordBaseline(old, prev);
         const mem: Memory = {
           ...old, type: c.after.type as MemoryType, content: c.after.content,
           importance: c.after.importance as ImportanceLevel, importanceScore: c.after.importance / 10,
           embedding: embeddings.get(i), drawer,
         };
-        storage.writeRow(mem);
-        record(mem.id, 'update', c.after, revision);
+        yield* storage.writeRowStep(mem);
+        yield* record(mem.id, 'update', c.after, revision);
         applied.updated.push(mem.id);
         written.push(mem);
         if (old.type !== mem.type) removed.push(old);
       } else {
         const old = byId.get(c.id);
         if (!old) throw new MemoryFileError('Proposal does not match the drawer', 409, 'stale');
-        recordBaseline(old, prev);
-        db.prepare('DELETE FROM memories WHERE id = ? AND user_id = ?').run(old.id, userId);
-        record(old.id, 'delete', null, revision);
+        yield* recordBaseline(old, prev);
+        yield* run('DELETE FROM memories WHERE id = ? AND user_id = ?', old.id, userId);
+        yield* record(old.id, 'delete', null, revision);
         applied.deleted.push(old.id);
         removed.push(old);
       }
     }
-    db.prepare('UPDATE memory_file_proposals SET applied_revision = ? WHERE id = ? AND user_id = ?').run(revision, proposal.id, userId);
-  })();
+    yield* run('UPDATE memory_file_proposals SET applied_revision = ? WHERE id = ? AND user_id = ?', revision, proposal.id, userId);
+  });
 
   if (stale) throw new MemoryFileError('The memory changed after this proposal was made; it was marked stale', 409, 'stale');
 
@@ -651,25 +716,25 @@ export async function approveProposal(userId: string, id: string, decidedBy: str
   for (const m of written) await bestEffort('writing a memory copy', () => storage.writeMarkdownCopy(m));
   await bestEffort('re-exporting the drawer', () => exportDrawerFile(userId, proposal.agentId, drawer));
 
-  return { proposal: getProposal(userId, proposal.id)!, revision, applied };
+  return { proposal: (await getProposal(userId, proposal.id))!, revision, applied };
 }
 
 /** Reject: nothing in the memory changes. Same checks and claim as approve. */
-export function rejectProposal(userId: string, id: string, decidedBy: string, expectedReviewHash: unknown, note?: unknown): MemoryProposal {
-  getDatabase().getDb().transaction(() => {
-    decidable(userId, id, expectedReviewHash);
-    claimDecision(userId, id, 'rejected', decidedBy, typeof note === 'string' && note ? note.slice(0, 500) : null);
-  })();
-  return getProposal(userId, id)!;
+export async function rejectProposal(userId: string, id: string, decidedBy: string, expectedReviewHash: unknown, note?: unknown): Promise<MemoryProposal> {
+  await sql().tx(function* () {
+    yield* decidable(userId, id, expectedReviewHash, true);
+    yield* claimDecision(userId, id, 'rejected', decidedBy, typeof note === 'string' && note ? note.slice(0, 500) : null);
+  });
+  return (await getProposal(userId, id))!;
 }
 
 /** Version history of a drawer, newest first. */
-export function drawerVersions(userId: string, drawer: DrawerRef, limit = 200): any[] {
-  return getDatabase().prepare(`
-    SELECT memory_id AS memoryId, drawer_revision AS drawerRevision, version, change, type, content,
-           importance_score AS importanceScore, proposal_id AS proposalId, created_by AS createdBy, created_at AS createdAt
+export async function drawerVersions(userId: string, drawer: DrawerRef, limit = 200): Promise<any[]> {
+  const rows = await sql().read(all(`
+    SELECT memory_id AS "memoryId", drawer_revision AS "drawerRevision", version, change, type, content,
+           importance_score AS "importanceScore", proposal_id AS "proposalId", created_by AS "createdBy", created_at AS "createdAt"
       FROM memory_versions WHERE user_id = ? AND drawer_kind = ? AND drawer_key = ?
      ORDER BY drawer_revision DESC, memory_id, version DESC LIMIT ?
-  `).all(userId, drawer.kind, drawer.key || '', Math.max(1, Math.min(1000, limit)))
-    .map((r: any) => ({ ...r, createdAt: isoUtc(r.createdAt) }));
+  `, userId, drawer.kind, drawer.key || '', Math.max(1, Math.min(1000, limit))));
+  return rows.map((r: any) => ({ ...r, createdAt: isoUtc(r.createdAt) }));
 }

@@ -198,7 +198,7 @@ test('vectors of different models are never compared; stale vectors are re-embed
   const fake = Array.from({ length: 1024 }, (_, i) => (i === 0 ? 1 : 0));
   db.prepare('UPDATE memories SET embedding = ?, embedding_model = ?, embedding_dims = 1024 WHERE id = ?').run(JSON.stringify(fake), 'ollama:other-model', id);
   db.prepare("UPDATE memories SET embedding_model = NULL WHERE id = ?").run(idOf('rc-off', 'm02'));
-  assert.equal(R.embeddingStatus('rc-off').stale, 2);
+  assert.equal((await R.embeddingStatus('rc-off')).stale, 2);
   const res = await storage.search({ query: 'production server Falkenstein', userId: 'rc-off', drawers: OPEN, limit: 3 });
   assert.equal(res[0].memory.id, id);
   // Re-embedded during the search (the preferred model answered): now hash-v2.
@@ -222,7 +222,7 @@ test('(b) Ollama recall: recall@3 per language ≥ thresholds; negatives score b
     const probe = await svc.embedDetailed('server');
     assert.equal(probe.model, `ollama:${EMBED_MODEL}`, 'model answered');
     await seed('rc-oll');
-    assert.equal(R.embeddingStatus('rc-oll').stale, 0, 'every memory has a model vector');
+    assert.equal((await R.embeddingStatus('rc-oll')).stale, 0, 'every memory has a model vector');
     const positives = SET.queries.filter((q) => !q.negative);
     const rows = await runSet('rc-oll', positives);
     const recall = recallByGroup(rows);

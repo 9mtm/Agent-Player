@@ -260,10 +260,10 @@ test('chat: memoryScope is validated (drawers chosen server side)', async () => 
   assert.equal(res.json().error, 'Invalid memoryScope');
 });
 
-test('storage: getByDrawers reads only the named drawers', () => {
+test('storage: getByDrawers reads only the named drawers', async () => {
   const storage = getMemoryStorage();
-  const rows = storage.getByDrawers('dr-owner', [{ kind: 'project', key: 'alpha' }]);
+  const rows = await storage.getByDrawers('dr-owner', [{ kind: 'project', key: 'alpha' }]);
   assert.deepEqual(rows.map((m) => m.id), [ids['dr-owner:alpha']]);
   assert.deepEqual(rows[0].drawer, { kind: 'project', key: 'alpha' });
-  assert.deepEqual(storage.getByDrawers('dr-owner', []), []);
+  assert.deepEqual(await storage.getByDrawers('dr-owner', []), []);
 });

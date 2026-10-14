@@ -10,7 +10,7 @@
  */
 
 import { MemoryTiersService, type ConsolidationResult } from './memory-tiers.js';
-import { getDatabase } from '../db/index.js';
+import { all, run, sql } from '../repositories/sql-steps.js';
 
 export class MemoryConsolidationService {
   private running = false;
@@ -42,8 +42,7 @@ export class MemoryConsolidationService {
       expired += expiredExperiential;
 
       // Step 3: Find and promote working → experiential
-      const db = getDatabase();
-      const users = db.prepare('SELECT DISTINCT user_id FROM memories WHERE memory_layer = ?').all('working') as any[];
+      const users = await sql().read(all<{ user_id: string }>('SELECT DISTINCT user_id FROM memories WHERE memory_layer = ? ORDER BY user_id', 'working'));
 
       for (const { user_id } of users) {
         const candidates = await MemoryTiersService.getPromotionCandidates(user_id);
@@ -58,15 +57,15 @@ export class MemoryConsolidationService {
       }
 
       // Step 4: Promote high-importance experiential → factual
-      const factualCandidates = db.prepare(`
+      const factualCandidates = await sql().read(all(`
         SELECT id, user_id, importance_score, access_count
         FROM memories
         WHERE memory_layer = 'experiential'
           AND importance_score >= 0.85
           AND access_count >= 10
-        ORDER BY importance_score DESC, access_count DESC
+        ORDER BY importance_score DESC, access_count DESC, id
         LIMIT 100
-      `).all() as any[];
+      `));
 
       for (const candidate of factualCandidates) {
         const success = await MemoryTiersService.promoteToFactual(candidate.user_id, candidate.id);
@@ -77,12 +76,12 @@ export class MemoryConsolidationService {
       }
 
       // Step 5: Mark experiential memories as consolidated
-      const consolidatedCount = db.prepare(`
+      const consolidatedCount = (await sql().read(run(`
         UPDATE memories
         SET consolidation_status = 'consolidated'
         WHERE memory_layer = 'experiential'
           AND consolidation_status = 'pending'
-      `).run().changes;
+      `))).changes;
 
       consolidated = consolidatedCount;
 

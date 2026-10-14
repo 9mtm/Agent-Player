@@ -8,7 +8,8 @@
  * https://www.techrxiv.org/users/1007269/articles/1367390
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, run, sql } from '../repositories/sql-steps.js';
+import { textTimestamp } from '../db/pg/dialect.js';
 import { v4 as uuidv4 } from 'uuid';
 
 interface DuplicationResult {
@@ -61,20 +62,18 @@ function calculateSimilarity(content1: string, content2: string): number {
  * Find duplicate or similar memories
  * Returns groups of similar memories
  */
-export function findSimilarMemories(
+export async function findSimilarMemories(
     userId: string,
     similarityThreshold: number = 0.85
-): SimilarMemory[][] {
-    const db = getDatabase();
-
+): Promise<SimilarMemory[][]> {
     // Get all active memories for this user
-    const memories = db.prepare(`
+    const memories = await sql().read(all<SimilarMemory>(`
         SELECT id, content, source_agent_id, importance_score, access_count, created_at
         FROM memories
         WHERE user_id = ?
         AND status = 'active'
-        ORDER BY created_at DESC
-    `).all(userId) as SimilarMemory[];
+        ORDER BY created_at DESC, id DESC
+    `, userId));
 
     const groups: SimilarMemory[][] = [];
     const processed = new Set<string>();
@@ -112,69 +111,75 @@ export function findSimilarMemories(
  * Merge similar memories into a single consolidated memory
  * Keeps the most important/accessed one, deletes the rest
  */
-export function mergeSimilarMemories(
+export async function mergeSimilarMemories(
     userId: string,
     memoryIds: string[]
-): string | null {
-    const db = getDatabase();
-
+): Promise<string | null> {
     if (memoryIds.length < 2) {
         return null; // Nothing to merge
     }
 
-    // Get all memories
-    const memories = db.prepare(`
-        SELECT *
-        FROM memories
-        WHERE id IN (${memoryIds.map(() => '?').join(',')})
-        AND user_id = ?
-    `).all(...memoryIds, userId) as any[];
+    // One transaction: the kept row is updated and the others deleted together.
+    return sql().tx(function* () {
+        // Get all memories (this user's only)
+        const memories = yield* all(`
+            SELECT *
+            FROM memories
+            WHERE id IN (${memoryIds.map(() => '?').join(',')})
+            AND user_id = ?
+            ORDER BY id
+        `, ...memoryIds, userId);
 
-    if (memories.length === 0) return null;
+        if (memories.length === 0) return null;
 
-    // Find the "best" memory to keep (highest importance + access count)
-    const bestMemory = memories.reduce((best, current) => {
-        const bestScore = (best.importance_score || 0) * 0.5 + (best.access_count || 0) * 0.5;
-        const currentScore = (current.importance_score || 0) * 0.5 + (current.access_count || 0) * 0.5;
-        return currentScore > bestScore ? current : best;
+        // Find the "best" memory to keep (highest importance + access count)
+        const bestMemory = memories.reduce((best, current) => {
+            const bestScore = (best.importance_score || 0) * 0.5 + (best.access_count || 0) * 0.5;
+            const currentScore = (current.importance_score || 0) * 0.5 + (current.access_count || 0) * 0.5;
+            return currentScore > bestScore ? current : best;
+        });
+
+        // Merge metadata from all memories
+        const totalAccessCount = memories.reduce((sum, m) => sum + (m.access_count || 0), 0);
+        const avgImportance = memories.reduce((sum, m) => sum + (m.importance_score || 0.5), 0) / memories.length;
+
+        // Was json_set(metadata, '$.merged_from', json(?), '$.merge_timestamp', datetime('now'))
+        // (SQLite only): the same keys set in JS, the time in the same text format.
+        let metadata: Record<string, unknown> = {};
+        try {
+            const parsed = bestMemory.metadata ? JSON.parse(bestMemory.metadata) : {};
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) metadata = parsed;
+        } catch { /* unreadable metadata: start again */ }
+        metadata.merged_from = memoryIds.filter(id => id !== bestMemory.id);
+        metadata.merge_timestamp = textTimestamp(Date.now());
+
+        // Update the best memory with merged data
+        yield* run(`
+            UPDATE memories
+            SET
+                access_count = ?,
+                importance_score = ?,
+                metadata = ?
+            WHERE id = ? AND user_id = ?
+        `,
+            totalAccessCount,
+            avgImportance,
+            JSON.stringify(metadata),
+            bestMemory.id,
+            userId
+        );
+
+        // Delete the duplicate memories
+        const duplicateIds = memoryIds.filter(id => id !== bestMemory.id);
+        if (duplicateIds.length > 0) {
+            yield* run(`
+                DELETE FROM memories
+                WHERE id IN (${duplicateIds.map(() => '?').join(',')}) AND user_id = ?
+            `, ...duplicateIds, userId);
+        }
+
+        return bestMemory.id as string;
     });
-
-    // Merge metadata from all memories
-    const allAgents = [...new Set(memories.map(m => m.source_agent_id).filter(Boolean))];
-    const totalAccessCount = memories.reduce((sum, m) => sum + (m.access_count || 0), 0);
-    const avgImportance = memories.reduce((sum, m) => sum + (m.importance_score || 0.5), 0) / memories.length;
-
-    // Update the best memory with merged data
-    db.prepare(`
-        UPDATE memories
-        SET
-            access_count = ?,
-            importance_score = ?,
-            metadata = json_set(
-                COALESCE(metadata, '{}'),
-                '$.merged_from',
-                json(?),
-                '$.merge_timestamp',
-                datetime('now')
-            )
-        WHERE id = ?
-    `).run(
-        totalAccessCount,
-        avgImportance,
-        JSON.stringify(memoryIds.filter(id => id !== bestMemory.id)),
-        bestMemory.id
-    );
-
-    // Delete the duplicate memories
-    const duplicateIds = memoryIds.filter(id => id !== bestMemory.id);
-    if (duplicateIds.length > 0) {
-        db.prepare(`
-            DELETE FROM memories
-            WHERE id IN (${duplicateIds.map(() => '?').join(',')})
-        `).run(...duplicateIds);
-    }
-
-    return bestMemory.id;
 }
 
 /**
@@ -186,16 +191,15 @@ export async function runDeduplication(
     similarityThreshold: number = 0.85
 ): Promise<DuplicationResult> {
     const startTime = Date.now();
-    const db = getDatabase();
 
-    const similarGroups = findSimilarMemories(userId, similarityThreshold);
+    const similarGroups = await findSimilarMemories(userId, similarityThreshold);
 
     let memoriesMerged = 0;
     let memoriesDeleted = 0;
 
     for (const group of similarGroups) {
         const memoryIds = group.map(m => m.id);
-        const mergedId = mergeSimilarMemories(userId, memoryIds);
+        const mergedId = await mergeSimilarMemories(userId, memoryIds);
 
         if (mergedId) {
             memoriesMerged++;
@@ -206,12 +210,12 @@ export async function runDeduplication(
     const durationMs = Date.now() - startTime;
 
     // Log the deduplication run
-    db.prepare(`
+    await sql().read(run(`
         INSERT INTO memory_deduplication_log (
             id, run_timestamp, duplicates_found, memories_merged,
             memories_deleted, duration_ms, status
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `,
         uuidv4(),
         Date.now(),
         similarGroups.length,
@@ -219,7 +223,7 @@ export async function runDeduplication(
         memoriesDeleted,
         durationMs,
         'success'
-    );
+    ));
 
     return {
         duplicatesFound: similarGroups.length,
@@ -232,26 +236,24 @@ export async function runDeduplication(
 /**
  * Get deduplication statistics
  */
-export function getDeduplicationStats(userId: string) {
-    const db = getDatabase();
-
+export async function getDeduplicationStats(userId: string) {
     // Get total memories
-    const totalMemories = db.prepare(`
+    const totalMemories = (await sql().read(all<{ count: number }>(`
         SELECT COUNT(*) as count
         FROM memories
         WHERE user_id = ? AND status = 'active'
-    `).get(userId) as { count: number };
+    `, userId)))[0] ?? { count: 0 };
 
     // Get recent deduplication logs
-    const recentLogs = db.prepare(`
+    const recentLogs = await sql().read(all(`
         SELECT *
         FROM memory_deduplication_log
-        ORDER BY run_timestamp DESC
+        ORDER BY run_timestamp DESC, id
         LIMIT 10
-    `).all() as any[];
+    `));
 
     // Calculate potential duplicates
-    const similarGroups = findSimilarMemories(userId, 0.85);
+    const similarGroups = await findSimilarMemories(userId, 0.85);
     const potentialDuplicates = similarGroups.reduce((sum, group) => sum + (group.length - 1), 0);
 
     return {
@@ -273,12 +275,11 @@ export async function scheduledDeduplication(userId: string) {
     } catch (error: any) {
         console.error(`[Memory Deduplication] Error for user ${userId}:`, error);
 
-        const db = getDatabase();
-        db.prepare(`
+        await sql().read(run(`
             INSERT INTO memory_deduplication_log (
                 id, run_timestamp, status, error_message
             ) VALUES (?, ?, ?, ?)
-        `).run(uuidv4(), Date.now(), 'failed', error.message);
+        `, uuidv4(), Date.now(), 'failed', error.message));
 
         throw error;
     }

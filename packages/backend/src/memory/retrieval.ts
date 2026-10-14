@@ -9,7 +9,6 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { getMemoryStorage } from './storage.js';
-import { getDatabase } from '../db/index.js';
 import { getMemoryExtractionClaudeConfig } from '../credentials/authority.js';
 import { getCredentialManager } from '../credentials/manager.js';
 import type {

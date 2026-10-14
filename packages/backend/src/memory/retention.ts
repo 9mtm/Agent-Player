@@ -20,8 +20,9 @@
  * audited. A dry run reports what would happen and changes nothing.
  */
 
-import { v4 as uuidv4 } from 'uuid';
-import { getDatabase } from '../db/index.js';
+import { all, dialect, one, run, sql, tableExists, type Step } from '../repositories/sql-steps.js';
+import { nowIsoText } from '../db/pg/dialect.js';
+import { orderedId } from '../repositories/ordered-id.js';
 import { getMemoryStorage } from './storage.js';
 import { DRAWER_KEY_SQL, DRAWER_KIND_SQL, normalizeDrawer, type DrawerRef } from './drawers.js';
 import { forgetMemory } from './forget.js';
@@ -43,8 +44,12 @@ const LINE = 140;
 
 export class RetentionInputError extends Error {}
 
-export function getRetentionConfig(userId: string): RetentionConfig {
-  const row = getDatabase().prepare('SELECT * FROM memory_retention_config WHERE user_id = ?').get(userId) as any;
+export function getRetentionConfig(userId: string): Promise<RetentionConfig> {
+  return sql().read(retentionConfigStep(userId));
+}
+
+function* retentionConfigStep(userId: string): Step<RetentionConfig> {
+  const row = yield* one('SELECT * FROM memory_retention_config WHERE user_id = ?', userId);
   if (!row) return { ...DEFAULT_RETENTION };
   return {
     enabled: row.enabled === 1,
@@ -60,8 +65,14 @@ function intIn(v: unknown, min: number, max: number, name: string): number {
 }
 
 /** Validate and store the owner's retention settings (partial update). */
-export function setRetentionConfig(userId: string, input: Record<string, unknown>, actor: string): RetentionConfig {
-  const cur = getRetentionConfig(userId);
+export function setRetentionConfig(userId: string, input: Record<string, unknown>, actor: string): Promise<RetentionConfig> {
+  // Read and write in one transaction: a partial update starts from the stored row.
+  return sql().tx(() => setRetentionConfigStep(userId, input, actor));
+}
+
+function* setRetentionConfigStep(userId: string, input: Record<string, unknown>, actor: string): Step<RetentionConfig> {
+  const d = yield* dialect();
+  const cur = yield* retentionConfigStep(userId);
   const next: RetentionConfig = { ...cur };
   if (input.enabled !== undefined) {
     if (typeof input.enabled !== 'boolean') throw new RetentionInputError('enabled must be true or false');
@@ -70,13 +81,13 @@ export function setRetentionConfig(userId: string, input: Record<string, unknown
   if (input.taskTtlDays !== undefined) next.taskTtlDays = intIn(input.taskTtlDays, 1, 3650, 'taskTtlDays');
   if (input.experienceAfterDays !== undefined) next.experienceAfterDays = intIn(input.experienceAfterDays, 7, 3650, 'experienceAfterDays');
   if (input.experienceMinGroup !== undefined) next.experienceMinGroup = intIn(input.experienceMinGroup, 2, 1000, 'experienceMinGroup');
-  getDatabase().prepare(`
+  yield* run(`
     INSERT INTO memory_retention_config (user_id, enabled, task_ttl_days, experience_after_days, experience_min_group, updated_by, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    VALUES (?, ?, ?, ?, ?, ?, ${nowIsoText(d)})
     ON CONFLICT(user_id) DO UPDATE SET enabled = excluded.enabled, task_ttl_days = excluded.task_ttl_days,
       experience_after_days = excluded.experience_after_days, experience_min_group = excluded.experience_min_group,
       updated_by = excluded.updated_by, updated_at = excluded.updated_at
-  `).run(userId, next.enabled ? 1 : 0, next.taskTtlDays, next.experienceAfterDays, next.experienceMinGroup, actor);
+  `, userId, next.enabled ? 1 : 0, next.taskTtlDays, next.experienceAfterDays, next.experienceMinGroup, actor);
   return next;
 }
 
@@ -93,21 +104,22 @@ function summaryText(title: string, items: Memory[]): string {
   return [`${title} (${items.length} items, ${first} to ${last}):`, ...shown, ...more].join('\n');
 }
 
-function tableExists(name: string): boolean {
-  return !!getDatabase().prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
-}
-
-/** When did this task end? null = still running / unknown and active. */
-function taskEnd(userId: string, key: string, items: Memory[]): number | null {
-  if (tableExists('tasks')) {
-    const t = getDatabase().prepare('SELECT status, completed_at FROM tasks WHERE id = ?').get(key) as { status: string; completed_at: string | null } | undefined;
+/**
+ * When did this task end? null = still running / unknown and active.
+ * `tasks` is the orchestrator's table when it shares the main database
+ * (today it lives in its own file, .data/multi-agent/orchestrator.db, so
+ * this is usually the activity fallback).
+ */
+function* taskEnd(userId: string, key: string, items: Memory[]): Step<number | null> {
+  if (yield* tableExists('tasks')) {
+    const t = yield* one<{ status: string; completed_at: string | null }>('SELECT status, completed_at FROM tasks WHERE id = ?', key);
     if (t) {
       if (!['completed', 'failed', 'cancelled'].includes(t.status)) return null;
       const at = t.completed_at ? Date.parse(t.completed_at) : NaN;
       if (Number.isFinite(at)) return at;
     }
   }
-  const last = getDatabase().prepare(`SELECT MAX(created_at) AS at FROM memory_versions WHERE user_id = ? AND drawer_kind = 'task' AND drawer_key = ?`).get(userId, key) as { at: string | null };
+  const last = yield* one<{ at: string | null }>(`SELECT MAX(created_at) AS at FROM memory_versions WHERE user_id = ? AND drawer_kind = 'task' AND drawer_key = ?`, userId, key);
   const times = items.map((m) => m.createdAt.getTime());
   if (last?.at) times.push(Date.parse(last.at));
   return times.length ? Math.max(...times) : null;
@@ -138,26 +150,26 @@ const ACTOR = 'retention';
  * either way. Counts only are stored; no memory text in the run record.
  */
 export async function runRetention(userId: string, opts: { now?: Date; dryRun?: boolean; requireEnabled?: boolean; actor?: string } = {}): Promise<RetentionResult> {
-  const config = getRetentionConfig(userId);
+  const config = await getRetentionConfig(userId);
   const now = (opts.now ?? new Date()).getTime();
   const dryRun = !!opts.dryRun;
   const actor = opts.actor ?? ACTOR;
-  const result: RetentionResult = { id: uuidv4(), dryRun, config, actions: [], forgotten: 0 };
+  // Time-ordered id: runs listed newest first keep their order on ties of created_at.
+  const result: RetentionResult = { id: orderedId(), dryRun, config, actions: [], forgotten: 0 };
 
   if (opts.requireEnabled && !config.enabled) {
     result.skipped = 'disabled';
   } else {
     const storage = getMemoryStorage();
-    const db = getDatabase();
 
     // 2. Ended tasks past their TTL.
-    const tasks = db.prepare(`SELECT DISTINCT ${DRAWER_KEY_SQL} AS key FROM memories WHERE user_id = ? AND ${DRAWER_KIND_SQL} = 'task'`).all(userId) as Array<{ key: string }>;
+    const tasks = await sql().read(all<{ key: string }>(`SELECT DISTINCT ${DRAWER_KEY_SQL} AS key FROM memories WHERE user_id = ? AND ${DRAWER_KIND_SQL} = 'task' ORDER BY 1`, userId));
     for (const { key } of tasks) {
       let drawer: DrawerRef;
       try { drawer = normalizeDrawer({ kind: 'task', key }); } catch { continue; }
-      const items = storage.getByDrawers(userId, [drawer]);
+      const items = await storage.getByDrawers(userId, [drawer]);
       if (items.length === 0) continue;
-      const end = taskEnd(userId, key, items);
+      const end = await sql().read(taskEnd(userId, key, items));
       if (end === null || end + config.taskTtlDays * DAY > now) continue;
       const action: RetentionAction = { kind: 'task-summary', drawerId: `task:${key}`, items: items.length };
       if (!dryRun) {
@@ -173,7 +185,7 @@ export async function runRetention(userId: string, opts: { now?: Date; dryRun?: 
 
     // 3. Old, not-important experience items -> one summary per type.
     const cutoff = now - config.experienceAfterDays * DAY;
-    const old = storage.getByDrawers(userId, [{ kind: 'experience' }])
+    const old = (await storage.getByDrawers(userId, [{ kind: 'experience' }]))
       .filter((m) => m.createdAt.getTime() < cutoff && importanceOf(m) < 8 && (m.metadata as any)?.source !== 'retention');
     const byType = new Map<string, Memory[]>();
     for (const m of old) byType.set(m.type, [...(byType.get(m.type) || []), m]);
@@ -192,13 +204,13 @@ export async function runRetention(userId: string, opts: { now?: Date; dryRun?: 
     }
   }
 
-  getDatabase().prepare('INSERT INTO memory_retention_runs (id, user_id, dry_run, actor, result) VALUES (?, ?, ?, ?, ?)')
-    .run(result.id, userId, dryRun ? 1 : 0, actor, JSON.stringify({ skipped: result.skipped ?? null, actions: result.actions, forgotten: result.forgotten, config }));
+  await sql().read(run('INSERT INTO memory_retention_runs (id, user_id, dry_run, actor, result) VALUES (?, ?, ?, ?, ?)',
+    result.id, userId, dryRun ? 1 : 0, actor, JSON.stringify({ skipped: result.skipped ?? null, actions: result.actions, forgotten: result.forgotten, config })));
   return result;
 }
 
-export function listRetentionRuns(userId: string, limit = 20): any[] {
-  return (getDatabase().prepare('SELECT id, dry_run, actor, result, created_at FROM memory_retention_runs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?')
-    .all(userId, Math.max(1, Math.min(200, limit))) as any[])
+export async function listRetentionRuns(userId: string, limit = 20): Promise<any[]> {
+  return (await sql().read(all('SELECT id, dry_run, actor, result, created_at FROM memory_retention_runs WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?',
+    userId, Math.max(1, Math.min(200, limit)))))
     .map((r) => ({ id: r.id, dryRun: r.dry_run === 1, actor: r.actor, createdAt: r.created_at, ...JSON.parse(r.result) }));
 }

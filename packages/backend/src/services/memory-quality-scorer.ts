@@ -8,7 +8,7 @@
  * - Context richness: Does it include situational context?
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, one, run, sql } from '../repositories/sql-steps.js';
 
 export interface QualityScores {
     overall: number;           // 0-100
@@ -103,14 +103,12 @@ export class MemoryQualityScorer {
      * Update memory quality scores in database
      */
     static async updateMemoryQuality(memoryId: string, scores: QualityScores): Promise<void> {
-        const db = getDatabase();
-
         // Get old quality score for history
-        const oldMemory = db.prepare('SELECT quality_score FROM memories WHERE id = ?').get(memoryId) as any;
+        const oldMemory = await sql().read(one('SELECT quality_score FROM memories WHERE id = ?', memoryId));
         const oldQualityScore = oldMemory?.quality_score || 50;
 
         // Update memory with new scores
-        db.prepare(`
+        await sql().read(run(`
             UPDATE memories
             SET quality_score = ?,
                 completeness_score = ?,
@@ -118,29 +116,29 @@ export class MemoryQualityScorer {
                 usefulness_score = ?,
                 needs_improvement = ?
             WHERE id = ?
-        `).run(
+        `,
             scores.overall,
             scores.completeness,
             scores.clarity,
             scores.usefulness,
             scores.overall < 60 ? 1 : 0,
             memoryId
-        );
+        ));
 
         // Log quality history if score changed significantly
         if (Math.abs(scores.overall - oldQualityScore) > 5) {
             const historyId = `qh_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-            db.prepare(`
+            await sql().read(run(`
                 INSERT INTO memory_quality_history (id, memory_id, old_quality_score, new_quality_score, improvement_type, changes_made)
                 VALUES (?, ?, ?, ?, ?, ?)
-            `).run(
+            `,
                 historyId,
                 memoryId,
                 oldQualityScore,
                 scores.overall,
                 'auto_enrichment',
                 JSON.stringify({ scores })
-            );
+            ));
         }
     }
 
@@ -288,9 +286,7 @@ export class MemoryQualityScorer {
         lowQuality: number;
         needsImprovement: number;
     }> {
-        const db = getDatabase();
-
-        const stats = db.prepare(`
+        const stats = await sql().read(one(`
             SELECT
                 COUNT(*) as total,
                 AVG(quality_score) as avg_quality,
@@ -300,7 +296,7 @@ export class MemoryQualityScorer {
                 SUM(CASE WHEN needs_improvement = 1 THEN 1 ELSE 0 END) as needs_improvement
             FROM memories
             WHERE user_id = ? AND status = 'active'
-        `).get(userId) as any;
+        `, userId));
 
         return {
             totalMemories: stats?.total || 0,
@@ -316,14 +312,12 @@ export class MemoryQualityScorer {
      * Get low quality memories that need improvement
      */
     static async getLowQualityMemories(userId: string, limit = 10): Promise<any[]> {
-        const db = getDatabase();
-
-        return db.prepare(`
+        return sql().read(all(`
             SELECT id, type, content, quality_score, completeness_score, clarity_score, usefulness_score, created_at
             FROM memories
             WHERE user_id = ? AND status = 'active' AND quality_score < 60
-            ORDER BY quality_score ASC, created_at DESC
+            ORDER BY quality_score ASC, created_at DESC, id
             LIMIT ?
-        `).all(userId, limit) as any[];
+        `, userId, limit));
     }
 }

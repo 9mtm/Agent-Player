@@ -22,18 +22,27 @@
  * rollback removes the batch's not-yet-approved proposals. Approved
  * memories stay (forget them one by one on request). Source files are never
  * touched (the server never sees a path).
+ *
+ * B2.2b-4: SQL steps (one copy for SQLite and PostgreSQL). A commit is
+ * idempotent by operation_key: the batch row is locked (FOR UPDATE on
+ * PostgreSQL) and re-read inside the commit transaction, so a second commit
+ * with the same key and version/hash, also one sent at the same time,
+ * returns the first receipt (`replay: true`) and creates nothing; the same
+ * key on another batch is refused (unique index, 409 operation_key_reused).
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { getDatabase } from '../../db/index.js';
+import { all, dialect, one, run, sql, type Step } from '../../repositories/sql-steps.js';
+import { forUpdate, nowIsoText } from '../../db/pg/dialect.js';
 import { denyReason } from '../../tools/core/file-sandbox.js';
 import { drawerId, DrawerInputError, parseDrawerId, type DrawerRef } from '../drawers.js';
 import { getMemoryStorage } from '../storage.js';
 import { classifyLearning } from '../learning.js';
 import {
-  createChangeProposal,
+  createChangeProposalStep,
+  lockProposalQueue,
   MAX_PENDING_PROPOSALS,
-  pendingProposalCount,
+  pendingProposalCountStep,
   resolveFileAgent,
 } from '../memory-files.js';
 import { isoUtc } from '../../api/timestamps.js';
@@ -139,24 +148,32 @@ export interface ImportFileInput {
 
 export interface ImportSettings { redactEmails: boolean; redactPhones: boolean }
 
-export function getImportSettings(userId: string): ImportSettings {
-  const row = getDatabase().prepare('SELECT redact_emails, redact_phones FROM memory_import_settings WHERE user_id = ?').get(userId) as
-    { redact_emails: number; redact_phones: number } | undefined;
+export function getImportSettings(userId: string): Promise<ImportSettings> {
+  return sql().read(importSettingsStep(userId));
+}
+
+function* importSettingsStep(userId: string): Step<ImportSettings> {
+  const row = yield* one<{ redact_emails: number; redact_phones: number }>('SELECT redact_emails, redact_phones FROM memory_import_settings WHERE user_id = ?', userId);
   return { redactEmails: !!row?.redact_emails, redactPhones: !!row?.redact_phones };
 }
 
-export function setImportSettings(userId: string, input: Record<string, unknown>): ImportSettings {
-  const cur = getImportSettings(userId);
+export function setImportSettings(userId: string, input: Record<string, unknown>): Promise<ImportSettings> {
+  return sql().tx(() => setImportSettingsStep(userId, input));
+}
+
+function* setImportSettingsStep(userId: string, input: Record<string, unknown>): Step<ImportSettings> {
+  const d = yield* dialect();
+  const cur = yield* importSettingsStep(userId);
   const next = { ...cur };
   for (const k of ['redactEmails', 'redactPhones'] as const) {
     if (input[k] === undefined) continue;
     if (typeof input[k] !== 'boolean') throw new ImportError(`${k} must be true or false`);
     next[k] = input[k] as boolean;
   }
-  getDatabase().prepare(`
-    INSERT INTO memory_import_settings (user_id, redact_emails, redact_phones, updated_at) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  yield* run(`
+    INSERT INTO memory_import_settings (user_id, redact_emails, redact_phones, updated_at) VALUES (?, ?, ?, ${nowIsoText(d)})
     ON CONFLICT(user_id) DO UPDATE SET redact_emails = excluded.redact_emails, redact_phones = excluded.redact_phones, updated_at = excluded.updated_at
-  `).run(userId, next.redactEmails ? 1 : 0, next.redactPhones ? 1 : 0);
+  `, userId, next.redactEmails ? 1 : 0, next.redactPhones ? 1 : 0);
   return next;
 }
 
@@ -357,12 +374,12 @@ function summarize(files: PreviewFile[], items: PreviewItem[]): PreviewSummary {
   };
 }
 
-function insertVersion(batchId: string, version: number, parent: number | null, files: PreviewFile[], items: PreviewItem[], by: string): string {
+function* insertVersion(batchId: string, version: number, parent: number | null, files: PreviewFile[], items: PreviewItem[], by: string): Step<string> {
   const hash = previewHash(batchId, version, files, items);
-  getDatabase().prepare(`
+  yield* run(`
     INSERT INTO memory_import_previews (batch_id, version, parent_version, content_hash, files, items, summary, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(batchId, version, parent, hash, JSON.stringify(files), JSON.stringify(items), JSON.stringify(summarize(files, items)), by);
+  `, batchId, version, parent, hash, JSON.stringify(files), JSON.stringify(items), JSON.stringify(summarize(files, items)), by);
   return hash;
 }
 
@@ -372,32 +389,34 @@ interface BatchRow {
   created_at: string; expires_at: string; committed_at: string | null; closed_at: string | null;
 }
 
-function batchRow(userId: string, id: string): BatchRow {
+/** The user's batch row, else 404; `lock` = FOR UPDATE on PostgreSQL (inside a transaction). */
+function* batchRow(userId: string, id: string, lock = false): Step<BatchRow> {
   if (typeof id !== 'string' || !BATCH_ID.test(id)) throw new ImportError('Import not found', 404, 'not_found');
-  const row = getDatabase().prepare('SELECT * FROM memory_import_batches WHERE id = ? AND user_id = ?').get(id, userId) as BatchRow | undefined;
+  const d = yield* dialect();
+  const row = yield* one<BatchRow>(`SELECT * FROM memory_import_batches WHERE id = ? AND user_id = ?${lock ? forUpdate(d) : ''}`, id, userId);
   if (!row) throw new ImportError('Import not found', 404, 'not_found');
   return row;
 }
 
 /** Previews not committed in time are expired and their sanitized text removed. */
-export function sweepExpired(userId: string): number {
-  const db = getDatabase();
+export async function sweepExpired(userId: string): Promise<number> {
   const now = new Date().toISOString();
-  const ids = (db.prepare(`SELECT id FROM memory_import_batches WHERE user_id = ? AND status = 'preview' AND expires_at < ?`).all(userId, now) as Array<{ id: string }>).map((r) => r.id);
+  const ids = (await sql().read(all<{ id: string }>(`SELECT id FROM memory_import_batches WHERE user_id = ? AND status = 'preview' AND expires_at < ?`, userId, now))).map((r) => r.id);
   for (const id of ids) {
-    db.transaction(() => {
-      db.prepare('DELETE FROM memory_import_previews WHERE batch_id = ?').run(id);
-      db.prepare(`UPDATE memory_import_batches SET status = 'expired', closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'preview'`).run(id);
+    await sql().tx(function* () {
+      const d = yield* dialect();
+      yield* run('DELETE FROM memory_import_previews WHERE batch_id = ?', id);
+      yield* run(`UPDATE memory_import_batches SET status = 'expired', closed_at = ${nowIsoText(d)}, updated_at = ${nowIsoText(d)} WHERE id = ? AND status = 'preview'`, id);
     });
   }
   return ids.length;
 }
 
-export function getPreview(userId: string, id: string, version?: number): PreviewView {
-  sweepExpired(userId);
-  const b = batchRow(userId, id);
+export async function getPreview(userId: string, id: string, version?: number): Promise<PreviewView> {
+  await sweepExpired(userId);
+  const b = await sql().read(batchRow(userId, id));
   const v = version ?? b.latest_version;
-  const row = getDatabase().prepare('SELECT * FROM memory_import_previews WHERE batch_id = ? AND version = ?').get(b.id, v) as any;
+  const row = await sql().read(one('SELECT * FROM memory_import_previews WHERE batch_id = ? AND version = ?', b.id, v));
   if (!row) throw new ImportError(b.status === 'preview' || b.status === 'committed' ? 'Preview version not found' : `This import is ${b.status}; its preview was removed`, 404, 'not_found');
   const files = JSON.parse(row.files) as PreviewFile[];
   const items = JSON.parse(row.items) as PreviewItem[];
@@ -413,13 +432,13 @@ export function getPreview(userId: string, id: string, version?: number): Previe
   };
 }
 
-export function listImports(userId: string): any[] {
-  sweepExpired(userId);
-  const rows = getDatabase().prepare(`
+export async function listImports(userId: string): Promise<any[]> {
+  await sweepExpired(userId);
+  const rows = await sql().read(all<BatchRow & { summary: string | null }>(`
     SELECT b.*, p.summary FROM memory_import_batches b
       LEFT JOIN memory_import_previews p ON p.batch_id = b.id AND p.version = b.latest_version
-     WHERE b.user_id = ? ORDER BY b.created_at DESC LIMIT 100
-  `).all(userId) as Array<BatchRow & { summary: string | null }>;
+     WHERE b.user_id = ? ORDER BY b.created_at DESC, b.id LIMIT 100
+  `, userId));
   return rows.map((r) => ({
     batchId: r.id, status: r.status, sourceKind: r.source_kind, latestVersion: r.latest_version,
     committedVersion: r.committed_version, createdAt: isoUtc(r.created_at), expiresAt: isoUtc(r.expires_at),
@@ -441,7 +460,7 @@ export interface CreatePreviewInput {
 }
 
 export async function createPreview(userId: string, input: CreatePreviewInput): Promise<PreviewView> {
-  sweepExpired(userId);
+  await sweepExpired(userId);
   const source = (input.source ?? 'text') as SourceKind;
   if (!SOURCE_KINDS.includes(source)) throw new ImportError(`source must be one of ${SOURCE_KINDS.join(', ')}`);
   if (!Array.isArray(input.files) || input.files.length === 0) throw new ImportError('Choose at least one file');
@@ -453,7 +472,7 @@ export async function createPreview(userId: string, input: CreatePreviewInput): 
       throw err;
     }
   }
-  const settings = getImportSettings(userId);
+  const settings = await getImportSettings(userId);
   const opts = {
     redactEmails: typeof input.redactEmails === 'boolean' ? input.redactEmails : settings.redactEmails,
     redactPhones: typeof input.redactPhones === 'boolean' ? input.redactPhones : settings.redactPhones,
@@ -476,11 +495,11 @@ export async function createPreview(userId: string, input: CreatePreviewInput): 
   const items: PreviewItem[] = [];
   const seen = new Set<string>();
   const existing = new Map<string, Set<string>>();
-  const existingIn = (d: DrawerRef): Set<string> => {
+  const existingIn = async (d: DrawerRef): Promise<Set<string>> => {
     const key = drawerId(d);
     let set = existing.get(key);
     if (!set) {
-      set = new Set(storage.getByDrawers(userId, [d]).map((m) => norm(m.content)));
+      set = new Set((await storage.getByDrawers(userId, [d])).map((m) => norm(m.content)));
       existing.set(key, set);
     }
     return set;
@@ -510,7 +529,7 @@ export async function createPreview(userId: string, input: CreatePreviewInput): 
       }
       const { drawer, type } = proposeDrawerAndType(name, c.heading, fixed);
       const n = norm(c.content);
-      const dup = seen.has(`${drawerId(drawer)}\u0000${n}`) || existingIn(drawer).has(n);
+      const dup = seen.has(`${drawerId(drawer)}\u0000${n}`) || (await existingIn(drawer)).has(n);
       seen.add(`${drawerId(drawer)}\u0000${n}`);
       const counts: Partial<Record<RedactionType, number>> = {};
       for (const m of c.content.matchAll(/\[REDACTED:([a-z_]+)\]/g)) counts[m[1] as RedactionType] = (counts[m[1] as RedactionType] ?? 0) + 1;
@@ -524,12 +543,11 @@ export async function createPreview(userId: string, input: CreatePreviewInput): 
   }
 
   const id = randomUUID();
-  const db = getDatabase();
   const expires = new Date(Date.now() + PREVIEW_TTL_MS).toISOString();
-  db.transaction(() => {
-    db.prepare(`INSERT INTO memory_import_batches (id, user_id, source_kind, status, latest_version, options, expires_at) VALUES (?, ?, ?, 'preview', 1, ?, ?)`)
-      .run(id, userId, source, JSON.stringify({ ...opts, drawer: fixed ? drawerId(fixed) : null }), expires);
-    insertVersion(id, 1, null, files, items, userId);
+  await sql().tx(function* () {
+    yield* run(`INSERT INTO memory_import_batches (id, user_id, source_kind, status, latest_version, options, expires_at) VALUES (?, ?, ?, 'preview', 1, ?, ?)`,
+      id, userId, source, JSON.stringify({ ...opts, drawer: fixed ? drawerId(fixed) : null }), expires);
+    yield* insertVersion(id, 1, null, files, items, userId);
   });
   return getPreview(userId, id, 1);
 }
@@ -538,12 +556,12 @@ export async function createPreview(userId: string, input: CreatePreviewInput): 
 // Stage 4: revise -> new immutable version
 // ---------------------------------------------------------------------------
 
-function requireLatest(b: BatchRow, version: unknown, contentHash: unknown): { files: PreviewFile[]; items: PreviewItem[]; hash: string } {
+function* requireLatest(b: BatchRow, version: unknown, contentHash: unknown): Step<{ files: PreviewFile[]; items: PreviewItem[]; hash: string }> {
   if (b.status !== 'preview') throw new ImportError(`This import is ${b.status}`, 409, 'not_preview');
   if (new Date(b.expires_at).getTime() < Date.now()) throw new ImportError('The preview expired; inspect the files again', 409, 'expired');
   if (!Number.isInteger(version) || typeof contentHash !== 'string') throw new ImportError('version and contentHash are required');
   if (version !== b.latest_version) throw new ImportError('A newer preview version exists; review it first', 409, 'superseded');
-  const row = getDatabase().prepare('SELECT * FROM memory_import_previews WHERE batch_id = ? AND version = ?').get(b.id, version) as any;
+  const row = yield* one('SELECT * FROM memory_import_previews WHERE batch_id = ? AND version = ?', b.id, version as number);
   if (!row) throw new ImportError('Preview version not found', 404, 'not_found');
   const files = JSON.parse(row.files) as PreviewFile[];
   const items = JSON.parse(row.items) as PreviewItem[];
@@ -561,10 +579,10 @@ export interface ReviseInput {
   items?: unknown;
 }
 
-export function revisePreview(userId: string, id: string, input: ReviseInput): PreviewView {
-  sweepExpired(userId);
-  const b = batchRow(userId, id);
-  const { files, items } = requireLatest(b, input.version, input.contentHash);
+export async function revisePreview(userId: string, id: string, input: ReviseInput): Promise<PreviewView> {
+  await sweepExpired(userId);
+  const b = await sql().read(batchRow(userId, id));
+  const { files, items } = await sql().read(requireLatest(b, input.version, input.contentHash));
   if (b.latest_version >= MAX_VERSIONS) throw new ImportError(`At most ${MAX_VERSIONS} preview versions`, 409, 'too_many_versions');
   const next: PreviewItem[] = items.map((i) => ({ ...i }));
   if (input.includeAll !== undefined) {
@@ -601,13 +619,20 @@ export function revisePreview(userId: string, id: string, input: ReviseInput): P
   }
   if (JSON.stringify(next) === JSON.stringify(items)) throw new ImportError('Nothing changed');
   const version = b.latest_version + 1;
-  const db = getDatabase();
-  db.transaction(() => {
-    insertVersion(b.id, version, b.latest_version, files, next, userId);
-    const res = db.prepare(`UPDATE memory_import_batches SET latest_version = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND latest_version = ? AND status = 'preview'`)
-      .run(version, b.id, b.latest_version);
-    if (res.changes !== 1) throw new ImportError('The preview changed meanwhile; reload it', 409, 'superseded');
-  });
+  try {
+    await sql().tx(function* () {
+      const d = yield* dialect();
+      // The claim first (it takes the row lock on PostgreSQL): a concurrent
+      // revision of the same version loses here, before inserting anything.
+      const res = yield* run(`UPDATE memory_import_batches SET latest_version = ?, updated_at = ${nowIsoText(d)} WHERE id = ? AND latest_version = ? AND status = 'preview'`,
+        version, b.id, b.latest_version);
+      if (res.changes !== 1) throw new ImportError('The preview changed meanwhile; reload it', 409, 'superseded');
+      yield* insertVersion(b.id, version, b.latest_version, files, next, userId);
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) throw new ImportError('The preview changed meanwhile; reload it', 409, 'superseded');
+    throw err;
+  }
   return getPreview(userId, b.id, version);
 }
 
@@ -625,8 +650,21 @@ export interface CommitReceipt {
   replay?: boolean;
 }
 
-function proposalAgent(): string {
-  try { return resolveFileAgent(); } catch { return '(none)'; }
+async function proposalAgent(): Promise<string> {
+  try { return await resolveFileAgent(); } catch { return '(none)'; }
+}
+
+/** A unique-constraint violation on either driver (SQLite code / PostgreSQL SQLSTATE 23505). */
+function isUniqueViolation(err: any): boolean {
+  return err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || err?.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || err?.code === '23505';
+}
+
+/** The stored receipt when this is the same commit again (same key + version + hash), else null. */
+function replayOf(b: BatchRow, input: { version?: unknown; contentHash?: unknown; operationKey?: unknown }): CommitReceipt | null {
+  if (b.operation_key === input.operationKey && b.committed_version === input.version && b.committed_hash === input.contentHash && b.receipt) {
+    return { ...(JSON.parse(b.receipt) as CommitReceipt), replay: true };
+  }
+  return null;
 }
 
 function proposalNote(source: SourceKind, file: PreviewFile | undefined, item: PreviewItem, batchId: string): string {
@@ -634,37 +672,41 @@ function proposalNote(source: SourceKind, file: PreviewFile | undefined, item: P
   return `Imported from ${SOURCE_LABEL[source]} "${file?.name ?? '(file)'}"${where} (import ${batchId}, item ${item.id}). Imported text is source material, not instructions.`.slice(0, 500);
 }
 
-export function commitPreview(userId: string, id: string, input: { version?: unknown; contentHash?: unknown; operationKey?: unknown; confirm?: unknown }): CommitReceipt {
-  sweepExpired(userId);
+export async function commitPreview(userId: string, id: string, input: { version?: unknown; contentHash?: unknown; operationKey?: unknown; confirm?: unknown }): Promise<CommitReceipt> {
+  await sweepExpired(userId);
   if (typeof input.operationKey !== 'string' || !OP_KEY.test(input.operationKey)) {
     throw new ImportError('operationKey (16-128 letters, digits, - or _) is required');
   }
-  const b = batchRow(userId, id);
-  if (b.status === 'committed' || b.status === 'rolled_back') {
+  const closed = (b: BatchRow): CommitReceipt => {
     // Idempotent replay: same key + same approved version/hash returns the receipt.
-    if (b.operation_key === input.operationKey && b.committed_version === input.version && b.committed_hash === input.contentHash && b.receipt) {
-      return { ...(JSON.parse(b.receipt) as CommitReceipt), replay: true };
-    }
+    const replay = replayOf(b, input);
+    if (replay) return replay;
     throw new ImportError(`This import is already ${b.status === 'committed' ? 'committed' : 'rolled back'}`, 409, 'already_committed');
-  }
+  };
+  const first = await sql().read(batchRow(userId, id));
+  if (first.status === 'committed' || first.status === 'rolled_back') return closed(first);
   if (input.confirm !== true) throw new ImportError('Send confirm: true after reviewing the sanitized preview');
-  const { files, items, hash } = requireLatest(b, input.version, input.contentHash);
-  const chosen = items.filter((i) => i.include);
-  if (chosen.length === 0) throw new ImportError('No items are selected');
-  const pending = pendingProposalCount(userId);
-  if (pending + chosen.length > MAX_PENDING_PROPOSALS) {
-    throw new ImportError(`Too many proposals would wait for review (${pending} pending, ${chosen.length} new, limit ${MAX_PENDING_PROPOSALS}); review some first`, 409, 'queue_full');
-  }
-  const agentId = proposalAgent();
-  const db = getDatabase();
-  const fileByIndex = new Map(files.map((f) => [f.index, f]));
-  let receipt!: CommitReceipt;
+  const agentId = await proposalAgent();
   try {
-    db.transaction(() => {
+    return await sql().tx(function* (): Step<CommitReceipt> {
+      const d = yield* dialect();
+      // Locked and read again: a concurrent commit of this batch waits here,
+      // then sees it committed (and replays when it is the same commit).
+      const b = yield* batchRow(userId, id, true);
+      if (b.status === 'committed' || b.status === 'rolled_back') return closed(b);
+      const { files, items, hash } = yield* requireLatest(b, input.version, input.contentHash);
+      const chosen = items.filter((i) => i.include);
+      if (chosen.length === 0) throw new ImportError('No items are selected');
+      yield* lockProposalQueue(userId);
+      const pending = yield* pendingProposalCountStep(userId);
+      if (pending + chosen.length > MAX_PENDING_PROPOSALS) {
+        throw new ImportError(`Too many proposals would wait for review (${pending} pending, ${chosen.length} new, limit ${MAX_PENDING_PROPOSALS}); review some first`, 409, 'queue_full');
+      }
+      const fileByIndex = new Map(files.map((f) => [f.index, f]));
       const proposals: CommitReceipt['proposals'] = [];
       for (const item of chosen) {
         const drawer = parseDrawerId(item.drawer);
-        const p = createChangeProposal({
+        const p = yield* createChangeProposalStep({
           userId, agentId, drawer,
           changes: [{ op: 'add', after: { type: item.type, importance: 5, content: item.content } }],
           source: 'import', reasons: ['import', `import:${b.source_kind}`, ...item.reasons],
@@ -673,22 +715,22 @@ export function commitPreview(userId: string, id: string, input: { version?: unk
         });
         proposals.push({ itemId: item.id, proposalId: p.id, drawer: item.drawer });
       }
-      receipt = {
+      const receipt: CommitReceipt = {
         batchId: b.id, version: b.latest_version, contentHash: hash, proposals,
         skipped: items.length - chosen.length, committedAt: new Date().toISOString(),
       };
-      const res = db.prepare(`
+      const res = yield* run(`
         UPDATE memory_import_batches SET status = 'committed', committed_version = ?, committed_hash = ?, operation_key = ?, receipt = ?,
-          committed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          committed_at = ${nowIsoText(d)}, updated_at = ${nowIsoText(d)}
         WHERE id = ? AND status = 'preview' AND latest_version = ?
-      `).run(b.latest_version, hash, input.operationKey, JSON.stringify(receipt), b.id, b.latest_version);
+      `, b.latest_version, hash, input.operationKey as string, JSON.stringify(receipt), b.id, b.latest_version);
       if (res.changes !== 1) throw new ImportError('The preview changed meanwhile; reload it', 409, 'superseded');
+      return receipt;
     });
   } catch (err: any) {
-    if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE') throw new ImportError('operationKey was already used for another import', 409, 'operation_key_reused');
+    if (isUniqueViolation(err)) throw new ImportError('operationKey was already used for another import', 409, 'operation_key_reused');
     throw err;
   }
-  return receipt;
 }
 
 // ---------------------------------------------------------------------------
@@ -703,27 +745,29 @@ export interface CancelResult {
   approvedKept: Array<{ proposalId: string; memoryIds: string[] }>;
 }
 
-export function cancelImport(userId: string, id: string): CancelResult {
-  sweepExpired(userId);
-  const b = batchRow(userId, id);
-  const db = getDatabase();
-  if (b.status === 'preview') {
-    db.transaction(() => {
-      db.prepare('DELETE FROM memory_import_previews WHERE batch_id = ?').run(b.id);
-      db.prepare(`UPDATE memory_import_batches SET status = 'cancelled', closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'preview'`).run(b.id);
-    });
-    return { batchId: b.id, status: 'cancelled', removedProposals: 0, approvedKept: [] };
-  }
-  if (b.status !== 'committed') throw new ImportError(`This import is already ${b.status}`, 409, 'closed');
-  let removed = 0;
-  let approved: Array<{ id: string }> = [];
-  db.transaction(() => {
-    approved = db.prepare(`SELECT id FROM memory_file_proposals WHERE import_batch_id = ? AND user_id = ? AND status = 'approved'`).all(b.id, userId) as Array<{ id: string }>;
-    removed = db.prepare(`DELETE FROM memory_file_proposals WHERE import_batch_id = ? AND user_id = ? AND status != 'approved'`).run(b.id, userId).changes;
-    db.prepare('DELETE FROM memory_import_previews WHERE batch_id = ?').run(b.id);
-    db.prepare(`UPDATE memory_import_batches SET status = 'rolled_back', closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'committed'`).run(b.id);
+export async function cancelImport(userId: string, id: string): Promise<CancelResult> {
+  await sweepExpired(userId);
+  return sql().tx(function* (): Step<CancelResult> {
+    const d = yield* dialect();
+    const b = yield* batchRow(userId, id, true);
+    if (b.status === 'preview') {
+      yield* run('DELETE FROM memory_import_previews WHERE batch_id = ?', b.id);
+      yield* run(`UPDATE memory_import_batches SET status = 'cancelled', closed_at = ${nowIsoText(d)}, updated_at = ${nowIsoText(d)} WHERE id = ? AND status = 'preview'`, b.id);
+      return { batchId: b.id, status: 'cancelled', removedProposals: 0, approvedKept: [] };
+    }
+    if (b.status !== 'committed') throw new ImportError(`This import is already ${b.status}`, 409, 'closed');
+    // Pending proposals of the batch are locked (PostgreSQL), so none is approved halfway.
+    const proposals = yield* all<{ id: string; status: string }>(
+      `SELECT id, status FROM memory_file_proposals WHERE import_batch_id = ? AND user_id = ? ORDER BY id${forUpdate(d)}`, b.id, userId);
+    const approved = proposals.filter((p) => p.status === 'approved');
+    const removed = (yield* run(`DELETE FROM memory_file_proposals WHERE import_batch_id = ? AND user_id = ? AND status != 'approved'`, b.id, userId)).changes;
+    yield* run('DELETE FROM memory_import_previews WHERE batch_id = ?', b.id);
+    yield* run(`UPDATE memory_import_batches SET status = 'rolled_back', closed_at = ${nowIsoText(d)}, updated_at = ${nowIsoText(d)} WHERE id = ? AND status = 'committed'`, b.id);
+    const approvedKept: CancelResult['approvedKept'] = [];
+    for (const p of approved) {
+      const rows = yield* all<{ memory_id: string }>(`SELECT DISTINCT memory_id FROM memory_versions WHERE proposal_id = ? AND user_id = ? AND change = 'create' ORDER BY memory_id`, p.id, userId);
+      approvedKept.push({ proposalId: p.id, memoryIds: rows.map((r) => r.memory_id) });
+    }
+    return { batchId: b.id, status: 'rolled_back', removedProposals: removed, approvedKept };
   });
-  const memStmt = db.prepare(`SELECT DISTINCT memory_id FROM memory_versions WHERE proposal_id = ? AND user_id = ? AND change = 'create'`);
-  const approvedKept = approved.map((p) => ({ proposalId: p.id, memoryIds: (memStmt.all(p.id, userId) as Array<{ memory_id: string }>).map((r) => r.memory_id) }));
-  return { batchId: b.id, status: 'rolled_back', removedProposals: removed, approvedKept };
 }

@@ -17,6 +17,7 @@
  */
 
 import type { MemoryType } from './types.js';
+import { run, sql, type Step } from '../repositories/sql-steps.js';
 
 export const DRAWER_KINDS = ['owner', 'project', 'experience', 'task', 'people'] as const;
 export type DrawerKind = typeof DRAWER_KINDS[number];
@@ -102,11 +103,12 @@ export const DRAWER_KEY_SQL = "COALESCE(drawer_key, '')";
 
 /**
  * SQL condition restricting rows to the given drawers. An empty list matches
- * nothing (`0`), so "no drawers selected" really loads no memory.
+ * nothing (`1 = 0`: a boolean on both drivers), so "no drawers selected"
+ * really loads no memory.
  */
 export function drawerSqlFilter(drawers: DrawerRef[]): { sql: string; params: string[] } {
   const list = uniqueDrawers(drawers.map((d) => normalizeDrawer(d)));
-  if (list.length === 0) return { sql: '0', params: [] };
+  if (list.length === 0) return { sql: '1 = 0', params: [] };
   const parts: string[] = [];
   const params: string[] = [];
   for (const d of list) {
@@ -231,17 +233,23 @@ export function chatTurnDrawers(includeOwnerMemory: boolean, memoryScope: unknow
 /**
  * Fill drawer_kind/drawer_key of rows saved before drawers existed (the
  * default for their type). Idempotent; logs counts only, never content.
+ * One transaction (B2.2b-4: SQL steps, both drivers).
  */
-export function backfillMemoryDrawers(db: { prepare(sql: string): any }): { owner: number; experience: number } {
-  const exp = db.prepare(
+export function* backfillMemoryDrawersStep(): Step<{ owner: number; experience: number }> {
+  const exp = (yield* run(
     "UPDATE memories SET drawer_kind = 'experience', drawer_key = '' WHERE drawer_kind IS NULL AND type IN ('skill', 'insight')"
-  ).run().changes as number;
-  const own = db.prepare(
+  )).changes;
+  const own = (yield* run(
     "UPDATE memories SET drawer_kind = 'owner', drawer_key = '' WHERE drawer_kind IS NULL"
-  ).run().changes as number;
-  db.prepare("UPDATE memories SET drawer_key = '' WHERE drawer_key IS NULL").run();
+  )).changes;
+  yield* run("UPDATE memories SET drawer_key = '' WHERE drawer_key IS NULL");
   if (own || exp) {
     console.log(`[Memory] Drawers assigned to existing memories: owner ${own}, experience ${exp}`);
   }
   return { owner: own, experience: exp };
+}
+
+/** backfillMemoryDrawersStep on the process driver (the argument of the old signature is ignored). */
+export function backfillMemoryDrawers(_db?: unknown): Promise<{ owner: number; experience: number }> {
+  return sql().tx(() => backfillMemoryDrawersStep());
 }

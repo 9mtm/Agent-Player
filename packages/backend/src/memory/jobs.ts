@@ -9,6 +9,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import { all, one, sql } from '../repositories/sql-steps.js';
 import { getDatabase } from '../db/index.js';
 import { runWeeklySummary } from './weekly-summary.js';
 import { runRetention } from './retention.js';
@@ -24,9 +25,9 @@ const SCHEDULE: ReadonlyArray<[MemoryJobName, string, string]> = [
   ['retention', RETENTION_CRON, 'Memory retention rules (task TTL, experience consolidation); only when turned on'],
 ];
 
-function isOwner(userId: unknown): userId is string {
+async function isOwner(userId: unknown): Promise<boolean> {
   if (typeof userId !== 'string' || !userId) return false;
-  const row = getDatabase().prepare(`SELECT role, status FROM users WHERE id = ?`).get(userId) as { role: string; status: string } | undefined;
+  const row = await sql().read(one<{ role: string; status: string }>(`SELECT role, status FROM users WHERE id = ?`, userId));
   return !!row && row.role === 'owner' && (row.status ?? 'active') === 'active';
 }
 
@@ -34,7 +35,7 @@ function isOwner(userId: unknown): userId is string {
 export async function runMemoryJob(action: { job?: unknown; userId?: unknown }): Promise<unknown> {
   const job = action?.job;
   if (typeof job !== 'string' || !JOBS.has(job)) throw new Error('Unknown memory job');
-  if (!isOwner(action.userId)) throw new Error('Memory jobs run only for an active owner account');
+  if (!(await isOwner(action.userId))) throw new Error('Memory jobs run only for an active owner account');
   const userId = action.userId as string;
   if (job === 'weekly-summary') {
     const rec = await runWeeklySummary(userId, { actor: 'scheduler' });
@@ -61,19 +62,23 @@ export function memoryJobName(job: MemoryJobName, userId: string): string {
 /**
  * Make sure every active owner account has its weekly summary job (idempotent).
  * Returns the jobs created. The cron engine loads them from cron_jobs.
+ *
+ * B2.2b-4: the owner accounts are read on the process driver (users is
+ * ported); cron_jobs stays on SQLite with the cron engine that reads it
+ * (scheduler/engine.ts, not ported yet: B2.2c).
  */
-export function ensureMemoryJobs(): Array<{ id: string; name: string; cronExpression: string; actionData: Record<string, unknown> }> {
-  const db = getDatabase();
-  const owners = db.prepare(`SELECT id FROM users WHERE role = 'owner' AND COALESCE(status, 'active') = 'active'`).all() as Array<{ id: string }>;
+export async function ensureMemoryJobs(): Promise<Array<{ id: string; name: string; cronExpression: string; actionData: Record<string, unknown> }>> {
+  const owners = await sql().read(all<{ id: string }>(`SELECT id FROM users WHERE role = 'owner' AND COALESCE(status, 'active') = 'active' ORDER BY id`));
   const created: Array<{ id: string; name: string; cronExpression: string; actionData: Record<string, unknown> }> = [];
   for (const { id: userId } of owners) {
     for (const [job, cronExpression, description] of SCHEDULE) {
       const name = memoryJobName(job, userId);
-      if (db.prepare('SELECT 1 FROM cron_jobs WHERE name = ?').get(name)) continue;
+      const cron = getDatabase();
+      if (cron.prepare('SELECT 1 FROM cron_jobs WHERE name = ?').get(name)) continue;
       const id = uuidv4();
       const actionData = { job, userId };
       const now = new Date().toISOString();
-      db.prepare(`
+      cron.prepare(`
         INSERT INTO cron_jobs (id, name, description, cron_expression, action_type, action_data, enabled, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
       `).run(id, name, description, cronExpression, MEMORY_JOB_ACTION, JSON.stringify(actionData), now, now);

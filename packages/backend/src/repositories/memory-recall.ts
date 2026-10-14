@@ -17,14 +17,14 @@
  * Guests and channel turns: refused. Out of scope -> 404 `Memory not found`;
  * a closed drawer for an agent run -> 403.
  *
- * SQLite implementation over memory/storage.ts, retrieval.ts, learning.ts
+ * One implementation for both drivers (SQL steps) over memory/storage.ts, retrieval.ts, learning.ts
  * and services/memory-tiers.ts / memory-consolidation.ts.
  */
 
 import type { Actor } from './actor.js';
 import { ScopeError, drawerOpen, requireOwner } from './scope.js';
 import { memberUser, memoryUser, versionActor } from './memory-actor.js';
-import { getDatabase } from '../db/index.js';
+import { all, one, sql } from './sql-steps.js';
 import { getMemoryStorage } from '../memory/storage.js';
 import { getMemoryRetrieval } from '../memory/retrieval.js';
 import { defaultDrawerForType, drawerSqlFilter, normalizeDrawer, sameDrawer, type DrawerRef } from '../memory/drawers.js';
@@ -79,7 +79,7 @@ function readDrawers(a: Actor, asked: DrawerRef[] | undefined): DrawerRef[] | un
   return asked ? asked.filter((d) => open.some((o) => sameDrawer(o, d))) : open;
 }
 
-export const sqliteMemoryRecall: MemoryRecallRepository = {
+export const memoryRecall: MemoryRecallRepository = {
   async search(actor, query) {
     const { a, userId } = memoryUser(actor);
     const drawers = readDrawers(a, query.drawers);
@@ -139,13 +139,12 @@ export const sqliteMemoryRecall: MemoryRecallRepository = {
     const scope = drawers ? drawerSqlFilter(drawers) : { sql: '1 = 1', params: [] as string[] };
     const where = `user_id = ? AND ${scope.sql}`;
     const args = [userId, ...scope.params];
-    const db = getDatabase().getDb();
-    const total = (db.prepare(`SELECT COUNT(*) as n FROM memories WHERE ${where}`).get(...args) as any)?.n ?? 0;
+    const total = (await sql().read(one<{ n: number }>(`SELECT COUNT(*) as n FROM memories WHERE ${where}`, ...args)))?.n ?? 0;
     if (total === 0) return { total: 0, highImportance: 0, byType: [], topTags: [], oldest: null, newest: null };
-    const byType = db.prepare(`SELECT type, COUNT(*) as n FROM memories WHERE ${where} GROUP BY type ORDER BY n DESC`).all(...args) as Array<{ type: string; n: number }>;
-    const highImportance = (db.prepare(`SELECT COUNT(*) as n FROM memories WHERE ${where} AND importance_score >= 0.7`).get(...args) as any)?.n ?? 0;
-    const dates = db.prepare(`SELECT MIN(created_at) as oldest, MAX(created_at) as newest FROM memories WHERE ${where}`).get(...args) as any;
-    const tagRows = db.prepare(`SELECT tags FROM memories WHERE ${where} AND tags IS NOT NULL`).all(...args) as Array<{ tags: string }>;
+    const byType = await sql().read(all<{ type: string; n: number }>(`SELECT type, COUNT(*) as n FROM memories WHERE ${where} GROUP BY type ORDER BY n DESC, type`, ...args));
+    const highImportance = (await sql().read(one<{ n: number }>(`SELECT COUNT(*) as n FROM memories WHERE ${where} AND importance_score >= 0.7`, ...args)))?.n ?? 0;
+    const dates = await sql().read(one<{ oldest: string | null; newest: string | null }>(`SELECT MIN(created_at) as oldest, MAX(created_at) as newest FROM memories WHERE ${where}`, ...args));
+    const tagRows = await sql().read(all<{ tags: string }>(`SELECT tags FROM memories WHERE ${where} AND tags IS NOT NULL ORDER BY created_at, id`, ...args));
     const tagCounts: Record<string, number> = {};
     for (const row of tagRows) {
       try {
@@ -160,8 +159,8 @@ export const sqliteMemoryRecall: MemoryRecallRepository = {
     const { a, userId } = memoryUser(actor);
     const drawers = readDrawers(a, undefined);
     const storage = getMemoryStorage();
-    const all: Memory[] = drawers ? storage.getByDrawers(userId, drawers) : await storage.getByUser(userId);
-    return all.sort((x, y) => (y.importanceScore ?? 0.5) - (x.importanceScore ?? 0.5) || y.createdAt.getTime() - x.createdAt.getTime());
+    const rows: Memory[] = drawers ? await storage.getByDrawers(userId, drawers) : await storage.getByUser(userId);
+    return rows.sort((x, y) => (y.importanceScore ?? 0.5) - (x.importanceScore ?? 0.5) || y.createdAt.getTime() - x.createdAt.getTime());
   },
 
   async saveDerived(actor, memory) {
@@ -190,7 +189,7 @@ export const sqliteMemoryRecall: MemoryRecallRepository = {
 
   async setImportanceScore(actor, memoryId, score) {
     const { userId } = memberUser(actor);
-    if (!getMemoryStorage().getOwned(userId, memoryId)) throw new ScopeError(404, NOT_FOUND);
+    if (!(await getMemoryStorage().getOwned(userId, memoryId))) throw new ScopeError(404, NOT_FOUND);
     return MemoryTiersService.updateImportanceScore(memoryId, score);
   },
 
@@ -204,3 +203,4 @@ export const sqliteMemoryRecall: MemoryRecallRepository = {
     return MemoryTiersService.getConsolidationLog(limit);
   },
 };
+
