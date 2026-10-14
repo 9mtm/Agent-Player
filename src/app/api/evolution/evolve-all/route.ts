@@ -28,7 +28,7 @@ export async function POST() {
             headers: { 'Content-Type': 'application/json' },
         });
         const data = await res.json();
-        return NextResponse.json(data);
+        return NextResponse.json(data, { status: res.status }); // keep the backend status (FU-03)
     } catch {
         return NextResponse.json({ error: 'Backend unavailable' }, { status: 502 });
     }

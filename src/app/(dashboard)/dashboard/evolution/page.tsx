@@ -17,6 +17,7 @@ import {
     ChevronRight
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { evolutionPath } from '@/lib/evolution/evolution-requests';
 
 interface AgentOverview {
     id: string;
@@ -51,7 +52,7 @@ export default function EvolutionPage() {
             const agentOverviews: AgentOverview[] = await Promise.all(
                 agentsData.agents.map(async (agent: any) => {
                     try {
-                        const statusRes = await fetch(`/api/evolution/${agent.id}/status`);
+                        const statusRes = await fetch(evolutionPath(String(agent.id), 'status'));
                         if (!statusRes.ok) {
                             return {
                                 id: agent.id,
@@ -249,7 +250,7 @@ export default function EvolutionPage() {
                     <Card
                         key={agent.id}
                         className="hover:border-gray-400 transition-colors cursor-pointer"
-                        onClick={() => router.push(`/dashboard/agents/${agent.id}/evolution`)}
+                        onClick={() => router.push(`/dashboard/agents/${encodeURIComponent(agent.id)}/evolution`)}
                     >
                         <CardHeader>
                             <CardTitle className="flex items-center gap-2">

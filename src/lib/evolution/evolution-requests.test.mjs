@@ -90,6 +90,9 @@ test('notices: 403 owner only, rollback 409 codes, 404, fallbacks', () => {
         assert.equal(evolutionNotice(a, 403, 'forbidden'), 'Owner only', a);
         assert.equal(evolutionNotice(a, 401), 'Sign in again.', a);
         assert.equal(evolutionNotice(a, 502), 'Backend unavailable', a);
+        // FU-03: the backend 500 body is generic; the notice is the fixed fallback.
+        assert.match(evolutionNotice(a, 500, 'internal_error'), /^Failed to /, a);
+        assert.equal(evolutionNotice(a, 500, 'internal_error'), evolutionNotice(a, 500), a);
     }
     assert.match(evolutionNotice('rollback', 409, 'stale'), /changed after this evolution/);
     assert.match(evolutionNotice('rollback', 409, 'rollback_unsupported'), /Only prompt and PERSONALITY\.md/);
