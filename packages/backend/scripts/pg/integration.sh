@@ -7,7 +7,9 @@
 # test/pg-credentials.integration.test.mjs and (B2.2b-3)
 # test/pg-agents-tasks.integration.test.mjs and (B2.2b-4)
 # test/pg-memory.integration.test.mjs and (B2.2c part 1)
-# test/pg-platform.integration.test.mjs against it, then always drops it.
+# test/pg-platform.integration.test.mjs and (B2.2c part 2)
+# test/pg-routes.integration.test.mjs and test/pg-boot.integration.test.mjs
+# against it, then always drops it.
 #
 # Usage: scripts/pg/integration.sh [report-dir]
 # Touches only the database named below on 127.0.0.1, as the current OS user.
@@ -60,5 +62,9 @@ test "${PIPESTATUS[0]}" -eq 0
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-memory.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-memory-output.txt"
 test "${PIPESTATUS[0]}" -eq 0
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-platform.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-platform-output.txt"
+test "${PIPESTATUS[0]}" -eq 0
+AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-routes.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-routes-output.txt"
+test "${PIPESTATUS[0]}" -eq 0
+AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-boot.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-boot-output.txt"
 test "${PIPESTATUS[0]}" -eq 0
 echo "reports in $OUT_DIR"
