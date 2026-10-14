@@ -118,13 +118,19 @@ export class CredentialVault {
     return this.db.dialect === 'postgres';
   }
 
-  /** "now" in a comparison with a text timestamp column (stored as ISO strings). */
+  /**
+   * "now" in a comparison with a text timestamp column (stored as ISO
+   * strings, `2026-10-14T12:00:00.000Z`). On SQLite both sides go through
+   * julianday(): a text comparison with datetime('now')
+   * (`2026-10-14 12:00:00`) is wrong within the expiry day ('T' sorts above
+   * ' '). PostgreSQL compares real timestamps.
+   */
   private get now(): string {
-    return this.pg ? 'now()' : "datetime('now')";
+    return this.pg ? 'now()' : "julianday('now')";
   }
 
   private ts(column: string): string {
-    return this.pg ? `(${column})::timestamptz` : column;
+    return this.pg ? `(${column})::timestamptz` : `julianday(${column})`;
   }
 
   /** SQLite LIKE ignores ASCII case; PostgreSQL needs ILIKE for the same match. */
@@ -407,22 +413,25 @@ export class CredentialVault {
   }
 
   /**
-   * Re-encrypt all credentials with new key
+   * Re-encrypt all credentials with the current (newest active) data key.
+   * FU-05: the key is taken once, before the loop, so every row is written
+   * with the same new key id; each row is decrypted with the key its
+   * envelope names (old keys stay readable by id).
    */
   async reEncryptAll(): Promise<number> {
     if (!this.rows) throw new Error('Vault not initialized');
 
     const credentials = await this.query({ includeExpired: true });
+    const { keyId, key } = await this.keyManager.getCurrentKey();
     let count = 0;
 
     for (const cred of credentials) {
       try {
-        // Decrypt with old key
+        // Decrypt with the key the envelope was written with
         const oldKey = await this.keyManager.getKey(cred.data.keyId);
         const decrypted = decrypt(cred.data, oldKey);
 
-        // Encrypt with new key
-        const { keyId, key } = await this.keyManager.getCurrentKey();
+        // Encrypt with the current key
         const newEncrypted = encrypt(decrypted, key, keyId);
 
         // Update in database
@@ -432,12 +441,15 @@ export class CredentialVault {
           cred.id
         );
 
+        this.keyManager.recordEncryption();
         count++;
       } catch (error) {
-        console.error(`[CredentialVault] Failed to re-encrypt ${cred.id}:`, error);
+        // Id and error kind only: never the envelope or key material.
+        console.error(`[CredentialVault] Failed to re-encrypt ${cred.id}:`, (error as Error)?.message ?? 'unknown error');
       }
     }
 
+    if (count > 0) await this.keyManager.updateKeyUsage(keyId);
     return count;
   }
 
@@ -449,7 +461,7 @@ export class CredentialVault {
 
     const t = this.table;
     const exp = this.ts('expires_at');
-    const inSevenDays = this.pg ? `now() + interval '7 days'` : `datetime('now', '+7 days')`;
+    const inSevenDays = this.pg ? `now() + interval '7 days'` : `julianday('now', '+7 days')`;
     return mapAll([
       this.db.one(`SELECT COUNT(*) as count FROM ${t}`),
       this.db.all(`SELECT type, COUNT(*) as count FROM ${t} GROUP BY type`),

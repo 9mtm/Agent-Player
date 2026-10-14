@@ -93,13 +93,20 @@ export class KeyManager {
     return this.rows;
   }
 
-  /** Where the dialects differ: "now" and a text timestamp as a time. */
+  /**
+   * Where the dialects differ: "now" and a text timestamp as a time.
+   * Timestamps are stored as ISO text (`2026-10-14T12:00:00.000Z`). On SQLite
+   * both sides go through julianday(): comparing that text with
+   * datetime('now') (`2026-10-14 12:00:00`) as strings is wrong within the
+   * expiry day ('T' sorts above ' '). julianday() also reads the older
+   * `YYYY-MM-DD HH:MM:SS` form. PostgreSQL compares real timestamps.
+   */
   private get now(): string {
-    return this.db.dialect === 'postgres' ? 'now()' : "datetime('now')";
+    return this.db.dialect === 'postgres' ? 'now()' : "julianday('now')";
   }
 
   private ts(column: string): string {
-    return this.db.dialect === 'postgres' ? `(${column})::timestamptz` : column;
+    return this.db.dialect === 'postgres' ? `(${column})::timestamptz` : `julianday(${column})`;
   }
 
   /**
@@ -249,14 +256,15 @@ export class KeyManager {
   }
 
   /**
-   * Get active data encryption key
+   * Get active data encryption key: the newest data key that is active and
+   * not expired (the one new ciphertext must use).
    */
   private getActiveDataKey(): Maybe<KeyEntry | null> {
     return mapMaybe(this.db.one(`
       SELECT * FROM ${this.table}
       WHERE type = 'data' AND active = 1
       AND (expires_at IS NULL OR ${this.ts('expires_at')} > ${this.now})
-      ORDER BY created_at DESC
+      ORDER BY created_at DESC, id DESC
       LIMIT 1
     `), (row: any) => (row ? this.rowToKeyEntry(row) : null));
   }
@@ -310,20 +318,23 @@ export class KeyManager {
   }
 
   /**
-   * Get the current active data key for encryption
+   * Get the current active data key for encryption.
+   *
+   * FU-05: always the key the key table names as active (newest active,
+   * unexpired data key); the cache only saves the unwrap of that key. Before,
+   * any cached key was returned, so right after a rotation (or once an old
+   * key was read for decryption) new ciphertext could still use an old,
+   * deactivated key.
    */
   async getCurrentKey(): Promise<{ keyId: string; key: Buffer }> {
-    // Check for cached key first
-    for (const [keyId, cached] of this.keyCache.entries()) {
-      if (cached.expiresAt > Date.now()) {
-        return { keyId, key: cached.key };
-      }
-    }
-
-    // Get active data key
     let keyEntry = await this.getActiveDataKey();
     if (!keyEntry) {
       keyEntry = await this.generateDataKey();
+    }
+
+    const cached = this.keyCache.get(keyEntry.id);
+    if (cached && cached.expiresAt > Date.now()) {
+      return { keyId: keyEntry.id, key: cached.key };
     }
 
     // Decrypt the key
@@ -408,6 +419,10 @@ export class KeyManager {
       throw err;
     }
 
+    // The deactivated keys leave the cache (wiped). They stay readable for
+    // decryption: getKey() loads any key by id, active or not.
+    this.evictCacheExcept(newKey.id);
+
     this.stats.lastKeyRotation = new Date();
     await this.updateStats();
 
@@ -437,6 +452,8 @@ export class KeyManager {
    */
   deactivateKey(keyId: string): Maybe<void> {
     return mapMaybe(this.db.run(`UPDATE ${this.table} SET active = 0 WHERE id = ?`, keyId), () => {
+      const cached = this.keyCache.get(keyId);
+      if (cached) secureWipe(cached.key);
       this.keyCache.delete(keyId);
       return this.updateStats();
     }) as Maybe<void>; // a promise returned inside mapMaybe() is flattened
@@ -502,6 +519,15 @@ export class KeyManager {
    */
   recordDecryption(): void {
     this.stats.totalDecryptions++;
+  }
+
+  /** Drop (and wipe) every cached key except `keepId`. */
+  private evictCacheExcept(keepId: string): void {
+    for (const [id, cached] of this.keyCache.entries()) {
+      if (id === keepId) continue;
+      secureWipe(cached.key);
+      this.keyCache.delete(id);
+    }
   }
 
   /**

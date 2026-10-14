@@ -24,7 +24,8 @@ import type { Credential, ICredentialStorage } from './types.js';
 import { sqliteRunner, type SqlRunner } from '../repositories/sql-runner.js';
 import { pgRunner } from '../repositories/pg/sql-runner.js';
 import { dbDriver, type DbDriver } from '../db/pg/config.js';
-import { withPgTransaction } from '../db/pg/pool.js';
+import { withPgTransaction, afterPgCommit } from '../db/pg/pool.js';
+import { randomBytes } from 'crypto';
 
 /**
  * Indexes of the credentials table (the table itself is in schema.sql).
@@ -180,13 +181,33 @@ ${CREDENTIALS_INDEXES_SQL}`);
       await withPgTransaction(async () => {
         await this.sql.run('DELETE FROM credentials WHERE id = ? OR (name = ? AND user_id = ?)', credential.id, credential.name, credential.userId || null);
         await this.sql.run(`INSERT ${insert}`, ...values);
+        // FU-05: the JSON backup follows committed state only. Inside a
+        // caller's transaction this runs after its COMMIT, never on rollback.
+        await afterPgCommit(() => this.backupFromCommittedRow(credential.id));
       });
     } else {
       await this.sql.run(`INSERT OR REPLACE ${insert}`, ...values);
+      await this.backupFromCommittedRow(credential.id);
     }
+  }
 
-    // Save to JSON file (backup)
-    await this.saveToFile(credential);
+  /**
+   * FU-05: rebuild the JSON backup of credential `id` from its committed row
+   * (ciphertext, IV and auth tag only), never from the caller's object. Runs
+   * after the write committed (PostgreSQL: afterPgCommit). On SQLite a
+   * better-sqlite3 transaction is synchronous and has ended by the time this
+   * runs; if the connection is still inside a transaction (a caller's raw
+   * BEGIN) the row is not committed yet, so no backup is written and the
+   * file keeps the last committed state (the next save rewrites it).
+   */
+  private async backupFromCommittedRow(id: string): Promise<void> {
+    if (this.sql.dialect === 'sqlite' && getDatabase().getDb().inTransaction) {
+      console.warn('[Credentials] Backup not written: the credential write is not committed yet');
+      return;
+    }
+    const row = await this.sql.one('SELECT * FROM credentials WHERE id = ?', id);
+    if (!row) return; // not committed (or deleted since): nothing to back up
+    await this.saveToFile(this.rowToCredential(row));
   }
 
   /**
@@ -271,13 +292,19 @@ ${CREDENTIALS_INDEXES_SQL}`);
     // Delete from database
     await this.sql.run('DELETE FROM credentials WHERE id = ?', id);
 
-    // Delete JSON file
-    const filePath = this.getFilePath(credential);
-    try {
-      await fs.unlink(filePath);
-    } catch (err) {
-      // File might not exist, ignore
-    }
+    // Delete the JSON file once the delete is committed (FU-05): a rolled-back
+    // delete keeps its backup.
+    const removeBackup = async () => {
+      if (this.sql.dialect === 'sqlite' && getDatabase().getDb().inTransaction) return;
+      if (await this.sql.one('SELECT id FROM credentials WHERE id = ?', id)) return; // still there
+      try {
+        await fs.unlink(this.getFilePath(credential));
+      } catch (err) {
+        // File might not exist, ignore
+      }
+    };
+    if (this.sql.dialect === 'postgres') await afterPgCommit(removeBackup);
+    else await removeBackup();
   }
 
   /**
@@ -314,8 +341,8 @@ ${CREDENTIALS_INDEXES_SQL}`);
     const filePath = this.getFilePath(credential);
     const dir = path.dirname(filePath);
 
-    // Create directory if needed
-    await fs.mkdir(dir, { recursive: true });
+    // Create directory if needed (owner only)
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 
     // Save as JSON (encrypted data only, not plaintext)
     const data = {
@@ -336,7 +363,18 @@ ${CREDENTIALS_INDEXES_SQL}`);
       lastUsed: credential.lastUsed?.toISOString()
     };
 
-    await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
+    // FU-05: atomic write. A temp file in the same directory (mode 0600,
+    // created exclusively), then rename over the backup: a reader sees the
+    // old file or the new one, never a partial write.
+    const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
+    try {
+      await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+      await fs.chmod(tmpPath, 0o600);
+      await fs.rename(tmpPath, filePath);
+    } catch (err) {
+      await fs.rm(tmpPath, { force: true }).catch(() => undefined);
+      throw err;
+    }
   }
 
   /**

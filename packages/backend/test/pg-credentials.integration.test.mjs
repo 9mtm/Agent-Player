@@ -10,7 +10,7 @@
 // vault_keys and audit_logs.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -250,17 +250,62 @@ test('credentials update in a transaction: a later failure rolls the change back
   assert.equal(rowAfter.description, null);
   assert.equal(await m.manager.credentialManagerFor('postgres').getValue(c.id), before);
 
+  // FU-05: the JSON backup follows the commit: the rolled-back update left the old ciphertext.
+  const backupFile = join(dir, '.agent-player', 'credentials', u.owner.id, `tx-${run}.json`);
+  const backup = () => JSON.parse(readFileSync(backupFile, 'utf8'));
+  assert.equal(backup().encryptedValue, rowBefore.encrypted_value);
+  assert.equal(backup().iv, rowBefore.iv);
+  assert.equal(statSync(backupFile).mode & 0o777, 0o600);
+  assert.deepEqual(readdirSync(join(dir, '.agent-player', 'credentials', u.owner.id)).filter((f) => f.endsWith('.tmp')), []);
+
+  // Inside a transaction that commits, the backup is written after COMMIT only.
+  let seenInside;
+  await m.repos.withPgActorTransaction(A.owner, async (a) => {
+    await silent(() => m.pgCredentials.update(a, c.id, { value: keep(secret('tx-commit')) }));
+    seenInside = backup().encryptedValue;
+  });
+  assert.equal(seenInside, rowBefore.encrypted_value, 'not written before COMMIT');
+  const committed = await one('SELECT encrypted_value FROM credentials WHERE id = ?', c.id);
+  assert.notEqual(committed.encrypted_value, rowBefore.encrypted_value);
+  assert.equal(backup().encryptedValue, committed.encrypted_value, 'written after COMMIT');
+  assert.equal(statSync(backupFile).mode & 0o777, 0o600);
+  // Back to the first value (committed), for the checks below.
+  await silent(() => m.manager.credentialManagerFor('postgres').update(c.id, { value: before }));
+
   // storage.save is itself one transaction: a failing INSERT keeps the old row.
   const storage = m.storage.credentialStorageFor('postgres');
   const cur = await storage.get(c.id);
+  const backupBeforeFail = readFileSync(backupFile, 'utf8');
   await assert.rejects(storage.save({ ...cur, name: null }));
   assert.ok(await one('SELECT id FROM credentials WHERE id = ?', c.id), 'DELETE rolled back with the failed INSERT');
   assert.equal(await m.manager.credentialManagerFor('postgres').getValue(c.id), before);
+  assert.equal(readFileSync(backupFile, 'utf8'), backupBeforeFail, 'a failed save never touches the backup');
 
   // INSERT OR REPLACE semantics as on SQLite: a new id with the same (name, user) replaces the old row.
   await silent(() => storage.save({ ...cur, id: `${c.id}-replaced` }));
   assert.equal(await one('SELECT id FROM credentials WHERE id = ?', c.id), undefined);
   assert.equal((await one('SELECT COUNT(*) AS n FROM credentials WHERE name = ? AND user_id = ?', `tx-${run}`, u.owner.id)).n, 1);
+});
+
+test('afterPgCommit: runs after COMMIT; dropped with a rolled-back transaction or savepoint', { skip }, async () => {
+  const ran = [];
+  await m.pool.afterPgCommit(() => ran.push('outside'));
+  assert.deepEqual(ran, ['outside'], 'outside a transaction: right away');
+  await m.pool.withPgTransaction(async () => {
+    await m.pool.afterPgCommit(() => ran.push('outer'));
+    await m.pool.withPgTransaction(async () => { await m.pool.afterPgCommit(() => ran.push('released')); });
+    await assert.rejects(m.pool.withPgTransaction(async () => {
+      await m.pool.afterPgCommit(() => ran.push('savepoint-rolled-back'));
+      throw new Error('inner boom');
+    }), /inner boom/);
+    assert.deepEqual(ran, ['outside'], 'nothing runs before COMMIT');
+  });
+  assert.deepEqual(ran, ['outside', 'outer', 'released']);
+  await assert.rejects(m.pool.withPgTransaction(async () => {
+    await m.pool.afterPgCommit(() => ran.push('rolled-back'));
+    throw new Error('outer boom');
+  }), /outer boom/);
+  assert.deepEqual(ran, ['outside', 'outer', 'released']);
 });
 
 test('key manager: metadata rows in vault_keys (master KDF config, wrapped data keys)', { skip }, async () => {
@@ -397,14 +442,35 @@ test('key rotation: one transaction; a failure keeps the old key active; old cip
   // Entries encrypted with the old key still decrypt (key looked up by id).
   assert.equal(typeof (await vault.retrieve(entry.id)).data.k, 'string');
 
-  // Re-encryption rewrites every entry; they still decrypt afterwards.
-  // (Which key it picks is getCurrentKey's cache rule, unchanged from SQLite:
-  // it returns any cached key, so the new key id is not asserted here.)
+  // FU-05: getCurrentKey names the new active key even with the old one cached.
+  assert.equal(JSON.parse((await one('SELECT encrypted_data FROM vault_credentials WHERE id = ?', entry.id)).encrypted_data).keyId, activeBefore[0]);
+  await km.getKey(activeBefore[0]);
+  assert.equal((await km.getCurrentKey()).keyId, fresh.id);
+
+  // Re-encryption moves every entry to the new key; they still decrypt afterwards.
   const beforeRe = (await one('SELECT encrypted_data FROM vault_credentials WHERE id = ?', entry.id)).encrypted_data;
   const n = await silent(() => vault.reEncryptAll());
-  assert.ok(n >= 1);
+  const rows = await all('SELECT id, encrypted_data FROM vault_credentials');
+  assert.equal(n, rows.length);
+  for (const r of rows) assert.equal(JSON.parse(r.encrypted_data).keyId, fresh.id, `row ${r.id} on the new key`);
   assert.notEqual((await one('SELECT encrypted_data FROM vault_credentials WHERE id = ?', entry.id)).encrypted_data, beforeRe);
   assert.equal(typeof (await vault.retrieve(entry.id)).data.k, 'string');
+});
+
+test('expiry within the same day: now+1h live, now-1h expired (vault and keys)', { skip }, async () => {
+  const H = 3_600_000;
+  const soon = await vault.store({ name: `day-soon-${run}`, type: 'api_key', data: { k: keep(secret('day-soon')) }, ownerId: `day-${run}`, ownerType: 'user', expiresAt: new Date(Date.now() + H) });
+  const gone = await vault.store({ name: `day-gone-${run}`, type: 'api_key', data: { k: keep(secret('day-gone')) }, ownerId: `day-${run}`, ownerType: 'user', expiresAt: new Date(Date.now() - H) });
+  assert.deepEqual((await vault.query({ ownerId: `day-${run}` })).map((c) => c.id), [soon.id]);
+  assert.equal((await vault.query({ ownerId: `day-${run}`, includeExpired: true })).length, 2);
+  assert.ok(gone.id);
+
+  const current = (await km.getCurrentKey()).keyId;
+  await m.pool.pgRun('UPDATE vault_keys SET expires_at = ? WHERE id = ?', new Date(Date.now() + H).toISOString(), current);
+  assert.equal((await km.getCurrentKey()).keyId, current);
+  await m.pool.pgRun('UPDATE vault_keys SET expires_at = ? WHERE id = ?', new Date(Date.now() - H).toISOString(), current);
+  assert.notEqual((await silent(() => km.getCurrentKey())).keyId, current, 'an expired key is never used for new ciphertext');
+  await silent(() => km.rotateKeys()); // back to exactly one active data key
 });
 
 test('no plaintext secret appears in any stored PostgreSQL row', { skip }, async () => {

@@ -113,6 +113,12 @@ interface TxFrame {
   shared: TxShared;
   /** Savepoint this frame runs in (null = the outer transaction). */
   savepoint: string | null;
+  /**
+   * afterPgCommit() callbacks registered in this frame. A released savepoint
+   * hands its list to the enclosing frame; a rolled-back one drops it; the
+   * outer transaction runs its list once COMMIT succeeded.
+   */
+  afterCommit: Array<() => unknown>;
 }
 
 const txStore = new AsyncLocalStorage<TxFrame>();
@@ -130,6 +136,33 @@ export function inPgTransaction(): boolean {
  */
 export function outsidePgTransaction<T>(fn: () => T): T {
   return txStore.exit(fn);
+}
+
+/**
+ * Run `fn` once the work so far is committed: right away outside a
+ * transaction, otherwise after the outermost COMMIT succeeds (never when the
+ * transaction, or the savepoint `fn` was registered in, rolls back). For side
+ * effects outside the database that must follow committed state only (FU-05:
+ * credential JSON backups). `fn` runs outside the transaction; an error it
+ * throws is logged and does not undo the commit.
+ */
+export async function afterPgCommit(fn: () => unknown): Promise<void> {
+  const f = txStore.getStore();
+  if (f && !f.shared.closed) {
+    f.afterCommit.push(fn);
+    return;
+  }
+  await runAfterCommit([fn]);
+}
+
+async function runAfterCommit(hooks: Array<() => unknown>): Promise<void> {
+  for (const hook of hooks) {
+    try {
+      await txStore.exit(hook);
+    } catch (err) {
+      console.error('[pg] after-commit action failed:', (err as Error)?.message ?? 'unknown error');
+    }
+  }
 }
 
 type Queryable = Pick<pg.Pool, 'query'> | Pick<pg.PoolClient, 'query'>;
@@ -209,8 +242,10 @@ async function inSavepoint<T>(outer: TxFrame, fn: () => T | Promise<T>): Promise
   try {
     await sq(`SAVEPOINT ${name}`);
     try {
-      const out = await txStore.run({ shared: s, savepoint: name }, fn);
+      const frame: TxFrame = { shared: s, savepoint: name, afterCommit: [] };
+      const out = await txStore.run(frame, fn);
       await sq(`RELEASE SAVEPOINT ${name}`);
+      outer.afterCommit.push(...frame.afterCommit);
       return out;
     } catch (err) {
       try {
@@ -236,10 +271,12 @@ export async function withPgTransaction<T>(fn: () => T | Promise<T>): Promise<Aw
 
   const client = await (await getPgPool()).connect();
   const shared: TxShared = { client, stack: [], seq: 0, closed: false };
+  const root: TxFrame = { shared, savepoint: null, afterCommit: [] };
   let discard = false;
+  let out: Awaited<T>;
   try {
     await client.query('BEGIN');
-    const out = await txStore.run({ shared, savepoint: null }, fn);
+    out = await txStore.run(root, fn);
     // Closed BEFORE COMMIT is queued: work still running from fn (not awaited)
     // is refused from here on. Queries queued earlier run first (the client
     // runs them in order), so nothing lands on the client after release.
@@ -250,7 +287,6 @@ export async function withPgTransaction<T>(fn: () => T | Promise<T>): Promise<Aw
     if (done.command !== 'COMMIT') {
       throw new PgTransactionError('transaction was aborted by an earlier error and has been rolled back');
     }
-    return out;
   } catch (err) {
     shared.closed = true; // as above, before ROLLBACK is queued
     // Also after a failed BEGIN/COMMIT (then ROLLBACK is a harmless no-op).
@@ -264,4 +300,7 @@ export async function withPgTransaction<T>(fn: () => T | Promise<T>): Promise<Aw
     shared.closed = true;
     client.release(discard ? true : undefined);
   }
+  // Committed: run the after-commit actions (the client is already released).
+  await runAfterCommit(root.afterCommit);
+  return out;
 }
