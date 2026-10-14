@@ -12,9 +12,20 @@
  *  1. Add column to notification_settings (migration)
  *  2. Add dispatcher function here
  *  3. Call it in notify() when enabled
+ *
+ * B2.2c: notifications, notification_settings and notification_schedules are
+ * on the process driver (SQL steps). A notification is inserted with
+ * RETURNING (one statement: the row returned is the row written, also with
+ * concurrent writers). A due schedule is claimed with a conditional UPDATE
+ * on its next_fire_at, in the same transaction as the notifications it
+ * creates, so several processes never fire the same schedule twice and a
+ * failed insert leaves the schedule due. External channels are dispatched
+ * after the commit.
  */
 
-import { getDatabase } from '../db/index.js';
+import type { Dialect } from '../db/pg/dialect.js';
+import { all, dialect, one, run, sql, type Step } from '../repositories/sql-steps.js';
+import { forUpdate } from '../db/pg/dialect.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -125,34 +136,33 @@ function isDndActive(settings: NotificationSettings): boolean {
 
 // ── Settings CRUD ─────────────────────────────────────────────────────────────
 
-export function getNotificationSettings(userId: string): NotificationSettings {
-  const db = getDatabase();
-  const row = db.prepare(
-    'SELECT * FROM notification_settings WHERE user_id = ?'
-  ).get(userId);
+/** A bound ISO time compared with a DATETIME (SQLite text) / timestamptz column. */
+function tsArg(d: Dialect): string {
+  return d === 'postgres' ? '(?)::timestamptz' : '?';
+}
 
+function* settingsStep(userId: string): Step<NotificationSettings> {
+  let row = yield* one('SELECT * FROM notification_settings WHERE user_id = ?', userId);
   if (!row) {
-    // Auto-create defaults
-    db.prepare(`
-      INSERT INTO notification_settings (user_id) VALUES (?)
-    `).run(userId);
-    return getNotificationSettings(userId);
+    // Auto-create defaults (a concurrent creator wins the unique user_id; read again).
+    yield* run('INSERT INTO notification_settings (user_id) VALUES (?) ON CONFLICT (user_id) DO NOTHING', userId);
+    row = yield* one('SELECT * FROM notification_settings WHERE user_id = ?', userId);
   }
   return rowToSettings(row);
 }
 
-export function saveNotificationSettings(
-  userId: string,
-  updates: Partial<Omit<NotificationSettings, 'userId'>>
-): NotificationSettings {
-  const db = getDatabase();
+export function getNotificationSettings(userId: string): Promise<NotificationSettings> {
+  return sql().tx(() => settingsStep(userId));
+}
+
+function* saveSettingsStep(userId: string, updates: Partial<Omit<NotificationSettings, 'userId'>>): Step<NotificationSettings> {
   // Ensure row exists
-  getNotificationSettings(userId);
+  yield* settingsStep(userId);
 
   const fields: string[] = [];
-  const vals: any[] = [];
+  const vals: Array<string | number | null> = [];
 
-  const col = (key: string, val: any) => { fields.push(`${key} = ?`); vals.push(val); };
+  const col = (key: string, val: any) => { fields.push(`${key} = ?`); vals.push(val ?? null); };
 
   if (updates.channelInApp !== undefined)    col('channel_in_app',      updates.channelInApp ? 1 : 0);
   if (updates.channelEmail !== undefined)    col('channel_email',       updates.channelEmail ? 1 : 0);
@@ -176,22 +186,39 @@ export function saveNotificationSettings(
   if (fields.length > 0) {
     fields.push('updated_at = CURRENT_TIMESTAMP');
     vals.push(userId);
-    db.prepare(
-      `UPDATE notification_settings SET ${fields.join(', ')} WHERE user_id = ?`
-    ).run(...vals);
+    yield* run(`UPDATE notification_settings SET ${fields.join(', ')} WHERE user_id = ?`, ...vals);
   }
 
-  return getNotificationSettings(userId);
+  return yield* settingsStep(userId);
+}
+
+export function saveNotificationSettings(
+  userId: string,
+  updates: Partial<Omit<NotificationSettings, 'userId'>>
+): Promise<NotificationSettings> {
+  return sql().tx(() => saveSettingsStep(userId, updates));
 }
 
 // ── Core notify() ─────────────────────────────────────────────────────────────
 
-/**
- * Create a notification and dispatch to all enabled channels.
- * Always stores in DB (in_app). Respects DND for external channels.
- */
-export function notify(input: CreateNotificationInput): Notification {
-  const db = getDatabase();
+function rowToNotification(created: any): Notification {
+  return {
+    id: created.id,
+    userId: created.user_id,
+    title: created.title,
+    body: created.body,
+    type: created.type,
+    channel: created.channel,
+    isRead: !!created.is_read,
+    actionUrl: created.action_url,
+    meta: created.meta,
+    source: created.source || 'system',
+    createdAt: created.created_at,
+  };
+}
+
+/** Insert one notification and return its row (SQL step). */
+function* insertNotificationStep(input: CreateNotificationInput): Step<any> {
   const {
     userId,
     title,
@@ -202,29 +229,17 @@ export function notify(input: CreateNotificationInput): Notification {
     meta,
     source = 'system',
   } = input;
-
-  // Insert into DB
-  db.prepare(`
+  return yield* one(`
     INSERT INTO notifications (user_id, title, body, type, channel, action_url, meta, source)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    userId,
-    title,
-    body,
-    type,
-    channel,
-    actionUrl ?? null,
-    meta ? JSON.stringify(meta) : null,
-    source
-  );
+    RETURNING *
+  `, userId, title, body, type, channel, actionUrl ?? null, meta ? JSON.stringify(meta) : null, source);
+}
 
-  const created = db.prepare(
-    'SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 1'
-  ).get(userId) as any;
-
-  // Dispatch to external channels if user settings allow
+/** Forward to the user's external channels (after the notification is stored). */
+async function dispatchExternal(userId: string, title: string, body: string): Promise<void> {
   try {
-    const settings = getNotificationSettings(userId);
+    const settings = await getNotificationSettings(userId);
     const dnd = isDndActive(settings);
 
     if (!dnd) {
@@ -241,20 +256,130 @@ export function notify(input: CreateNotificationInput): Notification {
   } catch {
     // Non-fatal — in-app notification already saved
   }
+}
 
-  return {
-    id: created.id,
-    userId: created.user_id,
-    title: created.title,
-    body: created.body,
-    type: created.type,
-    channel: created.channel,
-    isRead: !!created.is_read,
-    actionUrl: created.action_url,
-    meta: created.meta,
-    source: created.source || 'system',
-    createdAt: created.created_at,
-  };
+/**
+ * Create a notification and dispatch to all enabled channels.
+ * Always stores in DB (in_app). Respects DND for external channels.
+ */
+export async function notify(input: CreateNotificationInput): Promise<Notification> {
+  const created = await sql().read(insertNotificationStep(input));
+  await dispatchExternal(input.userId, input.title, input.body ?? '');
+  return rowToNotification(created);
+}
+
+// ── Notifications list / read / delete (routes) ──────────────────────────────
+
+export interface ListNotificationsOptions { unread?: boolean; source?: string; limit: number; offset: number }
+
+export function listNotifications(userId: string, opts: ListNotificationsOptions): Promise<{ rows: any[]; unreadCount: number }> {
+  return sql().read((function* () {
+    let q = 'SELECT * FROM notifications WHERE user_id = ?';
+    const params: Array<string | number> = [userId];
+    if (opts.unread) { q += ' AND is_read = 0'; }
+    if (opts.source) { q += ' AND source = ?'; params.push(opts.source); }
+    q += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+    params.push(opts.limit, opts.offset);
+    const rows = yield* all(q, ...params);
+    const unread = yield* one<{ c: number }>('SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND is_read = 0', userId);
+    return { rows, unreadCount: unread?.c ?? 0 };
+  })());
+}
+
+export async function markNotificationRead(userId: string, id: string): Promise<void> {
+  await sql().read(run('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?', id, userId));
+}
+
+export async function markAllNotificationsRead(userId: string): Promise<void> {
+  await sql().read(run('UPDATE notifications SET is_read = 1 WHERE user_id = ?', userId));
+}
+
+export async function deleteNotification(userId: string, id: string): Promise<void> {
+  await sql().read(run('DELETE FROM notifications WHERE id = ? AND user_id = ?', id, userId));
+}
+
+export async function deleteReadNotifications(userId: string): Promise<void> {
+  await sql().read(run('DELETE FROM notifications WHERE user_id = ? AND is_read = 1', userId));
+}
+
+/** Counts per type of the notifications an extension (source) created (extension SDK). */
+export async function notificationStatsBySource(source: string): Promise<{ total: number; unread: number; byType: Record<string, number> }> {
+  const stats = await sql().read(all<{ type: string; count: number; unread_count: number | null }>(`
+    SELECT
+      type,
+      COUNT(*) as count,
+      SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) as unread_count
+    FROM notifications
+    WHERE source = ?
+    GROUP BY type
+  `, source));
+  const byType: Record<string, number> = {};
+  let total = 0;
+  let unread = 0;
+  for (const row of stats) {
+    byType[row.type] = row.count;
+    total += row.count;
+    unread += Number(row.unread_count || 0);
+  }
+  return { total, unread, byType };
+}
+
+// ── Schedules (routes, create_reminder tool) ─────────────────────────────────
+
+export interface ScheduleInput {
+  id?: string;
+  userId: string;
+  title: string;
+  body: string;
+  type: string;
+  scheduleType: string;
+  scheduleTime: string;
+  scheduleDays: string | null;
+  scheduleDate: string | null;
+  channels: string;
+  nextFireAt: string | null;
+}
+
+/** Insert a schedule and return its row (RETURNING: the row just written). */
+export function createSchedule(input: ScheduleInput): Promise<any> {
+  const cols = ['user_id', 'title', 'body', 'type', 'schedule_type', 'schedule_time', 'schedule_days', 'schedule_date', 'channels', 'next_fire_at'];
+  const vals: Array<string | null> = [input.userId, input.title, input.body, input.type, input.scheduleType, input.scheduleTime,
+    input.scheduleDays, input.scheduleDate, input.channels, input.nextFireAt];
+  if (input.id) { cols.unshift('id'); vals.unshift(input.id); }
+  return sql().read(one(`
+    INSERT INTO notification_schedules (${cols.join(', ')})
+    VALUES (${cols.map(() => '?').join(', ')})
+    RETURNING *
+  `, ...vals));
+}
+
+export function listSchedules(userId: string): Promise<any[]> {
+  return sql().read(all('SELECT * FROM notification_schedules WHERE user_id = ? ORDER BY created_at DESC', userId));
+}
+
+/**
+ * Change a schedule (one transaction: the row is locked, `change` computes
+ * the SET list from it). null when the user has no such schedule.
+ */
+export function updateSchedule(
+  userId: string,
+  id: string,
+  change: (existing: any) => { fields: string[]; vals: Array<string | number | null> },
+): Promise<any | null> {
+  return sql().tx(() => (function* () {
+    const d = yield* dialect();
+    const existing = yield* one(`SELECT * FROM notification_schedules WHERE id = ? AND user_id = ?${forUpdate(d)}`, id, userId);
+    if (!existing) return null;
+    const { fields, vals } = change(existing);
+    if (fields.length > 0) {
+      yield* run(`UPDATE notification_schedules SET ${fields.join(', ')} WHERE id = ?`, ...vals, id);
+    }
+    return yield* one('SELECT * FROM notification_schedules WHERE id = ?', id);
+  })());
+}
+
+export async function deleteSchedule(userId: string, id: string): Promise<void> {
+  await sql().read(run('DELETE FROM notification_schedules WHERE id = ? AND user_id = ?', id, userId));
 }
 
 // ── Channel Dispatchers ────────────────────────────────────────────────────────
@@ -354,49 +479,55 @@ export function computeNextFire(
   return candidate;
 }
 
-/** Called by the cron runner — fires any overdue schedules */
-export function processScheduledNotifications(): void {
-  const db = getDatabase();
-  const now = new Date().toISOString();
+/**
+ * Fire one due schedule (one transaction): claim it with a conditional
+ * UPDATE on the next_fire_at that was read (another process that already
+ * fired it moved next_fire_at, so this claim changes nothing), then insert
+ * its notifications. Returns the notifications created (none when another
+ * process had it).
+ */
+function* fireScheduleStep(sched: any, now: Date): Step<any[]> {
+  const d = yield* dialect();
+  const next = computeNextFire(sched.schedule_type, sched.schedule_time, sched.schedule_days, sched.schedule_date, now);
+  const done = sched.schedule_type === 'once' || !next;
+  const claimed = done
+    // One-time or exhausted — deactivate
+    ? yield* run(`UPDATE notification_schedules SET is_active = 0, last_fired_at = CURRENT_TIMESTAMP
+                  WHERE id = ? AND is_active = 1 AND next_fire_at = ${tsArg(d)}`, sched.id, sched.next_fire_at)
+    : yield* run(`UPDATE notification_schedules SET last_fired_at = CURRENT_TIMESTAMP, next_fire_at = ?
+                  WHERE id = ? AND is_active = 1 AND next_fire_at = ${tsArg(d)}`, next!.toISOString(), sched.id, sched.next_fire_at);
+  if (claimed.changes !== 1) return [];
+  // Create the in-app notification
+  const channels: string[] = JSON.parse(sched.channels || '["in_app"]');
+  const created: any[] = [];
+  for (const ch of channels) {
+    created.push(yield* insertNotificationStep({
+      userId: sched.user_id,
+      title: sched.title,
+      body: sched.body,
+      type: sched.type,
+      channel: ch as NotificationChannel,
+    }));
+  }
+  return created;
+}
 
-  const due = db.prepare(`
-    SELECT * FROM notification_schedules
-    WHERE is_active = 1
-      AND next_fire_at IS NOT NULL
-      AND next_fire_at <= ?
-  `).all(now) as any[];
+/** Called by the cron runner — fires any overdue schedules */
+export async function processScheduledNotifications(): Promise<void> {
+  const runner = sql();
+  const now = new Date();
+  const due = await runner.read((function* () {
+    const d = yield* dialect();
+    return yield* all(`
+      SELECT * FROM notification_schedules
+      WHERE is_active = 1
+        AND next_fire_at IS NOT NULL
+        AND next_fire_at <= ${tsArg(d)}
+    `, now.toISOString());
+  })());
 
   for (const sched of due) {
-    // Create the in-app notification
-    const channels: string[] = JSON.parse(sched.channels || '["in_app"]');
-    for (const ch of channels) {
-      notify({
-        userId: sched.user_id,
-        title: sched.title,
-        body: sched.body,
-        type: sched.type,
-        channel: ch as NotificationChannel,
-      });
-    }
-
-    // Compute next fire time
-    const next = computeNextFire(
-      sched.schedule_type,
-      sched.schedule_time,
-      sched.schedule_days,
-      sched.schedule_date,
-      new Date()
-    );
-
-    if (sched.schedule_type === 'once' || !next) {
-      // One-time or exhausted — deactivate
-      db.prepare(
-        'UPDATE notification_schedules SET is_active = 0, last_fired_at = CURRENT_TIMESTAMP WHERE id = ?'
-      ).run(sched.id);
-    } else {
-      db.prepare(
-        'UPDATE notification_schedules SET last_fired_at = CURRENT_TIMESTAMP, next_fire_at = ? WHERE id = ?'
-      ).run(next.toISOString(), sched.id);
-    }
+    const created = await runner.tx(() => fireScheduleStep(sched, new Date()));
+    for (const n of created) await dispatchExternal(n.user_id, n.title, n.body ?? '');
   }
 }

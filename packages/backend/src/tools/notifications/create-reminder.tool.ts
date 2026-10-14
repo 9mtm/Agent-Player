@@ -12,7 +12,7 @@
  */
 
 import type { Tool, ToolResult } from '../types.js';
-import { getDatabase } from '../../db/index.js';
+import { createSchedule } from '../../services/notification-service.js';
 import { randomUUID } from 'crypto';
 
 export const createReminderTool: Tool = {
@@ -170,28 +170,22 @@ export const createReminderTool: Tool = {
         }
       }
 
-      const db = getDatabase();
       const id = randomUUID();
 
-      db.prepare(`
-        INSERT INTO notification_schedules (
-          id, user_id, title, body, type, schedule_type, schedule_time,
-          schedule_date, schedule_days, channels, is_active, next_fire_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+      // B2.2c: on the process driver (services/notification-service.ts)
+      await createSchedule({
         id,
-        user_id,
+        userId: user_id,
         title,
         body,
-        'reminder',
-        schedule_type,
-        schedule_time,
-        schedule_date || null,
-        schedule_days ? JSON.stringify(schedule_days) : null,
-        JSON.stringify(channels),
-        1, // is_active
-        nextFireAt.toISOString()
-      );
+        type: 'reminder',
+        scheduleType: schedule_type,
+        scheduleTime: schedule_time,
+        scheduleDate: schedule_date || null,
+        scheduleDays: schedule_days ? JSON.stringify(schedule_days) : null,
+        channels: JSON.stringify(channels),
+        nextFireAt: nextFireAt.toISOString(),
+      });
 
       const scheduleInfo = schedule_type === 'once'
         ? `on ${schedule_date} at ${schedule_time}`

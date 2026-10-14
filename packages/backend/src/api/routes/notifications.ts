@@ -1,11 +1,19 @@
 import type { FastifyInstance } from 'fastify';
-import { getDatabase } from '../../db/index.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
 import {
   notify,
   getNotificationSettings,
   saveNotificationSettings,
   computeNextFire,
+  listNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+  deleteNotification,
+  deleteReadNotifications,
+  listSchedules,
+  createSchedule,
+  updateSchedule,
+  deleteSchedule,
 } from '../../services/notification-service.js';
 
 // SECURITY: Use centralized JWT verification from auth/jwt.ts
@@ -60,20 +68,12 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     const userId = getUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const db = getDatabase();
     const { unread, limit = '50', offset = '0', source } = request.query as any;
 
-    let sql = 'SELECT * FROM notifications WHERE user_id = ?';
-    const params: any[] = [userId];
-    if (unread === '1') { sql += ' AND is_read = 0'; }
-    if (source) { sql += ' AND source = ?'; params.push(source); }
-    sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(limit), parseInt(offset));
-
-    const rows = db.prepare(sql).all(...params) as any[];
-    const unreadCount = (db.prepare(
-      'SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND is_read = 0'
-    ).get(userId) as any).c;
+    // B2.2c: on the process driver (services/notification-service.ts)
+    const { rows, unreadCount } = await listNotifications(userId, {
+      unread: unread === '1', source: source || undefined, limit: parseInt(limit), offset: parseInt(offset),
+    });
 
     return reply.send({
       success: true,
@@ -90,7 +90,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     const { title, body, type, channel, actionUrl, meta, source } = request.body;
     if (!title) return reply.status(400).send({ error: 'title is required' });
 
-    const notif = notify({ userId, title, body, type, channel, actionUrl, meta, source });
+    const notif = await notify({ userId, title, body, type, channel, actionUrl, meta, source });
     return reply.status(201).send({ success: true, notification: notif });
   });
 
@@ -99,10 +99,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     const userId = getUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const db = getDatabase();
-    db.prepare(
-      'UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?'
-    ).run(request.params.id, userId);
+    await markNotificationRead(userId, request.params.id);
 
     return reply.send({ success: true });
   });
@@ -112,10 +109,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     const userId = getUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const db = getDatabase();
-    db.prepare(
-      'UPDATE notifications SET is_read = 1 WHERE user_id = ?'
-    ).run(userId);
+    await markAllNotificationsRead(userId);
 
     return reply.send({ success: true });
   });
@@ -125,10 +119,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     const userId = getUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const db = getDatabase();
-    db.prepare(
-      'DELETE FROM notifications WHERE id = ? AND user_id = ?'
-    ).run(request.params.id, userId);
+    await deleteNotification(userId, request.params.id);
 
     return reply.send({ success: true });
   });
@@ -138,10 +129,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     const userId = getUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const db = getDatabase();
-    db.prepare(
-      'DELETE FROM notifications WHERE user_id = ? AND is_read = 1'
-    ).run(userId);
+    await deleteReadNotifications(userId);
 
     return reply.send({ success: true });
   });
@@ -153,7 +141,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     const userId = getUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const settings = getNotificationSettings(userId);
+    const settings = await getNotificationSettings(userId);
     return reply.send({ success: true, settings });
   });
 
@@ -162,7 +150,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     const userId = getUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const settings = saveNotificationSettings(userId, request.body);
+    const settings = await saveNotificationSettings(userId, request.body);
     return reply.send({ success: true, settings });
   });
 
@@ -173,10 +161,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     const userId = getUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const db = getDatabase();
-    const rows = db.prepare(
-      'SELECT * FROM notification_schedules WHERE user_id = ? ORDER BY created_at DESC'
-    ).all(userId) as any[];
+    const rows = await listSchedules(userId);
 
     return reply.send({ success: true, schedules: rows.map(rowToSchedule) });
   });
@@ -202,22 +187,14 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
       scheduleDate || null
     );
 
-    const db = getDatabase();
-    db.prepare(`
-      INSERT INTO notification_schedules
-        (user_id, title, body, type, schedule_type, schedule_time, schedule_days, schedule_date, channels, next_fire_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    // RETURNING: the row just written (no "newest row of this user" race)
+    const created = await createSchedule({
       userId, title, body, type, scheduleType, scheduleTime,
-      scheduleDays ? JSON.stringify(scheduleDays) : null,
-      scheduleDate || null,
-      JSON.stringify(channels),
-      nextFire ? nextFire.toISOString() : null
-    );
-
-    const created = db.prepare(
-      'SELECT * FROM notification_schedules WHERE user_id = ? ORDER BY created_at DESC LIMIT 1'
-    ).get(userId) as any;
+      scheduleDays: scheduleDays ? JSON.stringify(scheduleDays) : null,
+      scheduleDate: scheduleDate || null,
+      channels: JSON.stringify(channels),
+      nextFireAt: nextFire ? nextFire.toISOString() : null,
+    });
 
     return reply.status(201).send({ success: true, schedule: rowToSchedule(created) });
   });
@@ -228,52 +205,40 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
     const { id } = request.params;
-    const db = getDatabase();
-    const existing = db.prepare(
-      'SELECT * FROM notification_schedules WHERE id = ? AND user_id = ?'
-    ).get(id, userId) as any;
-    if (!existing) return reply.status(404).send({ error: 'Schedule not found' });
-
     const {
       title, body, type, scheduleType, scheduleTime, scheduleDays, scheduleDate,
       channels, isActive,
     } = request.body;
 
-    const fields: string[] = [];
-    const vals: any[] = [];
-    const set = (k: string, v: any) => { fields.push(`${k} = ?`); vals.push(v); };
+    // One transaction: the schedule row is locked while the change is computed from it.
+    const updated = await updateSchedule(userId, id, (existing) => {
+      const fields: string[] = [];
+      const vals: any[] = [];
+      const set = (k: string, v: any) => { fields.push(`${k} = ?`); vals.push(v ?? null); };
 
-    if (title !== undefined)        set('title', title);
-    if (body !== undefined)         set('body', body);
-    if (type !== undefined)         set('type', type);
-    if (isActive !== undefined)     set('is_active', isActive ? 1 : 0);
-    if (scheduleType !== undefined) set('schedule_type', scheduleType);
-    if (scheduleTime !== undefined) set('schedule_time', scheduleTime);
-    if (scheduleDays !== undefined) set('schedule_days', JSON.stringify(scheduleDays));
-    if (scheduleDate !== undefined) set('schedule_date', scheduleDate);
-    if (channels !== undefined)     set('channels', JSON.stringify(channels));
+      if (title !== undefined)        set('title', title);
+      if (body !== undefined)         set('body', body);
+      if (type !== undefined)         set('type', type);
+      if (isActive !== undefined)     set('is_active', isActive ? 1 : 0);
+      if (scheduleType !== undefined) set('schedule_type', scheduleType);
+      if (scheduleTime !== undefined) set('schedule_time', scheduleTime);
+      if (scheduleDays !== undefined) set('schedule_days', JSON.stringify(scheduleDays));
+      if (scheduleDate !== undefined) set('schedule_date', scheduleDate);
+      if (channels !== undefined)     set('channels', JSON.stringify(channels));
 
-    // Recompute next_fire_at if timing changed
-    if (scheduleType || scheduleTime || scheduleDays || scheduleDate) {
-      const next = computeNextFire(
-        scheduleType || existing.schedule_type,
-        scheduleTime || existing.schedule_time,
-        scheduleDays ? JSON.stringify(scheduleDays) : existing.schedule_days,
-        scheduleDate || existing.schedule_date
-      );
-      set('next_fire_at', next ? next.toISOString() : null);
-    }
-
-    if (fields.length > 0) {
-      vals.push(id);
-      db.prepare(
-        `UPDATE notification_schedules SET ${fields.join(', ')} WHERE id = ?`
-      ).run(...vals);
-    }
-
-    const updated = db.prepare(
-      'SELECT * FROM notification_schedules WHERE id = ?'
-    ).get(id) as any;
+      // Recompute next_fire_at if timing changed
+      if (scheduleType || scheduleTime || scheduleDays || scheduleDate) {
+        const next = computeNextFire(
+          scheduleType || existing.schedule_type,
+          scheduleTime || existing.schedule_time,
+          scheduleDays ? JSON.stringify(scheduleDays) : existing.schedule_days,
+          scheduleDate || existing.schedule_date
+        );
+        set('next_fire_at', next ? next.toISOString() : null);
+      }
+      return { fields, vals };
+    });
+    if (!updated) return reply.status(404).send({ error: 'Schedule not found' });
 
     return reply.send({ success: true, schedule: rowToSchedule(updated) });
   });
@@ -283,10 +248,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     const userId = getUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const db = getDatabase();
-    db.prepare(
-      'DELETE FROM notification_schedules WHERE id = ? AND user_id = ?'
-    ).run(request.params.id, userId);
+    await deleteSchedule(userId, request.params.id);
 
     return reply.send({ success: true });
   });

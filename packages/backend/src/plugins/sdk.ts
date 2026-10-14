@@ -597,7 +597,7 @@ export function createExtensionApi(
         const { notify } = await import('../services/notification-service.js');
 
         // Auto-tag with extensionId as source
-        const result = notify({
+        const result = await notify({
           ...notification,
           source: extensionId,
         });
@@ -618,25 +618,9 @@ export function createExtensionApi(
         unread: number;
         byType: Record<string, number>;
       }> {
-        const stats = db.prepare(`
-          SELECT
-            type,
-            COUNT(*) as count,
-            SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) as unread_count
-          FROM notifications
-          WHERE source = ?
-          GROUP BY type
-        `).all(extensionId) as any[];
-
-        const byType: Record<string, number> = {};
-        let total = 0;
-        let unread = 0;
-
-        stats.forEach(row => {
-          byType[row.type] = row.count;
-          total += row.count;
-          unread += row.unread_count || 0;
-        });
+        // B2.2c: on the process driver (services/notification-service.ts)
+        const { notificationStatsBySource } = await import('../services/notification-service.js');
+        const { total, unread, byType } = await notificationStatsBySource(extensionId);
 
         return { total, unread, byType };
       },

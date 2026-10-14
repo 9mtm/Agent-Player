@@ -225,7 +225,7 @@ export async function initializeBackend(fastify: FastifyInstance): Promise<Start
 
     // Scheduled notifications — check every minute
     setInterval(() => {
-      try { processScheduledNotifications(); } catch { /* non-fatal */ }
+      processScheduledNotifications().catch(() => { /* non-fatal */ });
     }, 60_000);
 
     // Initialize Calendar Sync Scheduler
