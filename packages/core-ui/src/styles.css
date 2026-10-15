@@ -824,3 +824,109 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 @media (max-width: 640px) { .app-shell .composer-keys { display:none; } .app-shell .chat-column { padding-inline:14px; } }
 
 .app-shell .ghost-action.strong { color:var(--accent); font-weight:500; }
+
+/* ---- Agent card and team (AGENT-CARD-01) ---- */
+.app-shell .chip { display:inline-flex; align-items:center; gap:3px; margin-inline-start:4px; padding:0 6px; min-block-size:18px; border-radius:3px; font-size:10.5px; font-weight:500; color:var(--text-2); background:color-mix(in srgb,var(--text) 6%,transparent); white-space:nowrap; vertical-align:middle; }
+.app-shell .chip.accent { color:var(--accent); background:color-mix(in srgb,var(--accent) 12%,transparent); }
+.app-shell .seg { display:inline-flex; gap:2px; padding:2px; border-radius:5px; background:color-mix(in srgb,var(--text) 5%,transparent); justify-self:start; }
+.app-shell :is(.page-column,.page-ui) .seg button { min-block-size:26px; padding:0 12px; border-radius:3.5px; background:transparent; box-shadow:none; color:var(--text-2); font-weight:500; }
+.app-shell :is(.page-column,.page-ui) .seg button[aria-selected="true"], .app-shell :is(.page-column,.page-ui) .seg button[aria-checked="true"] { background:var(--canvas); color:var(--text); box-shadow:0 0 0 1px var(--stroke-3),0 1px 2px rgba(0,0,0,.06); }
+.app-shell :is(.page-column,.page-ui) .seg.small button { min-block-size:22px; padding:0 9px; font-size:11.5px; }
+.app-shell .team { display:grid; gap:14px; }
+.app-shell .team-tools { display:flex; align-items:center; gap:8px; }
+.app-shell :is(.page-column,.page-ui) .team-filter { flex:1; max-inline-size:20rem; block-size:28px; }
+.app-shell .team-group { display:grid; gap:6px; }
+.app-shell :is(.page-column,.page-ui) .team-group-title { margin:0; font-size:11px; font-weight:600; color:var(--text-3); text-transform:none; }
+.app-shell :is(.page-column,.page-ui) .team-card { align-items:flex-start; min-block-size:64px; transition:box-shadow .12s ease, background .12s ease; }
+.app-shell :is(.page-column,.page-ui) .team-card:hover:not(:disabled) { box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 45%,var(--stroke-3)); background:var(--surface); }
+.app-shell .team-role { font-size:11.5px; color:var(--text-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.app-shell .team-desc { font-size:11.5px; color:var(--text-2); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; white-space:normal; margin-block-start:2px; font-weight:400; }
+.app-shell .team-avatar.large { inline-size:40px; block-size:40px; font-size:17px; border-radius:6px; }
+.app-shell .agent-card { display:grid; gap:12px; }
+.app-shell .agent-card-head { display:grid; gap:10px; }
+.app-shell :is(.page-column,.page-ui) .back-link { min-block-size:22px; padding:0 4px; background:transparent; box-shadow:none; color:var(--text-3); font-size:12px; }
+.app-shell :is(.page-column,.page-ui) .back-link:hover:not(:disabled) { color:var(--text); background:transparent; }
+.app-shell .agent-card-id { display:flex; align-items:center; gap:12px; }
+.app-shell :is(.page-column,.page-ui) .agent-card-id h3 { margin:0; font-size:17px; font-weight:600; letter-spacing:-.01em; display:flex; align-items:center; gap:4px; }
+.app-shell :is(.page-column,.page-ui) .agent-card-sub { font-size:12px; color:var(--text-3); margin-block-start:2px; }
+.app-shell .card-section { display:grid; gap:12px; padding:14px 16px; border-radius:6px; background:var(--surface); box-shadow:inset 0 0 0 1px var(--stroke-3); }
+.app-shell .card-sub { display:grid; gap:8px; padding-block-start:12px; border-block-start:1px solid var(--stroke-3); }
+.app-shell :is(.page-column,.page-ui) .card-sub h4 { display:flex; align-items:center; gap:6px; }
+.app-shell .card-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.app-shell .card-actions.sticky { position:sticky; inset-block-end:0; padding-block:8px; background:var(--surface); }
+.app-shell :is(.page-column,.page-ui) .card-notice { justify-self:stretch; max-inline-size:none; padding:6px 10px; border-radius:4px; font-size:12px; color:color-mix(in srgb,var(--danger) 80%,var(--text)); background:color-mix(in srgb,var(--danger) 8%,transparent); }
+.app-shell :is(.page-column,.page-ui) .card-saved { display:flex; align-items:center; gap:6px; justify-self:start; font-size:12px; color:var(--text-2); }
+.app-shell .card-saved svg { color:var(--accent); }
+.app-shell .field-row { display:flex; align-items:flex-end; gap:8px; flex-wrap:wrap; }
+.app-shell .field-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(12rem,1fr)); gap:10px; }
+.app-shell .field-grid.three { grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); }
+.app-shell :is(.page-column,.page-ui) .field { max-inline-size:none; }
+.app-shell :is(.page-column,.page-ui) .field.inline { display:flex; align-items:center; gap:8px; }
+.app-shell :is(.page-column,.page-ui) .field.inline input[type="range"] { inline-size:8rem; padding:0; border:0; background:transparent; block-size:auto; }
+.app-shell .persona-presets { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.app-shell :is(.page-column,.page-ui) .chip-button { min-block-size:26px; padding:0 10px; border-radius:999px; font-size:12px; font-weight:500; }
+.app-shell :is(.page-column,.page-ui) .chip-button[aria-pressed="true"] { box-shadow:inset 0 0 0 1px var(--accent); color:var(--accent); background:color-mix(in srgb,var(--accent) 8%,transparent); }
+.app-shell .traits { display:grid; gap:6px; }
+.app-shell :is(.page-column,.page-ui) .trait { display:grid; grid-template-columns:7.5rem minmax(0,1fr) 2.5rem; align-items:center; gap:10px; max-inline-size:none; font-size:12px; color:var(--text-2); }
+.app-shell .trait-name { font-weight:500; color:var(--text); }
+.app-shell .trait-scale { display:grid; grid-template-columns:6.5rem minmax(0,1fr) 6.5rem; align-items:center; gap:8px; }
+.app-shell .trait-scale small { font-size:10.5px; color:var(--text-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.app-shell .trait-scale small:last-child { text-align:end; }
+.app-shell :is(.page-column,.page-ui) .trait input[type="range"] { inline-size:100%; block-size:auto; padding:0; border:0; background:transparent; accent-color:var(--accent); }
+.app-shell .trait-value { font-size:11.5px; font-variant-numeric:tabular-nums; text-align:end; color:var(--text-3); }
+.app-shell .trait-value[data-changed] { color:var(--accent); font-weight:600; }
+.app-shell :is(.page-column,.page-ui) .version-list { list-style:none; padding:0; display:grid; gap:2px; }
+.app-shell .version-list li { display:grid; grid-template-columns:2.5rem minmax(0,1fr) auto auto; align-items:center; gap:8px; padding:4px 6px; border-radius:3px; font-size:12px; }
+.app-shell .version-list li[data-current] { background:var(--row-active); }
+.app-shell .version-n { font-variant-numeric:tabular-nums; font-weight:600; color:var(--text-2); }
+.app-shell .version-what { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-2); }
+.app-shell .version-when { font-size:11px; color:var(--text-3); white-space:nowrap; }
+.app-shell :is(.page-column,.page-ui) .perm-table { inline-size:auto; min-inline-size:18rem; }
+.app-shell :is(.page-column,.page-ui) .perm-table td { text-align:center; }
+.app-shell .mode-list { display:grid; gap:4px; }
+.app-shell .mode-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:3px 0; font-size:12.5px; color:var(--text-2); max-inline-size:30rem; }
+.app-shell :is(.page-column,.page-ui) .tool-grid { list-style:none; padding:0; display:grid; grid-template-columns:repeat(auto-fill,minmax(16rem,1fr)); gap:4px 12px; }
+.app-shell .tool-check { display:flex !important; align-items:flex-start; gap:8px; padding:4px 0; font-size:12px; color:var(--text-2); }
+.app-shell .tool-check span { display:grid; gap:1px; }
+.app-shell .tool-check code { font:11.5px Menlo,Monaco,"SF Mono",monospace; color:var(--text); }
+.app-shell .tool-check small { font-size:11px; color:var(--text-3); }
+.app-shell .tool-check[data-off] { opacity:.55; }
+.app-shell .drawer-chips { display:flex; flex-wrap:wrap; align-items:center; gap:4px; }
+
+/* ---- Memory page (MEMORY-PAGE-02) ---- */
+.app-shell .memory-page { display:grid; gap:14px; max-inline-size:72rem; margin:0 auto; }
+.app-shell .memory-page-head { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+.app-shell .memory-layout { display:grid; grid-template-columns:13rem minmax(0,1fr); gap:20px; align-items:start; }
+.app-shell .drawer-nav { position:sticky; inset-block-start:0; display:grid; gap:2px; }
+.app-shell .drawer-group { display:grid; gap:1px; margin-block-start:6px; }
+.app-shell :is(.page-column,.page-ui) .drawer-row { inline-size:100%; justify-content:space-between; gap:8px; min-block-size:26px; padding:0 8px; border-radius:3px; background:transparent; box-shadow:none; font-weight:400; color:var(--text-2); }
+.app-shell :is(.page-column,.page-ui) .drawer-row.nested { padding-inline-start:16px; }
+.app-shell :is(.page-column,.page-ui) .drawer-row[aria-current] { background:var(--row-active); color:var(--text); box-shadow:inset 0 0 0 1px var(--stroke-3); }
+.app-shell .drawer-row .count { font-size:11px; font-variant-numeric:tabular-nums; color:var(--text-3); }
+.app-shell :is(.page-column,.page-ui) .drawer-kind { margin:4px 8px 0; font-size:10.5px; font-weight:600; color:var(--text-4); }
+.app-shell :is(.page-column,.page-ui) .drawer-empty { margin:0 16px; font-size:11px; color:var(--text-4); }
+.app-shell .memory-main { display:grid; gap:10px; min-inline-size:0; }
+.app-shell .memory-toolbar { display:grid; grid-template-columns:minmax(0,1fr) minmax(12rem,18rem) auto; align-items:end; gap:10px; }
+.app-shell :is(.page-column,.page-ui) .memory-title h3 { margin:0; font-size:15px; }
+.app-shell .memory-search { display:flex; align-items:center; gap:6px; padding-inline:8px; border-radius:4px; box-shadow:inset 0 0 0 1px var(--border); background:var(--canvas); color:var(--text-3); }
+.app-shell :is(.page-column,.page-ui) .memory-search input { border:0; padding:0; background:transparent; inline-size:100%; }
+.app-shell .memory-list { display:grid; gap:8px; }
+.app-shell .memory-card { display:grid; gap:6px; padding:10px 12px; border-radius:6px; background:var(--surface); box-shadow:inset 0 0 0 1px var(--stroke-3); }
+.app-shell .memory-card.adding { box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 45%,var(--stroke-3)); }
+.app-shell .memory-card-head { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--text-3); min-block-size:22px; }
+.app-shell .memory-card-head .chip { margin:0; }
+.app-shell .memory-drawer { color:var(--text-2); }
+.app-shell .memory-date { font-variant-numeric:tabular-nums; }
+.app-shell .memory-actions { margin-inline-start:auto; display:flex; gap:2px; opacity:.6; transition:opacity .12s ease; }
+.app-shell .memory-card:hover .memory-actions, .app-shell .memory-actions:focus-within { opacity:1; }
+.app-shell :is(.page-column,.page-ui) .memory-text { margin:0; font-size:13px; line-height:1.55; color:var(--text); white-space:pre-wrap; overflow-wrap:anywhere; unicode-bidi:plaintext; text-align:start; max-inline-size:none; }
+.app-shell :is(.page-column,.page-ui) .memory-edit { inline-size:100%; max-inline-size:none; }
+.app-shell .imp { display:inline-flex; gap:2px; }
+.app-shell .imp i { inline-size:6px; block-size:6px; border-radius:1.5px; background:color-mix(in srgb,var(--text) 14%,transparent); }
+.app-shell .imp i[data-on] { background:var(--accent); }
+.app-shell :is(.page-column,.page-ui) .memory-history { list-style:none; margin:4px 0 0; padding:6px 0 0 10px; border-inline-start:1px solid var(--stroke-3); display:grid; gap:6px; }
+.app-shell .memory-history li { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:11px; color:var(--text-3); }
+.app-shell .memory-history p { flex-basis:100%; margin:0; font-size:12px; color:var(--text-2); white-space:pre-wrap; }
+.app-shell .confirm-inline { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-2); }
+.app-shell :is(.page-column,.page-ui) .empty-note { padding:28px 16px; text-align:center; color:var(--text-3); font-size:12.5px; border-radius:6px; box-shadow:inset 0 0 0 1px dashed var(--stroke-3); background:color-mix(in srgb,var(--text) 2%,transparent); max-inline-size:none; display:grid; gap:4px; justify-items:center; }
+@media (max-width: 760px) { .app-shell .memory-layout { grid-template-columns:1fr; } .app-shell .drawer-nav { position:static; } .app-shell .memory-toolbar { grid-template-columns:1fr; } .app-shell :is(.page-column,.page-ui) .trait { grid-template-columns:1fr; } }

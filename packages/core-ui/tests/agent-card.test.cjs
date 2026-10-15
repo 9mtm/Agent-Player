@@ -1,0 +1,126 @@
+// AGENT-CARD-01 / MEMORY-PAGE-02: contract, controllers and views (offline mock).
+require('./load.cjs');
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const React = require('../node_modules/react');
+const { renderToStaticMarkup } = require('../node_modules/react-dom/server');
+const { SessionClient, allowedRequest } = require('../src/session.ts');
+const { allowed } = require('../scripts/application-server.cjs');
+const { createLoginMock } = require('../src/session-mock.ts');
+const { AgentCardController } = require('../src/agent-card.ts');
+const { CardView } = require('../src/AgentCard.tsx');
+const { MemoryItemsController } = require('../src/memory-items.ts');
+const { MemoryPage } = require('../src/MemoryViews.tsx');
+const { memoryItem, agentCardResponse } = require('../src/agent-card-contract.js');
+
+const MID = '00000000-0000-4000-8000-000000000001';
+async function client() {
+  const c = new SessionClient({ mock: createLoginMock() });
+  c.selectMode('mock'); await c.login('demo@example.invalid', 'mock-only');
+  return c;
+}
+
+test('contract (browser and bridge): profile, persona and memory requests are exact', () => {
+  for (const allow of [allowedRequest, allowed]) {
+    assert.equal(allow('PUT', '/api/agents/sample-main', { expectedVersion: 1, role: 'manager', department: 'sales', description: 'x' }), true);
+    assert.equal(allow('PUT', '/api/agents/sample-main', { expectedVersion: 1, role: 'boss' }), false);
+    assert.equal(allow('PUT', '/api/agents/sample-main', { expectedVersion: 1, department: 'Sales!' }), false);
+    assert.equal(allow('PUT', '/api/agents/sample-main', { expectedVersion: 1, model: 'x' }), false);
+    assert.equal(allow('PUT', '/api/agents/sample-main', { expectedVersion: 1 }), false);
+    assert.equal(allow('GET', '/api/agents/sample-main/personality/current'), true);
+    assert.equal(allow('POST', '/api/agents/sample-main/personality/versions', { preset: 'careful-auditor', note: 'why' }), true);
+    assert.equal(allow('POST', '/api/agents/sample-main/personality/versions', { preset: 'careful-auditor', traits: {} }), false);
+    assert.equal(allow('POST', '/api/agents/sample-main/personality/lock'), true);
+    assert.equal(allow('POST', '/api/agents/sample-main/personality/lock', {}), false);
+    assert.equal(allow('POST', '/api/agents/sample-main/personality/rollback', { version: 2 }), true);
+    assert.equal(allow('POST', '/api/agents/../x/personality/rollback', { version: 2 }), false);
+    assert.equal(allow('GET', '/api/memory'), true);
+    assert.equal(allow('GET', '/api/memory?userId=x'), false);
+    assert.equal(allow('POST', '/api/memory', { type: 'fact', content: 'x', importance: 7, drawer: { kind: 'project', key: 'launch' } }), true);
+    assert.equal(allow('POST', '/api/memory', { type: 'fact', content: 'x', drawer: { kind: 'project' } }), false);
+    assert.equal(allow('POST', '/api/memory', { type: 'secret', content: 'x' }), false);
+    assert.equal(allow('PUT', `/api/memory/${MID}`, { content: 'y' }), true);
+    assert.equal(allow('PUT', '/api/memory/not-a-uuid', { content: 'y' }), false);
+    assert.equal(allow('DELETE', `/api/memory/${MID}`), true);
+    assert.equal(allow('POST', `/api/memory/${MID}/forget`), true);
+    assert.equal(allow('POST', '/api/memory/consolidate', {}), false);
+    // Existing routes are unchanged.
+    assert.equal(allow('GET', '/api/memory/files/owner?agentId=main'), true);
+  }
+});
+
+test('memory projection drops embeddings and owner ids; errors never pass text', () => {
+  const m = memoryItem({ id: MID, type: 'fact', content: 'x', importanceScore: 0.8, embedding: [1, 2], userId: 'u1', drawer: { kind: 'owner' }, createdAt: 'c', memoryLayer: 'factual' });
+  assert.deepEqual(m, { id: MID, type: 'fact', content: 'x', importance: 8, drawer: { kind: 'owner' }, layer: 'factual', createdAt: 'c', tags: [] });
+  assert.equal(agentCardResponse('/api/memory', 500, { error: 'stack /Users/x' }), null);
+  assert.deepEqual(agentCardResponse('/api/agents/a/personality/versions', 409, { code: 'personality_locked', error: 'x' }), { code: 'personality_locked' });
+});
+
+test('agent card: profile, persona versions, lock, rollback and permissions', async t => {
+  const c = new AgentCardController(await client(), 'sample-main'); t.after(() => c.dispose());
+  await c.load();
+  assert.equal(c.getSnapshot().phase, 'ready');
+  assert.equal(c.getSnapshot().agent.name, 'Offline main');
+  c.editProfile({ role: 'manager', department: ' Sales ', description: 'Runs sales.' });
+  assert.equal(c.profileChanged(), true);
+  await c.saveProfile();
+  assert.equal(c.getSnapshot().agent.role, 'manager');
+  assert.equal(c.getSnapshot().agent.department, 'sales');
+  assert.equal(c.getSnapshot().saved, 'Profile saved.');
+
+  await c.openTab('persona');
+  c.applyPreset('careful-auditor');
+  assert.equal(c.personaChanged(), true);
+  await c.savePersona('More careful');
+  assert.equal(c.getSnapshot().persona.version, 2);
+  assert.equal(c.getSnapshot().persona.preset, 'careful-auditor');
+  assert.equal(c.getSnapshot().versions.length, 2);
+  c.setTrait('warmth', 90);
+  assert.equal(c.getSnapshot().personaDraft.preset, null, 'a moved slider makes it custom');
+  await c.lock(true);
+  assert.equal(c.getSnapshot().persona.locked, true);
+  let html = renderToStaticMarkup(React.createElement(CardView, { card: c, onBack: () => {} }));
+  assert.match(html, /Unlock persona/);
+  await c.lock(false);
+  await c.rollback(1);
+  assert.equal(c.getSnapshot().persona.preset, 'balanced-assistant');
+
+  await c.openTab('permissions');
+  c.toggleDrawer('people', 'read');
+  c.toggleTool('web_fetch');
+  assert.equal(c.permissionsChanged(), true);
+  await c.savePermissions();
+  assert.equal(c.getSnapshot().saved, 'Permissions saved.');
+
+  await c.openTab('memory');
+  html = renderToStaticMarkup(React.createElement(CardView, { card: c, onBack: () => {} }));
+  assert.match(html, /Can read:/);
+  assert.match(html, /memory-card/);
+});
+
+test('memory page: drawers, add to a project, edit, history and forget', async t => {
+  const cl = await client();
+  const m = new MemoryItemsController(cl); t.after(() => m.dispose());
+  await m.load();
+  assert.equal(m.getSnapshot().phase, 'ready');
+  const before = m.getSnapshot().items.length;
+  assert.ok(m.getSnapshot().drawers.some(d => d.kind === 'project' && d.key === 'launch'));
+  m.openDrawer('project:launch');
+  assert.equal(m.visible().length, 1);
+  m.startAdd();
+  assert.deepEqual(m.getSnapshot().adding.drawer, { kind: 'project', key: 'launch' });
+  m.editAdd({ content: 'Fictional: the launch page needs a pricing table.', type: 'context', importance: 8 });
+  await m.saveAdd();
+  assert.equal(m.getSnapshot().items.length, before + 1);
+  assert.equal(m.visible().length, 2);
+  const id = m.visible()[0].id;
+  m.startEdit(id); m.editDraft('Fictional: the launch page needs a pricing table and FAQ.'); await m.saveEdit();
+  assert.match(m.getSnapshot().items.find(x => x.id === id).content, /FAQ/);
+  await m.toggleHistory(id);
+  assert.equal(m.getSnapshot().history[id].length, 2);
+  m.setQuery('pricing'); assert.equal(m.visible().length, 1);
+  await m.forget(id);
+  assert.equal(m.getSnapshot().items.length, before);
+  const html = renderToStaticMarkup(React.createElement(MemoryPage, { client: cl }));
+  assert.match(html, /Agent files and reviews/);
+});

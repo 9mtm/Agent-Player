@@ -151,7 +151,16 @@ export function createAgentsMock() {
       }
       const id = request.path.slice('/api/agents/'.length);
       if (request.method === 'GET') return rows.has(id) ? { status: 200, body: { agent: { ...rows.get(id) } } } : { status: 404, body: null };
-      if (request.method === 'PUT') { const b = request.body as { name: string; expectedVersion: number }; return update(id, b.name, b.expectedVersion); }
+      if (request.method === 'PUT') {
+        const b = request.body as { name?: string; expectedVersion: number; role?: string | null; department?: string | null; description?: string };
+        if (b.name !== undefined) return update(id, b.name, b.expectedVersion);
+        const row = rows.get(id);
+        if (!row) return { status: 404, body: null };
+        if (b.expectedVersion !== row.version) return { status: 409, body: { code: 'version_conflict', currentVersion: row.version, agent: { ...row } } };
+        const next = { ...row, version: row.version + 1, ...(b.role !== undefined ? { role: b.role } : {}), ...(b.department !== undefined ? { department: b.department } : {}), ...(b.description !== undefined ? { description: b.description } : {}) } as typeof row;
+        rows.set(id, next);
+        return { status: 200, body: { agent: { ...next } } };
+      }
       return { status: 400, body: null };
     },
   };

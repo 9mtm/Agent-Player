@@ -3,17 +3,30 @@ import { createSuggestionAdapter, validatedDisplayName } from './naming';
 import type { NamingLanguage } from './naming';
 import type { SessionClient, WireResponse } from './session';
 
-export type PublicAgent = Readonly<{ id: string; version: number } & ({ name: string; nameUnavailable?: never } | { name?: never; nameUnavailable: true })>;
-export type AgentRequest = { method: 'GET'; path: string } | { method: 'PUT'; path: string; body: { name: string; expectedVersion: number } };
+export type AgentProfile = { role?: 'main' | 'manager' | 'specialist' | 'evaluator' | null; department?: string | null; description?: string; emoji?: string; isPrimary?: boolean };
+export type PublicAgent = Readonly<{ id: string; version: number } & AgentProfile & ({ name: string; nameUnavailable?: never } | { name?: never; nameUnavailable: true })>;
+const ROLES = ['main', 'manager', 'specialist', 'evaluator'];
+/** Profile fields shown on the team page and the agent card (all optional, bounded). */
+export function agentProfile(x: Record<string, unknown>): AgentProfile {
+  return {
+    ...(x.role === null || ROLES.includes(x.role as string) ? { role: x.role as AgentProfile['role'] } : {}),
+    ...(x.department === null || (typeof x.department === 'string' && /^[a-z0-9][a-z0-9 _-]{0,63}$/.test(x.department)) ? { department: x.department as string | null } : {}),
+    ...(typeof x.description === 'string' ? { description: x.description.slice(0, 1000) } : {}),
+    ...(typeof x.emoji === 'string' && [...x.emoji].length <= 4 ? { emoji: x.emoji } : {}),
+    ...(typeof x.isPrimary === 'boolean' ? { isPrimary: x.isPrimary } : {}),
+  };
+}
+export type AgentRequest = { method: 'GET'; path: string } | { method: 'PUT'; path: string; body: { name: string; expectedVersion: number } | { expectedVersion: number; role?: string | null; department?: string | null; description?: string } };
 const record = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
 import { validAgentId } from './agent-id.js';
 export { validAgentId } from './agent-id.js';
 export const validVersion = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) > 0;
 export function publicAgent(x: unknown): PublicAgent {
   if (!record(x) || !validAgentId(x.id) || !validVersion(x.version)) throw Error('Invalid agent response');
+  const profile = agentProfile(x);
   return Object.freeze(typeof x.name === 'string' && validatedDisplayName(x.name) === x.name && x.nameUnavailable !== true
-    ? { id: x.id, name: x.name, version: x.version }
-    : { id: x.id, version: x.version, nameUnavailable: true as const });
+    ? { id: x.id, name: x.name, version: x.version, ...profile }
+    : { id: x.id, version: x.version, nameUnavailable: true as const, ...profile });
 }
 export function agentResponse(path: string, response: WireResponse): WireResponse {
   if (path !== '/api/agents' && !/^\/api\/agents\/[^/]+$/.test(path) || path === '/api/agents/name-suggestion') return response;

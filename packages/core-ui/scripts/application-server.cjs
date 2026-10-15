@@ -1,6 +1,7 @@
 const { allowedPersonality, personalityRoute, personalityResponse } = require('../src/personality-contract.js');
 const { allowedHire, hireRoute, hireResponse } = require('../src/hire-contract.js');
 const { allowedBoard, boardRoute, boardResponse } = require('../src/board-contract.js');
+const { allowedAgentCard, cardRoute, agentCardResponse } = require('../src/agent-card-contract.js');
 const { allowedConversation, conversationPath, conversationRoute, conversationResponse, RunEventParser, RUN_STREAM_MS, RUN_IDLE_MS } = require('../src/conversation-contract.js');
 const { validDeviceToken, validLoginBody } = require('../src/login-contract.js');
 const { setupStatus } = require('../src/setup-status.js');
@@ -20,14 +21,22 @@ const { validAgentId: agentId } = require('../src/agent-id.js');
 const { retryAfterSeconds } = require('../src/retry-after.js');
 const version = x => Number.isSafeInteger(x) && x > 0;
 const name = x => typeof x === 'string' && x.length > 0 && [...x].length <= 60 && x.normalize('NFKC').replace(/\s+/g, ' ').trim() === x && !/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069]/u.test(x);
+const ROLES = ['main', 'manager', 'specialist', 'evaluator'];
+const profile = x => ({
+  ...(x.role === null || ROLES.includes(x.role) ? { role: x.role } : {}),
+  ...(x.department === null || (typeof x.department === 'string' && /^[a-z0-9][a-z0-9 _-]{0,63}$/.test(x.department)) ? { department: x.department } : {}),
+  ...(typeof x.description === 'string' ? { description: x.description.slice(0, 1000) } : {}),
+  ...(typeof x.emoji === 'string' && [...x.emoji].length <= 4 ? { emoji: x.emoji } : {}),
+  ...(typeof x.isPrimary === 'boolean' ? { isPrimary: x.isPrimary } : {}),
+});
 const agent = x => {
   if (!record(x) || !agentId(x.id) || !version(x.version)) throw Error();
   return name(x.name) && x.nameUnavailable !== true
-    ? { id: x.id, name: x.name, version: x.version }
-    : { id: x.id, version: x.version, nameUnavailable: true };
+    ? { id: x.id, name: x.name, version: x.version, ...profile(x) }
+    : { id: x.id, version: x.version, nameUnavailable: true, ...profile(x) };
 };
 function allowed(method, target, body) {
-  if (allowedPersonality(method, target, body) || allowedHire(method, target, body) || allowedBoard(method, target, body) || allowedConversation(method, target, body)) return true;
+  if (allowedPersonality(method, target, body) || allowedHire(method, target, body) || allowedBoard(method, target, body) || allowedConversation(method, target, body) || allowedAgentCard(method, target, body)) return true;
   const id = /^\/api\/agents\/([^/?#]+)$/.exec(target)?.[1];
   if (method === 'PUT') return agentId(id) && record(body) && Object.keys(body).length === 2 && Object.keys(body).every(k => k === 'name' || k === 'expectedVersion') && name(body.name) && version(body.expectedVersion);
   if (method === 'GET' && body === undefined && (target === '/api/agents' || agentId(id))) return true;
@@ -74,6 +83,7 @@ function project(target, status, body) {
   if (hireRoute(target, status)) return hireResponse(target, status, body);
   if (boardRoute(target)) return boardResponse(target, status, body);
   if (conversationRoute(target)) return conversationResponse(target, status, body);
+  if (cardRoute(target)) return agentCardResponse(target, status, body);
   if (target === '/api/agents' || (target.startsWith('/api/agents/') && target !== '/api/agents/name-suggestion')) {
     if (status === 200 && target === '/api/agents') {
       if (!Array.isArray(body?.agents) || body.agents.length > 10000) throw Error();
