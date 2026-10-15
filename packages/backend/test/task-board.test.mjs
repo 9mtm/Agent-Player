@@ -130,3 +130,33 @@ test('columns: add and rename; comments: add and list with counts', async () => 
   await refresh();
   assert.equal(board.cards.find((x) => x.id === card.id).comments, 1);
 });
+
+test('agents: list, comment on and move only their own cards; others look missing', async () => {
+  const tools = await import(join(backendDir, 'src/tools/index.ts'));
+  const { DEFAULT_AGENT_TOOLS } = await import(join(backendDir, 'src/tools/grants.ts'));
+  for (const t of ['board_my_cards', 'board_comment', 'board_move']) assert.ok(DEFAULT_AGENT_TOOLS.includes(t));
+  await refresh();
+  const mine = (await call('POST', `${B()}/cards`, { columnId: col('To do'), title: 'Agent card', agents: ['ag-1'], priority: 'high' })).json();
+  const other = (await call('POST', `${B()}/cards`, { columnId: col('To do'), title: 'Not yours', agents: ['ag-2'] })).json();
+  const registry = await tools.createAgentToolsRegistry({ workspaceDir: dir, agentId: 'ag-1', userId: 'bd-owner', sessionId: 's-board' });
+  const text = (r) => (r.content || []).map((c) => c.text).join('\n');
+  const quietRun = async (name, params) => { const s = { ...console }; console.log = () => {}; console.warn = () => {}; try { return await registry.execute(name, params); } finally { Object.assign(console, s); } };
+  const list = await quietRun('board_my_cards', {});
+  assert.match(text(list), /Agent card/); assert.doesNotMatch(text(list), /Not yours/);
+  assert.match(text(await quietRun('board_comment', { card_id: mine.id, comment: 'Started on it.' })), /Comment added \(1/);
+  assert.match(text(await quietRun('board_comment', { card_id: other.id, comment: 'Sneaky' })), /not one of your board cards/);
+  assert.match(text(await quietRun('board_move', { card_id: mine.id, column: 'in progress' })), /moved to "In progress"/);
+  assert.match(text(await quietRun('board_move', { card_id: mine.id, column: 'Nowhere' })), /No column named/);
+  assert.match(text(await quietRun('board_move', { card_id: mine.id, column: 'done' })), /Only the owner moves cards to "Done"/);
+  assert.match(text(await quietRun('board_move', { card_id: mine.id, column: board.columns.at(-1).name })), /Only the owner moves cards to/, 'nor into the last column');
+  assert.match(text(await quietRun('board_move', { card_id: other.id, column: 'Done' })), /not one of your board cards/);
+  const comments = (await call('GET', `${B()}/cards/${mine.id}/comments`)).json().comments;
+  assert.deepEqual(comments.map((c) => [c.authorKind, c.authorId, c.body]), [['agent', 'ag-1', 'Started on it.']]);
+  await refresh();
+  assert.equal(board.cards.find((c) => c.id === mine.id).columnId, col('In progress'));
+  assert.equal(board.cards.find((c) => c.id === other.id).columnId, col('To do'));
+  // Another owner's run of the same agent sees nothing.
+  const foreign = await tools.createAgentToolsRegistry({ workspaceDir: dir, agentId: 'ag-1', userId: 'bd-admin', sessionId: 's-x' });
+  const s = { ...console }; console.log = () => {};
+  try { assert.match(text(await foreign.execute('board_my_cards', {})), /no board cards/); } finally { Object.assign(console, s); }
+});

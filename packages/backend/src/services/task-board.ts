@@ -326,3 +326,75 @@ export function addComment(ownerId: string, boardId: string, cardId: string, bod
       .map((c) => ({ id: c.id, authorKind: c.author_kind, authorId: c.author_id, body: c.body, createdAt: c.created_at }));
   }, { immediate: true });
 }
+
+// ---------------------------------------------------------------------------
+// Agents on the board (BOARD-02): an agent works only on cards it is
+// assigned to, on its run user's boards. Comments are signed by the agent.
+// ---------------------------------------------------------------------------
+
+export interface AgentCard { id: string; boardId: string; title: string; description: string; column: string; priority: Priority; dueDate: string | null; departments: string[] }
+
+/** Cards the agent is assigned to (not archived), most urgent first, at most 50. */
+export function agentCards(ownerId: string, agentId: string): Promise<AgentCard[]> {
+  return sql().read((function* () {
+    const rows = yield* all<{ id: string; board_id: string; title: string; description: string; col: string; priority: Priority; due_date: string | null }>(`
+      SELECT c.id, c.board_id, c.title, c.description, col.name AS col, c.priority, c.due_date
+      FROM board_cards c
+      JOIN board_card_agents a ON a.card_id = c.id
+      JOIN boards b ON b.id = c.board_id
+      JOIN board_columns col ON col.id = c.column_id
+      WHERE a.agent_id = ? AND b.owner_id = ? AND c.archived = 0
+      ORDER BY CASE c.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, c.due_date IS NULL, c.due_date, c.created_at
+      LIMIT 50`, agentId, ownerId);
+    const out: AgentCard[] = [];
+    for (const r of rows) {
+      const deps = (yield* all<{ department: string }>('SELECT department FROM board_card_departments WHERE card_id = ? ORDER BY department', r.id)).map((d) => d.department);
+      out.push({ id: r.id, boardId: r.board_id, title: r.title, description: r.description.slice(0, 1000), column: r.col, priority: r.priority, dueDate: r.due_date, departments: deps });
+    }
+    return out;
+  })());
+}
+
+function* assignedCard(ownerId: string, agentId: string, cardId: unknown): Step<{ id: string; board_id: string; version: number }> {
+  if (typeof cardId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(cardId)) throw bad('cardId is required');
+  const card = yield* one<{ id: string; board_id: string; version: number }>(`
+    SELECT c.id, c.board_id, c.version FROM board_cards c
+    JOIN boards b ON b.id = c.board_id
+    JOIN board_card_agents a ON a.card_id = c.id AND a.agent_id = ?
+    WHERE c.id = ? AND b.owner_id = ? AND c.archived = 0`, agentId, cardId, ownerId);
+  // Not assigned looks the same as missing: an agent cannot probe other cards.
+  if (!card) throw notFound('Card');
+  return card;
+}
+
+/** The agent adds a comment to a card it is assigned to. */
+export function agentComment(ownerId: string, agentId: string, cardId: unknown, body: unknown): Promise<number> {
+  const textBody = text(body, 'comment', MAX_COMMENT, true);
+  return sql().tx(function* () {
+    const d = yield* dialect();
+    const card = yield* assignedCard(ownerId, agentId, cardId);
+    yield* run(`INSERT INTO board_card_comments (id, card_id, author_kind, author_id, body, created_at) VALUES (?, ?, 'agent', ?, ?, ${nowText(d)})`,
+      randomUUID(), card.id, agentId, textBody);
+    const n = yield* one<{ n: number }>('SELECT COUNT(*) AS n FROM board_card_comments WHERE card_id = ?', card.id);
+    return Number(n?.n ?? 0);
+  }, { immediate: true });
+}
+
+/** The agent moves a card it is assigned to into another column (by name, case-insensitive), at the end. Never into the last column. */
+export function agentMove(ownerId: string, agentId: string, cardId: unknown, columnName: unknown): Promise<{ column: string }> {
+  const wanted = line(columnName, 'column', 60).toLowerCase();
+  return sql().tx(function* () {
+    const d = yield* dialect();
+    const card = yield* assignedCard(ownerId, agentId, cardId);
+    const cols = yield* all<{ id: string; name: string }>('SELECT id, name FROM board_columns WHERE board_id = ? ORDER BY position', card.board_id);
+    const col = cols.find((c) => c.name.toLowerCase() === wanted);
+    if (!col) throw bad(`No column named "${wanted.slice(0, 60)}". Columns: ${cols.map((c) => c.name).join(', ')}`);
+    // Finishing is the owner's decision: an agent never moves a card into "Done" or the board's last column.
+    if (col.name.toLowerCase() === 'done' || col.id === cols[cols.length - 1].id) throw new BoardError(403, 'owner_only_column', `Only the owner moves cards to "${col.name}". Move it to the column before it when your work is ready.`);
+    const pos = yield* nextPosition(col.id);
+    const r = yield* run(`UPDATE board_cards SET column_id = ?, position = ?, version = version + 1, updated_at = ${nowText(d)} WHERE id = ? AND version = ?`,
+      col.id, pos, card.id, card.version);
+    if (r.changes !== 1) throw new BoardError(409, 'version_conflict', 'The card was changed meanwhile; try again.');
+    return { column: col.name };
+  }, { immediate: true });
+}
