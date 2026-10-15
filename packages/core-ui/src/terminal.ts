@@ -1,5 +1,6 @@
 import type { SessionClient } from './session';
-import type { TerminalFrame } from './terminal-contract.js';
+import type { TerminalFrame, TerminalPrefs } from './terminal-contract.js';
+import { DEFAULT_TERMINAL_PREFS, terminalPrefOk, terminalPrefs } from './terminal-contract.js';
 
 export type TerminalPhase = 'idle' | 'starting' | 'open' | 'exited' | 'off' | 'error';
 export type TerminalState = Readonly<{ phase: TerminalPhase; id: string | null; cwd: string; shell: string; message?: string; projectId: string | null }>;
@@ -26,6 +27,11 @@ export class TerminalController {
   constructor(private readonly client: SessionClient) {}
   getSnapshot = () => this.#state;
   subscribe = (fn: () => void) => { this.#listeners.add(fn); return () => { this.#listeners.delete(fn); }; };
+  #clearers = new Set<() => void>();
+  /** Screens listening for "clear". */
+  onClear(fn: () => void) { this.#clearers.add(fn); return () => { this.#clearers.delete(fn); }; }
+  /** Clears the visible screen and the replay buffer (the shell keeps running). */
+  clear() { this.#replay = ''; this.#clearers.forEach(fn => fn()); }
   /** Receives output; the buffered screen is replayed first. */
   onOutput(fn: (data: string) => void) { if (this.#replay) fn(this.#replay); this.#output.add(fn); return () => { this.#output.delete(fn); }; }
   private publish(p: Partial<TerminalState>) { if (this.#disposed) return; this.#state = Object.freeze({ ...this.#state, ...p }); this.#listeners.forEach(fn => fn()); }
@@ -101,5 +107,75 @@ export class TerminalController {
     this.publish({ phase: 'idle', id: null });
     if (id) await this.client.request({ method: 'DELETE', path: `/api/terminal/sessions/${id}` } as never).catch(() => null);
   }
-  dispose() { void this.close(); clearTimeout(this.#resizeTimer); this.#disposed = true; this.#listeners.clear(); this.#output.clear(); }
+  dispose() { void this.close(); clearTimeout(this.#resizeTimer); this.#disposed = true; this.#listeners.clear(); this.#output.clear(); this.#clearers.clear(); }
+}
+
+
+/** The terminal look, loaded from and saved to the server (per owner), applied at once. */
+export class TerminalPrefsController {
+  #prefs: Readonly<TerminalPrefs> = Object.freeze({ ...DEFAULT_TERMINAL_PREFS });
+  #listeners = new Set<() => void>();
+  #pending: Partial<TerminalPrefs> = {};
+  #timer: ReturnType<typeof setTimeout> | undefined;
+  #loaded = false;
+  constructor(private readonly client: SessionClient) {}
+  getSnapshot = () => this.#prefs;
+  subscribe = (fn: () => void) => { this.#listeners.add(fn); return () => { this.#listeners.delete(fn); }; };
+  private set(p: TerminalPrefs) { this.#prefs = Object.freeze(p); this.#listeners.forEach(fn => fn()); }
+  async load() {
+    if (this.#loaded) return; this.#loaded = true;
+    try {
+      const r = await this.client.request({ method: 'GET', path: '/api/terminal/prefs' } as never);
+      if (r.status === 200 && record(r.body)) this.set({ ...terminalPrefs(r.body.prefs), ...this.#pending });
+    } catch { /* defaults stay */ }
+  }
+  /** Changes settings now; saves them a moment later (several quick changes become one save). */
+  update(change: Partial<TerminalPrefs>) {
+    const ok = Object.fromEntries(Object.entries(change).filter(([k, v]) => terminalPrefOk(k, v))) as Partial<TerminalPrefs>;
+    if (!Object.keys(ok).length) return;
+    this.set({ ...this.#prefs, ...ok });
+    this.#pending = { ...this.#pending, ...ok };
+    clearTimeout(this.#timer);
+    this.#timer = setTimeout(() => void this.flush(), 400);
+  }
+  reset() { this.update({ ...DEFAULT_TERMINAL_PREFS }); }
+  async flush() {
+    const body = this.#pending; this.#pending = {};
+    if (!Object.keys(body).length) return;
+    try { await this.client.request({ method: 'PUT', path: '/api/terminal/prefs', body } as never); } catch { /* kept for this page */ }
+  }
+  dispose() { clearTimeout(this.#timer); void this.flush(); this.#listeners.clear(); }
+}
+
+export const MAX_TERMINAL_TABS = 4;
+export type TerminalTab = Readonly<{ key: string; n: number; terminal: TerminalController }>;
+export type TerminalTabsState = Readonly<{ tabs: readonly TerminalTab[]; active: string | null }>;
+
+/** Several shells side by side as tabs (the server allows four per owner). */
+export class TerminalTabs {
+  #state: TerminalTabsState = Object.freeze({ tabs: [], active: null });
+  #listeners = new Set<() => void>();
+  #n = 0;
+  constructor(private readonly client: SessionClient) {}
+  getSnapshot = () => this.#state;
+  subscribe = (fn: () => void) => { this.#listeners.add(fn); return () => { this.#listeners.delete(fn); }; };
+  private publish(p: Partial<TerminalTabsState>) { this.#state = Object.freeze({ ...this.#state, ...p }); this.#listeners.forEach(fn => fn()); }
+  /** Opens a new tab (its shell starts when its screen mounts). */
+  add() {
+    if (this.#state.tabs.length >= MAX_TERMINAL_TABS) return null;
+    const tab: TerminalTab = { key: `t${++this.#n}`, n: this.#n, terminal: new TerminalController(this.client) };
+    this.publish({ tabs: [...this.#state.tabs, tab], active: tab.key });
+    return tab;
+  }
+  select(key: string) { if (this.#state.tabs.some(t => t.key === key)) this.publish({ active: key }); }
+  /** Closes a tab and its shell. */
+  close(key: string) {
+    const i = this.#state.tabs.findIndex(t => t.key === key); if (i < 0) return;
+    this.#state.tabs[i].terminal.dispose();
+    const tabs = this.#state.tabs.filter(t => t.key !== key);
+    this.publish({ tabs, active: this.#state.active === key ? (tabs[Math.min(i, tabs.length - 1)]?.key ?? null) : this.#state.active });
+  }
+  /** A different project: every shell restarts in the new folder. */
+  closeAll() { for (const t of this.#state.tabs) t.terminal.dispose(); this.publish({ tabs: [], active: null }); }
+  dispose() { this.closeAll(); this.#listeners.clear(); }
 }

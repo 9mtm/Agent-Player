@@ -209,3 +209,17 @@ test('a chat project terminal opens in the project folder; unknown or foreign pr
   assert.equal((await call('POST', '/api/terminal/sessions', 'tm-owner', { projectId: '00000000-0000-4000-8000-000000000000' })).statusCode, 404);
   assert.equal((await call('POST', '/api/terminal/sessions', 'tm-owner', { projectId: '../etc' })).statusCode, 404);
 });
+
+test('terminal look: owner prefs saved and merged; unknown or out-of-range settings refused', async () => {
+  const first = (await call('GET', '/api/terminal/prefs', 'tm-owner')).json();
+  assert.equal(first.prefs.theme, 'dpro-night');
+  assert.equal((await call('GET', '/api/terminal/prefs', 'tm-user')).statusCode, 403);
+  const saved = await call('PUT', '/api/terminal/prefs', 'tm-owner', { theme: 'ocean', fontSize: 14, cursorStyle: 'bar' });
+  assert.equal(saved.statusCode, 200);
+  assert.deepEqual([saved.json().prefs.theme, saved.json().prefs.fontSize, saved.json().prefs.cursorStyle, saved.json().prefs.cursorBlink], ['ocean', 14, 'bar', true]);
+  assert.equal((await call('GET', '/api/terminal/prefs', 'tm-owner')).json().prefs.theme, 'ocean', 'kept across requests');
+  for (const bad of [{ theme: 'neon' }, { fontSize: 99 }, { shell: '/bin/sh' }, { fontFamily: 'Comic Sans' }]) {
+    assert.equal((await call('PUT', '/api/terminal/prefs', 'tm-owner', bad)).statusCode, 400, JSON.stringify(bad));
+  }
+  assert.equal((await call('PUT', '/api/terminal/prefs', 'tm-owner', { fontSize: 13 })).json().prefs.theme, 'ocean', 'a partial save keeps the rest');
+});

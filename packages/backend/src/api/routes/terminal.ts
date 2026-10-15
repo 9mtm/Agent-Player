@@ -18,7 +18,8 @@ import { actorOf } from '../../auth/auth-gate.js';
 import { actorOrReply, requireOwner } from '../../repositories/scope.js';
 import { logAudit } from '../../services/audit-logger.js';
 import { openSseStream } from '../../services/chat-sse.js';
-import { TerminalError, TerminalManager, terminalEnabled } from '../../terminal/manager.js';
+import { TerminalError, TerminalManager, terminalEnabled, terminalPrefs, DEFAULT_TERMINAL_PREFS } from '../../terminal/manager.js';
+import { getPref, setPref } from '../../repositories/user-prefs.js';
 import { checkFolder, findProject } from '../../repositories/chat-conversations.js';
 
 const SESSION_ID = /^[0-9a-f-]{36}$/;
@@ -79,6 +80,22 @@ export function terminalRoutesWith(manager: TerminalManager) {
       const owner = ownerOf(request, reply);
       if (!owner) return reply;
       return { enabled: terminalEnabled(), sessions: manager.list(owner) };
+    });
+
+    // The screen's look (TERM-PRO-01): saved per owner, merged over the defaults.
+    fastify.get('/api/terminal/prefs', { config }, async (request, reply) => {
+      const owner = ownerOf(request, reply);
+      if (!owner) return reply;
+      return { prefs: terminalPrefs(await getPref(owner, 'terminal')), defaults: DEFAULT_TERMINAL_PREFS };
+    });
+    fastify.put<{ Body: unknown }>('/api/terminal/prefs', { config }, async (request, reply) => {
+      const owner = ownerOf(request, reply);
+      if (!owner) return reply;
+      const merged = { ...(terminalPrefs(await getPref(owner, 'terminal')) ?? DEFAULT_TERMINAL_PREFS), ...(request.body && typeof request.body === 'object' && !Array.isArray(request.body) ? request.body as object : { bad: true }) };
+      const prefs = terminalPrefs(merged, true);
+      if (!prefs) return reply.code(400).send({ error: 'Unknown or out-of-range terminal setting', code: 'invalid' });
+      await setPref(owner, 'terminal', prefs);
+      return { prefs };
     });
 
     fastify.post<{ Body: { cols?: unknown; rows?: unknown; projectId?: unknown } }>('/api/terminal/sessions', { config }, async (request, reply) => {

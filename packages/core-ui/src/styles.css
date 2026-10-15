@@ -1060,14 +1060,63 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .tree-size { flex:none; font-size:10.5px; color:var(--text-3); }
 @media (max-width: 900px) { .app-shell .chat-layout[data-panel] { grid-template-columns:minmax(0,1fr); } .app-shell .chat-panel.chat-pane { display:flex; position:fixed; inset:48px 0 28px auto; inline-size:min(100%,32rem); z-index:5; box-shadow:0 0 0 1px var(--stroke-3); background:var(--canvas); } }
 
-/* Terminal pane */
-.app-shell { --terminal-bg:#141414; }
-.shell[data-theme="light"] .app-shell { --terminal-bg:#fbfbfa; }
-.app-shell .terminal-pane { background:var(--terminal-bg); }
-.app-shell .terminal-screen { flex:1; min-block-size:0; padding:6px 0 0 8px; }
+/* Terminal pane (TERM-PRO-01): the screen takes its theme's colors; chrome follows them. */
+.app-shell .terminal-pane { --tbg:var(--term-bg,#121417); --tfg:var(--term-fg,#dfe3ea); background:var(--tbg); color:var(--tfg); position:relative; }
+.app-shell .terminal-pane { --tline:color-mix(in srgb,var(--tfg) 12%,var(--tbg)); --tdim:color-mix(in srgb,var(--tfg) 55%,var(--tbg)); --thover:color-mix(in srgb,var(--tfg) 8%,var(--tbg)); }
+.app-shell .term-bar { display:flex; align-items:stretch; gap:6px; padding:0 6px; border-block-end:1px solid var(--tline); min-block-size:32px; }
+.app-shell .term-tabs { display:flex; align-items:stretch; gap:2px; min-inline-size:0; overflow-x:auto; scrollbar-width:none; flex:1; }
+.app-shell .term-tab { display:inline-flex; align-items:center; gap:2px; padding-inline:2px 4px; border-radius:6px 6px 0 0; color:var(--tdim); position:relative; flex:none; }
+.app-shell .term-tab[aria-selected="true"] { color:var(--tfg); background:var(--thover); }
+.app-shell .term-tab[aria-selected="true"]::after { content:""; position:absolute; inset-inline:6px; inset-block-end:0; block-size:2px; border-radius:2px; background:var(--accent); }
+.app-shell .term-tab-open { display:inline-flex; align-items:center; gap:6px; border:0; background:none; color:inherit; font:12px/1 ui-monospace,SFMono-Regular,Menlo,monospace; padding:0 6px; cursor:pointer; white-space:nowrap; }
+.app-shell .term-tab-dir { opacity:.65; }
+.app-shell .term-dot { inline-size:6px; block-size:6px; border-radius:50%; background:#3fb950; flex:none; }
+.app-shell .term-tab[data-phase="starting"] .term-dot { background:#d29922; }
+.app-shell .term-tab[data-phase="exited"] .term-dot, .app-shell .term-tab[data-phase="error"] .term-dot, .app-shell .term-tab[data-phase="off"] .term-dot { background:#8b949e; }
+.app-shell .term-tab-close { border:0; background:none; color:inherit; inline-size:18px; block-size:18px; border-radius:4px; display:inline-grid; place-items:center; opacity:0; cursor:pointer; }
+.app-shell .term-tab:hover .term-tab-close, .app-shell .term-tab[aria-selected="true"] .term-tab-close, .app-shell .term-tab-close:focus-visible { opacity:.8; }
+.app-shell .term-tab-close:hover { background:var(--tline); opacity:1; }
+.app-shell .term-actions { display:flex; align-items:center; gap:2px; flex:none; }
+.app-shell .term-tool { border:0; background:none; color:var(--tdim); inline-size:26px; block-size:26px; border-radius:6px; display:inline-grid; place-items:center; cursor:pointer; align-self:center; }
+.app-shell .term-tool:hover:not(:disabled), .app-shell .term-tool[aria-expanded="true"] { background:var(--thover); color:var(--tfg); }
+.app-shell .term-tool:disabled { opacity:.35; cursor:default; }
+.app-shell .term-tool:focus-visible, .app-shell .term-tab-open:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.app-shell .term-body { flex:1; min-block-size:0; position:relative; display:flex; }
+.app-shell .term-screen-wrap { flex:1; min-inline-size:0; display:flex; flex-direction:column; }
+.app-shell .term-screen-wrap[hidden] { display:none; }
+.app-shell .terminal-screen { flex:1; min-block-size:0; padding:8px 4px 4px 10px; }
 .app-shell .terminal-screen .xterm { block-size:100%; }
-.app-shell .terminal-screen .xterm-viewport { background:var(--terminal-bg) !important; }
-
+.app-shell .terminal-screen .xterm-viewport { background:var(--tbg) !important; scrollbar-width:thin; scrollbar-color:var(--tline) transparent; }
+.app-shell .term-note { margin:0; padding:8px 12px; font-size:12px; color:var(--tdim); border-block-end:1px solid var(--tline); }
+.app-shell .term-note.error { color:#f85149; }
+.app-shell .term-status { display:flex; align-items:center; gap:12px; padding:3px 10px; border-block-start:1px solid var(--tline); font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--tdim); white-space:nowrap; overflow:hidden; }
+.app-shell .term-status-item { display:inline-flex; align-items:center; gap:5px; overflow:hidden; text-overflow:ellipsis; }
+.app-shell .term-status-spacer { flex:1; }
+/* settings panel */
+.app-shell .term-settings { position:absolute; inset-block-start:36px; inset-inline-end:8px; z-index:4; inline-size:min(360px,calc(100% - 16px)); max-block-size:calc(100% - 48px); overflow:auto;
+  background:var(--canvas); color:var(--text); border:1px solid var(--stroke-3); border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,.28); padding:10px 12px 12px; font-size:12px; }
+.app-shell .term-settings-head { display:flex; align-items:center; justify-content:space-between; margin-block-end:8px; }
+.app-shell .term-settings .term-tool { color:var(--text-3); }
+.app-shell .term-themes { border:0; padding:0; margin:0 0 10px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+.app-shell .term-themes legend, .app-shell .term-grid > label { color:var(--text-3); font-size:11px; }
+.app-shell .term-themes legend { margin-block-end:4px; }
+.app-shell .term-theme { display:flex; flex-direction:column; align-items:flex-start; gap:6px; padding:7px 8px; border-radius:7px; border:1.5px solid transparent; box-shadow:inset 0 0 0 1px rgba(127,127,127,.25); cursor:pointer; font:inherit; text-align:start; }
+.app-shell .term-theme[aria-pressed="true"] { box-shadow:none; }
+.app-shell .term-theme-name { font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace; }
+.app-shell .term-theme-dots { display:flex; gap:3px; }
+.app-shell .term-theme-dots i { inline-size:9px; block-size:9px; border-radius:2px; display:block; }
+.app-shell .term-grid { display:grid; grid-template-columns:1fr; gap:8px; }
+.app-shell .term-grid > label { display:grid; grid-template-columns:96px 1fr auto; align-items:center; gap:8px; }
+.app-shell .term-grid select { font:inherit; font-size:12px; padding:3px 6px; border-radius:6px; background:var(--composer-fill); color:var(--text); border:1px solid var(--stroke-3); }
+.app-shell .term-grid input[type="range"] { accent-color:var(--accent); }
+.app-shell .term-grid output { font-variant-numeric:tabular-nums; color:var(--text); min-inline-size:3.2em; text-align:end; }
+.app-shell .term-stepper { display:inline-flex; align-items:center; gap:6px; }
+.app-shell .term-stepper button { inline-size:24px; block-size:22px; border-radius:6px; border:1px solid var(--stroke-3); background:var(--composer-fill); color:var(--text); cursor:pointer; }
+.app-shell .term-grid .term-check { grid-template-columns:auto 1fr; color:var(--text); }
+.app-shell .term-settings-foot { display:flex; justify-content:space-between; align-items:center; margin-block-start:10px; font-size:11px; }
+/* maximized: the terminal takes the whole chat area */
+.app-shell .chat-layout[data-max] { grid-template-columns:0 minmax(0,1fr); }
+.app-shell .chat-layout[data-max] > .chat-screen { visibility:hidden; overflow:hidden; }
 /* Microphone (dictation) */
 .app-shell .composer-mic { display:inline-flex; align-items:center; gap:4px; margin-inline-start:auto; }
 .app-shell .composer-mic + .composer-keys { margin-inline-start:8px; }

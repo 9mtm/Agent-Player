@@ -241,3 +241,31 @@ export class TerminalManager {
     s.idleTimer = null;
   }
 }
+
+/** The terminal screen's look, saved per owner (TERM-PRO-01). Unknown or bad fields fall back to the defaults. */
+export const TERMINAL_THEMES = ['dpro-night', 'dpro-day', 'graphite', 'midnight', 'ocean', 'forest', 'paper', 'contrast'] as const;
+export const TERMINAL_FONTS = ['system', 'sf-mono', 'menlo', 'monaco', 'jetbrains', 'fira', 'cascadia', 'courier'] as const;
+export const TERMINAL_CURSORS = ['block', 'bar', 'underline'] as const;
+export type TerminalPrefs = {
+  theme: (typeof TERMINAL_THEMES)[number]; fontFamily: (typeof TERMINAL_FONTS)[number]; fontSize: number; lineHeight: number; letterSpacing: number;
+  cursorStyle: (typeof TERMINAL_CURSORS)[number]; cursorBlink: boolean; scrollback: number; copyOnSelect: boolean;
+};
+export const DEFAULT_TERMINAL_PREFS: TerminalPrefs = { theme: 'dpro-night', fontFamily: 'system', fontSize: 12, lineHeight: 1.2, letterSpacing: 0, cursorStyle: 'block', cursorBlink: true, scrollback: 5000, copyOnSelect: false };
+
+const pick = <T extends string>(list: readonly T[], x: unknown, d: T): T => (list as readonly unknown[]).includes(x) ? x as T : d;
+const num = (x: unknown, min: number, max: number, d: number, step = 1) => typeof x === 'number' && Number.isFinite(x) && x >= min && x <= max ? Number((Math.round(x / step) * step).toFixed(2)) : d;
+/** Strict for a save (null when anything is off), lenient for reading old values. */
+export function terminalPrefs(x: unknown, strict = false): TerminalPrefs | null {
+  if (typeof x !== 'object' || x === null || Array.isArray(x)) return strict ? null : { ...DEFAULT_TERMINAL_PREFS };
+  const o = x as Record<string, unknown>;
+  if (strict && Object.keys(o).some(k => !(k in DEFAULT_TERMINAL_PREFS))) return null;
+  const d = DEFAULT_TERMINAL_PREFS;
+  const out: TerminalPrefs = {
+    theme: pick(TERMINAL_THEMES, o.theme, d.theme), fontFamily: pick(TERMINAL_FONTS, o.fontFamily, d.fontFamily),
+    fontSize: num(o.fontSize, 9, 24, d.fontSize), lineHeight: num(o.lineHeight, 1, 1.8, d.lineHeight, 0.05), letterSpacing: num(o.letterSpacing, 0, 3, d.letterSpacing, 0.5),
+    cursorStyle: pick(TERMINAL_CURSORS, o.cursorStyle, d.cursorStyle), cursorBlink: typeof o.cursorBlink === 'boolean' ? o.cursorBlink : d.cursorBlink,
+    scrollback: num(o.scrollback, 1000, 50000, d.scrollback, 1000), copyOnSelect: typeof o.copyOnSelect === 'boolean' ? o.copyOnSelect : d.copyOnSelect,
+  };
+  if (strict && Object.entries(o).some(([k, v]) => out[k as keyof TerminalPrefs] !== v)) return null;
+  return out;
+}

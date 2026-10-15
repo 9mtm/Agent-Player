@@ -14,8 +14,35 @@ export const TERMINAL_STREAM_MS = 10 * 60_000;
 const FRAME_CHARS = 512 * 1024;
 
 /** Which terminal route a path is, or null. */
+export const TERMINAL_THEMES = ['dpro-night', 'dpro-day', 'graphite', 'midnight', 'ocean', 'forest', 'paper', 'contrast'];
+export const TERMINAL_FONTS = ['system', 'sf-mono', 'menlo', 'monaco', 'jetbrains', 'fira', 'cascadia', 'courier'];
+export const TERMINAL_CURSORS = ['block', 'bar', 'underline'];
+export const DEFAULT_TERMINAL_PREFS = Object.freeze({ theme: 'dpro-night', fontFamily: 'system', fontSize: 12, lineHeight: 1.2, letterSpacing: 0, cursorStyle: 'block', cursorBlink: true, scrollback: 5000, copyOnSelect: false });
+const inRange = (x, min, max) => typeof x === 'number' && Number.isFinite(x) && x >= min && x <= max;
+/** One terminal setting: true when the key is known and the value allowed. */
+export function terminalPrefOk(k, v) {
+  switch (k) {
+    case 'theme': return TERMINAL_THEMES.includes(v);
+    case 'fontFamily': return TERMINAL_FONTS.includes(v);
+    case 'cursorStyle': return TERMINAL_CURSORS.includes(v);
+    case 'fontSize': return Number.isInteger(v) && inRange(v, 9, 24);
+    case 'lineHeight': return inRange(v, 1, 1.8);
+    case 'letterSpacing': return inRange(v, 0, 3);
+    case 'scrollback': return Number.isInteger(v) && inRange(v, 1000, 50000);
+    case 'cursorBlink': case 'copyOnSelect': return typeof v === 'boolean';
+  }
+  return false;
+}
+/** Known settings only; anything else falls back to the default. */
+export function terminalPrefs(x) {
+  const out = { ...DEFAULT_TERMINAL_PREFS };
+  if (record(x)) for (const k of Object.keys(out)) if (terminalPrefOk(k, x[k])) out[k] = x[k];
+  return out;
+}
+
 export function terminalPath(path) {
   if (path === '/api/terminal') return { kind: 'info' };
+  if (path === '/api/terminal/prefs') return { kind: 'prefs' };
   if (path === '/api/terminal/sessions') return { kind: 'create' };
   let m = /^\/api\/terminal\/sessions\/([^/?#]+)$/.exec(path);
   if (m) return ID.test(m[1]) ? { kind: 'close', id: m[1] } : null;
@@ -32,6 +59,7 @@ export function allowedTerminal(method, path, body) {
   if (!p) return false;
   switch (p.kind) {
     case 'info': case 'stream': return method === 'GET' && body === undefined;
+    case 'prefs': return (method === 'GET' && body === undefined) || (method === 'PUT' && record(body) && Object.keys(body).length > 0 && Object.entries(body).every(([k, v]) => terminalPrefOk(k, v)));
     case 'create': return method === 'POST' && record(body) && onlyKeys(body, ['cols', 'rows', 'projectId'])
       && (body.cols === undefined || size(body.cols, 10, 500)) && (body.rows === undefined || size(body.rows, 2, 200)) && (body.projectId === undefined || (typeof body.projectId === 'string' && ID.test(body.projectId)));
     case 'input': return method === 'POST' && record(body) && onlyKeys(body, ['data']) && typeof body.data === 'string' && body.data.length > 0 && body.data.length <= TERMINAL_INPUT_CHARS;
@@ -50,6 +78,7 @@ export function terminalResponse(path, status, body) {
   if (status === 204) return { ok: true };
   if (status !== 200 && status !== 201) { const code = record(body) ? body.code : undefined; return (ERRORS[status] ?? []).includes(code) ? { code } : null; }
   if (!record(body)) throw Error('protocol');
+  if (p.kind === 'prefs') return { prefs: terminalPrefs(body.prefs) };
   if (p.kind === 'info') return { enabled: body.enabled === true, sessions: Array.isArray(body.sessions) ? body.sessions.filter(s => record(s) && typeof s.id === 'string' && ID.test(s.id)).slice(0, 20).map(s => ({ id: s.id, exited: s.exited === true })) : [] };
   if (p.kind === 'create') {
     if (typeof body.id !== 'string' || !ID.test(body.id)) throw Error('protocol');
