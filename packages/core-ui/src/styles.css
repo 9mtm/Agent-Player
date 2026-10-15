@@ -1277,3 +1277,22 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .mention-list li[aria-selected="true"] button, .app-shell .mention-list button:hover { background:var(--row-hover); }
 .app-shell .mention-list .avatar, .app-shell .reply-writer .avatar { inline-size:18px; block-size:18px; border-radius:50%; display:inline-grid; place-items:center; font-size:10px; font-weight:600; background:color-mix(in srgb,var(--accent) 22%,transparent); color:var(--accent); flex:none; }
 .app-shell .reply-writer { display:flex; align-items:center; gap:6px; margin:0 0 6px; font-size:12.5px; font-weight:600; }
+
+/* Import from other agents (MEM-IMPORT-01) */
+.app-shell .local-import { display:grid; gap:12px; max-inline-size:960px; }
+.app-shell .local-import-head h3 { margin:0 0 4px; }
+.app-shell .local-import-tools { display:flex; flex-wrap:wrap; align-items:center; gap:10px; position:sticky; inset-block-start:0; background:var(--canvas); padding-block:6px; z-index:2; }
+.app-shell .local-import-tools input[type="search"] { flex:1; min-inline-size:180px; font:inherit; font-size:13px; padding:5px 8px; border-radius:6px; border:1px solid var(--stroke-3); background:var(--composer-fill); color:var(--text); }
+.app-shell .local-import-tools label.term-check { display:inline-flex; align-items:center; gap:6px; font-size:12.5px; }
+.app-shell .local-import-tools label.term-check input, .app-shell .local-import-group input[type="checkbox"] { inline-size:14px; block-size:14px; margin:0; padding:0; min-inline-size:0; flex:none; accent-color:var(--accent); }
+.app-shell .local-import-group ul { list-style:none; margin:0; padding:0; display:grid; gap:2px; }
+.app-shell .local-import-folder { margin:10px 0 4px; font:12px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--text-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.app-shell .local-import-group label { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; padding:6px 8px; border-radius:6px; cursor:pointer; font-size:13px; }
+.app-shell .local-import-group label:hover { background:var(--row-hover); }
+.app-shell .local-import-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.app-shell .local-import-meta { font-size:11.5px; color:var(--text-3); white-space:nowrap; }
+.app-shell .local-import-job { border:1px solid var(--stroke-3); border-radius:8px; padding:8px 12px; font-size:13px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.app-shell .local-import-job[data-status="error"] { border-color:var(--danger); color:var(--danger); }
+.app-shell .local-import-bar { flex:0 0 140px; block-size:5px; border-radius:3px; background:var(--stroke-3); overflow:hidden; }
+.app-shell .local-import-bar i { display:block; block-size:100%; background:var(--accent); }
+@media (max-width: 720px) { .app-shell .local-import-group label { grid-template-columns:auto minmax(0,1fr); } .app-shell .local-import-meta { grid-column:2; } }

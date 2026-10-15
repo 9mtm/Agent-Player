@@ -6,6 +6,7 @@ import { drawerKinds, memoryTypes } from './agent-card-contract.js';
 import type { Drawer, MemoryItem, MemoryType } from './agent-card-contract.js';
 import { MemoryPanel } from './SessionPanels';
 import { UiIcon } from './ui-icons';
+import { LocalImport } from './LocalImport';
 
 const KIND_LABEL: Record<string, string> = { owner: 'About you', experience: 'Lessons', project: 'Project', task: 'Task', people: 'Person' };
 const KIND_PLURAL: Record<string, string> = { project: 'Projects', task: 'Tasks', people: 'People' };
@@ -48,7 +49,8 @@ export function MemoryCard({ item, actions, children }: { item: MemoryItem; acti
  * file and the changes waiting for your review.
  */
 export function MemoryPage({ client, active = false }: { client: SessionClient; active?: boolean }) {
-  const [tab, setTab] = useState<'items' | 'files'>('items');
+  const [tab, setTab] = useState<'items' | 'files' | 'import'>('items');
+  const owner = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot).user?.role === 'owner';
   const [c, setC] = useState<MemoryItemsController>();
   useEffect(() => { const x = new MemoryItemsController(client); setC(x); return () => x.dispose(); }, [client]);
   useEffect(() => { if (active && c && c.getSnapshot().phase === 'idle') void c.load(); }, [active, c]);
@@ -58,9 +60,10 @@ export function MemoryPage({ client, active = false }: { client: SessionClient; 
       <div className="seg" role="tablist" aria-label="Memory views">
         <button type="button" role="tab" aria-selected={tab === 'items'} onClick={() => setTab('items')}>Memories</button>
         <button type="button" role="tab" aria-selected={tab === 'files'} onClick={() => setTab('files')}>Agent files and reviews</button>
+        {owner && <button type="button" role="tab" aria-selected={tab === 'import'} onClick={() => setTab('import')}>Import from other agents</button>}
       </div>
     </header>
-    {tab === 'items' ? (c ? <ItemsView c={c}/> : null) : <MemoryPanel client={client} active={active && tab === 'files'}/>}
+    {tab === 'items' ? (c ? <ItemsView c={c}/> : null) : tab === 'import' ? <LocalImport client={client} active={active} onReview={() => setTab('files')}/> : <MemoryPanel client={client} active={active && tab === 'files'}/>}
   </section>;
 }
 
