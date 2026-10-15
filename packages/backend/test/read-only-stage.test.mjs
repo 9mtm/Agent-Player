@@ -326,3 +326,44 @@ test('logout works', async () => {
   assert.notEqual(res.statusCode, 403, res.body);
   assert.ok(res.statusCode < 400, `${res.statusCode} ${res.body}`);
 });
+
+test('stage 3 (hire test): exactly create agent + read/replace its tool grants, still behind the gate', async () => {
+  const saved = { stage: process.env.AGENT_PLAYER_ISOLATED_STAGE, only: process.env.AGENT_PLAYER_LOCAL_MODEL_ONLY };
+  const login = await req('POST', '/api/auth/login', { payload: { email: owner.email, password: owner.password } });
+  assert.equal(login.statusCode, 200, login.body);
+  token = login.json().token ?? login.json().accessToken;
+  try {
+    process.env.AGENT_PLAYER_LOCAL_MODEL_ONLY = '1';
+    process.env.AGENT_PLAYER_ISOLATED_STAGE = '2';
+    assertReadOnly(await req('POST', '/api/agents', { payload: { role: 'specialist' } }), 'create in stage 2');
+    process.env.AGENT_PLAYER_ISOLATED_STAGE = '3';
+    const created = await req('POST', '/api/agents', { payload: { role: 'specialist', name: 'Stage Three Hire', personality: { preset: 'bold-creative' } } });
+    assert.equal(created.statusCode, 201, created.body);
+    const id = created.json().agent.id;
+    const view = await req('GET', `/api/agents/${id}/tool-grants`);
+    assert.equal(view.statusCode, 200, view.body);
+    assert.ok(Array.isArray(view.json().available) && view.json().available.length > 0);
+    const put = await req('PUT', `/api/agents/${id}/tool-grants`, { payload: { grants: ['memory_search', 'web_fetch'], expectedVersion: view.json().version } });
+    assert.equal(put.statusCode, 200, put.body);
+    assert.deepEqual(put.json().grants.map(g => g.tool).sort(), ['memory_search', 'web_fetch']);
+    // Still behind the auth gate.
+    assert.equal((await req('POST', '/api/agents', { payload: { role: 'specialist' }, auth: false })).statusCode, 401);
+    // Only those routes; tricks and neighbours stay refused.
+    assertReadOnly(await req('PUT', `/api/agents/${id}/tool-grants?x=1`, { payload: { grants: [], expectedVersion: 2 } }), 'query trick');
+    assertReadOnly(await req('POST', '/api/agents?x=1', { payload: { role: 'specialist' } }), 'create query trick');
+    assertReadOnly(await req('PUT', `/api/agents/${id}`, { payload: { name: 'x' } }), 'rename');
+    assertReadOnly(await req('DELETE', `/api/agents/${id}`), 'delete agent');
+    assertReadOnly(await req('POST', `/api/agents/${id}/duplicate`, { payload: {} }), 'duplicate');
+    assertReadOnly(await req('POST', `/api/agents/${id}/set-primary`, { payload: {} }), 'set primary');
+    assertReadOnly(await req('POST', `/api/agents/${id}/personality/versions`, { payload: { preset: 'careful-auditor' } }), 'persona edit');
+    assertReadOnly(await req('POST', '/api/agents/name-suggestion', { payload: {} }), 'name suggestion');
+    assertReadOnly(await req('PUT', '/api/settings', { payload: { provider: 'local' } }), 'settings PUT');
+    // The switch is required: stage 3 without local-model-only opens nothing.
+    delete process.env.AGENT_PLAYER_LOCAL_MODEL_ONLY;
+    assertReadOnly(await req('POST', '/api/agents', { payload: { role: 'specialist' } }), 'stage 3 without the switch');
+  } finally {
+    if (saved.stage === undefined) delete process.env.AGENT_PLAYER_ISOLATED_STAGE; else process.env.AGENT_PLAYER_ISOLATED_STAGE = saved.stage;
+    if (saved.only === undefined) delete process.env.AGENT_PLAYER_LOCAL_MODEL_ONLY; else process.env.AGENT_PLAYER_LOCAL_MODEL_ONLY = saved.only;
+  }
+  assertReadOnly(await req('POST', '/api/agents', { payload: { role: 'specialist' } }), 'back in stage 1');
+});

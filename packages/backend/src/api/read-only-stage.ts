@@ -73,7 +73,28 @@ const ALWAYS_ALLOWED_POSTS = new Set(['/api/auth/login', '/api/auth/logout']);
  */
 const STAGE2_CHAT_ROUTE = '/api/chat';
 function chatStageEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return (env.AGENT_PLAYER_ISOLATED_STAGE ?? '').trim() === '2' && (env.AGENT_PLAYER_LOCAL_MODEL_ONLY ?? '').trim() === '1';
+  const stage = (env.AGENT_PLAYER_ISOLATED_STAGE ?? '').trim();
+  return (stage === '2' || stage === '3') && (env.AGENT_PLAYER_LOCAL_MODEL_ONLY ?? '').trim() === '1';
+}
+/**
+ * Isolated stage 3 (hire test on fresh fake data, owner-approved 2026-10-15):
+ * stage 2 plus exactly these routes, each still behind the auth gate (owner
+ * tier for grants, admin for create; personality at create is owner-only).
+ * Matched on the dispatched route template and a clean raw path (no query).
+ *   POST /api/agents                    create (role, persona)
+ *   GET  /api/agents/:id/tool-grants    read grants + available tools (SELECTs; MCP tools from the DB, no spawn)
+ *   PUT  /api/agents/:id/tool-grants    replace grants (versioned, audited)
+ */
+export const STAGE3_ROUTES: ReadonlySet<string> = new Set([
+  'POST /api/agents', 'GET /api/agents/:id/tool-grants', 'PUT /api/agents/:id/tool-grants',
+]);
+function hireStageEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (env.AGENT_PLAYER_ISOLATED_STAGE ?? '').trim() === '3' && (env.AGENT_PLAYER_LOCAL_MODEL_ONLY ?? '').trim() === '1';
+}
+function hireStageRoute(method: string, rawUrl: string, route: string | undefined): boolean {
+  if (!hireStageEnabled() || !route || !STAGE3_ROUTES.has(`${method} ${route}`)) return false;
+  const path = cleanPath(rawUrl);
+  return path !== null && path === rawUrl;
 }
 const SETUP_POSTS = new Set(['/api/setup/admin', '/api/setup/complete']);
 
@@ -170,8 +191,10 @@ export async function readOnlyAllows(request: FastifyRequest, opts: ReadOnlyStag
   if (String(headers.accept ?? '').toLowerCase().includes('text/event-stream')) return false;
 
   if (method === 'GET' || method === 'HEAD') {
+    if (method === 'GET' && hireStageRoute(method, rawUrl, route)) return true;
     return cleanPath(rawUrl) !== null && isSafeRead(method, route);
   }
+  if (method === 'PUT') return hireStageRoute(method, rawUrl, route);
 
   if (method === 'OPTIONS') {
     // Only @fastify/cors' preflight route ('*'), never a custom OPTIONS handler.
@@ -188,6 +211,7 @@ export async function readOnlyAllows(request: FastifyRequest, opts: ReadOnlyStag
   // Exact match on the raw URL and on the dispatched route: no query, no prefix, no encoding tricks.
   if (!route || rawUrl !== route) return false;
   if (ALWAYS_ALLOWED_POSTS.has(route)) return true;
+  if (hireStageRoute(method, rawUrl, route)) return true;
   if (SETUP_POSTS.has(route)) {
     const state = await safeSetupState(opts.setupState);
     if (state.setupComplete) return false;

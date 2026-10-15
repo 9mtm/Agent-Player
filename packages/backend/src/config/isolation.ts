@@ -31,8 +31,11 @@ export interface IsolatedLaunchConfig {
   dataDir: string;
   port: number;
   origins: string[];
-  /** 1 = read-only; 2 = read-only plus chat with the local Ollama model only. */
-  stage: 1 | 2;
+  /**
+   * 1 = read-only; 2 = read-only plus chat with the local Ollama model only;
+   * 3 = stage 2 plus hiring agents (create + tool grants) on the fresh fake data.
+   */
+  stage: 1 | 2 | 3;
 }
 
 /** Database selectors that must stay unset (SQLite under the data dir only). */
@@ -222,8 +225,8 @@ export function checkLauncherEnv(
   const origins = checkOrigins(env.ALLOWED_ORIGINS, errors);
   checkCommon(env, errors);
   const stageValue = (env[ISOLATED_STAGE_ENV] ?? '').trim();
-  if (stageValue !== '' && stageValue !== '1' && stageValue !== '2') errors.push(`${ISOLATED_STAGE_ENV} must be unset, 1 or 2`);
-  const stage: 1 | 2 = stageValue === '2' ? 2 : 1;
+  if (stageValue !== '' && stageValue !== '1' && stageValue !== '2' && stageValue !== '3') errors.push(`${ISOLATED_STAGE_ENV} must be unset, 1, 2 or 3`);
+  const stage: 1 | 2 | 3 = stageValue === '3' ? 3 : stageValue === '2' ? 2 : 1;
   for (const [name, forced] of Object.entries(FORCED_VARS)) {
     if (set(env, name) && env[name]!.trim().toLowerCase() !== forced) errors.push(`${name} must be unset or ${forced}`);
   }
@@ -274,7 +277,7 @@ export function buildIsolatedChildEnv(
     ...FORCED_PROVIDER_URLS,
     [ISOLATED_STAGE_ENV]: String(cfg.stage ?? 1),
   };
-  if (cfg.stage === 2) {
+  if (cfg.stage === 2 || cfg.stage === 3) {
     child.OLLAMA_URL = LOCAL_CHAT_OLLAMA_URL;
     child[LOCAL_MODEL_ONLY_ENV] = '1';
   }
@@ -299,16 +302,17 @@ export function checkIsolatedServerEnv(env: NodeJS.ProcessEnv, ctx: IsolationCon
     if ((env[name] ?? '').trim().toLowerCase() !== forced) errors.push(`${name} must be ${forced}`);
   }
   const stage = (env[ISOLATED_STAGE_ENV] ?? '').trim();
-  if (stage !== '1' && stage !== '2') errors.push(`${ISOLATED_STAGE_ENV} must be 1 or 2`);
+  if (stage !== '1' && stage !== '2' && stage !== '3') errors.push(`${ISOLATED_STAGE_ENV} must be 1, 2 or 3`);
+  const localChat = stage === '2' || stage === '3';
   // ISO-2: both local endpoints are exactly the dead port (stage 2: OLLAMA_URL
   // is exactly the local Ollama and every turn is local-only), and no other
   // provider endpoint variable may point off the machine.
-  const expected: Record<string, string> = stage === '2' ? { ...FORCED_PROVIDER_URLS, OLLAMA_URL: LOCAL_CHAT_OLLAMA_URL } : { ...FORCED_PROVIDER_URLS };
+  const expected: Record<string, string> = localChat ? { ...FORCED_PROVIDER_URLS, OLLAMA_URL: LOCAL_CHAT_OLLAMA_URL } : { ...FORCED_PROVIDER_URLS };
   for (const [name, forced] of Object.entries(expected)) {
     if ((env[name] ?? '').trim() !== forced) errors.push(`${name} must be ${forced}`);
   }
-  if (stage === '2' && (env[LOCAL_MODEL_ONLY_ENV] ?? '').trim() !== '1') errors.push(`${LOCAL_MODEL_ONLY_ENV} must be 1 in stage 2`);
-  if (stage !== '2' && set(env, LOCAL_MODEL_ONLY_ENV)) errors.push(`${LOCAL_MODEL_ONLY_ENV} must be unset in stage 1`);
+  if (localChat && (env[LOCAL_MODEL_ONLY_ENV] ?? '').trim() !== '1') errors.push(`${LOCAL_MODEL_ONLY_ENV} must be 1 in stages 2 and 3`);
+  if (!localChat && set(env, LOCAL_MODEL_ONLY_ENV)) errors.push(`${LOCAL_MODEL_ONLY_ENV} must be unset in stage 1`);
   for (const name of Object.keys(env)) {
     if (isProviderEndpointVar(name) && set(env, name) && !isLoopbackHttpUrl(env[name]!)) {
       errors.push(`${name} must be a loopback http URL`);

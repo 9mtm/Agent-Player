@@ -37,8 +37,9 @@
  *  - ISO-2: OLLAMA_URL, LOCAL_MODEL_API_URL, OLLAMA_HOST or any *_BASE_URL /
  *    *_API_URL / *_API_BASE is set at all (both local endpoints are always
  *    forced to the dead port http://127.0.0.1:9);
- *  - AGENT_PLAYER_ISOLATED_STAGE is set to anything but 1 (stage 2 needs a
- *    separately reviewed setup and is not available here).
+ *  - AGENT_PLAYER_ISOLATED_STAGE is set to anything but 1, 2 or 3 (2 = chat
+ *    with the local Ollama only; 3 = stage 2 plus hiring agents: create and
+ *    tool grants, on the fresh fake data).
  *
  * The child gets AGENT_PLAYER_ISOLATED=1 and AGENT_PLAYER_READONLY=1, so the
  * server re-checks the same rules and the data tree (no symlinks, no foreign
