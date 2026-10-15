@@ -1,0 +1,119 @@
+import type { WireRequest, WireResponse } from './session';
+import { conversationPath } from './conversation-contract.js';
+
+type Msg = { id: string; role: 'user' | 'assistant'; content: string; parts: unknown[] | null; status: 'complete' | 'stopped' | 'error'; runId: string | null; durationMs: number | null; createdAt: string };
+type Conv = { id: string; title: string | null; agentId: string | null; pinned: boolean; preview: string; createdAt: string; updatedAt: string; messages: Msg[]; order: number };
+type Run = { id: string; conv: Conv; events: Record<string, unknown>[]; done: boolean; stopped: boolean; started: number };
+
+const ANSWER = [
+  'Here is a fictional plan for **offline practice**. Nothing ran on a real machine.\n\n',
+  '| Step | Owner | Status |\n|---|---|---|\n| Draft the brief | Writer | Done |\n| Review | Lead | Next |\n\n',
+  '```ts\nexport function greet(name: string) {\n  return `Hello, ${name}`;\n}\n```\n\n',
+  '- [x] Read the notes\n- [ ] Send the summary\n\nمرحباً — Arabic text aligns on its own.',
+];
+
+/** Fictional, in-memory conversations and runs for offline practice and tests. Never a live fallback. */
+export function createConversationsMock(options: { stepMs?: number } = {}) {
+  const stepMs = options.stepMs ?? 60;
+  const convs = new Map<string, Conv>();
+  const runs = new Map<string, Run>();
+  let n = 0; let clock = 0;
+  const now = () => `2026-10-15 12:${String(Math.floor(clock / 60) % 60).padStart(2, '0')}:${String(clock++ % 60).padStart(2, '0')}`;
+  const view = (c: Conv) => ({ id: c.id, title: c.title, agentId: c.agentId, pinned: c.pinned, preview: c.preview, createdAt: c.createdAt, updatedAt: c.updatedAt });
+  const list = () => [...convs.values()].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.order - a.order).map(view);
+  const script = (prompt: string) => {
+    const ev: Record<string, unknown>[] = [
+      { type: 'reasoning', content: 'The owner wants a short plan. ' }, { type: 'reasoning', content: 'I will check the notes first.' },
+      { type: 'tool_start', step: 1, tools: [{ id: 'c1', name: 'read_file', input: JSON.stringify({ path: 'notes/brief.md' }) }, { id: 'c2', name: 'exec', input: JSON.stringify({ command: 'ls notes' }) }] },
+      { type: 'tool_result', step: 1, results: [{ id: 'c1', name: 'read_file', output: '# Brief\nFictional notes for practice.', isError: false, ms: 12 }, { id: 'c2', name: 'exec', output: 'brief.md\nideas.md', isError: false, ms: 30 }] },
+      ...ANSWER.map(content => ({ type: 'text', content })),
+    ];
+    if (/fail/i.test(prompt)) ev.splice(2, ev.length - 2, { type: 'text', content: 'Partial answer before a fictional failure.' });
+    return ev;
+  };
+
+  function eventsFor(run: Run, after: number, signal: AbortSignal): ReadableStream<Uint8Array> {
+    let i = after; let cancelled = false;
+    const enc = new TextEncoder();
+    return new ReadableStream<Uint8Array>({
+      async pull(c) {
+        await new Promise(r => setTimeout(r, stepMs));
+        if (cancelled) return;
+        if (signal.aborted) { c.close(); return; }
+        const total = run.events.length;
+        if (i < total) { const e = run.events[i++]; c.enqueue(enc.encode(`id: ${i}\ndata: ${JSON.stringify({ seq: i, ...e })}\n\n`)); if (e.type === 'end') c.close(); return; }
+        c.enqueue(enc.encode(': ping\n\n'));
+      },
+      cancel() { cancelled = true; },
+    });
+  }
+
+  function advance(run: Run, script: Record<string, unknown>[], failing: boolean) {
+    let k = 0;
+    const tick = () => {
+      if (run.done) return;
+      if (run.stopped || k >= script.length) {
+        const status = run.stopped ? 'stopped' : failing ? 'error' : 'complete';
+        const text = run.events.filter(e => e.type === 'text').map(e => e.content).join('');
+        const parts: unknown[] = [];
+        for (const e of run.events) {
+          const last = parts.at(-1) as { kind: string; text?: string } | undefined;
+          if (e.type === 'text' || e.type === 'reasoning') { if (last?.kind === e.type) last.text += String(e.content); else parts.push({ kind: e.type, text: e.content }); }
+          if (e.type === 'tool_start') parts.push({ kind: 'tools', step: e.step, calls: (e.tools as { id: string }[]).map(t => ({ ...t })) });
+          if (e.type === 'tool_result') { const p = parts.find((x: any) => x.kind === 'tools' && x.step === e.step) as any; (e.results as any[]).forEach(r => { const c = p.calls.find((x: any) => x.id === r.id); Object.assign(c, r); }); }
+        }
+        const ms = (k + 1) * stepMs;
+        run.conv.messages.push({ id: `m-${++n}`, role: 'assistant', content: text, parts, status, runId: run.id, durationMs: ms, createdAt: now() });
+        run.conv.updatedAt = now();
+        run.events.push({ type: 'end', status, ms, ...(failing ? { code: 'model_unavailable' } : {}) });
+        run.done = true;
+        return;
+      }
+      run.events.push(script[k++]);
+      setTimeout(tick, stepMs);
+    };
+    setTimeout(tick, stepMs);
+  }
+
+  return function transport(request: WireRequest): WireResponse {
+    const p = conversationPath(request.path);
+    const body = request.body as Record<string, any> | undefined;
+    if (!p) return { status: 404, body: { code: 'not_found' } };
+    if (p.kind === 'list') {
+      if (request.method === 'GET') return { status: 200, body: { conversations: list() } };
+      const c: Conv = { id: `conv-${String(++n).padStart(8, '0')}`, title: body?.title ?? null, agentId: body?.agentId ?? null, pinned: false, preview: '', createdAt: now(), updatedAt: now(), messages: [], order: n };
+      convs.set(c.id, c);
+      return { status: 201, body: { conversation: view(c) } };
+    }
+    if (p.kind === 'events' || p.kind === 'stop') {
+      const run = runs.get(p.run);
+      if (!run) return { status: 404, body: { code: 'not_found' } };
+      if (p.kind === 'stop') { run.stopped = true; return { status: 200, body: { ok: true, status: run.done ? 'complete' : 'stopping' } }; }
+      return { status: 200, body: null, stream: eventsFor(run, p.after, request.signal) };
+    }
+    const c = convs.get(p.id);
+    if (!c) return { status: 404, body: { code: 'not_found' } };
+    if (p.kind === 'one') {
+      if (request.method === 'DELETE') { convs.delete(c.id); return { status: 200, body: { ok: true } }; }
+      if (body?.title !== undefined) c.title = body.title?.trim() || null;
+      if (body?.pinned !== undefined) c.pinned = body.pinned;
+      return { status: 200, body: { conversation: view(c) } };
+    }
+    if (p.kind === 'messages') {
+      const active = [...runs.values()].find(r => r.conv === c && !r.done);
+      return { status: 200, body: { conversation: view(c), messages: c.messages.map(m => ({ ...m })), activeRunId: active?.id ?? null } };
+    }
+    // runs
+    const busy = [...runs.values()].find(r => r.conv === c && !r.done);
+    if (busy) return { status: 409, body: { code: 'conversation_busy', runId: busy.id } };
+    if (runs.has(body!.runId)) return { status: 202, body: { runId: body!.runId, replayed: true } };
+    const user: Msg = { id: `m-${++n}`, role: 'user', content: body!.message, parts: null, status: 'complete', runId: body!.runId, durationMs: null, createdAt: now() };
+    c.messages.push(user);
+    c.title ??= String(body!.message).split('\n')[0].split(/\s+/).slice(0, 7).join(' ').slice(0, 60);
+    c.preview = String(body!.message).slice(0, 140); c.updatedAt = now(); c.order = ++n;
+    const run: Run = { id: body!.runId, conv: c, events: [], done: false, stopped: false, started: Date.now() };
+    runs.set(run.id, run);
+    advance(run, script(body!.message), /fail/i.test(body!.message));
+    return { status: 202, body: { runId: run.id, userMessage: user } };
+  };
+}

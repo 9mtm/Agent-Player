@@ -12,6 +12,19 @@ const shapes = {
   copy: <><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></>,
   check: <path d="M5 12l5 5L20 7"/>,
   sidebar: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></>,
+  terminal: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/></>,
+  file: <><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></>,
+  pencil: <><path d="M4 20h4L19 9l-4-4L4 16z"/></>,
+  globe: <><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18z"/></>,
+  brain: <><path d="M9 4a3 3 0 0 0-3 3v1a3 3 0 0 0-2 5a3 3 0 0 0 3 4a3 3 0 0 0 5 1V5a2 2 0 0 0-3-1z"/><path d="M15 4a3 3 0 0 1 3 3v1a3 3 0 0 1 2 5a3 3 0 0 1-3 4a3 3 0 0 1-5 1"/></>,
+  tool: <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>,
+  chevron: <path d="M9 6l6 6-6 6"/>,
+  'arrow-down': <><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></>,
+  pin: <><path d="M9 4h6l-1 6 3 3H7l3-3z"/><path d="M12 13v7"/></>,
+  trash: <><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></>,
+  more: <><circle cx="5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="19" cy="12" r="1.2" fill="currentColor"/></>,
+  alert: <><circle cx="12" cy="12" r="9"/><path d="M12 7v6"/><path d="M12 16.5v.5"/></>,
+  refresh: <><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></>,
 } as const;
 
 export type UiIconName = keyof typeof shapes;

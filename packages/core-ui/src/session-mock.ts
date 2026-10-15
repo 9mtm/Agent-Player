@@ -3,6 +3,8 @@ import { personalityRoute } from './personality-contract.js';
 import { createChatMock } from './chat-mock';
 import { createAgentsMock } from './agents-mock';
 import { createBoardMock } from './board-mock';
+import { createConversationsMock } from './conversations-mock';
+import { conversationRoute } from './conversation-contract.js';
 import { allowedRequest } from './session';
 import { createMemoryMock } from './memory-mock';
 import type { WireTransport } from './session';
@@ -13,6 +15,7 @@ export function createLoginMock(agents = createAgentsMock(), setup: 'existing-ow
   const personality = createPersonalityMock();
   const board = createBoardMock();
   const chat = createChatMock();
+  const conversations = createConversationsMock();
   let serial = 0;
   let active = '';
   const user = { id: 'mock-owner', email: 'demo@example.invalid', username: 'Offline demo', role: 'owner' };
@@ -38,6 +41,7 @@ export function createLoginMock(agents = createAgentsMock(), setup: 'existing-ow
     if (request.path === '/api/auth/logout') { active = ''; return { status: 200, body: { success: true } }; }
     if (personalityRoute(request.path)) return personality.transport(request);
     if (request.path === '/api/boards' || request.path.startsWith('/api/boards/')) return board(request);
+    if (conversationRoute(request.path)) return conversations(request);
     if (request.path === '/api/agents' || request.path.startsWith('/api/agents/') || request.path.startsWith('/api/onboarding/team-')) return agents.transport(request);
     if (request.path.startsWith('/api/memory/')) return memory.transport(request);
     // A permission failure exercises protected-content clearing without simulating sign-out.
