@@ -143,7 +143,7 @@ export const channelSetup = [
     "requiredEnv": [
       "NTFY_TOPIC"
     ],
-    "prerequisites": "pip install httpx   # already a Hermes dependency",
+    "prerequisites": "pip install httpx",
     "prepare": "Choose an ntfy server and a dedicated topic. Configure topic access controls and an access token if the server requires one."
   },
   {
