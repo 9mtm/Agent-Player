@@ -3,7 +3,7 @@
  * Executes workflows node-by-node with error handling and retry logic
  */
 
-import { getDatabase } from '../db/index.js';
+import { q } from '../repositories/sql-steps.js';
 
 interface WorkflowNode {
     id: string;
@@ -33,7 +33,6 @@ interface ExecutionLog {
 }
 
 export class WorkflowExecutor {
-    private db = getDatabase();
     private executionId: string;
     private workflowId: string;
     private nodes: WorkflowNode[];
@@ -71,12 +70,12 @@ export class WorkflowExecutor {
             await this.executeNode(triggerNode);
 
             // Mark as completed
-            this.updateStatus('completed');
+            await this.updateStatus('completed');
             this.log('info', 'Workflow execution completed successfully');
 
         } catch (error) {
             this.log('error', `Workflow execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-            this.updateStatus('failed', error instanceof Error ? error.message : 'Unknown error');
+            await this.updateStatus('failed', error instanceof Error ? error.message : 'Unknown error');
         }
     }
 
@@ -350,21 +349,21 @@ export class WorkflowExecutor {
     /**
      * Update execution status in database
      */
-    private updateStatus(status: 'running' | 'completed' | 'failed', error?: string): void {
+    private async updateStatus(status: 'running' | 'completed' | 'failed', error?: string): Promise<void> {
         const now = new Date().toISOString();
 
         if (status === 'completed' || status === 'failed') {
-            this.db.getDb().prepare(`
+            await q.run(`
                 UPDATE workflow_executions
                 SET status = ?, completed_at = ?, error = ?, logs = ?
-                WHERE id = ?
-            `).run(status, now, error || null, JSON.stringify(this.context.logs), this.executionId);
+                WHERE id = ?`,
+                status, now, error || null, JSON.stringify(this.context.logs), this.executionId);
         } else {
-            this.db.getDb().prepare(`
+            await q.run(`
                 UPDATE workflow_executions
                 SET status = ?, logs = ?
-                WHERE id = ?
-            `).run(status, JSON.stringify(this.context.logs), this.executionId);
+                WHERE id = ?`,
+                status, JSON.stringify(this.context.logs), this.executionId);
         }
     }
 }
