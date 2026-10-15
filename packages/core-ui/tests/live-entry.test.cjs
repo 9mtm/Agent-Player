@@ -40,11 +40,12 @@ test('default entry and absent compile constant ignore browser selectors and rem
     assert.doesNotMatch(renderToStaticMarkup(React.createElement(App, { client })), /Use live sign-in/);
   }
 });
-test('compiled opt-in injects live only, renders fixture and sends nothing on mount or mode selection', () => {
+test('compiled opt-in injects live only and shows no fictional workspace; nothing is sent while rendering', () => {
   const b = browser(); const client = entry(b.instance, true);
   assert.equal(client.getSnapshot().mode, 'fixture');
   assert.equal(client.canUse('mock'), false);
-  assert.match(renderToStaticMarkup(React.createElement(App, { client })), /Use live sign-in/);
+  // Owner decision 2026-10-15: real data only; the page opens the real sign-in (on mount) instead of a fixture.
+  assert.doesNotMatch(renderToStaticMarkup(React.createElement(App, { client })), /Use live sign-in|Fixture workspace|Nothing here yet/);
   client.selectMode('live');
   assert.match(renderToStaticMarkup(React.createElement(App, { client })), /Check setup status/);
   assert.equal(b.calls.length, 0);
