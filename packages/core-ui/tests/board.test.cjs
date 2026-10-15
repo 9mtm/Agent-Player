@@ -6,7 +6,7 @@ const { renderToStaticMarkup } = require('../node_modules/react-dom/server');
 const { SessionClient, allowedRequest } = require('../src/session.ts');
 const { BoardController, cardsIn, matches } = require('../src/board.ts');
 const { TaskBoard } = require('../src/TaskBoard.tsx');
-const { allowedBoard, boardResponse, validCardEdit, validNewCard } = require('../src/board-contract.js');
+const { allowedBoard, boardResponse, validBoardEdit, validCardEdit, validNewBoard, validNewCard } = require('../src/board-contract.js');
 const { createLoginMock } = require('../src/session-mock.ts');
 const { allowed } = require('../scripts/application-server.cjs');
 
@@ -56,10 +56,10 @@ test('responses are projected; malformed ones are refused', () => {
 test('offline: open, add cards, edit in the panel, move, comment, archive', async t => {
   const { b, calls } = await fixture(t);
   assert.equal(calls.filter(c => c.path.startsWith('/api/boards')).length, 0, 'nothing read before Open the board');
-  assert.match(markup(b), /Open the board/);
+  assert.match(markup(b), /Open the boards/);
   await b.load();
   let s = b.getSnapshot();
-  assert.deepEqual(s.columns.map(c => c.name), ['Backlog', 'To do', 'In progress', 'Review', 'Done']);
+  assert.deepEqual(s.columns.map(c => c.name), ['Ideas', 'Backlog', 'To do', 'In progress', 'Review', 'Done']);
   assert.ok(s.agents.length >= 2, 'team loaded for assignees');
   assert.equal(await b.addCard(col(b, 'To do'), '  Write   the launch post '), true);
   assert.equal(await b.addCard(col(b, 'To do'), 'Design the banner'), true);
@@ -134,4 +134,54 @@ test('quick successive adds are queued, none is lost', async t => {
   const results = await Promise.all(['One', 'Two', 'Three'].map(x => b.addCard(col(b, 'Backlog'), x)));
   assert.deepEqual(results, [true, true, true]);
   assert.deepEqual(cardsIn(b.getSnapshot().cards, col(b, 'Backlog')).map(c => c.title), ['One', 'Two', 'Three']);
+});
+
+test('boards contract: create and edit bodies; list projection with templates and colours', () => {
+  assert.equal(validNewBoard({ name: 'Launch', template: 'content', color: 'pink', departments: ['marketing', 'sales'], description: 'x' }), true);
+  for (const bad of [{ name: '' }, { name: 'x', color: 'gold' }, { name: 'x', template: 'Bad Id' }, { name: 'x', departments: ['Marketing'] }, { name: 'x', extra: 1 }])
+    assert.equal(validNewBoard(bad), false, JSON.stringify(bad));
+  assert.equal(validBoardEdit({ expectedVersion: 2, archived: true }), true);
+  assert.equal(validBoardEdit({ expectedVersion: 2 }), false);
+  assert.equal(validBoardEdit({ name: 'x' }), false);
+  for (const allow of [allowedRequest, allowed]) {
+    assert.equal(allow('POST', '/api/boards', { name: 'Launch' }), true);
+    assert.equal(allow('PUT', '/api/boards/b1', { expectedVersion: 1, color: 'teal' }), true);
+    assert.equal(allow('GET', '/api/boards?archived=1', undefined), true);
+    assert.equal(allow('DELETE', '/api/boards/b1', undefined), false);
+  }
+  const list = boardResponse('/api/boards', 200, { boards: [{ id: 'b1', name: 'Company board', description: '', template: 'kanban', color: 'blue', departments: [], kind: 'company', archived: false, version: 1, cards: 3, open: 2, owner_id: 'x' }],
+    templates: [{ id: 'kanban', name: 'Team workflow', description: 'd', columns: ['Ideas', 'Done'] }, { id: 'BAD' }], colors: ['blue', 'gold'] });
+  assert.equal(list.boards[0].owner_id, undefined); assert.equal(list.boards[0].cards, 3);
+  assert.deepEqual(list.templates.map(t => t.id), ['kanban']); assert.deepEqual(list.colors, ['blue']);
+});
+
+test('offline: create department and shared boards from templates, switch, edit settings, archive', async t => {
+  const { b, calls } = await fixture(t);
+  await b.load();
+  assert.equal(b.getSnapshot().boards.length, 1);
+  assert.ok(b.getSnapshot().templates.some(x => x.id === 'content'));
+  assert.equal(await b.createBoard({ name: 'Marketing content', template: 'content', color: 'pink', departments: [' Marketing '] }), true);
+  let s = b.getSnapshot();
+  assert.equal(s.meta.name, 'Marketing content'); assert.equal(s.meta.kind, 'department');
+  assert.deepEqual(s.columns.map(c => c.name), ['Ideas', 'Writing', 'Editing', 'Scheduled', 'Published']);
+  assert.deepEqual(calls.find(c => c.method === 'POST' && c.path === '/api/boards').body, { name: 'Marketing content', template: 'content', color: 'pink', departments: ['marketing'] });
+  await b.createBoard({ name: 'Product launch', template: 'kanban', color: 'orange', departments: ['marketing', 'development'] });
+  s = b.getSnapshot();
+  assert.equal(s.meta.kind, 'shared'); assert.equal(s.boards.length, 3);
+  const html = markup(b);
+  for (const label of ['Whole company', 'marketing', 'Shared by departments', '\\+ New board', 'Board settings']) assert.match(html, new RegExp(label));
+  // Switch back to the company board.
+  await b.openBoard(s.boards.find(x => x.name === 'Company board').id);
+  assert.equal(b.getSnapshot().meta.name, 'Company board');
+  // Settings: rename + recolour; nothing changed is not sent; archive hides it.
+  await b.openBoard(b.getSnapshot().boards.find(x => x.name === 'Product launch').id);
+  assert.equal(await b.updateBoard({ name: 'Product launch' }), false);
+  assert.match(b.getSnapshot().notice, /Nothing changed/);
+  assert.equal(await b.updateBoard({ name: 'Launch 2027', color: 'teal' }), true);
+  assert.deepEqual([b.getSnapshot().meta.name, b.getSnapshot().meta.color, b.getSnapshot().meta.version], ['Launch 2027', 'teal', 2]);
+  const archivedId = b.getSnapshot().meta.id;
+  assert.equal(await b.updateBoard({ archived: true }), true);
+  s = b.getSnapshot();
+  assert.ok(!s.boards.some(x => x.id === archivedId)); assert.notEqual(s.boardId, archivedId);
+  assert.match(s.notice, /archived/);
 });

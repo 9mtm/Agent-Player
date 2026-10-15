@@ -6,6 +6,9 @@ import { department } from './hire-contract.js';
 
 export const BOARDS_PATH = '/api/boards';
 export const priorities = ['low', 'normal', 'high', 'urgent'];
+export const boardColors = ['blue', 'green', 'orange', 'red', 'purple', 'pink', 'teal', 'gray'];
+const kinds = ['company', 'department', 'shared'];
+const templateId = x => typeof x === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(x);
 export const MAX_TITLE = 200;
 export const MAX_DESCRIPTION = 5000;
 export const MAX_COMMENT = 4000;
@@ -68,11 +71,30 @@ export function validCardEdit(b) {
 
 const nameBody = b => record(b) && Object.keys(b).length === 1 && lineOk(b.name, 60);
 
+export function validNewBoard(b) {
+  if (!record(b) || !onlyKeys(b, ['name', 'description', 'template', 'color', 'departments']) || !lineOk(b.name, 80)) return false;
+  if (b.description !== undefined && !textOk(b.description, 500, false)) return false;
+  if (b.template !== undefined && !templateId(b.template)) return false;
+  if (b.color !== undefined && !boardColors.includes(b.color)) return false;
+  return b.departments === undefined || departments(b.departments);
+}
+
+export function validBoardEdit(b) {
+  if (!record(b) || !onlyKeys(b, ['expectedVersion', 'name', 'description', 'color', 'departments', 'archived']) || !version(b.expectedVersion) || Object.keys(b).length < 2) return false;
+  if (b.name !== undefined && !lineOk(b.name, 80)) return false;
+  if (b.description !== undefined && !textOk(b.description, 500, false)) return false;
+  if (b.color !== undefined && !boardColors.includes(b.color)) return false;
+  if (b.departments !== undefined && !departments(b.departments)) return false;
+  return b.archived === undefined || typeof b.archived === 'boolean';
+}
+
 export function allowedBoard(method, path, body) {
-  if (path === BOARDS_PATH) return method === 'GET' && body === undefined;
+  if (path === BOARDS_PATH) return (method === 'GET' && body === undefined) || (method === 'POST' && validNewBoard(body));
+  if (path === `${BOARDS_PATH}?archived=1`) return method === 'GET' && body === undefined;
   const p = boardPath(path);
   if (!p) return false;
-  if (p.kind === 'board' || p.kind === 'board-archived') return method === 'GET' && body === undefined;
+  if (p.kind === 'board') return (method === 'GET' && body === undefined) || (method === 'PUT' && validBoardEdit(body));
+  if (p.kind === 'board-archived') return method === 'GET' && body === undefined;
   if (p.kind === 'columns') return method === 'POST' && nameBody(body);
   if (p.kind === 'column') return method === 'PUT' && nameBody(body);
   if (p.kind === 'cards') return method === 'POST' && validNewCard(body);
@@ -82,7 +104,7 @@ export function allowedBoard(method, path, body) {
 }
 
 export function boardRoute(path) {
-  return path === BOARDS_PATH || boardPath(path) !== null;
+  return path === BOARDS_PATH || path === `${BOARDS_PATH}?archived=1` || boardPath(path) !== null;
 }
 
 const fail = () => { throw Error('Invalid board response'); };
@@ -100,10 +122,19 @@ function card(c) {
   };
 }
 
+function meta(b) {
+  if (!record(b) || !id(b.id)) fail();
+  return {
+    id: b.id, name: clip(b.name, 80), description: clip(b.description, 500), template: templateId(b.template) ? b.template : 'custom',
+    color: boardColors.includes(b.color) ? b.color : 'blue', departments: Array.isArray(b.departments) ? b.departments.filter(department).slice(0, 12) : [],
+    kind: kinds.includes(b.kind) ? b.kind : 'company', archived: b.archived === true, version: version(b.version) ? b.version : 1,
+  };
+}
+
 function board(b) {
   if (!record(b) || !id(b.id) || !Array.isArray(b.columns) || b.columns.length > 20 || !Array.isArray(b.cards) || b.cards.length > MAX_CARDS) fail();
   return {
-    id: b.id, name: clip(b.name, 80),
+    ...meta(b),
     columns: b.columns.map(c => { if (!record(c) || !id(c.id) || !Number.isSafeInteger(c.position)) fail(); return { id: c.id, name: clip(c.name, 60), position: c.position }; }),
     cards: b.cards.map(card),
   };
@@ -119,14 +150,22 @@ function error(status, body) {
   const code = record(body) ? body.code : undefined;
   if (!codes.includes(code)) return null;
   if (code === 'version_conflict' && record(body.card)) return { code, card: card(body.card) };
+  if (code === 'version_conflict' && record(body.board)) return { code, board: meta(body.board) };
   return { code };
 }
 
 export function boardResponse(path, status, body) {
   if (status !== 200 && status !== 201) return error(status, body);
-  if (path === BOARDS_PATH) {
-    if (!record(body) || !Array.isArray(body.boards) || body.boards.length > 50) fail();
-    return { boards: body.boards.map(b => { if (!record(b) || !id(b.id)) fail(); return { id: b.id, name: clip(b.name, 80) }; }) };
+  if (path === BOARDS_PATH || path === `${BOARDS_PATH}?archived=1`) {
+    if (status === 201) return board(body);
+    if (!record(body) || !Array.isArray(body.boards) || body.boards.length > 200) fail();
+    const count = x => (Number.isSafeInteger(x) && x >= 0 ? x : 0);
+    return {
+      boards: body.boards.map(b => ({ ...meta(b), cards: count(b.cards), open: count(b.open) })),
+      templates: Array.isArray(body.templates) ? body.templates.filter(t => record(t) && templateId(t.id) && Array.isArray(t.columns)).slice(0, 30)
+        .map(t => ({ id: t.id, name: clip(t.name, 60), description: clip(t.description, 200), columns: t.columns.filter(c => typeof c === 'string').slice(0, 20).map(c => clip(c, 60)) })) : [],
+      colors: Array.isArray(body.colors) ? body.colors.filter(c => boardColors.includes(c)) : [],
+    };
   }
   const p = boardPath(path);
   if (!p) fail();

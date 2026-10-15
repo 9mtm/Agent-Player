@@ -1,54 +1,161 @@
 import { useState, useSyncExternalStore } from 'react';
 import type { DragEvent } from 'react';
 import { allPriorities, cardsIn, matches, priorityLabel } from './board';
-import type { BoardController, Card, Column } from './board';
+import type { BoardColor, BoardController, BoardSummary, Card, Column } from './board';
 import { Icon } from './icons';
 
 const initials = (name: string) => name.trim().split(/\s+/).slice(0, 2).map(w => w.slice(0, 1).toUpperCase()).join('') || '?';
 const DRAG_TYPE = 'application/x-dpro-card';
 
-/** The company task board: columns of cards, drag to move, a side panel to edit and comment. */
+const kindLabel = { company: 'Whole company', department: 'Department', shared: 'Shared' } as const;
+const colorLabel: Record<BoardColor, string> = { blue: 'Blue', green: 'Green', orange: 'Orange', red: 'Red', purple: 'Purple', pink: 'Pink', teal: 'Teal', gray: 'Gray' };
+
+/** The company's boards: a list of boards (company, per department, shared), the open board's columns, and a card panel. */
 export function TaskBoard({ controller }: { controller: BoardController }) {
   const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const [newColumn, setNewColumn] = useState('');
+  const [mode, setMode] = useState<'board' | 'new' | 'settings'>('board');
   const busy = s.phase === 'loading' || s.phase === 'saving';
   const departments = [...new Set(s.cards.flatMap(c => c.departments))].sort();
   const openCard = s.cards.find(c => c.id === s.open);
   const visible = s.cards.filter(c => matches(c, s.filter)).length;
 
-  return <section aria-label="Task board" className="board">
-    <div className="board-head">
-      <div>
-        <h2>{s.name ?? 'Task board'}</h2>
-        <p className="fine-print">Plan the company's work: cards move from left to right, each with the agents and departments working on it.</p>
-      </div>
-      {s.boardId && <form className="board-add-column" onSubmit={e => { e.preventDefault(); void controller.addColumn(newColumn).then(ok => { if (ok) setNewColumn(''); }); }}>
-        <input aria-label="New column name" placeholder="New column" maxLength={60} value={newColumn} disabled={busy} onChange={e => setNewColumn(e.target.value)}/>
-        <button type="submit" disabled={busy || !newColumn.trim()}>Add column</button>
-      </form>}
-    </div>
-    {(s.notice || s.phase === 'loading') && <p role="status" className="board-notice">{s.notice ?? 'Reading the board…'}</p>}
-    {!s.boardId
-      ? <div className="hire-actions"><button type="button" className="primary" disabled={busy || !s.owner} onClick={() => void controller.load()}>Open the board</button></div>
-      : <>
-        <div className="board-filters" role="search">
-          <input aria-label="Search cards" placeholder="Search cards" value={s.filter.text} onChange={e => controller.setFilter({ text: e.target.value })}/>
-          <select aria-label="Filter by agent" value={s.filter.agent} onChange={e => controller.setFilter({ agent: e.target.value })}>
-            <option value="">All agents</option>
-            {s.agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-          <select aria-label="Filter by department" value={s.filter.department} onChange={e => controller.setFilter({ department: e.target.value })}>
-            <option value="">All departments</option>
-            {departments.map(d => <option key={d} value={d}>{d}</option>)}
-          </select>
-          <span className="fine-print">{visible} of {s.cards.length} cards</span>
-        </div>
-        <div className="board-columns">
-          {s.columns.map(col => <BoardColumn key={col.id} col={col} controller={controller} busy={busy}/>)}
-        </div>
-      </>}
-    {openCard && s.draft && <CardPanel card={openCard} controller={controller} busy={busy}/>}
+  if (!s.boardId) return <section aria-label="Task board" className="board">
+    <div className="board-head"><div><h2>Boards</h2><p className="fine-print">Plan the company's work on boards: one for the whole company, one per department, or shared by departments.</p></div></div>
+    {(s.notice || s.phase === 'loading') && <p role="status" className="board-notice">{s.notice ?? 'Reading the boards…'}</p>}
+    <div className="hire-actions"><button type="button" className="primary" disabled={busy || !s.owner} onClick={() => void controller.load()}>Open the boards</button></div>
   </section>;
+
+  return <section aria-label="Task board" className="board board-with-rail" data-color={s.meta?.color}>
+    <BoardRail controller={controller} onNew={() => setMode('new')} onPick={id => { setMode('board'); void controller.openBoard(id); }} busy={busy}/>
+    <div className="board-main">
+      {mode === 'new' ? <NewBoardForm controller={controller} busy={busy} onDone={() => setMode('board')}/>
+        : mode === 'settings' && s.meta ? <BoardSettings controller={controller} busy={busy} onDone={() => setMode('board')}/>
+        : <>
+          <div className="board-head">
+            <div className="board-title">
+              <span className="board-swatch" data-color={s.meta?.color} aria-hidden="true"/>
+              <div>
+                <h2>{s.name}</h2>
+                <p className="fine-print">{s.meta ? kindLabel[s.meta.kind] : ''}{s.meta?.departments.length ? ` · ${s.meta.departments.join(', ')}` : ''}{s.meta?.description ? ` · ${s.meta.description}` : ''}</p>
+              </div>
+            </div>
+            <div className="board-head-actions">
+              <form className="board-add-column" onSubmit={e => { e.preventDefault(); void controller.addColumn(newColumn).then(ok => { if (ok) setNewColumn(''); }); }}>
+                <input aria-label="New column name" placeholder="New column" maxLength={60} value={newColumn} disabled={busy} onChange={e => setNewColumn(e.target.value)}/>
+                <button type="submit" disabled={busy || !newColumn.trim()}>Add column</button>
+              </form>
+              <button type="button" disabled={busy} onClick={() => setMode('settings')}>Board settings</button>
+            </div>
+          </div>
+          {(s.notice || s.phase === 'loading') && <p role="status" className="board-notice">{s.notice ?? 'Reading the board…'}</p>}
+          <div className="board-filters" role="search">
+            <input aria-label="Search cards" placeholder="Search cards" value={s.filter.text} onChange={e => controller.setFilter({ text: e.target.value })}/>
+            <select aria-label="Filter by agent" value={s.filter.agent} onChange={e => controller.setFilter({ agent: e.target.value })}>
+              <option value="">All agents</option>
+              {s.agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+            <select aria-label="Filter by department" value={s.filter.department} onChange={e => controller.setFilter({ department: e.target.value })}>
+              <option value="">All departments</option>
+              {departments.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+            <span className="fine-print">{visible} of {s.cards.length} cards</span>
+          </div>
+          <div className="board-columns">
+            {s.columns.map(col => <BoardColumn key={col.id} col={col} controller={controller} busy={busy}/>)}
+          </div>
+        </>}
+    </div>
+    {mode === 'board' && openCard && s.draft && <CardPanel card={openCard} controller={controller} busy={busy}/>}
+  </section>;
+}
+
+/** Boards grouped: whole company, each department, shared by departments. */
+function BoardRail({ controller, onNew, onPick, busy }: { controller: BoardController; onNew: () => void; onPick: (id: string) => void; busy: boolean }) {
+  const s = controller.getSnapshot();
+  const company = s.boards.filter(b => b.kind === 'company');
+  const byDep = new Map<string, BoardSummary[]>();
+  for (const b of s.boards.filter(x => x.kind === 'department')) byDep.set(b.departments[0], [...(byDep.get(b.departments[0]) ?? []), b]);
+  const shared = s.boards.filter(b => b.kind === 'shared');
+  const item = (b: BoardSummary) => <li key={b.id}>
+    <button type="button" className="board-rail-item" aria-current={b.id === s.boardId ? 'page' : undefined} disabled={busy} onClick={() => onPick(b.id)} title={b.description || b.name}>
+      <span className="board-swatch small" data-color={b.color} aria-hidden="true"/><span className="board-rail-name">{b.name}</span><span className="board-count">{b.cards}</span>
+    </button>
+  </li>;
+  return <nav className="board-rail" aria-label="Boards">
+    <button type="button" className="primary board-new" disabled={busy} onClick={onNew}>+ New board</button>
+    {company.length > 0 && <><p className="board-rail-label">Whole company</p><ul>{company.map(item)}</ul></>}
+    {[...byDep.keys()].sort().map(dep => <div key={dep}><p className="board-rail-label">{dep}</p><ul>{byDep.get(dep)!.map(item)}</ul></div>)}
+    {shared.length > 0 && <><p className="board-rail-label">Shared by departments</p><ul>{shared.map(item)}</ul></>}
+  </nav>;
+}
+
+function ColorPicker({ value, onChange, colors }: { value: BoardColor; onChange: (c: BoardColor) => void; colors: readonly BoardColor[] }) {
+  return <div className="board-colors" role="radiogroup" aria-label="Board colour">{colors.map(c =>
+    <label key={c} className="board-color" title={colorLabel[c]}>
+      <input type="radio" name="board-color" aria-label={colorLabel[c]} checked={value === c} onChange={() => onChange(c)}/>
+      <span className="board-swatch" data-color={c} aria-hidden="true"/>
+    </label>)}
+  </div>;
+}
+
+function DepartmentsInput({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const [dep, setDep] = useState('');
+  const add = () => { const d = dep.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase(); if (d && !value.includes(d) && value.length < 12) onChange([...value, d]); setDep(''); };
+  return <div className="board-panel-deps">
+    <span className="board-chips">{value.map(x => <span key={x} className="board-chip">{x} <button type="button" aria-label={`Remove ${x}`} onClick={() => onChange(value.filter(v => v !== x))}>×</button></span>)}
+      {value.length === 0 && <span className="fine-print">None — the board is for the whole company.</span>}</span>
+    <div className="board-inline"><input aria-label="Add a department" placeholder="e.g. marketing" maxLength={64} value={dep} onChange={e => setDep(e.target.value)}
+      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}/><button type="button" disabled={!dep.trim()} onClick={add}>Add</button></div>
+  </div>;
+}
+
+function NewBoardForm({ controller, busy, onDone }: { controller: BoardController; busy: boolean; onDone: () => void }) {
+  const s = controller.getSnapshot();
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [template, setTemplate] = useState(s.templates[0]?.id ?? 'kanban');
+  const [color, setColor] = useState<BoardColor>('blue');
+  const [deps, setDeps] = useState<string[]>([]);
+  return <form className="board-form" aria-label="New board" onSubmit={e => { e.preventDefault(); void controller.createBoard({ name, description, template, color, departments: deps }).then(ok => { if (ok) onDone(); }); }}>
+    <h2>New board</h2>
+    {s.notice && <p role="status" className="board-notice">{s.notice}</p>}
+    <label>Name<input value={name} maxLength={80} placeholder="e.g. Marketing content" onChange={e => setName(e.target.value)}/></label>
+    <label>Description <small className="fine-print">(optional)</small><input value={description} maxLength={500} onChange={e => setDescription(e.target.value)}/></label>
+    <fieldset className="board-templates"><legend>Start from a template</legend>
+      {s.templates.map(t => <label key={t.id} className="board-template" data-on={template === t.id || undefined}>
+        <input type="radio" name="board-template" checked={template === t.id} onChange={() => setTemplate(t.id)}/>
+        <span><strong>{t.name}</strong><small>{t.description}</small><span className="board-template-cols">{t.columns.map(c => <span key={c}>{c}</span>)}</span></span>
+      </label>)}
+    </fieldset>
+    <fieldset className="board-fieldset"><legend>Colour</legend><ColorPicker value={color} onChange={setColor} colors={s.colors}/></fieldset>
+    <fieldset className="board-fieldset"><legend>Departments</legend><p className="fine-print">One department makes it that team's board; several make it a shared board.</p><DepartmentsInput value={deps} onChange={setDeps}/></fieldset>
+    <div className="hire-actions"><button type="submit" className="primary" disabled={busy || !name.trim()}>Create board</button><button type="button" disabled={busy} onClick={onDone}>Cancel</button></div>
+  </form>;
+}
+
+function BoardSettings({ controller, busy, onDone }: { controller: BoardController; busy: boolean; onDone: () => void }) {
+  const m = controller.getSnapshot().meta!;
+  const colors = controller.getSnapshot().colors;
+  const [name, setName] = useState(m.name);
+  const [description, setDescription] = useState(m.description);
+  const [color, setColor] = useState<BoardColor>(m.color);
+  const [deps, setDeps] = useState<string[]>([...m.departments]);
+  const [confirmArchive, setConfirmArchive] = useState(false);
+  return <form className="board-form" aria-label="Board settings" onSubmit={e => { e.preventDefault(); void controller.updateBoard({ name, description, color, departments: deps }).then(ok => { if (ok) onDone(); }); }}>
+    <h2>Board settings</h2>
+    {controller.getSnapshot().notice && <p role="status" className="board-notice">{controller.getSnapshot().notice}</p>}
+    <label>Name<input value={name} maxLength={80} onChange={e => setName(e.target.value)}/></label>
+    <label>Description<input value={description} maxLength={500} onChange={e => setDescription(e.target.value)}/></label>
+    <fieldset className="board-fieldset"><legend>Colour</legend><ColorPicker value={color} onChange={setColor} colors={colors}/></fieldset>
+    <fieldset className="board-fieldset"><legend>Departments</legend><DepartmentsInput value={deps} onChange={setDeps}/></fieldset>
+    <div className="hire-actions"><button type="submit" className="primary" disabled={busy}>Save</button><button type="button" disabled={busy} onClick={onDone}>Cancel</button></div>
+    <fieldset className="board-fieldset danger"><legend>Archive this board</legend>
+      <p className="fine-print">The board and its cards are kept but hidden from the list and from agents.</p>
+      <label className="check"><input type="checkbox" checked={confirmArchive} onChange={e => setConfirmArchive(e.target.checked)}/> I want to archive “{m.name}”</label>
+      <button type="button" disabled={busy || !confirmArchive} onClick={() => void controller.updateBoard({ archived: true }).then(ok => { if (ok) onDone(); })}>Archive board</button>
+    </fieldset>
+  </form>;
 }
 
 function BoardColumn({ col, controller, busy }: { col: Column; controller: BoardController; busy: boolean }) {
