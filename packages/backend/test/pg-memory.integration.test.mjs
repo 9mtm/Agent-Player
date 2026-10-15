@@ -512,6 +512,15 @@ test('retention: off by default; owner turns it on; old task drawer summarized a
   };
   const done = [await old(`Done step 1 ${tag}`, { kind: 'task', key: `t-done-${tag}` }, 200), await old(`Done step 2 ${tag}`, { kind: 'task', key: `t-done-${tag}` }, 199)];
   const recent = await old(`Recent step ${tag}`, { kind: 'task', key: `t-new-${tag}` }, 5);
+  // B2.2d-15b: an old drawer whose orchestrator task is still running is kept;
+  // one whose task completed long ago is summarized.
+  const running = await old(`Running step ${tag}`, { kind: 'task', key: `t-run-${tag}` }, 300);
+  const finished = await old(`Finished step ${tag}`, { kind: 'task', key: `t-fin-${tag}` }, 300);
+  const orchTask = (id, status, completedAt) => m.pool.pgRun(
+    `INSERT INTO orchestrator_tasks (id, title, description, status, created_at, completed_at) VALUES (?, 't', 'd', ?, ?, ?)`,
+    id, status, new Date(Date.now() - 300 * DAY).toISOString(), completedAt);
+  await orchTask(`t-run-${tag}`, 'in_progress', null);
+  await orchTask(`t-fin-${tag}`, 'completed', new Date(Date.now() - 250 * DAY).toISOString());
   const lessons = [1, 2, 3].map((i) => `Lesson ${i} ${tag}`);
   const exp = [];
   for (const [i, l] of lessons.entries()) exp.push(await old(l, { kind: 'experience' }, 400 + i, { type: 'insight' }));
@@ -523,6 +532,8 @@ test('retention: off by default; owner turns it on; old task drawer summarized a
   assert.equal(off.skipped, 'disabled');
   const dry = await repo().runRetention(A.owner, true);
   assert.ok(dry.actions.some((a) => a.kind === 'task-summary' && a.drawerId === `task:t-done-${tag}` && a.items === 2));
+  assert.ok(!dry.actions.some((a) => a.drawerId === `task:t-run-${tag}`), 'running orchestrator task is kept');
+  assert.ok(dry.actions.some((a) => a.kind === 'task-summary' && a.drawerId === `task:t-fin-${tag}`), 'completed orchestrator task is summarized');
   assert.ok(await exists(done[0]));
   await assert.rejects(() => repo().setRetention(A.admin, { enabled: true }), (e) => e instanceof m.scope.ScopeError);
   await assert.rejects(() => repo().setRetention(A.owner, { taskTtlDays: 0 }), m.retention.RetentionInputError);
@@ -532,7 +543,8 @@ test('retention: off by default; owner turns it on; old task drawer summarized a
   const run = await silent(() => m.retention.runRetention(ids.owner, { requireEnabled: true }));
   assert.ok(run.forgotten >= 2 + exp.length, `forgotten ${run.forgotten}`);
   for (const id of [...done, ...exp]) assert.equal(await exists(id), false, id);
-  for (const id of [recent, ownerOld]) assert.equal(await exists(id), true, id);
+  for (const id of [recent, ownerOld, running]) assert.equal(await exists(id), true, id);
+  assert.equal(await exists(finished), false, finished);
   const summary = (await m.storage.getByDrawers(ids.owner, [{ kind: 'experience' }])).find((x) => x.metadata?.retention === 'task-summary' && x.metadata?.task === `t-done-${tag}`);
   assert.ok(summary && summary.content.includes(`Done step 1 ${tag}`));
   const runs = (await repo().retention(A.owner)).runs;

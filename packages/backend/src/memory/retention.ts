@@ -29,6 +29,7 @@ import { forgetMemory } from './forget.js';
 import { newMemory, saveVersioned } from './learning.js';
 import { importanceOf } from './versions.js';
 import type { Memory } from './types.js';
+import { orchestratorTablesFor } from '../multi-agent/orchestrator.js';
 
 export interface RetentionConfig {
   enabled: boolean;
@@ -106,13 +107,15 @@ function summaryText(title: string, items: Memory[]): string {
 
 /**
  * When did this task end? null = still running / unknown and active.
- * `tasks` is the orchestrator's table when it shares the main database
- * (today it lives in its own file, .data/multi-agent/orchestrator.db, so
- * this is usually the activity fallback).
+ * The orchestrator's task table is read when it is in the main database:
+ * on PostgreSQL that is `orchestrator_tasks` (B2.2d-15); on SQLite the
+ * orchestrator keeps its own file (.data/multi-agent/orchestrator.db), so
+ * `tasks` is usually absent there and the activity fallback decides.
  */
 function* taskEnd(userId: string, key: string, items: Memory[]): Step<number | null> {
-  if (yield* tableExists('tasks')) {
-    const t = yield* one<{ status: string; completed_at: string | null }>('SELECT status, completed_at FROM tasks WHERE id = ?', key);
+  const table = orchestratorTablesFor(yield* dialect()).tasks;
+  if (yield* tableExists(table)) {
+    const t = yield* one<{ status: string; completed_at: string | null }>(`SELECT status, completed_at FROM ${table} WHERE id = ?`, key);
     if (t) {
       if (!['completed', 'failed', 'cancelled'].includes(t.status)) return null;
       const at = t.completed_at ? Date.parse(t.completed_at) : NaN;
