@@ -27,6 +27,7 @@ import { outsiderAgentMemoryEnabled } from '../../services/outsider-memory.js';
 import { DrawerInputError, chatTurnDrawers, type DrawerRef } from '../../memory/drawers.js';
 import { createModelRouter, ModelRouter } from '../../services/model-router.js';
 import { CostTracker } from '../../services/cost-tracker.js';
+import { ModelUnavailable, runOllamaAgentLoop } from '../../services/ollama-agent-loop.js';
 import { OLLAMA_URL, DEFAULT_OLLAMA_MODEL, ollamaThinkOption } from '../../llm/ollama.js';
 
 const DEFAULT_MODEL = DEFAULT_OLLAMA_MODEL;
@@ -38,6 +39,15 @@ const DEFAULT_MODEL = DEFAULT_OLLAMA_MODEL;
  */
 export function localModelOnly(env: NodeJS.ProcessEnv = process.env): boolean {
   return (env.AGENT_PLAYER_LOCAL_MODEL_ONLY ?? '').trim() === '1' && (env.AGENT_PLAYER_ISOLATED ?? '').trim() === '1';
+}
+
+/**
+ * Isolated stage 2 may also offer the agent's tools to the local model
+ * (CHAT-REBUILD-01: long-task tests). Off unless both flags are set; the
+ * registry's exec policy, grants and approvals still apply to every call.
+ */
+export function localModelTools(env: NodeJS.ProcessEnv = process.env): boolean {
+  return localModelOnly(env) && (env.AGENT_PLAYER_LOCAL_MODEL_TOOLS ?? '').trim() === '1';
 }
 
 interface AgentConfig {
@@ -479,7 +489,7 @@ async function streamChat(
 
   // Get real tools from the tools registry (11 tools: exec, read, write, browser×4, memory×2, desktop)
   const toolsRegistry = await createAgentToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers });
-  const tools = localModelOnly() ? [] : toolsRegistry.getToolsForAPI();
+  const tools = localModelOnly() && !localModelTools() ? [] : toolsRegistry.getToolsForAPI();
 
   console.log('[Chat] 🔧 Available tools:', tools.length);
   if (tools.length > 0) {
@@ -644,121 +654,42 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
     return reply;
   }
 
-  // Default: use Ollama
-  console.log('[Chat] 🤖 Using Ollama (local)');
+  // Default: the local model, with its own agent loop (CHAT-REBUILD-01):
+  // streamed text and reasoning, tool calls run through the same registry
+  // (exec policy, channel policy, grants and approvals apply), results fed back.
+  console.log('[Chat] 🤖 Using Ollama (local) agent loop');
   // CHAT-01: headers go out before Ollama is contacted, so a cold model load
   // cannot trip a pre-header timeout; the heartbeat keeps the stream alive.
   openSseStream(reply.raw);
-  // The client went away before the reply ended: stop the model (CHAT-01).
+  // The client went away before the reply ended: stop the model and the loop.
   const upstreamAbort = new AbortController();
   reply.raw.once?.('close', () => { if (!reply.raw.writableEnded) upstreamAbort.abort(); });
-  let response: Response;
+  const startedAt = Date.now();
   try {
-    response = await fetch(`${OLLAMA_URL}/api/chat`, {
+    const result = await runOllamaAgentLoop({
+      url: OLLAMA_URL,
+      model,
+      messages: ollamaMessages.map((m) => ({ role: m.role, content: messageText(m.content) })),
+      tools,
+      execute: (name, args) => toolsRegistry.execute(name, args),
+      write: (frame) => { if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(frame)}\n\n`); },
       signal: upstreamAbort.signal,
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages: ollamaMessages,
-        stream: true,
-        ...ollamaThinkOption(),
-        tools: tools.length > 0 ? tools : undefined, // Add tools support
-        options: {
-          temperature,
-          ...(maxTokens && { num_predict: maxTokens })
-        }
-      })
+      temperature,
+      maxTokens,
+      ...ollamaThinkOption(),
     });
-  } catch (err: any) {
-    console.error('[Chat] ❌ Ollama unreachable:', err?.name || 'Error');
-    return modelUnavailable(reply);
-  }
-
-  if (!response.ok) {
-    // SECURITY (H-09): the upstream body is never read, logged or relayed.
-    console.error('[Chat] ❌ Ollama request failed', { status: response.status });
-    try { await response.body?.cancel(); } catch { /* ignore */ }
-    return modelUnavailable(reply);
-  }
-
-  console.log('[Chat] ✅ Ollama connected, streaming...');
-
-  const reader = response.body?.getReader();
-  if (!reader) {
-    console.error('[Chat] ❌ No reader available');
-    reply.raw.end();
-    return reply;
-  }
-
-  const decoder = new TextDecoder();
-  let buffer = ''; // Buffer for incomplete lines
-  let chunkCount = 0;
-  let totalContent = '';
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        // Process any remaining data in buffer
-        if (buffer.trim()) {
-          processLine(buffer);
-        }
-        break;
-      }
-
-      const chunk = decoder.decode(value, { stream: true });
-      buffer += chunk;
-
-      // Split by newlines and process complete lines
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || ''; // Keep incomplete line in buffer
-
-      for (const line of lines) {
-        processLine(line);
-      }
+    console.log('[Chat] ✅ Local turn ended', { steps: result.steps, chars: result.answer.length, aborted: result.aborted, ms: Date.now() - startedAt });
+  } catch (err) {
+    if (err instanceof ModelUnavailable) {
+      console.error('[Chat] ❌ Ollama request failed', { status: err.status });
+      return modelUnavailable(reply);
     }
-  } catch (error) {
-    console.error('[Chat] ❌ Stream error:', error);
+    if (upstreamAbort.signal.aborted) { reply.raw.end(); return reply; }
+    console.error('[Chat] ❌ Ollama unreachable', safeErrorFields(err, startedAt));
+    return modelUnavailable(reply);
   }
-
-  console.log('[Chat] ✅ Stream completed');
-  console.log('[Chat]   Total chunks:', chunkCount);
-  console.log('[Chat]   Response length:', totalContent.length, 'chars');
-
   reply.raw.end();
   return reply;
-
-  function processLine(line: string) {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-
-    try {
-      const json = JSON.parse(trimmed);
-
-      // Send content chunk
-      if (json.message?.content) {
-        chunkCount++;
-        totalContent += json.message.content;
-        reply.raw.write(`data: ${JSON.stringify({ content: json.message.content, done: false })}\n\n`);
-
-        if (chunkCount === 1) {
-          console.log('[Chat] 📡 First chunk received');
-        }
-      }
-
-      // Send done signal
-      if (json.done) {
-        console.log('[Chat] 📡 Done signal received');
-        reply.raw.write(`data: ${JSON.stringify({ content: '', done: true })}\n\n`);
-      }
-    } catch (e) {
-      // Skip invalid JSON lines
-      if (trimmed.length > 0) {
-        console.log('[Chat] ⚠️ Invalid JSON line', { chars: trimmed.length });
-      }
-    }
-  }
 }
 
 // Non-streaming chat response
