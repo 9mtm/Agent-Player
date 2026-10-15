@@ -313,7 +313,7 @@ export async function executeChatTurn(reply: FastifyReply, input: ChatTurnInput)
 
     // Resolve agent config: specific agent > primary agent > fallback defaults
     const agentConfig = agentId ? await getAgentById(agentId) : await getPrimaryAgent();
-    const resolvedModel = localModelOnly() ? DEFAULT_MODEL : (model || agentConfig?.model || DEFAULT_MODEL);
+    let resolvedModel = localModelOnly() ? DEFAULT_MODEL : (model || agentConfig?.model || DEFAULT_MODEL);
     // CORE-01: the agent's current personality version sets temperature,
     // output length and the working-style prompt block. An explicit request
     // value still wins. Personality never changes tools or approvals: the
@@ -381,13 +381,20 @@ export async function executeChatTurn(reply: FastifyReply, input: ChatTurnInput)
       resolvedSystemPrompt += `\n\n## Recent Context\nThe following information was recalled from previous interactions with this user:\n${memoryContext}`;
     }
     // An agent's explicit provider wins; without one, follow the global settings provider.
-    const resolvedProvider = localModelOnly() ? 'ollama' : (agentConfig?.provider
+    let resolvedProvider = localModelOnly() ? 'ollama' : (agentConfig?.provider
       || ((await getSettingsManager().getSettings()).provider === 'claude' ? 'claude' : 'ollama'));
     // SECURITY (S1.1): keys come from the credential authority only: the
     // agent's own encrypted key, else the global Settings key.
     const resolvedApiKey = resolvedProvider === 'claude'
       ? await resolveProviderApiKey('claude', { agentId: agentConfig?.id })
       : '';
+    // No key for the paid provider: answer with the local model instead of
+    // sending a Claude model name to the local server (which always failed).
+    if (resolvedProvider === 'claude' && !resolvedApiKey) {
+      resolvedProvider = 'ollama';
+      resolvedModel = DEFAULT_MODEL;
+      console.log('[Chat] No Claude key set; using the local model', { model: resolvedModel });
+    }
 
     console.log('[Chat] Agent:', agentConfig?.name || 'none (fallback)', '| Provider:', resolvedProvider, '| Model:', resolvedModel);
     if (memoryContext) console.log('[Chat] Memory context injected', { chars: String(memoryContext).length });
