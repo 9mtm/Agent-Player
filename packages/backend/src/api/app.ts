@@ -34,6 +34,7 @@ import { memoryImportRoutes } from './routes/memory-import.js';
 import { credentialsRoutes } from './routes/credentials.js';
 // import { onboardingRoutes } from './routes/onboarding.js'; // S0-Q.14: disabled, see below
 import { onboardingWebRoutes } from './routes/onboarding-web.js'; // F-05: web wizard after first owner login
+import { teamPlanRoutes } from './routes/team-plan.js'; // ONBOARD-TEAM-01: company size -> departments -> proposed team
 import { gatewayRoutes } from './routes/gateway.js';
 import { authRoutes } from './routes/auth.js';
 import { databaseRoutes } from './routes/database.js';
@@ -302,6 +303,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   // F-05: the web wizard (/onboarding page) has its own owner-only API with
   // per-user state in the DB; it never runs the terminal wizard.
   await fastify.register(onboardingWebRoutes);
+  await fastify.register(teamPlanRoutes);
   await fastify.register(gatewayRoutes); // 🌐 Multi-Interface Gateway
   await fastify.register(sandboxRoutes); // 🐳 Docker Sandbox System
   await fastify.register(auditRoutes); // 🛡️ Security Audit System

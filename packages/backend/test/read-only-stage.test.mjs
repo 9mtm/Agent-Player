@@ -336,6 +336,7 @@ test('stage 3 (hire test): exactly create agent + read/replace its tool grants, 
     process.env.AGENT_PLAYER_LOCAL_MODEL_ONLY = '1';
     process.env.AGENT_PLAYER_ISOLATED_STAGE = '2';
     assertReadOnly(await req('POST', '/api/agents', { payload: { role: 'specialist' } }), 'create in stage 2');
+    assertReadOnly(await req('POST', '/api/onboarding/team-plan', { payload: { size: 'small', departments: ['sales'] } }), 'team plan in stage 2');
     process.env.AGENT_PLAYER_ISOLATED_STAGE = '3';
     const created = await req('POST', '/api/agents', { payload: { role: 'specialist', name: 'Stage Three Hire', personality: { preset: 'bold-creative' } } });
     assert.equal(created.statusCode, 201, created.body);
@@ -346,6 +347,13 @@ test('stage 3 (hire test): exactly create agent + read/replace its tool grants, 
     const put = await req('PUT', `/api/agents/${id}/tool-grants`, { payload: { grants: ['memory_search', 'web_fetch'], expectedVersion: view.json().version } });
     assert.equal(put.statusCode, 200, put.body);
     assert.deepEqual(put.json().grants.map(g => g.tool).sort(), ['memory_search', 'web_fetch']);
+    const catalogue = await req('GET', '/api/onboarding/team-catalogue');
+    assert.equal(catalogue.statusCode, 200, catalogue.body);
+    const teamPlan = await req('POST', '/api/onboarding/team-plan', { payload: { size: 'small', departments: ['sales', 'finance'] } });
+    assert.equal(teamPlan.statusCode, 200, teamPlan.body);
+    assert.equal(teamPlan.json().hires.length, 4);
+    assertReadOnly(await req('POST', '/api/onboarding/team-plan?x=1', { payload: { size: 'small', departments: ['sales'] } }), 'team plan query trick');
+    assertReadOnly(await req('POST', '/api/onboarding', { payload: { step: 'profile', data: {} } }), 'other onboarding writes');
     // Still behind the auth gate.
     assert.equal((await req('POST', '/api/agents', { payload: { role: 'specialist' }, auth: false })).statusCode, 401);
     // Only those routes; tricks and neighbours stay refused.
