@@ -1,6 +1,7 @@
 const { allowedPersonality, personalityRoute, personalityResponse } = require('../src/personality-contract.js');
 const { allowedHire, hireRoute, hireResponse } = require('../src/hire-contract.js');
 const { allowedBoard, boardRoute, boardResponse } = require('../src/board-contract.js');
+const { allowedConversation, conversationPath, conversationRoute, conversationResponse, RunEventParser, RUN_STREAM_MS, RUN_IDLE_MS } = require('../src/conversation-contract.js');
 const { validDeviceToken, validLoginBody } = require('../src/login-contract.js');
 const { setupStatus } = require('../src/setup-status.js');
 const { memoryResponse } = require('./memory-response.cjs');
@@ -26,7 +27,7 @@ const agent = x => {
     : { id: x.id, version: x.version, nameUnavailable: true };
 };
 function allowed(method, target, body) {
-  if (allowedPersonality(method, target, body) || allowedHire(method, target, body) || allowedBoard(method, target, body)) return true;
+  if (allowedPersonality(method, target, body) || allowedHire(method, target, body) || allowedBoard(method, target, body) || allowedConversation(method, target, body)) return true;
   const id = /^\/api\/agents\/([^/?#]+)$/.exec(target)?.[1];
   if (method === 'PUT') return agentId(id) && record(body) && Object.keys(body).length === 2 && Object.keys(body).every(k => k === 'name' || k === 'expectedVersion') && name(body.name) && version(body.expectedVersion);
   if (method === 'GET' && body === undefined && (target === '/api/agents' || agentId(id))) return true;
@@ -72,6 +73,7 @@ function project(target, status, body) {
   if (personalityRoute(target)) return personalityResponse(target, status, body);
   if (hireRoute(target, status)) return hireResponse(target, status, body);
   if (boardRoute(target)) return boardResponse(target, status, body);
+  if (conversationRoute(target)) return conversationResponse(target, status, body);
   if (target === '/api/agents' || (target.startsWith('/api/agents/') && target !== '/api/agents/name-suggestion')) {
     if (status === 200 && target === '/api/agents') {
       if (!Array.isArray(body?.agents) || body.agents.length > 10000) throw Error();
@@ -108,10 +110,11 @@ function project(target, status, body) {
 const passiveHeaders = new Set(['host', 'origin', 'authorization', 'accept', 'content-type', 'content-length', 'connection', 'user-agent', 'accept-encoding', 'accept-language', 'cache-control', 'pragma', 'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'cookie']);
 // Internal factory accepts only numeric loopback ports for ephemeral mock tests.
 // The executable below exposes no destination, host, port or environment overrides.
-function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly = false, upstreamPort = 42521, timeoutMs = 10000, streamTimeoutMs = CHAT_DEADLINE_MS, streamIdleMs = CHAT_IDLE_MS } = {}) {
+function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly = false, upstreamPort = 42521, timeoutMs = 10000, streamTimeoutMs = CHAT_DEADLINE_MS, streamIdleMs = CHAT_IDLE_MS, runStreamMs = RUN_STREAM_MS, runIdleMs = RUN_IDLE_MS } = {}) {
   if (typeof stage1ReadOnly !== 'boolean') throw Error('Invalid stage1 configuration');
   if (!['candidate', 'current'].includes(channel) || !Number.isInteger(upstreamPort) || upstreamPort < 1 || upstreamPort > 65535 || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10000) throw Error('Invalid launch configuration');
   if (!Number.isInteger(streamTimeoutMs) || streamTimeoutMs < 1 || streamTimeoutMs > CHAT_DEADLINE_MS || !Number.isInteger(streamIdleMs) || streamIdleMs < 1 || streamIdleMs > CHAT_IDLE_MS) throw Error('Invalid stream limits');
+  if (!Number.isInteger(runStreamMs) || runStreamMs < 1 || runStreamMs > RUN_STREAM_MS || !Number.isInteger(runIdleMs) || runIdleMs < 1 || runIdleMs > RUN_IDLE_MS) throw Error('Invalid run stream limits');
   const assets = readCurrent(packageRoot, channel); // Pin validated bytes for this server lifetime.
   const server = http.createServer({ maxHeaderSize: 16384, requestTimeout: 10000, headersTimeout: 10000 }, async (req, res) => {
     for (const [k, v] of Object.entries(HEADERS)) res.setHeader(k, v);
@@ -148,10 +151,11 @@ function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly =
       if (!data) return send(404);
       return send(200, data, name.endsWith('.html') ? 'text/html; charset=utf-8' : name.endsWith('.js') ? 'text/javascript; charset=utf-8' : name.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/plain; charset=utf-8');
     }
-    if (!['GET', 'POST', 'PUT'].includes(req.method)) return send(405);
+    if (!['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) return send(405);
     const chat = raw === '/api/chat' && req.method === 'POST';
+    const runEvents = req.method === 'GET' && conversationPath(raw)?.kind === 'events';
     if (Object.keys(req.headers).some(k => !passiveHeaders.has(k) && !(chat && k === 'idempotency-key')) || (req.headers.connection && !/^(close|keep-alive)$/i.test(req.headers.connection)) || (req.headers['sec-fetch-mode'] && req.headers['sec-fetch-mode'] !== 'same-origin') || (req.headers['sec-fetch-dest'] && req.headers['sec-fetch-dest'] !== 'empty')) return send(400);
-    if (['POST', 'PUT'].includes(req.method) && req.headers.origin !== origin) return send(403);
+    if (['POST', 'PUT', 'DELETE'].includes(req.method) && req.headers.origin !== origin) return send(403);
     if (chat && !validKey(req.headers['idempotency-key'])) return send(400);
     const login = raw === '/api/auth/login';
     const discovery = raw === '/api/setup/status' && req.method === 'GET';
@@ -169,16 +173,47 @@ function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly =
       if (!allowed(req.method, raw, body)) return send(400);
       if (res.destroyed || res.writableEnded) return;
       const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
-      const headers = { Host: `${HOST}:${upstreamPort}`, Accept: chat ? 'text/event-stream' : 'application/json', ...(chat ? { 'Idempotency-Key': req.headers['idempotency-key'] } : {}), ...(auth ? { Authorization: auth } : {}), ...(req.headers.origin ? { Origin: origin } : {}), ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {}) };
+      const headers = { Host: `${HOST}:${upstreamPort}`, Accept: chat || runEvents ? 'text/event-stream' : 'application/json', ...(chat ? { 'Idempotency-Key': req.headers['idempotency-key'] } : {}), ...(auth ? { Authorization: auth } : {}), ...(req.headers.origin ? { Origin: origin } : {}), ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {}) };
       // Request-body intake keeps its ordinary bound. Chat header wait and body
       // share one absolute stream deadline, including upstream model startup.
       if (chat) {
         clearTimeout(timer);
         timer = setTimeout(() => { send(504); upstream?.destroy(); }, streamTimeoutMs);
       }
+      // A run reader ends cleanly after RUN_STREAM_MS; the page re-attaches with after=<seq>.
+      if (runEvents) clearTimeout(timer);
       upstream = http.request({ hostname: HOST, port: upstreamPort, path: raw, method: req.method, headers, agent: false, maxHeaderSize: 16384 }, response => {
         const fail = () => { response.destroy(); send(502); };
         const status = response.statusCode;
+        if (runEvents && status === 200) {
+          if (response.headers.location || response.headers['set-cookie'] || response.headers['content-encoding']
+            || !/^text\/event-stream(?:\s*;|$)/i.test(response.headers['content-type'] || '')) return fail();
+          const parser = new RunEventParser(conversationPath(raw).after);
+          // End our response first; its 'finish' cleanup then closes the upstream reader.
+          const finish = () => { clearTimeout(idle); clearTimeout(timer); if (!res.writableEnded) res.end(); };
+          const touch = () => { clearTimeout(idle); idle = setTimeout(finish, runIdleMs); };
+          timer = setTimeout(finish, runStreamMs);
+          touch();
+          // Only projected, numbered frames and fixed heartbeats leave the bridge.
+          res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.flushHeaders();
+          let lastKeepalive = -Infinity;
+          response.on('data', chunk => {
+            touch();
+            try {
+              const frames = parser.push(chunk);
+              for (const frame of frames) if (!res.write(`data: ${JSON.stringify(frame)}\n\n`)) response.pause();
+              const now = performance.now();
+              if (!frames.length && now - lastKeepalive >= KEEPALIVE_MS) { res.write(': keepalive\n\n'); lastKeepalive = now; }
+              if (parser.ended) finish();
+            } catch { res.destroy(); response.destroy(); }
+          });
+          res.on('drain', () => response.resume());
+          response.on('error', () => { if (!res.writableEnded) res.destroy(); });
+          response.on('aborted', () => { if (!res.writableEnded) res.destroy(); });
+          response.on('end', () => { try { parser.finish(); } catch { /* the client re-attaches */ } finish(); });
+          return;
+        }
         if (chat && status === 200) {
           const runId = response.headers['x-run-id'], messageId = response.headers['x-message-id'];
           if (response.headers.location || response.headers['set-cookie'] || response.headers['content-encoding']
