@@ -25,9 +25,9 @@ export type CompanySize = (typeof COMPANY_SIZES)[number];
 
 export const COMPANY_SIZE_LABELS: Readonly<Record<CompanySize, string>> = Object.freeze({
   solo: 'Just me',
-  small: '2–10 people',
-  medium: '11–50 people',
-  large: 'More than 50 people',
+  small: '2–10 agents',
+  medium: '11–50 agents',
+  large: 'More than 50 agents',
 });
 
 /**
@@ -190,12 +190,12 @@ export const TEAM_ROLES = ['manager', 'specialist', 'evaluator'] as const;
 export type TeamRole = (typeof TEAM_ROLES)[number];
 
 /**
- * Roles inside one department of `count` people: one lead per 20 people (at
- * least one), from 4 people one reviewer per 10 (at least one), the rest
+ * Roles inside one department of `count` agents: one lead per 20 agents (at
+ * least one), from 4 agents one reviewer per 10 (at least one), the rest
  * specialists. 1 -> 1 lead; 2 -> lead + specialist; 4 -> 1/2/1; 100 -> 5/85/10.
  */
 export function departmentRoles(count: number): RoleCounts {
-  if (!Number.isInteger(count) || count < 1) throw new CompanyPlanInputError('Each department needs at least one person');
+  if (!Number.isInteger(count) || count < 1) throw new CompanyPlanInputError('Each department needs at least one agent');
   const manager = Math.max(1, Math.round(count / 20));
   const evaluator = count >= 4 ? Math.max(1, Math.round(count / 10)) : 0;
   return { manager, specialist: count - manager - evaluator, evaluator };
@@ -209,13 +209,13 @@ export function parseTotal(value: unknown): number {
 }
 
 /**
- * Split `total` over the departments by weight with at least one person each
+ * Split `total` over the departments by weight with at least one agent each
  * (largest remainder, ties in the given order). The result always sums to
  * `total`. Pure.
  */
 export function distributeHeadcount(total: number, departments: readonly string[]): Record<string, number> {
   if (departments.length === 0) throw new CompanyPlanInputError('Pick at least one department');
-  if (total < departments.length) throw new CompanyPlanInputError(`A total of ${total} cannot give each of ${departments.length} departments one person`);
+  if (total < departments.length) throw new CompanyPlanInputError(`A total of ${total} cannot give each of ${departments.length} departments one agent`);
   const weights = departments.map((d) => catalogueEntry(d)?.weight ?? CUSTOM_DEPARTMENT_WEIGHT);
   const sum = weights.reduce((a, b) => a + b, 0);
   const free = total - departments.length; // everyone gets 1 first
@@ -263,7 +263,7 @@ export function parseCounts(value: unknown, departments: readonly string[]): Rec
   return out;
 }
 
-/** One department of `count` people: role split, titles and personas. Pure. */
+/** One department of `count` agents: role split, titles and personas. Pure. */
 export function departmentShare(department: string, count: number): DepartmentShare {
   return {
     department,
@@ -285,7 +285,7 @@ export function planDistribution(input: DistributionInput): CompanyDistribution 
   if (input.counts !== undefined) {
     counts = parseCounts(input.counts, departments);
     const sum = Object.values(counts).reduce((a, b) => a + b, 0);
-    if (sum > MAX_TOTAL_HEADCOUNT) throw new CompanyPlanInputError(`At most ${MAX_TOTAL_HEADCOUNT} people in total`);
+    if (sum > MAX_TOTAL_HEADCOUNT) throw new CompanyPlanInputError(`At most ${MAX_TOTAL_HEADCOUNT} agents in total`);
     if (input.total !== undefined && parseTotal(input.total) !== sum) throw new CompanyPlanInputError('total does not match the department counts');
   } else {
     counts = distributeHeadcount(parseTotal(input.total), departments);

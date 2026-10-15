@@ -4,14 +4,14 @@
  * The owner reviews a distribution (company-plan.ts planDistribution: a count
  * and a persona per role for each department) and hires it as one batch:
  *
- *   createBatch  stores the plan as one pending item per person. The id comes
+ *   createBatch  stores the plan as one pending item per agent. The id comes
  *                from the client, so sending the same batch again is a no-op;
  *                the same id with a different plan is refused.
  *   runBatch     creates up to `max` pending items, in order. Each item's
  *                agent (name reserved, row inserted, personality v1 seeded)
  *                and its 'created' mark are one transaction, and the mark is
  *                only set from 'pending'; a second run, a reload or a run in
- *                another tab never creates the same person twice.
+ *                another tab never creates the same agent twice.
  *   batchStatus  progress, for the review screen and for resuming after a
  *                reload.
  *
@@ -94,7 +94,7 @@ export function expandBatch(raw: unknown): PlannedItem[] {
       }
     }
   });
-  if (items.length > MAX_TOTAL_HEADCOUNT) throw new CompanyPlanInputError(`At most ${MAX_TOTAL_HEADCOUNT} people in total`);
+  if (items.length > MAX_TOTAL_HEADCOUNT) throw new CompanyPlanInputError(`At most ${MAX_TOTAL_HEADCOUNT} agents in total`);
   return items;
 }
 
