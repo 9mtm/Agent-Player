@@ -147,6 +147,8 @@ test('agents: list, comment on and move only their own cards; others look missin
   assert.match(text(await quietRun('board_comment', { card_id: other.id, comment: 'Sneaky' })), /not one of your board cards/);
   assert.match(text(await quietRun('board_move', { card_id: mine.id, column: 'in progress' })), /moved to "In progress"/);
   assert.match(text(await quietRun('board_move', { card_id: mine.id, column: 'Nowhere' })), /No column named/);
+  assert.match(text(await quietRun('board_move', { card_id: mine.id, column: 'done' })), /Only the owner moves cards to "Done"/);
+  assert.match(text(await quietRun('board_move', { card_id: mine.id, column: board.columns.at(-1).name })), /Only the owner moves cards to/, 'nor into the last column');
   assert.match(text(await quietRun('board_move', { card_id: other.id, column: 'Done' })), /not one of your board cards/);
   const comments = (await call('GET', `${B()}/cards/${mine.id}/comments`)).json().comments;
   assert.deepEqual(comments.map((c) => [c.authorKind, c.authorId, c.body]), [['agent', 'ag-1', 'Started on it.']]);

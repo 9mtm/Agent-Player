@@ -380,7 +380,7 @@ export function agentComment(ownerId: string, agentId: string, cardId: unknown, 
   }, { immediate: true });
 }
 
-/** The agent moves a card it is assigned to into another column (by name, case-insensitive), at the end. */
+/** The agent moves a card it is assigned to into another column (by name, case-insensitive), at the end. Never into the last column. */
 export function agentMove(ownerId: string, agentId: string, cardId: unknown, columnName: unknown): Promise<{ column: string }> {
   const wanted = line(columnName, 'column', 60).toLowerCase();
   return sql().tx(function* () {
@@ -389,6 +389,8 @@ export function agentMove(ownerId: string, agentId: string, cardId: unknown, col
     const cols = yield* all<{ id: string; name: string }>('SELECT id, name FROM board_columns WHERE board_id = ? ORDER BY position', card.board_id);
     const col = cols.find((c) => c.name.toLowerCase() === wanted);
     if (!col) throw bad(`No column named "${wanted.slice(0, 60)}". Columns: ${cols.map((c) => c.name).join(', ')}`);
+    // Finishing is the owner's decision: an agent never moves a card into "Done" or the board's last column.
+    if (col.name.toLowerCase() === 'done' || col.id === cols[cols.length - 1].id) throw new BoardError(403, 'owner_only_column', `Only the owner moves cards to "${col.name}". Move it to the column before it when your work is ready.`);
     const pos = yield* nextPosition(col.id);
     const r = yield* run(`UPDATE board_cards SET column_id = ?, position = ?, version = version + 1, updated_at = ${nowText(d)} WHERE id = ? AND version = ?`,
       col.id, pos, card.id, card.version);
