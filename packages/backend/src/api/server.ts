@@ -22,6 +22,7 @@ import { dbDriver } from '../db/pg/config.js';
 import { ISOLATED_ENV } from '../config/isolation.js';
 import { assertSafeIsolatedTree } from '../config/isolated-tree.js';
 import { flushAuditWritesWithin, SHUTDOWN_AUDIT_FLUSH_MS } from '../services/audit-logger.js';
+import { getOrchestrator } from '../multi-agent/orchestrator.js';
 
 const PORT = config.port;
 const HOST = config.host;
@@ -123,6 +124,10 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       // awaited by the request) get a short, bounded chance to land.
       if (!(await flushAuditWritesWithin(SHUTDOWN_AUDIT_FLUSH_MS))) {
         console.warn(`[Server] Some audit writes did not finish within ${SHUTDOWN_AUDIT_FLUSH_MS} ms of shutdown`);
+      }
+      // B2.2d-15: orchestrator writes queued for PostgreSQL get the same bounded chance.
+      if (!(await flushAuditWritesWithin(SHUTDOWN_AUDIT_FLUSH_MS, () => getOrchestrator().flush()))) {
+        console.warn(`[Server] Some orchestrator writes did not finish within ${SHUTDOWN_AUDIT_FLUSH_MS} ms of shutdown`);
       }
       process.exit(0);
     } catch {

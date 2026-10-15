@@ -31,6 +31,7 @@ const { INDEXER_TABLES_SQL, INDEXER_FTS_SQL } = await import(join(backendDir, 's
 const { APP_SETTINGS_SQL } = await import(join(backendDir, 'src/settings/settings-manager.ts'));
 const auditStorage = await import(join(backendDir, 'src/audit/audit-storage.ts'));
 const { WEBHOOKS_SCHEMA_SQL } = await import(join(backendDir, 'src/webhooks/manager.ts'));
+const { orchestratorSchemaSql, orchestratorTablesFor } = await import(join(backendDir, 'src/multi-agent/orchestrator.ts'));
 
 test.after(() => {
   process.chdir(backendDir);
@@ -187,4 +188,14 @@ test('B2.2c part 2: r008 equals the webhook store DDL (its own SQLite file; the 
   const pg = readFileSync(join(backendDir, 'src', 'db', 'migrations-pg', 'r008_webhooks.sql'), 'utf8');
   for (const t of ['webhooks', 'inbound_webhooks', 'webhook_deliveries']) assert.match(pg, new RegExp(`CREATE TABLE IF NOT EXISTS ${t} \\(`));
   assert.doesNotMatch(pg, /PRAGMA|datetime\(/i);
+});
+
+test('B2.2d-15: r009 equals the orchestrator DDL for the orchestrator_* tables; SQLite keeps agents/teams/tasks', () => {
+  assert.deepEqual(orchestratorTablesFor('postgres'), { agents: 'orchestrator_agents', teams: 'orchestrator_teams', tasks: 'orchestrator_tasks' });
+  assert.deepEqual(statements(runtime('r009_orchestrator.sql')), statements(orchestratorSchemaSql(orchestratorTablesFor('postgres'))));
+  const pg = readFileSync(join(backendDir, 'src', 'db', 'migrations-pg', 'r009_orchestrator.sql'), 'utf8');
+  for (const t of ['orchestrator_agents', 'orchestrator_teams', 'orchestrator_tasks']) assert.match(pg, new RegExp(`CREATE TABLE IF NOT EXISTS ${t} \\(`));
+  assert.match(pg, /idx_orchestrator_tasks_status ON orchestrator_tasks/);
+  // The main schema's own `teams` table is not touched.
+  assert.doesNotMatch(pg, /CREATE TABLE IF NOT EXISTS teams \(/);
 });

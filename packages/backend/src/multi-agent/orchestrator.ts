@@ -6,6 +6,9 @@
 import { dataPathOr } from '../config/data-root.js';
 import { v4 as uuidv4 } from 'uuid';
 import Database from 'better-sqlite3';
+import { dbDriver } from '../db/pg/config.js';
+import { requirePgTable } from '../encryption/row-store.js';
+import { all, pgSteps, run, type SqlParam } from '../repositories/sql-steps.js';
 import { mkdirSync, existsSync } from 'fs';
 import { dirname } from 'path';
 import {
@@ -21,42 +24,28 @@ import {
   DEFAULT_ORCHESTRATION,
 } from './types.js';
 
-export class AgentOrchestrator {
-  private db: Database.Database | null = null;
-  private agents: Map<string, AgentInstance> = new Map();
-  private teams: Map<string, TeamInstance> = new Map();
-  private tasks: Map<string, Task> = new Map();
-  private strategy: OrchestrationStrategy = DEFAULT_ORCHESTRATION;
+/**
+ * B2.2d-15: where the orchestrator keeps its rows.
+ *   SQLite      its own file <data>/multi-agent/orchestrator.db, tables
+ *               agents / teams / tasks (unchanged).
+ *   PostgreSQL  the main database (one backup covers it), tables
+ *               orchestrator_agents / _teams / _tasks: the main schema
+ *               already has a different `teams` table. The DDL is
+ *               scripts/pg/runtime/r009_orchestrator.sql (= orchestratorSchemaSql
+ *               for these names, test/pg-runtime-ddl.test.mjs), migrations-pg r009.
+ */
+export interface OrchestratorTables { agents: string; teams: string; tasks: string }
 
-  // Limits
-  private maxSpawnDepth: number = 3;
-  private maxChildrenPerAgent: number = 5;
-  private maxConcurrentTasks: number = 10;
+export function orchestratorTablesFor(driver: 'sqlite' | 'postgres'): OrchestratorTables {
+  return driver === 'postgres'
+    ? { agents: 'orchestrator_agents', teams: 'orchestrator_teams', tasks: 'orchestrator_tasks' }
+    : { agents: 'agents', teams: 'teams', tasks: 'tasks' };
+}
 
-  /**
-   * Initialize the orchestrator
-   */
-  async initialize(dbPath: string = dataPathOr('./.data/multi-agent/orchestrator.db', 'multi-agent', 'orchestrator.db')): Promise<void> {
-    const dir = dirname(dbPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
-
-    this.createTables();
-    this.loadFromDatabase();
-
-    console.log('[Orchestrator] Initialized');
-  }
-
-  /**
-   * Create database tables
-   */
-  private createTables(): void {
-    this.db!.exec(`
-      CREATE TABLE IF NOT EXISTS agents (
+/** The orchestrator DDL for the given table names (SQLite names by default). */
+export function orchestratorSchemaSql(t: OrchestratorTables = orchestratorTablesFor('sqlite')): string {
+  return `
+      CREATE TABLE IF NOT EXISTS ${t.agents} (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         description TEXT,
@@ -69,7 +58,7 @@ export class AgentOrchestrator {
         created_at TEXT NOT NULL
       );
 
-      CREATE TABLE IF NOT EXISTS teams (
+      CREATE TABLE IF NOT EXISTS ${t.teams} (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         description TEXT,
@@ -83,7 +72,7 @@ export class AgentOrchestrator {
         metadata TEXT
       );
 
-      CREATE TABLE IF NOT EXISTS tasks (
+      CREATE TABLE IF NOT EXISTS ${t.tasks} (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
         description TEXT NOT NULL,
@@ -106,14 +95,92 @@ export class AgentOrchestrator {
         retry_count INTEGER DEFAULT 0,
         max_retries INTEGER DEFAULT 2,
         spawn_depth INTEGER DEFAULT 0,
-        spawned_by TEXT
+        spawned_by TEXT,
+        origin TEXT
       );
 
-      CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-      CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_to);
-      CREATE INDEX IF NOT EXISTS idx_tasks_team ON tasks(team_id);
-      CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
-    `);
+      CREATE INDEX IF NOT EXISTS idx_${t.tasks}_status ON ${t.tasks}(status);
+      CREATE INDEX IF NOT EXISTS idx_${t.tasks}_assigned ON ${t.tasks}(assigned_to);
+      CREATE INDEX IF NOT EXISTS idx_${t.tasks}_team ON ${t.tasks}(team_id);
+      CREATE INDEX IF NOT EXISTS idx_${t.tasks}_parent ON ${t.tasks}(parent_id);
+    `;
+}
+
+/** INSERT that replaces the row with the same id (same SQL on both drivers). */
+function upsertSql(table: string, columns: string[]): string {
+  const updates = columns.filter((c) => c !== 'id').map((c) => `${c} = excluded.${c}`).join(', ');
+  return `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})
+          ON CONFLICT (id) DO UPDATE SET ${updates}`;
+}
+
+const AGENT_COLUMNS = ['id', 'name', 'description', 'role', 'capabilities', 'model',
+  'system_prompt', 'max_concurrent_tasks', 'metadata', 'created_at'];
+const TEAM_COLUMNS = ['id', 'name', 'description', 'objective', 'agent_ids', 'leader_id',
+  'communication_style', 'shared_memory', 'status', 'created_at', 'metadata'];
+const TASK_COLUMNS = ['id', 'title', 'description', 'priority', 'status', 'required_capabilities',
+  'assigned_to', 'team_id', 'parent_id', 'subtasks', 'dependencies', 'input', 'output',
+  'progress', 'created_at', 'started_at', 'completed_at', 'deadline', 'error',
+  'retry_count', 'max_retries', 'spawn_depth', 'spawned_by', 'origin'];
+
+export class AgentOrchestrator {
+  private db: Database.Database | null = null;
+  /** PostgreSQL: the store is the main database (no SQLite file is opened). */
+  private pg = false;
+  private tables: OrchestratorTables = orchestratorTablesFor('sqlite');
+  /**
+   * PostgreSQL writes, in call order. The in-memory maps are the live state
+   * (as on SQLite); a write that fails is logged and the chain goes on.
+   * flush() waits for everything queued so far.
+   */
+  private pending: Promise<void> = Promise.resolve();
+  private agents: Map<string, AgentInstance> = new Map();
+  private teams: Map<string, TeamInstance> = new Map();
+  private tasks: Map<string, Task> = new Map();
+  private strategy: OrchestrationStrategy = DEFAULT_ORCHESTRATION;
+
+  // Limits
+  private maxSpawnDepth: number = 3;
+  private maxChildrenPerAgent: number = 5;
+  private maxConcurrentTasks: number = 10;
+
+  /**
+   * Initialize the orchestrator
+   */
+  async initialize(dbPath: string = dataPathOr('./.data/multi-agent/orchestrator.db', 'multi-agent', 'orchestrator.db')): Promise<void> {
+    if (dbDriver() === 'postgres') {
+      // The tables come from the PostgreSQL migrations (no runtime DDL there).
+      this.tables = orchestratorTablesFor('postgres');
+      await requirePgTable(this.tables.tasks, 'migrations-pg r009');
+      this.pg = true;
+      this.db = null;
+      this.load(
+        await pgSteps.read(all(`SELECT * FROM ${this.tables.agents}`)),
+        await pgSteps.read(all(`SELECT * FROM ${this.tables.teams}`)),
+        await pgSteps.read(all(`SELECT * FROM ${this.tables.tasks} WHERE status NOT IN ('completed', 'failed', 'cancelled')`))
+      );
+      console.log('[Orchestrator] Initialized in the main PostgreSQL database');
+      return;
+    }
+
+    const dir = dirname(dbPath);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+
+    this.db = new Database(dbPath);
+    this.db.pragma('journal_mode = WAL');
+
+    this.createTables();
+    this.loadFromDatabase();
+
+    console.log('[Orchestrator] Initialized');
+  }
+
+  /**
+   * Create database tables
+   */
+  private createTables(): void {
+    this.db!.exec(orchestratorSchemaSql(this.tables));
 
     // S1.2: server-recorded origin of a task ('owner' = created by the owner
     // through the API, 'agent' = created by an agent tool, 'requeue' = recurring
@@ -126,8 +193,16 @@ export class AgentOrchestrator {
    * Load data from database
    */
   private loadFromDatabase(): void {
+    this.load(
+      this.db!.prepare('SELECT * FROM agents').all() as any[],
+      this.db!.prepare('SELECT * FROM teams').all() as any[],
+      this.db!.prepare("SELECT * FROM tasks WHERE status NOT IN ('completed', 'failed', 'cancelled')").all() as any[]
+    );
+  }
+
+  /** Fill the in-memory maps from stored rows (both drivers). */
+  private load(agentRows: any[], teamRows: any[], taskRows: any[]): void {
     // Load agents
-    const agentRows = this.db!.prepare('SELECT * FROM agents').all() as any[];
     for (const row of agentRows) {
       const definition: AgentDefinition = {
         id: row.id,
@@ -137,7 +212,7 @@ export class AgentOrchestrator {
         capabilities: JSON.parse(row.capabilities),
         model: row.model || undefined,
         systemPrompt: row.system_prompt || undefined,
-        maxConcurrentTasks: row.max_concurrent_tasks,
+        maxConcurrentTasks: Number(row.max_concurrent_tasks),
         metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
       };
 
@@ -152,7 +227,6 @@ export class AgentOrchestrator {
     }
 
     // Load teams
-    const teamRows = this.db!.prepare('SELECT * FROM teams').all() as any[];
     for (const row of teamRows) {
       const definition: TeamDefinition = {
         id: row.id,
@@ -162,7 +236,7 @@ export class AgentOrchestrator {
         agentIds: JSON.parse(row.agent_ids),
         leaderId: row.leader_id || undefined,
         communicationStyle: row.communication_style,
-        sharedMemory: row.shared_memory === 1,
+        sharedMemory: Number(row.shared_memory) === 1,
         createdAt: new Date(row.created_at),
         metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
       };
@@ -178,9 +252,6 @@ export class AgentOrchestrator {
     }
 
     // Load pending tasks
-    const taskRows = this.db!.prepare(
-      "SELECT * FROM tasks WHERE status NOT IN ('completed', 'failed', 'cancelled')"
-    ).all() as any[];
     for (const row of taskRows) {
       this.tasks.set(row.id, this.rowToTask(row));
     }
@@ -204,12 +275,7 @@ export class AgentOrchestrator {
     this.agents.set(definition.id, instance);
 
     // Persist
-    this.db!.prepare(`
-      INSERT OR REPLACE INTO agents (
-        id, name, description, role, capabilities, model,
-        system_prompt, max_concurrent_tasks, metadata, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    this.write(upsertSql(this.tables.agents, AGENT_COLUMNS),
       definition.id,
       definition.name,
       definition.description || null,
@@ -279,7 +345,7 @@ export class AgentOrchestrator {
   removeAgent(id: string): boolean {
     const deleted = this.agents.delete(id);
     if (deleted) {
-      this.db!.prepare('DELETE FROM agents WHERE id = ?').run(id);
+      this.write(`DELETE FROM ${this.tables.agents} WHERE id = ?`, id);
     }
     return deleted;
   }
@@ -319,12 +385,7 @@ export class AgentOrchestrator {
     }
 
     // Persist
-    this.db!.prepare(`
-      INSERT INTO teams (
-        id, name, description, objective, agent_ids, leader_id,
-        communication_style, shared_memory, status, created_at, metadata
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    this.write(`INSERT INTO ${this.tables.teams} (${TEAM_COLUMNS.join(', ')}) VALUES (${TEAM_COLUMNS.map(() => '?').join(', ')})`,
       fullDefinition.id,
       fullDefinition.name,
       fullDefinition.description || null,
@@ -373,7 +434,7 @@ export class AgentOrchestrator {
       }
     }
 
-    this.db!.prepare("UPDATE teams SET status = 'disbanded' WHERE id = ?").run(id);
+    this.write(`UPDATE ${this.tables.teams} SET status = 'disbanded' WHERE id = ?`, id);
     return true;
   }
 
@@ -890,15 +951,32 @@ export class AgentOrchestrator {
 
   // ============ Persistence ============
 
+  /**
+   * One write. SQLite: runs now, a failure throws to the caller (as before).
+   * PostgreSQL: queued behind the earlier writes (same order as the calls);
+   * the parameters are taken now, so a later change to the object is its own
+   * write. A failed write is logged without its parameters.
+   */
+  private write(sqlText: string, ...params: SqlParam[]): void {
+    if (!this.pg) {
+      this.db!.prepare(sqlText).run(...params);
+      return;
+    }
+    this.pending = this.pending
+      .then(() => pgSteps.read(run(sqlText, ...params)))
+      .then(
+        () => undefined,
+        (err: any) => console.error('[Orchestrator] PostgreSQL write failed:', err?.code ?? err?.name ?? 'Error')
+      );
+  }
+
+  /** Wait until every write queued so far is done (PostgreSQL; resolves at once on SQLite). */
+  flush(): Promise<void> {
+    return this.pending;
+  }
+
   private persistTask(task: Task): void {
-    this.db!.prepare(`
-      INSERT OR REPLACE INTO tasks (
-        id, title, description, priority, status, required_capabilities,
-        assigned_to, team_id, parent_id, subtasks, dependencies, input, output,
-        progress, created_at, started_at, completed_at, deadline, error,
-        retry_count, max_retries, spawn_depth, spawned_by, origin
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    this.write(upsertSql(this.tables.tasks, TASK_COLUMNS),
       task.id,
       task.title,
       task.description,
@@ -974,6 +1052,7 @@ export class AgentOrchestrator {
    * Close database
    */
   close(): void {
+    this.pg = false;
     if (this.db) {
       this.db.close();
       this.db = null;
