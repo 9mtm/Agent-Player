@@ -1,0 +1,5 @@
+/node_modules/
+/dist/
+/.npm-cache/
+/.build-evidence/
+!package-lock.json
