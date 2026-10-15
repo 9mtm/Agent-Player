@@ -1,13 +1,14 @@
 /**
  * Extension Marketplace Service
- * Handles extension registry, installation, updates, and reviews
+ * Handles extension registry, installation, updates, and reviews.
+ * B2.2d-11: on the process driver; install, uninstall and reviews are one
+ * transaction each.
  */
 
-import { getDatabase } from '../db/index.js';
+import { all, num, one, q, run, sql, type Step } from '../repositories/sql-steps.js';
 import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { execSync } from 'child_process';
 
 export interface RegistryExtension {
   id: string;
@@ -68,7 +69,7 @@ export interface ExtensionReview {
 /**
  * Search marketplace extensions with filters
  */
-export function searchMarketplace(options?: {
+export async function searchMarketplace(options?: {
   query?: string;
   category?: string;
   type?: string;
@@ -78,63 +79,64 @@ export function searchMarketplace(options?: {
   userId?: string;
   limit?: number;
   offset?: number;
-}): { extensions: RegistryExtension[]; total: number } {
-  const db = getDatabase();
+}): Promise<{ extensions: RegistryExtension[]; total: number }> {
   const { query, category, type, tags, featured, verified, userId, limit = 50, offset = 0 } = options || {};
+  // SQLite LIKE ignores ASCII case; ILIKE gives the same match on PostgreSQL.
+  const like = q.dialect === 'postgres' ? 'ILIKE' : 'LIKE';
 
-  let sql = `
-    SELECT er.*,
-           ei.installed_version,
-           CASE WHEN ei.id IS NOT NULL THEN 1 ELSE 0 END as installed
+  const from = `
     FROM extension_registry er
-    LEFT JOIN extension_installations ei ON er.id = ei.extension_id ${userId ? 'AND ei.user_id = ?' : 'AND 0=1'}
+    LEFT JOIN extension_installations ei ON er.id = ei.extension_id ${userId ? 'AND ei.user_id = ?' : 'AND 1 = 0'}
     WHERE er.status = 'active'
   `;
-
-  const params: any[] = userId ? [userId] : [];
+  let where = '';
+  const params: Array<string | number> = userId ? [userId] : [];
 
   if (query) {
-    sql += ` AND (er.name LIKE ? OR er.description LIKE ? OR er.tags LIKE ?)`;
+    where += ` AND (er.name ${like} ? OR er.description ${like} ? OR er.tags ${like} ?)`;
     const searchPattern = `%${query}%`;
     params.push(searchPattern, searchPattern, searchPattern);
   }
 
   if (category) {
-    sql += ` AND er.category = ?`;
+    where += ` AND er.category = ?`;
     params.push(category);
   }
 
   if (type) {
-    sql += ` AND er.type = ?`;
+    where += ` AND er.type = ?`;
     params.push(type);
   }
 
   if (tags && tags.length > 0) {
-    const tagConditions = tags.map(() => `er.tags LIKE ?`).join(' OR ');
-    sql += ` AND (${tagConditions})`;
+    const tagConditions = tags.map(() => `er.tags ${like} ?`).join(' OR ');
+    where += ` AND (${tagConditions})`;
     tags.forEach(tag => params.push(`%"${tag}"%`));
   }
 
   if (featured !== undefined) {
-    sql += ` AND er.featured = ?`;
+    where += ` AND er.featured = ?`;
     params.push(featured ? 1 : 0);
   }
 
   if (verified !== undefined) {
-    sql += ` AND er.verified = ?`;
+    where += ` AND er.verified = ?`;
     params.push(verified ? 1 : 0);
   }
 
-  // Count total
-  const countSql = sql.replace(/SELECT er\.\*.*?FROM/, 'SELECT COUNT(*) as total FROM');
-  const countResult = db.prepare(countSql).get(...params) as any;
-  const total = countResult.total || 0;
+  // Count total (a separate COUNT over the same FROM/WHERE; the former regex
+  // rewrite never matched across the newlines, so total was always 0)
+  const countResult = await q.one<{ total: number }>(`SELECT COUNT(*) as total ${from}${where}`, ...params);
+  const total = countResult?.total || 0;
 
   // Get paginated results
-  sql += ` ORDER BY er.featured DESC, er.rating_avg DESC, er.install_count DESC LIMIT ? OFFSET ?`;
-  params.push(limit, offset);
-
-  const extensions = db.prepare(sql).all(...params) as any[];
+  const extensions = await q.all<any>(`
+    SELECT er.*,
+           ei.installed_version,
+           CASE WHEN ei.id IS NOT NULL THEN 1 ELSE 0 END as installed
+    ${from}${where}
+    ORDER BY er.featured DESC, er.rating_avg DESC, er.install_count DESC, er.id ASC LIMIT ? OFFSET ?`,
+    ...params, limit, offset);
 
   return {
     extensions: extensions.map(parseRegistryExtension),
@@ -145,40 +147,32 @@ export function searchMarketplace(options?: {
 /**
  * Get extension details by ID
  */
-export function getExtensionDetails(extensionId: string, userId?: string): RegistryExtension | null {
-  const db = getDatabase();
-
-  const extension = db
-    .prepare(
-      `
+function* extensionDetailsStep(extensionId: string, userId?: string): Step<RegistryExtension | null> {
+  const extension = yield* one<any>(`
     SELECT er.*,
            ei.installed_version,
            CASE WHEN ei.id IS NOT NULL THEN 1 ELSE 0 END as installed
     FROM extension_registry er
-    LEFT JOIN extension_installations ei ON er.id = ei.extension_id ${userId ? 'AND ei.user_id = ?' : 'AND 0=1'}
-    WHERE er.id = ?
-  `
-    )
-    .get(...(userId ? [userId, extensionId] : [extensionId])) as any;
+    LEFT JOIN extension_installations ei ON er.id = ei.extension_id ${userId ? 'AND ei.user_id = ?' : 'AND 1 = 0'}
+    WHERE er.id = ?`,
+    ...(userId ? [userId, extensionId] : [extensionId]));
 
   return extension ? parseRegistryExtension(extension) : null;
+}
+
+export function getExtensionDetails(extensionId: string, userId?: string): Promise<RegistryExtension | null> {
+  return sql().read(extensionDetailsStep(extensionId, userId));
 }
 
 /**
  * Get extension versions
  */
-export function getExtensionVersions(extensionId: string): ExtensionVersion[] {
-  const db = getDatabase();
-
-  const versions = db
-    .prepare(
-      `
+export async function getExtensionVersions(extensionId: string): Promise<ExtensionVersion[]> {
+  const versions = await q.all<any>(`
     SELECT * FROM extension_versions
     WHERE extension_id = ?
-    ORDER BY release_date DESC
-  `
-    )
-    .all(extensionId) as any[];
+    ORDER BY release_date DESC`,
+    extensionId);
 
   return versions.map(parseExtensionVersion);
 }
@@ -186,21 +180,13 @@ export function getExtensionVersions(extensionId: string): ExtensionVersion[] {
 /**
  * Get extension reviews
  */
-export function getExtensionReviews(extensionId: string, limit = 20): ExtensionReview[] {
-  const db = getDatabase();
-
-  const reviews = db
-    .prepare(
-      `
+export function getExtensionReviews(extensionId: string, limit = 20): Promise<ExtensionReview[]> {
+  return q.all<ExtensionReview>(`
     SELECT * FROM extension_reviews
     WHERE extension_id = ?
     ORDER BY helpful_count DESC, created_at DESC
-    LIMIT ?
-  `
-    )
-    .all(extensionId, limit) as any[];
-
-  return reviews;
+    LIMIT ?`,
+    extensionId, limit);
 }
 
 /**
@@ -211,43 +197,53 @@ export async function installExtension(
   userId: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const db = getDatabase();
+    const { checkDependenciesStep } = await import('./extension-dependencies.js');
 
-    // Get extension from registry
-    const extension = getExtensionDetails(extensionId);
-    if (!extension) {
-      return { success: false, error: 'Extension not found in registry' };
-    }
-
-    // Check if already installed
-    const existing = db
-      .prepare('SELECT * FROM extension_installations WHERE extension_id = ? AND user_id = ?')
-      .get(extensionId, userId);
-
-    if (existing) {
-      return { success: false, error: 'Extension already installed' };
-    }
-
-    // Check dependencies
-    const { checkDependencies } = await import('./extension-dependencies.js');
-    const depCheck = checkDependencies(extensionId, userId);
-
-    if (!depCheck.success) {
-      const errors = [];
-      if (depCheck.missing.length > 0) {
-        errors.push(
-          `Missing dependencies: ${depCheck.missing.map((m) => `${m.name}${m.min_version ? ` (>= ${m.min_version})` : ''}`).join(', ')}`
-        );
+    const outcome = await sql().tx(function* (): Step<{ success: boolean; error?: string }> {
+      // Get extension from registry
+      const extension = yield* extensionDetailsStep(extensionId);
+      if (!extension) {
+        return { success: false, error: 'Extension not found in registry' };
       }
-      if (depCheck.conflicts.length > 0) {
-        errors.push(
-          `Version conflicts: ${depCheck.conflicts.map((c) => `${c.dependency} requires ${c.required_version}, installed: ${c.installed_version}`).join(', ')}`
-        );
-      }
-      return { success: false, error: errors.join('; ') };
-    }
 
-    // Download and extract extension
+      // Check if already installed
+      const existing = yield* one('SELECT 1 AS ok FROM extension_installations WHERE extension_id = ? AND user_id = ?', extensionId, userId);
+      if (existing) {
+        return { success: false, error: 'Extension already installed' };
+      }
+
+      // Check dependencies
+      const depCheck = yield* checkDependenciesStep(extensionId, userId);
+
+      if (!depCheck.success) {
+        const errors = [];
+        if (depCheck.missing.length > 0) {
+          errors.push(
+            `Missing dependencies: ${depCheck.missing.map((m) => `${m.name}${m.min_version ? ` (>= ${m.min_version})` : ''}`).join(', ')}`
+          );
+        }
+        if (depCheck.conflicts.length > 0) {
+          errors.push(
+            `Version conflicts: ${depCheck.conflicts.map((c) => `${c.dependency} requires ${c.required_version}, installed: ${c.installed_version}`).join(', ')}`
+          );
+        }
+        return { success: false, error: errors.join('; ') };
+      }
+
+      // Record installation (UNIQUE (extension_id, user_id) refuses a concurrent second install)
+      yield* run(`
+        INSERT INTO extension_installations (id, extension_id, user_id, installed_version)
+        VALUES (?, ?, ?, ?)`,
+        randomUUID(), extensionId, userId, extension.version);
+
+      // Increment install count
+      yield* run('UPDATE extension_registry SET install_count = install_count + 1 WHERE id = ?', extensionId);
+
+      return { success: true };
+    });
+    if (!outcome.success) return outcome;
+
+    // Download and extract extension (after the commit; the id is a registry id)
     const extensionDir = join(process.cwd(), 'packages', 'backend', 'extensions', extensionId);
     if (!existsSync(extensionDir)) {
       mkdirSync(extensionDir, { recursive: true });
@@ -255,22 +251,7 @@ export async function installExtension(
 
     // TODO: Download from download_url and extract
     // For now, assume extension files are already in place (manual installation)
-
-    // Record installation
-    db.prepare(
-      `
-      INSERT INTO extension_installations (id, extension_id, user_id, installed_version)
-      VALUES (?, ?, ?, ?)
-    `
-    ).run(randomUUID(), extensionId, userId, extension.version);
-
-    // Increment install count
-    db.prepare('UPDATE extension_registry SET install_count = install_count + 1 WHERE id = ?').run(extensionId);
-
-    // Enable extension in extension_configs
-    const { getExtensionRunner } = await import('../plugins/extension-runner.js');
-    const runner = getExtensionRunner();
-    // Runner will auto-load on next initialization
+    // The extension runner loads it on its next initialization.
 
     return { success: true };
   } catch (error: any) {
@@ -286,32 +267,31 @@ export async function uninstallExtension(
   userId: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const db = getDatabase();
+    const { canUninstallStep } = await import('./extension-dependencies.js');
 
-    // Check reverse dependencies
-    const { canUninstall } = await import('./extension-dependencies.js');
-    const uninstallCheck = canUninstall(extensionId, userId);
+    return await sql().tx(function* (): Step<{ success: boolean; error?: string }> {
+      // Check reverse dependencies
+      const uninstallCheck = yield* canUninstallStep(extensionId, userId);
 
-    if (!uninstallCheck.canUninstall) {
-      return {
-        success: false,
-        error: `Cannot uninstall - required by: ${uninstallCheck.blockedBy.join(', ')}`,
-      };
-    }
+      if (!uninstallCheck.canUninstall) {
+        return {
+          success: false,
+          error: `Cannot uninstall - required by: ${uninstallCheck.blockedBy.join(', ')}`,
+        };
+      }
 
-    // Remove installation record
-    const result = db
-      .prepare('DELETE FROM extension_installations WHERE extension_id = ? AND user_id = ?')
-      .run(extensionId, userId);
+      // Remove installation record
+      const result = yield* run('DELETE FROM extension_installations WHERE extension_id = ? AND user_id = ?', extensionId, userId);
 
-    if (result.changes === 0) {
-      return { success: false, error: 'Extension not installed' };
-    }
+      if (result.changes === 0) {
+        return { success: false, error: 'Extension not installed' };
+      }
 
-    // Disable extension in extension_configs
-    db.prepare('UPDATE extension_configs SET enabled = 0 WHERE extension_id = ?').run(extensionId);
+      // Disable extension in extension_configs
+      yield* run('UPDATE extension_configs SET enabled = 0 WHERE extension_id = ?', extensionId);
 
-    return { success: true };
+      return { success: true };
+    });
   } catch (error: any) {
     return { success: false, error: error.message };
   }
@@ -320,18 +300,14 @@ export async function uninstallExtension(
 /**
  * Check for extension updates
  */
-export function checkForUpdates(userId: string): Array<{
+export function checkForUpdates(userId: string): Promise<Array<{
   extension_id: string;
   name: string;
   current_version: string;
   latest_version: string;
   changelog?: string;
-}> {
-  const db = getDatabase();
-
-  const updates = db
-    .prepare(
-      `
+}>> {
+  return q.all(`
     SELECT
       ei.extension_id,
       er.name,
@@ -344,70 +320,61 @@ export function checkForUpdates(userId: string): Array<{
     WHERE ei.user_id = ?
       AND ei.installed_version != er.version
       AND er.status = 'active'
-  `
-    )
-    .all(userId) as any[];
-
-  return updates;
+    ORDER BY ei.extension_id`,
+    userId);
 }
 
 /**
  * Submit extension review
  */
-export function submitReview(
+export async function submitReview(
   extensionId: string,
   userId: string,
   rating: number,
   reviewTitle?: string,
   reviewText?: string,
   version?: string
-): { success: boolean; error?: string } {
+): Promise<{ success: boolean; error?: string }> {
   try {
-    const db = getDatabase();
-
     // Validate rating
-    if (rating < 1 || rating > 5) {
+    if (!(rating >= 1 && rating <= 5)) {
       return { success: false, error: 'Rating must be between 1 and 5' };
     }
 
-    // Check if extension exists
-    const extension = db.prepare('SELECT * FROM extension_registry WHERE id = ?').get(extensionId);
-    if (!extension) {
-      return { success: false, error: 'Extension not found' };
-    }
+    return await sql().tx(function* (): Step<{ success: boolean; error?: string }> {
+      // Check if extension exists
+      const extension = yield* one('SELECT 1 AS ok FROM extension_registry WHERE id = ?', extensionId);
+      if (!extension) {
+        return { success: false, error: 'Extension not found' };
+      }
 
-    // Upsert review
-    db.prepare(
-      `
-      INSERT INTO extension_reviews (id, extension_id, user_id, rating, review_title, review_text, version)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(extension_id, user_id) DO UPDATE SET
-        rating = excluded.rating,
-        review_title = excluded.review_title,
-        review_text = excluded.review_text,
-        version = excluded.version,
-        updated_at = CURRENT_TIMESTAMP
-    `
-    ).run(randomUUID(), extensionId, userId, rating, reviewTitle || null, reviewText || null, version || null);
+      // Upsert review
+      yield* run(`
+        INSERT INTO extension_reviews (id, extension_id, user_id, rating, review_title, review_text, version)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(extension_id, user_id) DO UPDATE SET
+          rating = excluded.rating,
+          review_title = excluded.review_title,
+          review_text = excluded.review_text,
+          version = excluded.version,
+          updated_at = CURRENT_TIMESTAMP`,
+        randomUUID(), extensionId, userId, rating, reviewTitle || null, reviewText || null, version || null);
 
-    // Recalculate average rating
-    const stats = db
-      .prepare(
-        `
-      SELECT AVG(rating) as avg_rating, COUNT(*) as count
-      FROM extension_reviews
-      WHERE extension_id = ?
-    `
-      )
-      .get(extensionId) as any;
+      // Recalculate average rating (same transaction: no lost update between reviews)
+      const stats = yield* one<{ avg_rating: unknown; count: number }>(`
+        SELECT AVG(rating) as avg_rating, COUNT(*) as count
+        FROM extension_reviews
+        WHERE extension_id = ?`,
+        extensionId);
 
-    db.prepare('UPDATE extension_registry SET rating_avg = ?, rating_count = ? WHERE id = ?').run(
-      stats.avg_rating || 0,
-      stats.count || 0,
-      extensionId
-    );
+      yield* run('UPDATE extension_registry SET rating_avg = ?, rating_count = ? WHERE id = ?',
+        // AVG is numeric (text) on PostgreSQL
+        num<number | null>(stats?.avg_rating) ?? 0,
+        stats?.count || 0,
+        extensionId);
 
-    return { success: true };
+      return { success: true };
+    });
   } catch (error: any) {
     return { success: false, error: error.message };
   }

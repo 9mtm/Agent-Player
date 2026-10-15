@@ -53,7 +53,7 @@ export async function marketplaceRoutes(fastify: FastifyInstance) {
       const { q, category, type, tags, featured, verified, limit, offset } = request.query as any;
       const userId = getUserIdFromRequest(request);
 
-      const result = searchMarketplace({
+      const result = await searchMarketplace({
         query: q,
         category,
         type,
@@ -92,7 +92,7 @@ export async function marketplaceRoutes(fastify: FastifyInstance) {
       const { id } = request.params as any;
       const userId = getUserIdFromRequest(request);
 
-      const extension = getExtensionDetails(id, userId);
+      const extension = await getExtensionDetails(id, userId);
 
       if (!extension) {
         return { success: false, error: 'Extension not found' };
@@ -124,7 +124,7 @@ export async function marketplaceRoutes(fastify: FastifyInstance) {
     async (request) => {
       const { id } = request.params as any;
 
-      const versions = getExtensionVersions(id);
+      const versions = await getExtensionVersions(id);
 
       return { success: true, versions };
     }
@@ -152,7 +152,7 @@ export async function marketplaceRoutes(fastify: FastifyInstance) {
     async (request) => {
       const { id } = request.params as any;
 
-      const reviews = getExtensionReviews(id);
+      const reviews = await getExtensionReviews(id);
 
       return { success: true, reviews };
     }
@@ -179,7 +179,7 @@ export async function marketplaceRoutes(fastify: FastifyInstance) {
     },
     async (request) => {
       const { extension_id } = request.body as any;
-      const userId = getUserIdFromRequest(request) || '1'; // Default to user 1
+      const userId = getUserIdFromRequest(request); // F-06: the token user only (throws → 401), no default user
 
       const result = await installExtension(extension_id, userId);
 
@@ -208,7 +208,7 @@ export async function marketplaceRoutes(fastify: FastifyInstance) {
     },
     async (request) => {
       const { extension_id } = request.body as any;
-      const userId = getUserIdFromRequest(request) || '1';
+      const userId = getUserIdFromRequest(request); // F-06: the token user only (throws → 401), no default user
 
       const result = await uninstallExtension(extension_id, userId);
 
@@ -229,9 +229,9 @@ export async function marketplaceRoutes(fastify: FastifyInstance) {
       },
     },
     async (request) => {
-      const userId = getUserIdFromRequest(request) || '1';
+      const userId = getUserIdFromRequest(request); // F-06: the token user only (throws → 401), no default user
 
-      const updates = checkForUpdates(userId);
+      const updates = await checkForUpdates(userId);
 
       return { success: true, updates };
     }
@@ -262,9 +262,9 @@ export async function marketplaceRoutes(fastify: FastifyInstance) {
     },
     async (request) => {
       const { extension_id, rating, review_title, review_text, version } = request.body as any;
-      const userId = getUserIdFromRequest(request) || '1';
+      const userId = getUserIdFromRequest(request); // F-06: the token user only (throws → 401), no default user
 
-      const result = submitReview(extension_id, userId, rating, review_title, review_text, version);
+      const result = await submitReview(extension_id, userId, rating, review_title, review_text, version);
 
       return result;
     }
@@ -293,9 +293,9 @@ export async function marketplaceRoutes(fastify: FastifyInstance) {
     },
     async (request) => {
       const { extension_id, current_version, target_version } = request.body as any;
-      const userId = getUserIdFromRequest(request) || '1';
+      const userId = getUserIdFromRequest(request); // F-06: the token user only (throws → 401), no default user
 
-      const result = queueUpdate(extension_id, userId, current_version, target_version);
+      const result = await queueUpdate(extension_id, userId, current_version, target_version);
 
       return result;
     }
@@ -314,9 +314,9 @@ export async function marketplaceRoutes(fastify: FastifyInstance) {
       },
     },
     async (request) => {
-      const userId = getUserIdFromRequest(request) || '1';
+      const userId = getUserIdFromRequest(request); // F-06: the token user only (throws → 401), no default user
 
-      const updates = getPendingUpdates(userId);
+      const updates = await getPendingUpdates(userId);
 
       return { success: true, updates };
     }
@@ -371,9 +371,9 @@ export async function marketplaceRoutes(fastify: FastifyInstance) {
     },
     async (request) => {
       const { id } = request.params as any;
-      const userId = getUserIdFromRequest(request) || '1';
+      const userId = getUserIdFromRequest(request); // F-06: the token user only (throws → 401), no default user
 
-      const result = cancelUpdate(id, userId);
+      const result = await cancelUpdate(id, userId);
 
       return result;
     }
@@ -392,9 +392,9 @@ export async function marketplaceRoutes(fastify: FastifyInstance) {
       },
     },
     async (request) => {
-      const userId = getUserIdFromRequest(request) || '1';
+      const userId = getUserIdFromRequest(request); // F-06: the token user only (throws → 401), no default user
 
-      const result = autoQueueUpdates(userId);
+      const result = await autoQueueUpdates(userId);
 
       return { success: true, ...result };
     }

@@ -1,9 +1,10 @@
 /**
  * Extension Update Manager Service
- * Handles extension updates, version comparison, and update queue
+ * Handles extension updates, version comparison, and update queue.
+ * B2.2d-11: on the process driver; queueing and processing are atomic.
  */
 
-import { getDatabase } from '../db/index.js';
+import { one, q, run, sql, type Step } from '../repositories/sql-steps.js';
 import { randomUUID } from 'crypto';
 import { checkForUpdates } from './extension-marketplace.js';
 
@@ -23,39 +24,33 @@ export interface PendingUpdate {
 /**
  * Queue an extension update
  */
-export function queueUpdate(
+export async function queueUpdate(
   extensionId: string,
   userId: string,
   currentVersion: string,
   targetVersion: string
-): { success: boolean; error?: string; updateId?: string } {
+): Promise<{ success: boolean; error?: string; updateId?: string }> {
   try {
-    const db = getDatabase();
+    return await sql().tx(function* (): Step<{ success: boolean; error?: string; updateId?: string }> {
+      // Check if already queued
+      const existing = yield* one(`
+        SELECT 1 AS ok FROM extension_update_queue
+        WHERE extension_id = ? AND user_id = ? AND status IN ('pending', 'in_progress')`,
+        extensionId, userId);
 
-    // Check if already queued
-    const existing = db
-      .prepare(
-        `
-      SELECT * FROM extension_update_queue
-      WHERE extension_id = ? AND user_id = ? AND status IN ('pending', 'in_progress')
-    `
-      )
-      .get(extensionId, userId);
+      if (existing) {
+        return { success: false, error: 'Update already queued' };
+      }
 
-    if (existing) {
-      return { success: false, error: 'Update already queued' };
-    }
+      // Queue the update
+      const updateId = randomUUID();
+      yield* run(`
+        INSERT INTO extension_update_queue (id, extension_id, user_id, current_version, target_version)
+        VALUES (?, ?, ?, ?, ?)`,
+        updateId, extensionId, userId, currentVersion, targetVersion);
 
-    // Queue the update
-    const updateId = randomUUID();
-    db.prepare(
-      `
-      INSERT INTO extension_update_queue (id, extension_id, user_id, current_version, target_version)
-      VALUES (?, ?, ?, ?, ?)
-    `
-    ).run(updateId, extensionId, userId, currentVersion, targetVersion);
-
-    return { success: true, updateId };
+      return { success: true, updateId };
+    }, { immediate: true });
   } catch (error: any) {
     return { success: false, error: error.message };
   }
@@ -64,22 +59,14 @@ export function queueUpdate(
 /**
  * Get pending updates for user
  */
-export function getPendingUpdates(userId: string): PendingUpdate[] {
-  const db = getDatabase();
-
-  const updates = db
-    .prepare(
-      `
+export function getPendingUpdates(userId: string): Promise<PendingUpdate[]> {
+  return q.all<PendingUpdate>(`
     SELECT uq.*, er.name as extension_name
     FROM extension_update_queue uq
     LEFT JOIN extension_registry er ON uq.extension_id = er.id
     WHERE uq.user_id = ? AND uq.status IN ('pending', 'in_progress')
-    ORDER BY uq.scheduled_at DESC
-  `
-    )
-    .all(userId) as any[];
-
-  return updates;
+    ORDER BY uq.scheduled_at DESC, uq.id DESC`,
+    userId);
 }
 
 /**
@@ -87,50 +74,38 @@ export function getPendingUpdates(userId: string): PendingUpdate[] {
  */
 export async function processUpdate(updateId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const db = getDatabase();
-
     // Get update details
-    const update = db
-      .prepare('SELECT * FROM extension_update_queue WHERE id = ?')
-      .get(updateId) as any;
+    const update = await q.one<any>('SELECT * FROM extension_update_queue WHERE id = ?', updateId);
 
     if (!update) {
       return { success: false, error: 'Update not found' };
     }
 
-    if (update.status !== 'pending') {
+    // Claim it: pending → in_progress in one statement, so two concurrent
+    // calls cannot both process the same update.
+    const claimed = await q.run(`UPDATE extension_update_queue SET status = 'in_progress' WHERE id = ? AND status = 'pending'`, updateId);
+    if (claimed.changes !== 1) {
       return { success: false, error: 'Update not in pending state' };
     }
-
-    // Mark as in progress
-    db.prepare('UPDATE extension_update_queue SET status = ? WHERE id = ?').run('in_progress', updateId);
 
     try {
       // TODO: Download and install new version
       // For now, just update the installation record
+      await sql().tx(function* () {
+        yield* run(`
+          UPDATE extension_installations
+          SET installed_version = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE extension_id = ? AND user_id = ?`,
+          update.target_version, update.extension_id, update.user_id);
 
-      db.prepare(
-        `
-        UPDATE extension_installations
-        SET installed_version = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE extension_id = ? AND user_id = ?
-      `
-      ).run(update.target_version, update.extension_id, update.user_id);
-
-      // Mark as completed
-      db.prepare('UPDATE extension_update_queue SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?').run(
-        'completed',
-        updateId
-      );
+        // Mark as completed
+        yield* run(`UPDATE extension_update_queue SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = ?`, updateId);
+      });
 
       return { success: true };
     } catch (error: any) {
       // Mark as failed
-      db.prepare('UPDATE extension_update_queue SET status = ?, error_message = ? WHERE id = ?').run(
-        'failed',
-        error.message,
-        updateId
-      );
+      await q.run(`UPDATE extension_update_queue SET status = 'failed', error_message = ? WHERE id = ?`, error.message, updateId);
 
       return { success: false, error: error.message };
     }
@@ -142,18 +117,12 @@ export async function processUpdate(updateId: string): Promise<{ success: boolea
 /**
  * Cancel a pending update
  */
-export function cancelUpdate(updateId: string, userId: string): { success: boolean; error?: string } {
+export async function cancelUpdate(updateId: string, userId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const db = getDatabase();
-
-    const result = db
-      .prepare(
-        `
+    const result = await q.run(`
       DELETE FROM extension_update_queue
-      WHERE id = ? AND user_id = ? AND status = 'pending'
-    `
-      )
-      .run(updateId, userId);
+      WHERE id = ? AND user_id = ? AND status = 'pending'`,
+      updateId, userId);
 
     if (result.changes === 0) {
       return { success: false, error: 'Update not found or cannot be cancelled' };
@@ -168,13 +137,13 @@ export function cancelUpdate(updateId: string, userId: string): { success: boole
 /**
  * Check for updates and queue them automatically
  */
-export function autoQueueUpdates(userId: string): { queued: number; errors: string[] } {
-  const updates = checkForUpdates(userId);
+export async function autoQueueUpdates(userId: string): Promise<{ queued: number; errors: string[] }> {
+  const updates = await checkForUpdates(userId);
   const errors: string[] = [];
   let queued = 0;
 
   for (const update of updates) {
-    const result = queueUpdate(update.extension_id, userId, update.current_version, update.latest_version);
+    const result = await queueUpdate(update.extension_id, userId, update.current_version, update.latest_version);
 
     if (result.success) {
       queued++;
