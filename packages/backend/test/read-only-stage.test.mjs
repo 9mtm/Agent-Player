@@ -404,11 +404,30 @@ test('stage 3 (hire test): exactly create agent + read/replace its tool grants, 
     // Only those routes; tricks and neighbours stay refused.
     assertReadOnly(await req('PUT', `/api/agents/${id}/tool-grants?x=1`, { payload: { grants: [], expectedVersion: 2 } }), 'query trick');
     assertReadOnly(await req('POST', '/api/agents?x=1', { payload: { role: 'specialist' } }), 'create query trick');
-    assertReadOnly(await req('PUT', `/api/agents/${id}`, { payload: { name: 'x' } }), 'rename');
+    // AGENT-CARD-01: profile edit and persona versions on the hire stage.
+    const before = (await req('GET', `/api/agents/${id}`)).json().agent;
+    const edited = await req('PUT', `/api/agents/${id}`, { payload: { role: 'specialist', department: 'sales', description: 'Card test', expectedVersion: before.version } });
+    assert.equal(edited.statusCode, 200, edited.body);
+    assert.equal(edited.json().agent.department, 'sales');
+    assertReadOnly(await req('PUT', `/api/agents/${id}?x=1`, { payload: { description: 'x' } }), 'agent PUT query trick');
     assertReadOnly(await req('DELETE', `/api/agents/${id}`), 'delete agent');
     assertReadOnly(await req('POST', `/api/agents/${id}/duplicate`, { payload: {} }), 'duplicate');
     assertReadOnly(await req('POST', `/api/agents/${id}/set-primary`, { payload: {} }), 'set primary');
-    assertReadOnly(await req('POST', `/api/agents/${id}/personality/versions`, { payload: { preset: 'careful-auditor' } }), 'persona edit');
+    assert.equal((await req('GET', `/api/agents/${id}/personality/current`)).statusCode, 200);
+    const persona = await req('POST', `/api/agents/${id}/personality/versions`, { payload: { preset: 'careful-auditor' } });
+    assert.equal(persona.statusCode, 200, persona.body);
+    assert.equal((await req('GET', `/api/agents/${id}/personality/versions`)).statusCode, 200);
+    // MEMORY-PAGE-02: memory items.
+    const mem = await req('POST', '/api/memory', { payload: { type: 'fact', content: 'Stage memory', importance: 7, drawer: { kind: 'owner' } } });
+    assert.equal(mem.statusCode, 200, mem.body);
+    const mid = mem.json().memory.id;
+    assert.equal((await req('GET', '/api/memory')).statusCode, 200);
+    assert.equal((await req('GET', '/api/memory/drawers')).statusCode, 200);
+    assert.equal((await req('PUT', `/api/memory/${mid}`, { payload: { content: 'Stage memory, edited' } })).statusCode, 200);
+    assert.equal((await req('GET', `/api/memory/${mid}/versions`)).statusCode, 200);
+    assert.equal((await req('POST', `/api/memory/${mid}/forget`, { payload: {} })).statusCode, 200);
+    assertReadOnly(await req('POST', '/api/memory/consolidate', { payload: {} }), 'memory maintenance stays refused');
+    assertReadOnly(await req('GET', '/api/memory?userId=x'), 'memory list query trick');
     assertReadOnly(await req('POST', '/api/agents/name-suggestion', { payload: {} }), 'name suggestion');
     assertReadOnly(await req('PUT', '/api/settings', { payload: { provider: 'local' } }), 'settings PUT');
     // The switch is required: stage 3 without local-model-only opens nothing.
