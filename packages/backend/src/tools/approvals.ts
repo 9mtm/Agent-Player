@@ -24,7 +24,7 @@ import { approvalRunDrawers, toolMemoryDrawers } from './memory/scope.js';
 import type { DrawerRef } from '../memory/drawers.js';
 import { onApprovalDecided } from '../services/task-runs.js';
 
-export type ApprovalCategory = 'message' | 'delete' | 'money' | 'install' | 'settings' | 'other';
+export type ApprovalCategory = 'message' | 'delete' | 'money' | 'install' | 'settings' | 'browser' | 'network' | 'other';
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'executed' | 'failed' | 'expired';
 
 /** Built-in and known tools that always need approval. */

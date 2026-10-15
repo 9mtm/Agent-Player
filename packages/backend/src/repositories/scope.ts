@@ -144,6 +144,12 @@ export function inScopeOr404<T>(value: T | null | undefined, visible: boolean, m
   return value;
 }
 
+/** CORE-PERMS-01: for agent runs, open for this run AND a kind the owner lets it write. Other actors: always true. */
+export function drawerWritable(actor: Actor, drawer: DrawerRef): boolean {
+  if (actor.kind !== 'agent') return true;
+  return drawerOpen(actor, drawer) && (!actor.writeKinds || actor.writeKinds.includes(drawer.kind));
+}
+
 /** For agent runs: is the drawer open for this run? Other actors: always true. */
 export function drawerOpen(actor: Actor, drawer: DrawerRef): boolean {
   if (actor.kind !== 'agent') return true;

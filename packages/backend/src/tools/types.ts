@@ -83,6 +83,11 @@ export interface ToolExecutionContext {
   grants?: import('./grants.js').AgentToolGrants;
   /** Present for channel-originated turns: restricts which tools may be offered/run (S0-Q.8). */
   toolPolicy?: import('./channel-policy.js').ChannelToolPolicy;
+  /**
+   * CORE-PERMS-01: the agent's memory scope and permission modes, loaded by
+   * createToolsRegistry / createAgentToolsRegistry from agentId when absent.
+   */
+  permissions?: import('./agent-permissions.js').AgentPermissions;
   /** Memory drawers this run may read (CORE-03, memory/drawers.ts selectDrawers). */
   memoryDrawers?: import('../memory/drawers.js').DrawerRef[];
   /** CORE-08: the durable task-run step this call belongs to (set by the run executor). */

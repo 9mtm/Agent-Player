@@ -29,7 +29,7 @@ import { pgOne } from '../db/pg/pool.js';
 import type { UserRole } from '../auth/route-guards.js';
 import type { DrawerRef } from '../memory/drawers.js';
 import type { ToolExecutionContext } from '../tools/types.js';
-import { toolMemoryDrawers } from '../tools/memory/scope.js';
+import { toolMemoryDrawers, toolMemoryWriteKinds } from '../tools/memory/scope.js';
 
 export type ActorKind = 'user' | 'agent' | 'service' | 'system';
 export type ActorRole = UserRole | 'none';
@@ -45,6 +45,8 @@ export interface Actor {
   readonly channel?: string;
   /** Memory drawers open for an agent run (CORE-03); absent = not an agent run. */
   readonly drawers?: readonly DrawerRef[];
+  /** CORE-PERMS-01: drawer kinds an agent run may write; absent = every open drawer. */
+  readonly writeKinds?: readonly DrawerRef['kind'][];
   /** Durable task run the tool call belongs to (CORE-08), for audit only. */
   readonly runId?: string;
 }
@@ -112,6 +114,7 @@ function buildToolActor(context: ToolExecutionContext | undefined, userId: strin
     ...(context?.agentId ? { agentId: context.agentId } : {}),
     ...(context?.toolPolicy ? { channel: context.toolPolicy.channel } : {}),
     drawers: Object.freeze([...toolMemoryDrawers(context)]),
+    ...(toolMemoryWriteKinds(context) ? { writeKinds: Object.freeze(toolMemoryWriteKinds(context)!) } : {}),
     ...(context?.taskRun?.runId ? { runId: context.taskRun.runId } : {}),
   });
 }

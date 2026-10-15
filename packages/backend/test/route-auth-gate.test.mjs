@@ -219,6 +219,8 @@ const OWNER_ONLY = [
   ['GET', '/api/approvals'], ['GET', '/api/approvals/:id'], ['POST', '/api/approvals/:id/approve'], ['POST', '/api/approvals/:id/deny'],
   // S1.4: agent permissions
   ['GET', '/api/agents/:id/tool-grants'], ['PUT', '/api/agents/:id/tool-grants'],
+  // CORE-PERMS-01: memory scope + off/ask/allow per agent
+  ['GET', '/api/agents/:id/permissions'], ['PUT', '/api/agents/:id/permissions'],
   // CORE-01: versioned personality
   ['GET', '/api/agents/:id/personality/current'], ['GET', '/api/agents/:id/personality/versions'],
   ['POST', '/api/agents/:id/personality/versions'], ['POST', '/api/agents/:id/personality/lock'],

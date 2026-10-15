@@ -24,7 +24,7 @@
  */
 
 import type { Actor } from './actor.js';
-import { ScopeError, drawerOpen, requireActor, requireMember } from './scope.js';
+import { ScopeError, drawerOpen, drawerWritable, requireActor, requireMember } from './scope.js';
 import { memoryOwner, memoryUser, versionActor } from './memory-actor.js';
 import { memoryRecall, type MemoryRecallRepository } from './memory-recall.js';
 import { memoryOwnerRepository, type MemoryOwnerRepository } from './memory-owner.js';
@@ -90,11 +90,14 @@ async function memoryRowOwner(id: string): Promise<string | null> {
   return row?.user_id ?? null;
 }
 
-/** The own memory row (no access-count side effect), drawer-checked for agent runs. */
-async function ownMemory(a: Actor, userId: string, id: string): Promise<Memory> {
+/** The own memory row (no access-count side effect), drawer-checked for agent runs (writable when `write`). */
+async function ownMemory(a: Actor, userId: string, id: string, write = false): Promise<Memory> {
   const m = await getMemoryStorage().getOwned(userId, id);
   if (!m) throw new ScopeError(404, NOT_FOUND);
-  if (!drawerOpen(a, m.drawer ?? defaultDrawerForType(m.type))) throw new ScopeError(403, DRAWER_CLOSED);
+  const drawer = m.drawer ?? defaultDrawerForType(m.type);
+  if (!drawerOpen(a, drawer)) throw new ScopeError(403, DRAWER_CLOSED);
+  // CORE-PERMS-01: a drawer the agent may read but not write is read-only for it.
+  if (write && !drawerWritable(a, drawer)) throw new ScopeError(403, DRAWER_CLOSED);
   return m;
 }
 
@@ -133,14 +136,14 @@ export const memoryRepository: MemoryRepository = {
   async create(actor, memory, reason) {
     const { a, userId } = memoryUser(actor);
     const drawer = memory.drawer ? normalizeDrawer(memory.drawer) : defaultDrawerForType(memory.type);
-    if (!drawerOpen(a, drawer)) throw new ScopeError(403, DRAWER_CLOSED);
+    if (!drawerWritable(a, drawer)) throw new ScopeError(403, DRAWER_CLOSED);
     return saveVersioned({ ...memory, userId } as Memory, versionActor(a), reason);
   },
 
   async update(actor, id, updates, reason) {
     const { a, userId } = memoryUser(actor);
-    await ownMemory(a, userId, id);
-    if (a.kind === 'agent' && updates.drawer && !drawerOpen(a, normalizeDrawer(updates.drawer))) throw new ScopeError(403, DRAWER_CLOSED);
+    await ownMemory(a, userId, id, true);
+    if (a.kind === 'agent' && updates.drawer && !drawerWritable(a, normalizeDrawer(updates.drawer))) throw new ScopeError(403, DRAWER_CLOSED);
     const updated = await updateVersioned(userId, id, updates, versionActor(a), reason);
     if (!updated) throw new ScopeError(404, NOT_FOUND);
     return updated;
@@ -148,7 +151,7 @@ export const memoryRepository: MemoryRepository = {
 
   async delete(actor, id, reason) {
     const { a, userId } = memoryUser(actor);
-    await ownMemory(a, userId, id);
+    await ownMemory(a, userId, id, true);
     await deleteVersioned(userId, id, versionActor(a), reason);
   },
 
@@ -173,6 +176,7 @@ export const memoryRepository: MemoryRepository = {
       const drawer = await forgettableDrawer(userId, id);
       if (!drawer) return null;
       if (!(a.drawers ?? []).some((d) => sameDrawer(d, drawer))) throw new ScopeError(403, DRAWER_CLOSED);
+      if (!drawerWritable(a, drawer)) throw new ScopeError(403, DRAWER_CLOSED);
     }
     return forgetMemory(userId, id, versionActor(a));
   },
