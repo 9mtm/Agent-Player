@@ -265,3 +265,23 @@ test('task plan: the latest plan_steps call shows as a live checklist, not as to
   assert.match(html, /Check with the owner/);
   assert.doesNotMatch(html, /plan steps/i, 'the plan call is not listed as a tool');
 });
+
+test('team chat: "@Name" or the reply picker chooses who writes; replies show their writer', async t => {
+  const { c, calls } = await fixture(t);
+  await c.load(); await until(() => c.getSnapshot().agents.length === 2);
+  assert.equal(c.mentioned('please @offline helper, check this')?.id, 'sample-helper');
+  assert.equal(c.mentioned('mail me at x@offline helper')?.id, undefined, 'only at the start of a word');
+  await c.send('Write the plan'); await until(() => !c.getSnapshot().runId);
+  await c.send('@Offline helper review it'); await until(() => !c.getSnapshot().runId);
+  const runs = calls.filter(x => x.method === 'POST' && /\/runs$/.test(x.path));
+  assert.equal(runs.length, 2);
+  await c.open(c.getSnapshot().activeId); await until(() => c.getSnapshot().threadPhase === 'ready');
+  const writers = c.getSnapshot().turns.filter(x => x.role === 'assistant').map(x => x.agentId ?? null);
+  assert.deepEqual(writers, [null, 'sample-helper']);
+  assert.equal(c.getSnapshot().replyAgent, '', 'opening resets the picker');
+  const html = renderToStaticMarkup(React.createElement(ChatView, { controller: c, mode: 'mock' }));
+  assert.match(html, /class="reply-writer"[^>]*>.*Offline helper/);
+  assert.match(html, /aria-label="Reply from"|>Reply from</);
+  c.edit('hey @off');
+  assert.match(renderToStaticMarkup(React.createElement(ChatView, { controller: c, mode: 'mock' })), /role="listbox" aria-label="Agents"/);
+});

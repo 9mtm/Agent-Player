@@ -1,10 +1,10 @@
 import type { WireRequest, WireResponse } from './session';
 import { conversationPath } from './conversation-contract.js';
 
-type Msg = { id: string; role: 'user' | 'assistant'; content: string; parts: unknown[] | null; status: 'complete' | 'stopped' | 'error'; runId: string | null; durationMs: number | null; createdAt: string };
+type Msg = { id: string; role: 'user' | 'assistant'; content: string; parts: unknown[] | null; status: 'complete' | 'stopped' | 'error'; runId: string | null; durationMs: number | null; createdAt: string; agentId?: string };
 type Proj = { id: string; name: string; slug: string; folder: string | null; repoUrl: string | null };
 type Conv = { id: string; title: string | null; agentId: string | null; projectId: string | null; pinned: boolean; preview: string; createdAt: string; updatedAt: string; messages: Msg[]; order: number };
-type Run = { id: string; conv: Conv; events: Record<string, unknown>[]; done: boolean; stopped: boolean; started: number };
+type Run = { id: string; conv: Conv; events: Record<string, unknown>[]; done: boolean; stopped: boolean; started: number; agentId?: string };
 
 /** Fictional GitHub links (the scheme is joined here so no full address appears in the source). */
 const GH = ['https:', '', 'github.com'].join('/');
@@ -75,7 +75,7 @@ export function createConversationsMock(options: { stepMs?: number } = {}) {
           if (e.type === 'tool_result') { const p = parts.find((x: any) => x.kind === 'tools' && x.step === e.step) as any; (e.results as any[]).forEach(r => { const c = p.calls.find((x: any) => x.id === r.id); Object.assign(c, r); }); }
         }
         const ms = (k + 1) * stepMs;
-        run.conv.messages.push({ id: `m-${++n}`, role: 'assistant', content: text, parts, status, runId: run.id, durationMs: ms, createdAt: now() });
+        run.conv.messages.push({ id: `m-${++n}`, role: 'assistant', content: text, parts, status, runId: run.id, durationMs: ms, createdAt: now(), ...(run.agentId ? { agentId: run.agentId } : {}) });
         run.conv.updatedAt = now();
         run.events.push({ type: 'end', status, ms, ...(failing ? { code: 'model_unavailable' } : {}) });
         run.done = true;
@@ -149,7 +149,7 @@ export function createConversationsMock(options: { stepMs?: number } = {}) {
     c.messages.push(user);
     c.title ??= String(body!.message).split('\n')[0].split(/\s+/).slice(0, 7).join(' ').slice(0, 60);
     c.preview = String(body!.message).slice(0, 140); c.updatedAt = now(); c.order = ++n;
-    const run: Run = { id: body!.runId, conv: c, events: [], done: false, stopped: false, started: Date.now() };
+    const run: Run = { id: body!.runId, conv: c, events: [], done: false, stopped: false, started: Date.now(), ...(typeof body!.agentId === 'string' ? { agentId: body!.agentId } : {}) };
     runs.set(run.id, run);
     advance(run, script(body!.message), /fail/i.test(body!.message));
     return { status: 202, body: { runId: run.id, userMessage: user } };

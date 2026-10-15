@@ -84,7 +84,7 @@ export function allowedConversation(method, path, body) {
   if (method === 'PUT' && p.kind === 'project') return record(body) && Object.keys(body).length > 0 && onlyKeys(body, ['name', 'folder', 'repoUrl'])
     && (body.name === undefined || (title(body.name) && body.name.trim().length > 0)) && (body.folder === undefined || body.folder === null || folderOk(body.folder)) && (body.repoUrl === undefined || body.repoUrl === null || repoOk(body.repoUrl));
   if (method === 'POST' && p.kind === 'list') return record(body) && onlyKeys(body, ['title', 'agentId', 'projectId']) && (body.title === undefined || title(body.title)) && (body.agentId === undefined || agentId(body.agentId)) && (body.projectId === undefined || uuid(body.projectId));
-  if (method === 'POST' && p.kind === 'runs') return record(body) && onlyKeys(body, ['runId', 'message', 'model']) && validRunId(body.runId) && text(body.message, MAX_MESSAGE) && body.message.trim().length > 0
+  if (method === 'POST' && p.kind === 'runs') return record(body) && onlyKeys(body, ['runId', 'message', 'model', 'agentId']) && (body.agentId === undefined || agentId(body.agentId)) && validRunId(body.runId) && text(body.message, MAX_MESSAGE) && body.message.trim().length > 0
     && (body.model === undefined || (typeof body.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:\/-]{0,99}$/.test(body.model)));
   if (method === 'POST' && p.kind === 'stop') return body === undefined;
   if (method === 'PUT' && p.kind === 'one') return record(body) && Object.keys(body).length > 0 && onlyKeys(body, ['title', 'pinned', 'projectId']) && (body.projectId === undefined || body.projectId === null || uuid(body.projectId)) && (body.title === undefined || body.title === null || title(body.title)) && (body.pinned === undefined || typeof body.pinned === 'boolean');
@@ -117,7 +117,8 @@ function message(x) {
   const parts = Array.isArray(x.parts) && x.parts.length <= 5000 ? x.parts.map(part).filter(Boolean) : null;
   return { id: str(x.id, 64), role: x.role, content: x.content.slice(0, 1000000), parts,
     status: ['complete', 'stopped', 'error'].includes(x.status) ? x.status : 'complete',
-    runId: validRunId(x.runId) ? x.runId : null, durationMs: num(x.durationMs) ?? null, createdAt: str(x.createdAt, 40) };
+    runId: validRunId(x.runId) ? x.runId : null, durationMs: num(x.durationMs) ?? null, createdAt: str(x.createdAt, 40),
+    ...(agentId(x.agentId) ? { agentId: x.agentId } : {}) };
 }
 
 function project(x) {

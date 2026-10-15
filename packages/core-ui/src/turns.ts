@@ -15,14 +15,16 @@ export type Turn = Readonly<{
   runId: string | null; durationMs: number | null; startedAt?: number; code?: 'model_unavailable'; lastSeq: number; pending?: boolean;
   /** Client clock time of the run's start, from the first event's `at` (keeps durations right after a re-attach). */
   base?: number;
+  /** CHAT-PRO-02 I: the agent that wrote this reply (absent = the conversation's agent). */
+  agentId?: string;
 }>;
 
 export function userTurn(key: string, content: string, runId: string | null, pending = false): Turn {
   return Object.freeze({ key, role: 'user', content, parts: [], status: 'complete', runId, durationMs: null, lastSeq: 0, ...(pending ? { pending } : {}) });
 }
 
-export function liveTurn(runId: string, now: number): Turn {
-  return Object.freeze({ key: `run:${runId}`, role: 'assistant', content: '', parts: [], status: 'running', runId, durationMs: null, startedAt: now, lastSeq: 0 });
+export function liveTurn(runId: string, now: number, agentId?: string): Turn {
+  return Object.freeze({ key: `run:${runId}`, role: 'assistant', content: '', parts: [], status: 'running', runId, durationMs: null, startedAt: now, lastSeq: 0, ...(agentId ? { agentId } : {}) });
 }
 
 function fromWirePart(p: WirePart): Part {
@@ -34,7 +36,7 @@ function fromWirePart(p: WirePart): Part {
 /** A stored message as a transcript turn. */
 export function fromWire(m: WireMessage): Turn {
   const parts = m.role === 'assistant' ? (m.parts?.length ? m.parts.map(fromWirePart) : m.content ? [{ kind: 'text' as const, text: m.content }] : []) : [];
-  return Object.freeze({ key: m.id, role: m.role === 'user' ? 'user' : 'assistant', content: m.content, parts, status: m.status, runId: m.runId, durationMs: m.durationMs, lastSeq: 0 });
+  return Object.freeze({ key: m.id, role: m.role === 'user' ? 'user' : 'assistant', content: m.content, parts, status: m.status, runId: m.runId, durationMs: m.durationMs, lastSeq: 0, ...(m.agentId ? { agentId: m.agentId } : {}) });
 }
 
 /** Applies one run event to the live assistant turn (events at or below lastSeq are ignored). */

@@ -22,6 +22,8 @@ export type ConversationsState = Readonly<{
   turns: readonly Turn[];
   draft: string;
   agentId: string;
+  /** CHAT-PRO-02 I: the agent writing the next reply in an open conversation ('' = the conversation's agent). */
+  replyAgent: string;
   agents: readonly AgentChoice[];
   /** Models the owner can pick for the next reply ('' = the agent's own model). */
   models: readonly ModelOption[];
@@ -57,7 +59,7 @@ export function withAttachments(message: string, files: readonly { name: string;
 
 export class ConversationsController {
   #state: ConversationsState = Object.freeze({
-    access: 'ready', listPhase: 'idle', conversations: [], activeId: null, threadPhase: 'empty', turns: [], draft: '', agentId: '', agents: [], models: [], model: '', projects: [], projectFilter: '', git: null,
+    access: 'ready', listPhase: 'idle', conversations: [], activeId: null, threadPhase: 'empty', turns: [], draft: '', agentId: '', replyAgent: '', agents: [], models: [], model: '', projects: [], projectFilter: '', git: null,
     runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, attachments: [],
   });
   #listeners = new Set<() => void>();
@@ -86,6 +88,14 @@ export class ConversationsController {
 
   edit(draft: string) { this.publish({ draft: draft.slice(0, MAX_MESSAGE) }); }
   selectAgent(agentId: string) { if (!this.#state.activeId) this.publish({ agentId }); }
+  /** In an open conversation: which agent writes the next replies ('' = the conversation's own agent). */
+  setReplyAgent(agentId: string) { if (agentId === '' || this.#state.agents.some(a => a.id === agentId)) this.publish({ replyAgent: agentId }); }
+  /** The agent an "@Name" in the text points to (longest name wins), if any. */
+  mentioned(text: string): AgentChoice | undefined {
+    const lower = text.toLowerCase();
+    return [...this.#state.agents].sort((a, b) => b.name.length - a.name.length)
+      .find(a => { const i = lower.indexOf(`@${a.name.toLowerCase()}`); const next = lower[i + a.name.length + 1]; return i >= 0 && (i === 0 || /\s/.test(lower[i - 1])) && (next === undefined || !/[\p{L}\p{N}_]/u.test(next)); });
+  }
   /** Adds text files to the next message; refuses files that are too big or not text. */
   attach(files: readonly { name: string; text: string }[]): string | null {
     const next = [...this.#state.attachments];
@@ -214,7 +224,7 @@ export class ConversationsController {
   /** A blank conversation (created on the first message). */
   newChat() {
     this.#follow?.abort(); this.#openSeq++;
-    this.publish({ activeId: null, turns: [], threadPhase: 'empty', runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, notice: undefined, agentId: '', git: null });
+    this.publish({ activeId: null, turns: [], threadPhase: 'empty', runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, notice: undefined, agentId: '', replyAgent: '', git: null });
     void this.loadGit();
   }
 
@@ -223,7 +233,7 @@ export class ConversationsController {
     this.#follow?.abort();
     const seq = ++this.#openSeq;
     const known = this.#state.conversations.find(c => c.id === id);
-    this.publish({ activeId: id, turns: [], threadPhase: 'loading', runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, notice: undefined, agentId: known?.agentId ?? '' });
+    this.publish({ activeId: id, turns: [], threadPhase: 'loading', runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, notice: undefined, agentId: known?.agentId ?? '', replyAgent: '' });
     try {
       const r = await this.call('GET', `/api/chat/conversations/${id}/messages`);
       if (!this.live() || seq !== this.#openSeq) return;
@@ -258,15 +268,21 @@ export class ConversationsController {
     this.publish({ starting: true, notice: undefined, turns: [...this.#state.turns, optimistic], threadPhase: 'ready', ...(text === undefined ? { draft: '', attachments: [] } : {}) });
     try {
       let id = this.#state.activeId;
+      const named = this.mentioned(message)?.id;
       if (!id) {
-        const c = await this.call('POST', '/api/chat/conversations', { ...(this.#state.agentId ? { agentId: this.#state.agentId } : {}), ...(this.#state.projectFilter ? { projectId: this.#state.projectFilter } : {}) });
+        const c = await this.call('POST', '/api/chat/conversations', { ...((named ?? this.#state.agentId) ? { agentId: named ?? this.#state.agentId } : {}), ...(this.#state.projectFilter ? { projectId: this.#state.projectFilter } : {}) });
         if (!this.live() || seq !== this.#openSeq) return;
         if ((c.status !== 201 && c.status !== 200) || !record(c.body) || !record(c.body.conversation)) throw new SessionFailure('unavailable');
         const conv = c.body.conversation as Conversation;
         id = conv.id;
         this.publish({ activeId: id, conversations: [conv, ...this.#state.conversations.filter(x => x.id !== id)] });
       }
-      const r = await this.call('POST', `/api/chat/conversations/${id}/runs`, this.#state.model ? { runId, message, model: this.#state.model } : { runId, message });
+      // CHAT-PRO-02 I: "@Name" or the reply picker chooses who writes this reply.
+      const convAgent = this.#state.conversations.find(x => x.id === id)?.agentId ?? (this.#state.agentId || null);
+      const writer = named ?? (this.#state.replyAgent || undefined);
+      const agentForRun = writer && writer !== convAgent ? writer : undefined;
+      if (named && named !== this.#state.replyAgent && this.#state.activeId) this.publish({ replyAgent: named === convAgent ? '' : named });
+      const r = await this.call('POST', `/api/chat/conversations/${id}/runs`, { runId, message, ...(this.#state.model ? { model: this.#state.model } : {}), ...(agentForRun ? { agentId: agentForRun } : {}) });
       if (!this.live() || seq !== this.#openSeq) return;
       if (r.status === 409 && record(r.body) && r.body.code === 'conversation_busy' && typeof r.body.runId === 'string') {
         // Another tab is still answering here: wait in the queue and follow that run.
@@ -282,7 +298,7 @@ export class ConversationsController {
         return;
       }
       const stored = record(r.body.userMessage) ? fromWire(r.body.userMessage as WireMessage) : userTurn(`user:${runId}`, message, runId);
-      this.publish({ starting: false, runId, turns: [...this.#state.turns.filter(t => t !== optimistic), stored, liveTurn(runId, this.now())] });
+      this.publish({ starting: false, runId, turns: [...this.#state.turns.filter(t => t !== optimistic), stored, liveTurn(runId, this.now(), agentForRun)] });
       void this.follow(runId, seq);
       void this.refreshList(); // the first message names the conversation
     } catch {

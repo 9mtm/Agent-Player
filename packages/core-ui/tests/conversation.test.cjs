@@ -28,7 +28,8 @@ test('conversation contract (browser and bridge): exact paths, strict bodies', (
     assert.equal(allow('POST', `/api/chat/conversations/${CID}/runs`, { runId: RID, message: 'Hello' }), true);
     assert.equal(allow('POST', `/api/chat/conversations/${CID}/runs`, { runId: RID, message: '  ' }), false);
     assert.equal(allow('POST', `/api/chat/conversations/${CID}/runs`, { runId: 'short', message: 'x' }), false);
-    assert.equal(allow('POST', `/api/chat/conversations/${CID}/runs`, { runId: RID, message: 'x', agentId: 'a' }), false);
+    assert.equal(allow('POST', `/api/chat/conversations/${CID}/runs`, { runId: RID, message: 'x', agentId: 'a' }), true, 'another agent may write the reply (CHAT-PRO-02 I)');
+    assert.equal(allow('POST', `/api/chat/conversations/${CID}/runs`, { runId: RID, message: 'x', agentId: '../x' }), false);
     assert.equal(allow('POST', `/api/chat/conversations/${CID}/runs`, { runId: RID, message: 'x'.repeat(100001) }), false);
     assert.equal(allow('GET', `/api/chat/runs/${RID}/events`, undefined), true);
     assert.equal(allow('GET', `/api/chat/runs/${RID}/events?after=42`, undefined), true);

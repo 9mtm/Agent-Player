@@ -90,8 +90,17 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
     } catch { setAttachError('The file could not be read.'); }
     if (picker.current) picker.current.value = '';
   };
+  // CHAT-PRO-02 I: "@" at the start of a word suggests agents; picking one fills in its name.
+  const mention = /(^|\s)@([^\s@]{0,40})$/.exec(s.draft);
+  const suggestions = mention && s.agents.length > 1 ? s.agents.filter(a => a.name.toLowerCase().startsWith(mention[2].toLowerCase())).slice(0, 6) : [];
+  const [pick, setPick] = useState(0);
+  const choose = (name: string) => { if (!mention) return; controller.edit(`${s.draft.slice(0, s.draft.length - mention[2].length - 1)}@${name} `); setPick(0); input.current?.focus(); };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
+    if (suggestions.length) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setPick(p => (p + (e.key === 'ArrowDown' ? 1 : suggestions.length - 1)) % suggestions.length); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); choose(suggestions[Math.min(pick, suggestions.length - 1)].name); return; }
+    }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!e.repeat) submit(); return; }
     if (e.key === 'Escape' && running) { e.preventDefault(); void controller.stop(); return; }
     if (e.key === 'ArrowUp' && !s.draft) { const last = controller.recall(); if (last) { e.preventDefault(); controller.edit(last); } }
@@ -99,6 +108,13 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
 
   const lastUser = [...s.turns].reverse().find(t => t.role === 'user');
   const agentName = s.agents.find(a => a.id === s.agentId)?.name;
+  const activeConv = s.conversations.find(c => c.id === s.activeId);
+  const convAgentId = activeConv?.agentId ?? null;
+  const nameOf = (id: string | null | undefined) => (id ? s.agents.find(a => a.id === id)?.name : s.agents.find(a => a.primary)?.name) ?? 'Main agent';
+  const convAgentName = nameOf(convAgentId);
+  // A reply shows who wrote it once more than one agent answers here.
+  const writers = new Set(s.turns.filter(t => t.role === 'assistant').map(t => t.agentId ?? convAgentId ?? ''));
+  const teamChat = writers.size > 1 || !!s.replyAgent;
   const empty = s.turns.length === 0 && s.threadPhase !== 'loading';
 
   const project = controller.activeProject();
@@ -135,7 +151,7 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
       </div> : <div className="chat-column" role="log" aria-live="polite" aria-relevant="additions">
         {s.turns.map((t, i) => t.role === 'user'
           ? <UserMessage key={t.key} turn={t}/>
-          : <AssistantTurn key={t.key} turn={t} last={i === s.turns.length - 1} onRetry={lastUser ? () => void controller.send(lastUser.content) : undefined}/>)}
+          : <AssistantTurn key={t.key} turn={t} writer={teamChat ? nameOf(t.agentId ?? convAgentId) : undefined} last={i === s.turns.length - 1} onRetry={lastUser ? () => void controller.send(lastUser.content) : undefined}/>)}
         {s.starting && !s.turns.some(t => t.status === 'running') && <WorkingRow since={Date.now()} label="Starting"/>}
       </div>}
     </div>
@@ -161,6 +177,9 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
       <form className="chat-composer" method="post" onSubmit={e => { e.preventDefault(); submit(); }}
         onDragOver={e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); }} onDrop={e => { if (e.dataTransfer.files.length) { e.preventDefault(); void onFiles(e.dataTransfer.files); } }}>
         <label htmlFor="chat-input" className="sr-only">Message</label>
+        {suggestions.length > 0 && <ul className="mention-list" role="listbox" aria-label="Agents">{suggestions.map((a, i) =>
+          <li key={a.id} role="option" aria-selected={i === Math.min(pick, suggestions.length - 1)}><button type="button" onMouseDown={e => { e.preventDefault(); choose(a.name); }}>
+            <span className="avatar" aria-hidden="true">{a.name.slice(0, 1).toUpperCase()}</span>{a.name}</button></li>)}</ul>}
         <textarea id="chat-input" ref={input} rows={1} dir="auto" value={s.draft} maxLength={100000}
           placeholder={running ? 'Type the next message; it is sent when this reply ends' : agentName ? `Message ${agentName}` : s.turns.length ? 'Send a follow-up' : "What's on your mind?"}
           onChange={e => controller.edit(e.target.value)} onKeyDown={onKeyDown} disabled={s.access === 'denied'}/>
@@ -168,13 +187,18 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
           <input ref={picker} type="file" multiple hidden onChange={e => void onFiles(e.target.files)}
             accept=".txt,.md,.csv,.json,.yml,.yaml,.xml,.toml,.ini,.log,.ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.rb,.go,.rs,.java,.php,.sh,.sql,.html,.css,text/*"/>
           <button type="button" className="tool composer-attach" aria-label="Attach text files" title="Attach text files (code, notes, CSV…)" onClick={() => picker.current?.click()}><UiIcon name="plus" size={14}/></button>
-          {s.agents.length > 0 && !s.activeId
-            ? <label className="composer-agent"><span className="sr-only">Agent</span>
-              <select value={s.agentId} onChange={e => controller.selectAgent(e.target.value)}>
-                {/* "" is the primary agent: name it once instead of listing it twice. */}
-                <option value="">{s.agents.find(a => a.primary)?.name ?? 'Main agent'}</option>
-                {s.agents.filter(a => !a.primary).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select></label>
+          {s.agents.length > 0
+            ? <label className="composer-agent" title={s.activeId ? 'Who writes the next reply (or type @ and a name)' : 'Who you talk to (or type @ and a name)'}><span className="sr-only">{s.activeId ? 'Reply from' : 'Agent'}</span>
+              {s.activeId
+                ? <select value={s.replyAgent} onChange={e => controller.setReplyAgent(e.target.value)}>
+                  <option value="">{convAgentName}</option>
+                  {s.agents.filter(a => a.id !== convAgentId && !(a.primary && !convAgentId)).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+                : <select value={s.agentId} onChange={e => controller.selectAgent(e.target.value)}>
+                  {/* "" is the primary agent: name it once instead of listing it twice. */}
+                  <option value="">{s.agents.find(a => a.primary)?.name ?? 'Main agent'}</option>
+                  {s.agents.filter(a => !a.primary).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>}</label>
             : <span className="composer-hint">{agentName ? agentName : ''}</span>}
           {s.models.length > 0 && <label className="composer-agent composer-model"><span className="sr-only">Model</span>
             <select value={s.model} onChange={e => controller.selectModel(e.target.value)} title="Model for the next reply">
@@ -321,7 +345,7 @@ function UserMessage({ turn }: { turn: Turn }) {
 }
 
 /** One assistant turn: live parts in order while running; work folded once finished. */
-function AssistantTurn({ turn, last, onRetry }: { turn: Turn; last: boolean; onRetry?: () => void }) {
+function AssistantTurn({ turn, last, onRetry, writer }: { turn: Turn; last: boolean; onRetry?: () => void; writer?: string }) {
   const live = turn.status === 'running';
   const plan = turnPlan(turn.parts);
   const parts = plan ? withoutPlan(turn.parts) : turn.parts;
@@ -330,7 +354,7 @@ function AssistantTurn({ turn, last, onRetry }: { turn: Turn; last: boolean; onR
   const answerText = answer.filter(p => p.kind === 'text').map(p => (p as { text: string }).text).join('');
   const [quiet, since] = useQuiet(turn, live);
   return <article className="chat-assistant" aria-busy={live || undefined}>
-    <p className="sr-only">Agent</p>
+    {writer ? <p className="reply-writer"><span className="avatar" aria-hidden="true">{writer.slice(0, 1).toUpperCase()}</span>{writer}</p> : <p className="sr-only">Agent</p>}
     {plan && <PlanCard steps={plan} live={live} status={turn.status}/>}
     {live
       ? <>{parts.map((p, i) => <PartView key={i} part={p} live last={i === parts.length - 1}/>)}
