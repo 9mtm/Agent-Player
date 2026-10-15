@@ -965,7 +965,7 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 
 /* Chat details panel (right) */
 .app-shell .chat-layout { flex:1 1 auto; min-block-size:0; display:grid; grid-template-columns:minmax(0,1fr); }
-.app-shell .chat-layout[data-panel] { grid-template-columns:minmax(0,1fr) 17rem; }
+.app-shell .chat-layout[data-panel] { grid-template-columns:minmax(0,1fr) 19.5rem; }
 .app-shell .chat-layout .chat-screen { min-inline-size:0; }
 .app-shell .chat-topbar { display:flex; align-items:stretch; border-block-end:1px solid var(--stroke-3); min-block-size:30px; }
 .app-shell .chat-topbar .project-bar { flex:1; border:0; }
@@ -1013,3 +1013,7 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .switch input:checked + span::after { transform:translateX(11px); }
 .app-shell .switch input:focus-visible + span { outline:2px solid var(--accent); outline-offset:2px; }
 .app-shell .switch input:disabled + span { opacity:.5; }
+.app-shell .panel-group-name { white-space:nowrap; min-inline-size:0; }
+.app-shell .panel-group-name > .muted { margin-inline-start:auto; }
+.app-shell .panel-group > .muted { font-size:11px; }
+.app-shell .panel-modes li > span { min-inline-size:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
