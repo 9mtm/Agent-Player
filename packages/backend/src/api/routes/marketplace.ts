@@ -22,6 +22,7 @@ import {
   autoQueueUpdates,
 } from '../../services/extension-update-manager.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
+import { extensionsAvailable, EXTENSIONS_SQLITE_ONLY } from '../../plugins/extension-runner.js';
 
 export async function marketplaceRoutes(fastify: FastifyInstance) {
   /**
@@ -177,7 +178,8 @@ export async function marketplaceRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    async (request) => {
+    async (request, reply) => {
+      if (!extensionsAvailable()) return reply.code(409).send(EXTENSIONS_SQLITE_ONLY); // Q-33
       const { extension_id } = request.body as any;
       const userId = getUserIdFromRequest(request); // F-06: the token user only (throws → 401), no default user
 

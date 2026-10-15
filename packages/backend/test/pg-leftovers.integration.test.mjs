@@ -1,6 +1,7 @@
 // B2.2d-6: the leftovers scenario (test/fixtures/pg-leftovers-scenario.mjs)
 // on PostgreSQL: resolveToolUser reads users and the extension runner
-// reads/writes extension_configs on PostgreSQL, where those tables live.
+// reads/writes extension_configs on PostgreSQL, where those tables live;
+// Q-33 (B2.2d-7b): no extension loads on PostgreSQL and enable/install answer 409.
 // Runs ONLY when AGENT_PLAYER_PG_TEST_URL names a THROWAWAY database on
 // 127.0.0.1 that the PostgreSQL runner has already migrated (it writes test
 // rows and never cleans up: drop the database afterwards). Otherwise every
@@ -55,6 +56,12 @@ if (URL_) {
     Runner: (await import('../src/plugins/extension-runner.ts')).ExtensionRunner,
     Fastify: (await import('fastify')).default,
     extDir: join(dir, 'extensions'),
+    routes: {
+      registerAuthGate: (await import('../src/auth/auth-gate.ts')).registerAuthGate,
+      generateToken: (await import('../src/auth/jwt.ts')).generateToken,
+      extensionsRoutes: (await import('../src/api/routes/extensions.ts')).extensionsRoutes,
+      marketplaceRoutes: (await import('../src/api/routes/marketplace.ts')).marketplaceRoutes,
+    },
   };
   closeAll = async () => {
     Object.assign(console, quiet);
@@ -63,7 +70,7 @@ if (URL_) {
   };
 }
 
-leftoversScenario(test, () => ctx, { tag: randomBytes(4).toString('hex'), skip });
+leftoversScenario(test, () => ctx, { tag: randomBytes(4).toString('hex'), skip, driver: 'postgres' });
 
 test('no users / extension_configs statement reached SQLite', { skip }, () => {
   assert.deepEqual(sqliteHits, []);

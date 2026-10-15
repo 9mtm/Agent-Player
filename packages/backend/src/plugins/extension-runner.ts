@@ -11,6 +11,7 @@ import { createExtensionErrorSanitizer } from './extension-error-sanitizer.js';
 import { getDatabase } from '../db/index.js';
 import { nowText } from '../db/pg/dialect.js';
 import { q } from '../repositories/sql-steps.js';
+import { dbDriver } from '../db/pg/config.js';
 import { readdirSync, existsSync, readFileSync, watch } from 'fs';
 import { resolve, join } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -37,6 +38,21 @@ interface Extension {
  * Extension Runner
  * Scans extensions directory, loads enabled extensions, calls register() hooks
  */
+/**
+ * Q-33 (Mohamed, 2026-10-15): extensions are SQLite-only. Their SDK hands
+ * them the SQLite handle and they ship SQLite migrations, so on PostgreSQL no
+ * extension is loaded, enabled or installed.
+ */
+export function extensionsAvailable(): boolean {
+  return dbDriver() !== 'postgres';
+}
+
+/** The refusal the extension and marketplace routes answer on PostgreSQL (HTTP 409). */
+export const EXTENSIONS_SQLITE_ONLY = Object.freeze({
+  error: 'Extensions run only on the SQLite database; they are off on PostgreSQL',
+  code: 'extensions_sqlite_only',
+});
+
 export class ExtensionRunner {
   private loadedExtensions = new Map<string, Extension>();
   private extensionsDir: string;
@@ -50,6 +66,13 @@ export class ExtensionRunner {
    * Called at server startup before fastify.listen()
    */
   async initialize(fastify: FastifyInstance, cronEngine: any) {
+    // Q-33 (Mohamed, 2026-10-15): extensions keep their own SQLite tables, so
+    // they run only on the SQLite database and stay off on PostgreSQL.
+    if (!extensionsAvailable()) {
+      console.log('[ExtensionRunner] ⏭️  Extensions are off: they run only on the SQLite database (AGENT_PLAYER_DB=postgres)\n');
+      return;
+    }
+
     console.log('[ExtensionRunner] 🔌 Loading extensions...\n');
 
     // Emergency shutdown: disable all extensions via env variable
@@ -207,6 +230,7 @@ export class ExtensionRunner {
    * NOTE: This requires server restart for route changes to take effect
    */
   enableHotReload() {
+    if (!extensionsAvailable()) return; // Q-33: off on PostgreSQL
     if (!existsSync(this.extensionsDir)) {
       console.log('[ExtensionRunner] ⚠️  Hot reload disabled - no extensions directory');
       return;
