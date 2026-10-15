@@ -17,7 +17,7 @@ export function ChangesPane({ panes }: { panes: PanesController }) {
   return <div className="pane" aria-label="Changes">
     <div className="pane-head">
       {data?.branch && <span className="pane-branch" dir="ltr">⎇ {data.branch}</span>}
-      {data && total && <span className="pane-sum"><span className="plus">+{total[0]}</span> <span className="minus">−{total[1]}</span> · {data.changes.length} {data.changes.length === 1 ? 'file' : 'files'}</span>}
+      {data && total && data.changes.length > 0 && <span className="pane-sum"><span className="plus">+{total[0]}</span> <span className="minus">−{total[1]}</span> · {data.changes.length} {data.changes.length === 1 ? 'file' : 'files'}</span>}
       <button type="button" className="row-tool pane-refresh" aria-label="Reload changes" title="Reload" onClick={() => void panes.loadChanges()}><UiIcon name="refresh" size={12}/></button>
     </div>
     {!c || c.phase === 'loading' ? <p className="pane-empty">Loading…</p>
