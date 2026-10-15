@@ -355,6 +355,8 @@ function PlanCard({ steps, live, status }: { steps: readonly PlanStep[]; live: b
   const counted = steps.filter(s => s.status !== 'skipped').length;
   const finished = !live && steps.every(s => s.status === 'done' || s.status === 'skipped');
   const [open, setOpen] = useState(!finished);
+  // Fold once the run ends with every step done (the owner can open it again).
+  useEffect(() => { if (finished) setOpen(false); }, [finished]);
   const halted = !live && status !== 'complete';
   const active = steps.find(s => s.status === 'active');
   return <section className="plan-card" aria-label="Task plan" data-live={live || undefined}>
