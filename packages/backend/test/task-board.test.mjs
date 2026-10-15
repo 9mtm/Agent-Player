@@ -80,22 +80,22 @@ test('cards: create with agents and departments, validate, edit, move, archive',
   const b = (await call('POST', `${B()}/cards`, { columnId: col('In progress'), title: 'Second' })).json();
   const c = (await call('POST', `${B()}/cards`, { columnId: col('In progress'), title: 'Third' })).json();
   // Move the first card into "In progress", before "Third".
-  const moved = await call('PATCH', `${B()}/cards/${card.id}`, { expectedVersion: 1, columnId: col('In progress'), beforeCardId: c.id, priority: 'urgent' });
+  const moved = await call('PUT', `${B()}/cards/${card.id}`, { expectedVersion: 1, columnId: col('In progress'), beforeCardId: c.id, priority: 'urgent' });
   assert.equal(moved.statusCode, 200, moved.body);
   assert.equal(moved.json().version, 2);
   await refresh();
   assert.deepEqual(board.cards.filter((x) => x.columnId === col('In progress')).map((x) => x.title), ['Second', 'Launch the newsletter', 'Third']);
   // A stale version is refused with the current card.
-  const stale = await call('PATCH', `${B()}/cards/${card.id}`, { expectedVersion: 1, title: 'Old edit' });
+  const stale = await call('PUT', `${B()}/cards/${card.id}`, { expectedVersion: 1, title: 'Old edit' });
   assert.equal(stale.statusCode, 409); assert.equal(stale.json().code, 'version_conflict'); assert.equal(stale.json().card.version, 2);
-  assert.equal((await call('PATCH', `${B()}/cards/${card.id}`, { title: 'No version' })).json().code, 'invalid_version');
+  assert.equal((await call('PUT', `${B()}/cards/${card.id}`, { title: 'No version' })).json().code, 'invalid_version');
   // Archive hides the card from the board; ?archived=1 shows it.
-  assert.equal((await call('PATCH', `${B()}/cards/${b.id}`, { expectedVersion: 1, archived: true })).statusCode, 200);
+  assert.equal((await call('PUT', `${B()}/cards/${b.id}`, { expectedVersion: 1, archived: true })).statusCode, 200);
   await refresh();
   assert.ok(!board.cards.some((x) => x.id === b.id));
   assert.ok((await call('GET', `${B()}?archived=1`)).json().cards.some((x) => x.id === b.id && x.archived));
   // Edit agents and departments.
-  const edited = await call('PATCH', `${B()}/cards/${card.id}`, { expectedVersion: 2, agents: ['ag-2'], departments: [] });
+  const edited = await call('PUT', `${B()}/cards/${card.id}`, { expectedVersion: 2, agents: ['ag-2'], departments: [] });
   assert.deepEqual([edited.json().agents, edited.json().departments], [['ag-2'], []]);
 });
 
@@ -104,7 +104,7 @@ test('many moves to the same spot keep a stable order (renumbering)', async () =
   const anchor = (await call('POST', `${B()}/cards`, { columnId: target, title: 'Anchor' })).json();
   for (let i = 0; i < 15; i++) {
     const x = (await call('POST', `${B()}/cards`, { columnId: col('Backlog'), title: `Item ${i}` })).json();
-    const r = await call('PATCH', `${B()}/cards/${x.id}`, { expectedVersion: 1, columnId: target, beforeCardId: anchor.id });
+    const r = await call('PUT', `${B()}/cards/${x.id}`, { expectedVersion: 1, columnId: target, beforeCardId: anchor.id });
     assert.equal(r.statusCode, 200, r.body);
   }
   await refresh();
@@ -118,7 +118,7 @@ test('columns: add and rename; comments: add and list with counts', async () => 
   assert.equal(added.statusCode, 201);
   board = added.json();
   assert.equal(board.columns.at(-1).name, 'Blocked');
-  board = (await call('PATCH', `${B()}/columns/${col('Blocked')}`, { name: 'Waiting' })).json();
+  board = (await call('PUT', `${B()}/columns/${col('Blocked')}`, { name: 'Waiting' })).json();
   assert.ok(board.columns.some((c) => c.name === 'Waiting'));
   assert.equal((await call('POST', `${B()}/columns`, { name: '' })).statusCode, 400);
   const card = board.cards[0];

@@ -5,9 +5,9 @@
  *   GET   /api/boards                                  -> { boards: [{id, name}] }  (first call creates the company board)
  *   GET   /api/boards/:id?archived=1                   -> { id, name, columns, cards }
  *   POST  /api/boards/:id/columns          { name }    -> board
- *   PATCH /api/boards/:id/columns/:columnId { name }   -> board
+ *   PUT   /api/boards/:id/columns/:columnId { name }   -> board
  *   POST  /api/boards/:id/cards            { columnId, title, description?, priority?, dueDate?, agents?, departments? } -> 201 card
- *   PATCH /api/boards/:id/cards/:cardId    { expectedVersion, title?, description?, priority?, dueDate?, agents?, departments?,
+ *   PUT   /api/boards/:id/cards/:cardId    { expectedVersion, title?, description?, priority?, dueDate?, agents?, departments?,
  *                                            columnId?, beforeCardId?, archived? } -> card; 409 { code: 'version_conflict', card }
  *   GET   /api/boards/:id/cards/:cardId/comments        -> { comments }
  *   POST  /api/boards/:id/cards/:cardId/comments { body } -> 201 { comments }
@@ -64,7 +64,7 @@ export async function taskBoardRoutes(fastify: FastifyInstance) {
     try { return reply.code(201).send(await addColumn(owner, request.params.id, objectBody(request.body))); } catch (err) { return fail(err, reply); }
   });
 
-  fastify.patch<{ Params: P; Body: unknown }>('/api/boards/:id/columns/:columnId', { config }, async (request, reply) => {
+  fastify.put<{ Params: P; Body: unknown }>('/api/boards/:id/columns/:columnId', { config }, async (request, reply) => {
     const owner = ownerOf(request, reply); if (owner === null) return reply;
     if (!ids(request.params)) return reply.code(404).send({ error: 'Column not found', code: 'not_found' });
     try { return await renameColumn(owner, request.params.id, request.params.columnId!, objectBody(request.body)); } catch (err) { return fail(err, reply); }
@@ -76,7 +76,7 @@ export async function taskBoardRoutes(fastify: FastifyInstance) {
     try { return reply.code(201).send(await createCard(owner, request.params.id, objectBody(request.body))); } catch (err) { return fail(err, reply); }
   });
 
-  fastify.patch<{ Params: P; Body: unknown }>('/api/boards/:id/cards/:cardId', { config }, async (request, reply) => {
+  fastify.put<{ Params: P; Body: unknown }>('/api/boards/:id/cards/:cardId', { config }, async (request, reply) => {
     const owner = ownerOf(request, reply); if (owner === null) return reply;
     if (!ids(request.params)) return reply.code(404).send({ error: 'Card not found', code: 'not_found' });
     try { return await updateCard(owner, request.params.id, request.params.cardId!, objectBody(request.body)); } catch (err) { return fail(err, reply); }
