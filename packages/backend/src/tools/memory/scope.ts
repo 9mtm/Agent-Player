@@ -33,8 +33,15 @@ export function narrowestDrawer(drawers: readonly DrawerRef[]): DrawerRef | null
 
 export function toolMemoryDrawers(context?: ToolExecutionContext): DrawerRef[] {
   if (context?.toolPolicy && !outsiderAgentMemoryEnabled()) return selectDrawers({ audience: 'outsider' });
-  if (context?.memoryDrawers) return context.memoryDrawers;
-  return selectDrawers({ audience: 'owner' });
+  const drawers = context?.memoryDrawers ?? selectDrawers({ audience: 'owner' });
+  // CORE-PERMS-01: only the drawer kinds the owner lets this agent read.
+  const read = context?.permissions?.memoryRead;
+  return read ? drawers.filter((d) => read.includes(d.kind)) : drawers;
+}
+
+/** CORE-PERMS-01: drawer kinds the agent may write, or undefined (no limit beyond the open drawers). */
+export function toolMemoryWriteKinds(context?: ToolExecutionContext): DrawerRef['kind'][] | undefined {
+  return context?.permissions ? [...context.permissions.memoryWrite] : undefined;
 }
 
 /** At most this many drawers are kept in an approval's stored run scope. */

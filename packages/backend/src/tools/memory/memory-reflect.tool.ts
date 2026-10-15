@@ -192,8 +192,13 @@ Parameters:
       const reflectionContent = lines.join('\n');
 
       // Saved into the narrowest drawer the analyzed memories came from (an open drawer).
-      const sourceDrawers = drawers.filter((d) => targetMemories.some((m) => m.drawer && sameDrawer(m.drawer, d)));
-      const drawer = narrowestDrawer(sourceDrawers) ?? narrowestDrawer(drawers)!;
+      // CORE-PERMS-01: only drawers the agent may write.
+      const writable = actor.writeKinds ? drawers.filter((d) => actor.writeKinds!.includes(d.kind)) : drawers;
+      if (writable.length === 0) {
+        return { content: [{ type: 'text', text: 'Reflection not saved: this agent may not write to any open memory drawer.' }], error: 'No writable memory drawer' };
+      }
+      const sourceDrawers = writable.filter((d) => targetMemories.some((m) => m.drawer && sameDrawer(m.drawer, d)));
+      const drawer = narrowestDrawer(sourceDrawers) ?? narrowestDrawer(writable)!;
 
       // Save reflection as a new memory (Multi-Tier Memory: experiential layer)
       const reflectionMemory: Omit<Memory, 'userId'> = {

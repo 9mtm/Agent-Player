@@ -348,6 +348,12 @@ test('stage 3 (hire test): exactly create agent + read/replace its tool grants, 
     const put = await req('PUT', `/api/agents/${id}/tool-grants`, { payload: { grants: ['memory_search', 'web_fetch'], expectedVersion: view.json().version } });
     assert.equal(put.statusCode, 200, put.body);
     assert.deepEqual(put.json().grants.map(g => g.tool).sort(), ['memory_search', 'web_fetch']);
+    // CORE-PERMS-01: memory scope + off/ask/allow on the hire stage.
+    const permView = await req('GET', `/api/agents/${id}/permissions`);
+    assert.equal(permView.statusCode, 200, permView.body);
+    const permPut = await req('PUT', `/api/agents/${id}/permissions`, { payload: { memoryRead: ['task'], memoryWrite: ['task'], sharedMemory: false, modes: { ...permView.json().modes, browser: 'off' }, expectedVersion: permView.json().version } });
+    assert.equal(permPut.statusCode, 200, permPut.body);
+    assertReadOnly(await req('PUT', `/api/agents/${id}/permissions?x=1`, { payload: {} }), 'permissions query trick');
     const catalogue = await req('GET', '/api/onboarding/team-catalogue');
     assert.equal(catalogue.statusCode, 200, catalogue.body);
     const teamPlan = await req('POST', '/api/onboarding/team-plan', { payload: { size: 'small', departments: ['sales', 'finance'] } });

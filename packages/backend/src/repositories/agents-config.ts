@@ -53,6 +53,7 @@ import {
 import { VersionInputError, expectedVersionFrom } from '../api/concurrency.js';
 import { AGENT_ROLES, PersonalityInputError, isAgentRole, normalizeDepartment, type AgentRole } from '../services/personality.js';
 import { checkOwnerPersonalityInput, seedPersonalityForNewAgent, type SaveInput } from '../services/personality-store.js';
+import { seedNewAgentPermissionsStep } from '../tools/agent-permissions.js';
 
 export interface AgentConfigRow {
   id: string;
@@ -129,7 +130,8 @@ function* rowStep(id: string): Step<AgentConfigRow | undefined> {
 }
 const row = (id: string) => sql().read(rowStep(id));
 /**
- * Reserve the name, insert the agents_config row and seed personality v1.
+ * Reserve the name, insert the agents_config row, seed personality v1 and
+ * the safe default permissions (CORE-PERMS-01).
  * A step: run it inside a transaction (createConfig, and the batch hire of
  * ONBOARD-TEAM-02 together with its own bookkeeping row).
  */
@@ -157,6 +159,8 @@ export function* insertAgentConfigStep(input: {
     department,
   );
   if (role || explicit) yield* seedPersonalityForNewAgent(id, { role, department, explicit }, userId ?? 'system');
+  // CORE-PERMS-01: a new agent starts with every tool category on "ask" (D-AGENT-PERMS safe default).
+  yield* seedNewAgentPermissionsStep(id, userId);
 }
 
 export const newAgentId = () => `agent-${Date.now()}-${randomBytes(3).toString('hex')}`;

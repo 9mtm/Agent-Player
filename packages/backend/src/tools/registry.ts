@@ -5,6 +5,7 @@
  * Tools can be registered and executed through this registry.
  */
 
+import { modeFor, permissionCategory } from './agent-permissions.js';
 import type { Tool, ToolResult, ToolExecutionContext } from './types.js';
 import { execToolRefusal, isToolAllowedByExecPolicy, isToolObjectAllowedByExecPolicy } from './exec-policy.js';
 import { channelToolCallRefusal, isToolAllowedInChannel } from './channel-policy.js';
@@ -57,6 +58,7 @@ export class ToolsRegistry {
       isToolObjectAllowedByExecPolicy(tool)
       && (!policy || isToolAllowedInChannel(policy, tool))
       && isToolGranted(grants, tool.name)
+      && modeFor(this.context.permissions, tool) !== 'off'
     );
   }
 
@@ -117,9 +119,26 @@ export class ToolsRegistry {
       return grantRefused;
     }
 
+    // CORE-PERMS-01: the owner's mode for this tool's category: off = refused,
+    // ask = always approval, allow = no approval (risky ones confirmed by the owner).
+    const mode = modeFor(this.context.permissions, tool);
+    if (mode === 'off') {
+      console.warn(`[ToolsRegistry] ⛔ Refused tool switched off for agent ${this.context.agentId ?? '(none)'}: ${toolName}`);
+      return {
+        content: [{ type: 'text', text: `Tool "${toolName}" was not run: the owner switched off this kind of tool for this agent.` }],
+        error: 'Tool switched off for this agent',
+      };
+    }
+
     // SECURITY (S1.3): risky tools (send, delete, spend, install, settings) wait
     // for a one-time owner approval. Only approveAndRun() holds a valid ticket.
-    const category = approvalCategory(tool);
+    // "allow" lifts only the approval that comes from the category itself
+    // (e.g. message for *_send); a tool's own approval request ('other', such
+    // as a write-like MCP tool) always stays.
+    const ownCategory = approvalCategory(tool);
+    const modeCategory = permissionCategory(tool);
+    let category = ownCategory ?? (mode === 'ask' ? modeCategory : null);
+    if (mode === 'allow' && ownCategory && ownCategory === modeCategory) category = null;
     if (category && !isConfinedChannelReply(policy, toolName) && !consumeApprovalTicket(options.approvalTicket, toolName)) {
       try {
         return await requestApproval(tool, params, this.context, category);

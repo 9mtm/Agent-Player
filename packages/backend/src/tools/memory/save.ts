@@ -142,6 +142,10 @@ Examples:
       if (!open.some((d) => sameDrawer(d, drawer))) {
         throw new Error('That memory drawer is not open for this conversation');
       }
+      // CORE-PERMS-01: the owner may make a drawer read-only for this agent.
+      if (actor.writeKinds && !actor.writeKinds.includes(drawer.kind)) {
+        throw new Error('This agent may not write to that memory drawer');
+      }
 
       // Validate importance
       const importance = Math.max(1, Math.min(10, params.importance || 5));
