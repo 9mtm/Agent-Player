@@ -3,6 +3,7 @@ const shapes = {
   'arrow-up': <><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></>,
   stop: <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" stroke="none"/>,
   plus: <><path d="M12 5v14"/><path d="M5 12h14"/></>,
+  board: <><rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="10" y="4" width="5" height="11" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></>,
   search: <><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></>,
   compose: <><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></>,
   'log-out': <><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/><path d="M10 16l-4-4 4-4"/><path d="M6 12h10"/></>,
