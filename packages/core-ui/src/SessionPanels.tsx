@@ -4,6 +4,8 @@ import type { SessionClient } from './session';
 import { createMemoryAdapter, MemoryController, validDrawer } from './memory';
 import { AgentsController } from './agents';
 import { MemoryReview } from './MemoryDestination';
+import { MemoryBulkReview } from './MemoryBulkReview';
+import { BulkReviewController } from './memory';
 import { Markdown } from './markdown';
 
 const roleName: Record<string, string> = { owner: 'Owner', admin: 'Admin', user: 'Member', guest: 'Guest' };
@@ -70,6 +72,7 @@ export function MemoryPanel({ client, active = false }: { client: SessionClient;
   const [agent, setAgent] = useState('');
   const [kind, setKind] = useState<DrawerKind>('owner'); const [key, setKey] = useState('');
   const [query, setQuery] = useState('');
+  const [bulk, setBulk] = useState(false);
   const [team, setTeam] = useState<AgentsController>();
   useEffect(() => { const c = new AgentsController(client); setTeam(c); return () => c.dispose(); }, [client]);
   const teamState = useSyncExternalStore(team ? team.subscribe : noop, team ? team.getSnapshot : nothing, team ? team.getSnapshot : nothing);
@@ -85,7 +88,7 @@ export function MemoryPanel({ client, active = false }: { client: SessionClient;
   const chosen = agents.find(a => a.id === agent);
   const shown = agents.filter(a => !query.trim() || (a.name ?? '').toLowerCase().includes(query.trim().toLowerCase()));
   /** Read one drawer of one agent (each click is an explicit read). */
-  const read = (agentId: string, drawer: string) => { if (!owner || !agentId || !drawer) return; controller.setContext({ ...memory.context, agentId, drawerId: drawer }); void controller.load(); };
+  const read = (agentId: string, drawer: string) => { if (!owner || !agentId || !drawer) return; setBulk(false); controller.setContext({ ...memory.context, agentId, drawerId: drawer }); void controller.load(); };
   const keyed = kind === 'project' || kind === 'task' || kind === 'people';
   // Opening the page shows the team at once (one read the first time the page is shown).
   useEffect(() => { if (active && owner && team && teamState?.phase === 'idle' && !agents.length) void team.list(); }, [active, owner, team, teamState?.phase, agents.length]);
@@ -125,8 +128,10 @@ export function MemoryPanel({ client, active = false }: { client: SessionClient;
             </form>}
             {(memory.phase !== 'ready' && memory.phase !== 'idle' || memory.unknownOutcome || memory.decisionNotice) && <p role="status" className="memory-status">
               {memory.unknownOutcome ? 'Decision outcome unknown. Read again to see the current state; nothing was sent twice.' : memory.decisionNotice ? `${memory.decisionNotice}. Open the change again before deciding.` : memory.phase === 'accepted' ? 'Approved and saved.' : memoryLabel[memory.phase] ?? memory.phase}</p>}
-            {memory.proposals.length > 0 && <section className="memory-pending" aria-label="Waiting for your review">
+            {bulk && <MemoryBulkReview adapter={controller.adapter} context={memory.context} proposals={memory.proposals} onClose={changed => { setBulk(false); if (changed) void controller.load(); }}/>}
+            {!bulk && memory.proposals.length > 0 && <section className="memory-pending" aria-label="Waiting for your review">
               <h4>{memory.proposals.length} {memory.proposals.length === 1 ? 'change waits' : 'changes wait'} for your review</h4>
+              {BulkReviewController.eligible(memory.proposals).length > 1 && !!controller.adapter.decide && <button type="button" className="memory-bulk-open" disabled={memory.phase === 'deciding'} onClick={() => setBulk(true)}>Review {BulkReviewController.eligible(memory.proposals).length} imported memories together</button>}
               <ul>{memory.proposals.map(p => <li key={p.id}>
                 <span>{sourceLabel[p.source] ?? p.source}</span><span className="fine-print">{p.createdAt.slice(0, 16).replace('T', ' ')}</span>
                 <button type="button" aria-pressed={memory.detail?.id === p.id} disabled={memory.phase === 'deciding'} onClick={() => void controller.open(p.id)}>Review</button>

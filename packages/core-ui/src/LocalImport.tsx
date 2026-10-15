@@ -1,9 +1,10 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { LocalImportController } from './local-import';
-import type { LocalSession } from './local-import-contract.js';
+import { LOCAL_SOURCES } from './local-import-contract.js';
+import type { LocalSession, LocalSource } from './local-import-contract.js';
 import type { SessionClient } from './session';
 
-const SOURCE: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex' };
+const SOURCE: Record<LocalSource, string> = { 'claude-code': 'Claude Code', codex: 'Codex', antigravity: 'Antigravity', 'gemini-cli': 'Gemini CLI' };
 const shortPath = (p: string) => { const home = p.match(/^\/Users\/[^/]+/)?.[0]; return home ? `~${p.slice(home.length)}` : p; };
 
 /** Bring in what you told other agents: pick conversations, the local model proposes memories, you approve each one. */
@@ -11,7 +12,7 @@ export function LocalImport({ client, active, onReview }: { client: SessionClien
   const [c] = useState(() => new LocalImportController(client));
   useEffect(() => () => c.dispose(), [c]);
   const s = useSyncExternalStore(c.subscribe, c.getSnapshot, c.getSnapshot);
-  const [source, setSource] = useState<'all' | 'claude-code' | 'codex'>('all');
+  const [source, setSource] = useState<'all' | LocalSource>('all');
   const [query, setQuery] = useState('');
   const [onlyNew, setOnlyNew] = useState(true);
   useEffect(() => { if (active && s.phase === 'idle') void c.load(); }, [active, c, s.phase]);
@@ -23,7 +24,7 @@ export function LocalImport({ client, active, onReview }: { client: SessionClien
   return <section className="local-import" aria-label="Import from other agents">
     <div className="local-import-head">
       <div><h3>Import from other agents</h3>
-        <p className="fine-print">Pick conversations you had with Claude Code or Codex on this computer. Secrets are removed first, a private copy is kept in <code>{s.archive || '~/.dpro/imports'}</code>, and the local model suggests lasting memories. Nothing is remembered until you approve each one. The original files are never changed.</p></div>
+        <p className="fine-print">Pick conversations you had with Claude Code, Codex, Antigravity or Gemini CLI on this computer. Secrets are removed first, a private copy is kept in <code>{s.archive || '~/.dpro/imports'}</code>, and the local model suggests lasting memories. Nothing is remembered until you approve it. The original files are never changed.</p></div>
     </div>
     {s.job && <div className="local-import-job" role="status" data-status={s.job.status}>
       {running ? <>Reading {s.job.done} of {s.job.total}… <span className="local-import-bar" aria-hidden="true"><i style={{ inlineSize: `${s.job.total ? Math.round((s.job.done / s.job.total) * 100) : 0}%` }}/></span></>
@@ -36,7 +37,7 @@ export function LocalImport({ client, active, onReview }: { client: SessionClien
       : <>
         <div className="local-import-tools">
           <div className="seg small" role="radiogroup" aria-label="Source">
-            {(['all', 'claude-code', 'codex'] as const).map(k => <button key={k} type="button" role="radio" aria-checked={source === k} onClick={() => setSource(k)}>
+            {(['all', ...LOCAL_SOURCES.filter(k => s.sessions.some(x => x.source === k))] as const).map(k => <button key={k} type="button" role="radio" aria-checked={source === k} onClick={() => setSource(k)}>
               {k === 'all' ? 'All' : SOURCE[k]} <span className="muted">{k === 'all' ? s.sessions.length : s.sessions.filter(x => x.source === k).length}</span></button>)}
           </div>
           <input type="search" placeholder="Find by words or folder" aria-label="Find conversations" value={query} onChange={e => setQuery(e.target.value)}/>
@@ -44,7 +45,7 @@ export function LocalImport({ client, active, onReview }: { client: SessionClien
           <button type="button" className="primary" disabled={!s.selected.length || running} onClick={() => void c.start()}>{running ? 'Importing…' : `Import ${s.selected.length || ''} ${s.selected.length === 1 ? 'conversation' : 'conversations'}`.replace('  ', ' ')}</button>
           {s.selected.length > 0 && !running && <button type="button" className="link-button" onClick={() => c.clear()}>Clear</button>}
         </div>
-        {!shown.length ? <p className="fine-print">{s.sessions.length ? 'No conversation matches.' : 'No Claude Code or Codex conversations were found on this computer.'}</p>
+        {!shown.length ? <p className="fine-print">{s.sessions.length ? 'No conversation matches.' : 'No conversations from other agents were found on this computer.'}</p>
           : [...groups].map(([folder, list]) => <div key={folder} className="local-import-group">
             <p className="local-import-folder" dir="ltr" title={folder}>{folder}</p>
             <ul>{list.map(x => <li key={x.id}>

@@ -655,6 +655,20 @@ form > label { display:block; margin-block-end:8px; }
 .memory-pending li { display:flex; align-items:center; gap:10px; font-size:12.5px; }
 .memory-pending li button { margin-inline-start:auto; }
 .memory-body { display:grid; gap:6px; }
+.memory-bulk-open { justify-self:start; }
+.memory-bulk { padding:10px 12px; border-radius:6px; box-shadow:inset 0 0 0 1px var(--line, color-mix(in srgb,currentColor 18%,transparent)); display:grid; gap:8px; }
+.memory-bulk-head { display:flex; align-items:center; gap:10px; }
+.memory-bulk-head h4 { margin:0; font-size:13px; }
+.memory-bulk-head button { margin-inline-start:auto; }
+.memory-bulk-list, .app-shell .memory-bulk-list { list-style:none; margin:0; padding:0; display:grid; gap:2px; max-block-size:60vh; overflow:auto; }
+.memory-bulk-list label.check, .memory-bulk-list label { display:grid; grid-template-columns:auto 1fr auto; gap:10px; align-items:start; padding:6px 4px; border-radius:4px; font-size:13px; line-height:1.5; }
+.memory-bulk-list label:hover { background:color-mix(in srgb,currentColor 5%,transparent); }
+.memory-bulk-text { display:grid; gap:2px; }
+.memory-bulk-text > span { display:grid; gap:2px; white-space:pre-line; }
+.memory-bulk-all { display:flex; align-items:center; gap:8px; font-size:12.5px; }
+.app-shell .memory-bulk input[type="checkbox"], .memory-bulk input[type="checkbox"] { inline-size:14px; block-size:14px; min-inline-size:0; min-block-size:0; margin:3px 0 0; padding:0; flex:0 0 auto; }
+.app-shell .memory-bulk label.check { font-size:12.5px; color:var(--text-2); }
+.memory-bulk .memory-confirm { margin-block:4px; }
 .memory-text { font-size:13.5px; line-height:1.6; max-inline-size:72ch; }
 .memory-text h1, .memory-text h2 { font-size:15px; margin:16px 0 6px; }
 .memory-text h3 { font-size:13.5px; margin:14px 0 4px; }

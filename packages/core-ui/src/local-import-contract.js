@@ -1,5 +1,5 @@
 // Wire contract for importing memories from other agents on this computer
-// (MEM-IMPORT-01), shared by the browser client and the local bridge. Owner only.
+// (MEM-IMPORT-01/02), shared by the browser client and the local bridge. Owner only.
 
 const ID = /^[0-9a-f]{32}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -8,6 +8,7 @@ const str = (x, max) => (typeof x === 'string' ? x.slice(0, max) : null);
 const n = x => (Number.isSafeInteger(x) && x >= 0 ? x : 0);
 export const LOCAL_IMPORT_PATH = '/api/memory/import/local';
 export const MAX_IMPORT_SESSIONS = 20;
+export const LOCAL_SOURCES = ['claude-code', 'codex', 'antigravity', 'gemini-cli'];
 
 export function localImportPath(path) {
   if (path === LOCAL_IMPORT_PATH) return { kind: 'local' };
@@ -39,7 +40,7 @@ export function localImportResponse(path, status, body) {
   if (!Array.isArray(body.sessions)) throw Error('protocol');
   const j = job(body.job);
   return { archive: str(body.archive, 200) ?? '', ...(j ? { job: j } : {}),
-    sessions: body.sessions.slice(0, 400).filter(s => record(s) && typeof s.id === 'string' && ID.test(s.id) && ['claude-code', 'codex'].includes(s.source)).map(s => ({
+    sessions: body.sessions.slice(0, 400).filter(s => record(s) && typeof s.id === 'string' && ID.test(s.id) && LOCAL_SOURCES.includes(s.source)).map(s => ({
       id: s.id, source: s.source, cwd: str(s.cwd, 1024), title: str(s.title, 200) ?? '', startedAt: str(s.startedAt, 40), updatedAt: str(s.updatedAt, 40) ?? '', bytes: n(s.bytes), turns: n(s.turns),
       imported: record(s.imported) ? { importedAt: str(s.imported.importedAt, 40) ?? '', proposed: n(s.imported.proposed) } : null })) };
 }

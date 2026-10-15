@@ -262,3 +262,62 @@ export class MemoryController {
     }
   }
 }
+
+/**
+ * Bulk review of import proposals (MEM-IMPORT-02): the owner reads many short
+ * imported memories in one list and approves or rejects the selected ones.
+ * Each decision is still its own request carrying that proposal's reviewHash
+ * from the detail shown here, so a proposal that changed since it was read is
+ * refused (409) and counted as "changed", never applied blindly.
+ */
+export const MAX_BULK = 100;
+export interface BulkState { phase: 'idle' | 'loading' | 'ready' | 'deciding' | 'done' | 'error'; items: Proposal[]; selected: string[]; result?: { done: number; changed: number; failed: number; unknown: number; action: Decision['action'] } }
+export class BulkReviewController {
+  private state: BulkState = { phase: 'idle', items: [], selected: [] };
+  private listeners = new Set<() => void>();
+  private abort = new AbortController();
+  private readonly unknown: Set<string>;
+  constructor(readonly adapter: MemoryAdapter, readonly context: MemoryContext) { this.unknown = adapter.uncertainDecisions ?? new Set(); }
+  getSnapshot = (): BulkState => this.state;
+  subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
+  private publish(patch: Partial<BulkState>) { this.state = { ...this.state, ...patch }; this.listeners.forEach(fn => fn()); }
+  private key(id: string) { return JSON.stringify([this.context.userId, id]); }
+  /** Pending import proposals that only add memories (nothing to compare against), read in full. */
+  static eligible(list: ProposalSummary[]): ProposalSummary[] { return list.filter(p => p.status === 'pending' && p.source === 'import').slice(0, MAX_BULK); }
+  async load(list: ProposalSummary[]) {
+    this.publish({ phase: 'loading', items: [], selected: [], result: undefined });
+    try {
+      const items: Proposal[] = [];
+      for (const s of BulkReviewController.eligible(list)) {
+        if (this.unknown.has(this.key(s.id))) continue;
+        const p = await this.adapter.detail(this.context, s.id, this.abort.signal);
+        if (p.status === 'pending' && p.changes.length > 0 && p.changes.every(c => c.op === 'add')) items.push(p);
+      }
+      this.publish({ phase: 'ready', items, selected: items.map(p => p.id) });
+    } catch { this.publish({ phase: 'error' }); }
+  }
+  toggle(id: string) { if (this.state.phase !== 'ready') return; const s = this.state.selected; this.publish({ selected: s.includes(id) ? s.filter(x => x !== id) : [...s, id] }); }
+  selectAll(on: boolean) { if (this.state.phase === 'ready') this.publish({ selected: on ? this.state.items.map(p => p.id) : [] }); }
+  async decide(action: Decision['action']) {
+    if (this.state.phase !== 'ready' || !this.adapter.decide || (action !== 'approve' && action !== 'reject')) return;
+    const chosen = this.state.items.filter(p => this.state.selected.includes(p.id));
+    if (!chosen.length) return;
+    this.publish({ phase: 'deciding' });
+    const result = { done: 0, changed: 0, failed: 0, unknown: 0, action };
+    for (const p of chosen) {
+      if (this.adapter.mode === 'contract') this.unknown.add(this.key(p.id));
+      try {
+        const d = await this.adapter.decide(this.context, { id: p.id, baseRevision: p.baseRevision, baseHash: p.baseHash, review: reviewVersion(p), expectedReviewHash: p.reviewHash, action }, this.abort.signal);
+        if (d.id !== p.id || d.reviewHash !== p.reviewHash || d.status !== (action === 'approve' ? 'approved' : 'rejected')) throw new MemoryFailure('unknown');
+        this.unknown.delete(this.key(p.id)); result.done++;
+      } catch (e) {
+        const f = e instanceof MemoryFailure ? e : undefined;
+        if (f && (f.code || f.phase === 'denied' || f.phase === 'unavailable')) this.unknown.delete(this.key(p.id));
+        if (f?.code) result.changed++; else if (f?.phase === 'unknown') result.unknown++; else result.failed++;
+        if (f?.phase === 'denied') break;
+      }
+    }
+    this.publish({ phase: 'done', result });
+  }
+  dispose() { this.abort.abort(); this.listeners.clear(); }
+}
