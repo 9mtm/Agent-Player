@@ -16,6 +16,11 @@ export const BATCHES_PATH = '/api/onboarding/team-batches';
 export const MAX_TOTAL = 1000;
 export const MAX_RUN = 50;
 export const teamRoles = ['manager', 'specialist', 'evaluator'];
+// CORE-PERMS-01: per-agent memory scope and off / ask / allow per tool category.
+export const drawerKinds = ['owner', 'project', 'experience', 'task', 'people'];
+export const permissionCategories = ['browser', 'network', 'message', 'delete', 'install', 'money', 'settings'];
+export const permissionModes = ['off', 'ask', 'allow'];
+export const riskyCategories = ['money', 'install', 'delete'];
 export const MAX_GRANTS = 500;
 export const MAX_AVAILABLE = 2000;
 
@@ -47,6 +52,24 @@ export function validCreateBody(b) {
   if (b.department !== undefined && !department(b.department)) return false;
   if (b.description !== undefined && !description(b.description)) return false;
   return b.personality === undefined || validPersonality(b.personality);
+}
+
+export function permissionsAgentId(path) {
+  const m = /^\/api\/agents\/([^/?#]+)\/permissions$/.exec(path);
+  return m && validAgentId(m[1]) ? m[1] : null;
+}
+
+const kindList = x => Array.isArray(x) && x.length <= drawerKinds.length && x.every(k => drawerKinds.includes(k)) && new Set(x).size === x.length;
+const modeMap = x => record(x) && Object.keys(x).length === permissionCategories.length && permissionCategories.every(c => permissionModes.includes(x[c]));
+
+/** PUT /api/agents/:id/permissions body: full replacement; risky "allow" only with confirmRisky. */
+export function validPermissionsBody(b) {
+  if (!record(b) || !onlyKeys(b, ['memoryRead', 'memoryWrite', 'sharedMemory', 'modes', 'expectedVersion', 'confirmRisky'])) return false;
+  if (!kindList(b.memoryRead) || !kindList(b.memoryWrite) || !b.memoryWrite.every(k => b.memoryRead.includes(k))) return false;
+  if (typeof b.sharedMemory !== 'boolean' || !modeMap(b.modes)) return false;
+  if (!Number.isSafeInteger(b.expectedVersion) || b.expectedVersion < 0) return false;
+  if (b.confirmRisky !== undefined && typeof b.confirmRisky !== 'boolean') return false;
+  return !riskyCategories.some(c => b.modes[c] === 'allow') || b.confirmRisky === true;
 }
 
 export function grantsAgentId(path) {
@@ -114,6 +137,7 @@ export function allowedHire(method, path, body) {
   if (path === BATCHES_PATH) return (method === 'GET' && body === undefined) || (method === 'POST' && validBatchBody(body));
   const batch = batchPath(path);
   if (batch) return batch.run ? method === 'POST' && validRunBody(body) : method === 'GET' && body === undefined;
+  if (permissionsAgentId(path)) return (method === 'GET' && body === undefined) || (method === 'PUT' && validPermissionsBody(body));
   if (path === '/api/agents') return method === 'POST' && validCreateBody(body);
   if (!grantsAgentId(path)) return false;
   if (method === 'GET') return body === undefined;
@@ -123,7 +147,7 @@ export function allowedHire(method, path, body) {
 /** True when this response belongs to the hire contract (create result or a grants path). */
 export function hireRoute(path, status) {
   return path === CATALOGUE_PATH || path === PLAN_PATH || path === DISTRIBUTION_PATH || path === BATCHES_PATH || batchPath(path) !== null
-    || grantsAgentId(path) !== null || (path === '/api/agents' && (status === 201 || status === 400 || status === 403));
+    || grantsAgentId(path) !== null || permissionsAgentId(path) !== null || (path === '/api/agents' && (status === 201 || status === 400 || status === 403));
 }
 
 const fail = () => { throw Error('Invalid hire response'); };
@@ -263,6 +287,24 @@ function batchResult(batch, status, body) {
   return known(status, body, status === 404 ? ['batch_not_found'] : status === 409 ? ['batch_running'] : status === 400 ? ['invalid_plan'] : []);
 }
 
+function permissionsView(agentId, b) {
+  if (!record(b) || b.agentId !== agentId || !kindList(b.memoryRead) || !kindList(b.memoryWrite) || typeof b.sharedMemory !== 'boolean' || !modeMap(b.modes)
+    || !Number.isSafeInteger(b.version) || b.version < 0) fail();
+  return { agentId, memoryRead: [...b.memoryRead], memoryWrite: b.memoryWrite.filter(k => b.memoryRead.includes(k)), sharedMemory: b.sharedMemory,
+    modes: Object.fromEntries(permissionCategories.map(c => [c, b.modes[c]])), version: b.version };
+}
+
+function permissionsResult(agentId, status, body) {
+  if (status === 200) return permissionsView(agentId, body);
+  const code = record(body) ? body.code : undefined;
+  if (status === 409 && code === 'version_conflict') {
+    if (!Number.isSafeInteger(body.currentVersion)) fail();
+    return { code, currentVersion: body.currentVersion };
+  }
+  if (status === 403 && code === 'read_only_stage') return { code };
+  return status === 400 && ['invalid_permissions', 'risky_not_confirmed', 'invalid_version'].includes(code) ? { code } : null;
+}
+
 export function hireResponse(path, status, body) {
   if (path === CATALOGUE_PATH) return catalogueResult(status, body);
   if (path === PLAN_PATH) return planResult(status, body);
@@ -270,6 +312,8 @@ export function hireResponse(path, status, body) {
   if (path === BATCHES_PATH) return batchesResult(status, body);
   const batch = batchPath(path);
   if (batch) return batchResult(batch, status, body);
+  const permAgent = permissionsAgentId(path);
+  if (permAgent) return permissionsResult(permAgent, status, body);
   if (path === '/api/agents') return createResult(status, body);
   const agentId = grantsAgentId(path);
   if (!agentId) fail();
