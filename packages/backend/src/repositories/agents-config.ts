@@ -128,7 +128,38 @@ function* rowStep(id: string): Step<AgentConfigRow | undefined> {
   return yield* one<AgentConfigRow>('SELECT * FROM agents_config WHERE id = ?', id);
 }
 const row = (id: string) => sql().read(rowStep(id));
-const newAgentId = () => `agent-${Date.now()}-${randomBytes(3).toString('hex')}`;
+/**
+ * Reserve the name, insert the agents_config row and seed personality v1.
+ * A step: run it inside a transaction (createConfig, and the batch hire of
+ * ONBOARD-TEAM-02 together with its own bookkeeping row).
+ */
+export function* insertAgentConfigStep(input: {
+  id: string; name: string; language: string | null; body: AgentConfigInput;
+  role: AgentRole | null; department: string | null; explicit: SaveInput | null; userId: string | null;
+}): Step<void> {
+  const { id, name, language, body, role, department, explicit, userId } = input;
+  yield* reserveAgentName(name, id, { reason: 'create', language, reservedBy: userId });
+  yield* run(`
+    INSERT INTO agents_config (id, name, description, emoji, system_prompt, model, provider, temperature, max_tokens, capabilities, api_key, role, department)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)
+  `,
+    id,
+    name,
+    body.description || '',
+    body.emoji || '🤖',
+    body.system_prompt || '',
+    body.model || 'claude-sonnet-4-5-20250929',
+    body.provider || 'claude',
+    body.temperature ?? 0.7,
+    body.max_tokens ?? 4096,
+    typeof body.capabilities === 'object' ? JSON.stringify(body.capabilities) : (body.capabilities || '{}'),
+    role,
+    department,
+  );
+  if (role || explicit) yield* seedPersonalityForNewAgent(id, { role, department, explicit }, userId ?? 'system');
+}
+
+export const newAgentId = () => `agent-${Date.now()}-${randomBytes(3).toString('hex')}`;
 
 /** Owner/admin; the reserved small local agent: owner only (MCP-01b). */
 function adminFor(actor: Actor | null | undefined, id: string): Actor {
@@ -204,27 +235,7 @@ export const agentConfigs: AgentConfigsRepository = {
       if (body.language !== undefined) language = await resolveNamingLanguage(a.userId, body.language);
     }
 
-    await sql().tx(function* () {
-      yield* reserveAgentName(name, id, { reason: 'create', language, reservedBy: a.userId });
-      yield* run(`
-        INSERT INTO agents_config (id, name, description, emoji, system_prompt, model, provider, temperature, max_tokens, capabilities, api_key, role, department)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)
-      `,
-        id,
-        name,
-        body.description || '',
-        body.emoji || '🤖',
-        body.system_prompt || '',
-        body.model || 'claude-sonnet-4-5-20250929',
-        body.provider || 'claude',
-        body.temperature ?? 0.7,
-        body.max_tokens ?? 4096,
-        typeof body.capabilities === 'object' ? JSON.stringify(body.capabilities) : (body.capabilities || '{}'),
-        role,
-        department,
-      );
-      if (role || explicit) yield* seedPersonalityForNewAgent(id, { role, department, explicit }, a.userId ?? 'system');
-    });
+    await sql().tx(() => insertAgentConfigStep({ id, name, language, body, role, department, explicit, userId: a.userId ?? null }));
 
     // SECURITY (S1.1): the key goes to the encrypted credentials store only.
     if (typeof body.api_key === 'string' && body.api_key.trim()) await setAgentApiKey(id, body.api_key);

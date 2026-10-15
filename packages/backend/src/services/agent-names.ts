@@ -130,10 +130,17 @@ export function validateAgentName(value: unknown): string {
   return name;
 }
 
-/** Add the names of agents that exist now (idempotent). */
+/**
+ * Add the names of agents that exist now (idempotent). Only agents whose
+ * current name is not recorded for them yet are read: a recorded
+ * (agent_id, name) pair already holds that name's key, so skipping it changes
+ * nothing, and a batch hire of hundreds stays linear (ONBOARD-TEAM-02).
+ */
 export function* syncExistingAgentNamesStep(): Step<void> {
   const d = yield* dialect();
-  const rows = yield* all<{ id: string; name: string }>('SELECT id, name FROM agents_config');
+  const rows = yield* all<{ id: string; name: string }>(`
+    SELECT a.id, a.name FROM agents_config a
+    WHERE NOT EXISTS (SELECT 1 FROM used_agent_names u WHERE u.agent_id = a.id AND u.name = a.name)`);
   const insert = insertOrIgnore(d, `INSERT INTO used_agent_names (name_key, name, agent_id, reason) VALUES (?, ?, ?, 'existing')`);
   for (const r of rows) {
     if (typeof r.name !== 'string') continue;

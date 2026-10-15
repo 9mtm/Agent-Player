@@ -63,6 +63,7 @@ test('headcount grows with company size; titles and personas follow the departme
   assert.equal(medium.find((h) => h.department === 'finance' && h.role === 'specialist').title, 'Accountant');
   assert.equal(medium.find((h) => h.department === 'finance' && h.role === 'specialist').preset, 'careful-auditor');
   assert.equal(medium.find((h) => h.department === 'marketing' && h.role === 'specialist').preset, 'bold-creative');
+  assert.equal(medium.find((h) => h.department === 'finance' && h.role === 'manager').preset, 'careful-auditor', 'a lead has the department persona');
   const custom = plan.planRoles('small', ['podcast studio']);
   assert.equal(custom[0].departmentLabel, 'Podcast Studio');
   assert.equal(custom[0].title, 'Podcast Studio team lead');
