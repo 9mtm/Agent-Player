@@ -8,7 +8,9 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-export function leftoversScenario(test, getM, { tag, skip = false }) {
+export function leftoversScenario(test, getM, { tag, skip = false, driver = 'sqlite' }) {
+  // Q-33 (B2.2d-7b): extensions run only on SQLite; on PostgreSQL none loads.
+  const pg = driver === 'postgres';
   const m = () => getM();
   const active = `lo-active-${tag}`;
   const inactive = `lo-inactive-${tag}`;
@@ -44,8 +46,8 @@ export function leftoversScenario(test, getM, { tag, skip = false }) {
     const app = Fastify();
     await runner.initialize(app, {});
     await app.close();
-    assert.deepEqual(globalThis.__loLoaded, [extA]);
-    assert.deepEqual([...runner.getLoadedExtensions().keys()], [extA]);
+    assert.deepEqual(globalThis.__loLoaded, pg ? [] : [extA]);
+    assert.deepEqual([...runner.getLoadedExtensions().keys()], pg ? [] : [extA]);
   });
 
   test('extension runner: disable writes enabled = 0, calls onDisable, and the next start skips it', { skip }, async () => {
@@ -56,12 +58,35 @@ export function leftoversScenario(test, getM, { tag, skip = false }) {
     await runner.disableExtension(extA);
     await app.close();
     assert.equal((await q.one('SELECT enabled FROM extension_configs WHERE extension_id = ?', extA)).enabled, 0);
-    assert.deepEqual(globalThis.__loDisabled, [extA]);
+    assert.deepEqual(globalThis.__loDisabled, pg ? [] : [extA], 'onDisable runs only for a loaded extension');
     globalThis.__loLoaded = [];
     const again = new Runner(extDir);
     const app2 = Fastify();
     await again.initialize(app2, {});
     await app2.close();
     assert.deepEqual(globalThis.__loLoaded, []);
+  });
+
+  test('Q-33: enable and marketplace install answer 409 extensions_sqlite_only on PostgreSQL only', { skip }, async () => {
+    const { q, Fastify, routes } = m();
+    const owner = `lo-owner-${tag}`;
+    await q.run(`INSERT INTO users (id, email, username, password_hash, role, status) VALUES (?, ?, ?, 'x', 'owner', 'active')`, owner, `${owner}@example.test`, owner);
+    const app = Fastify();
+    routes.registerAuthGate(app);
+    await app.register(routes.extensionsRoutes);
+    await app.register(routes.marketplaceRoutes);
+    await app.ready();
+    const headers = { authorization: `Bearer ${routes.generateToken(owner, 1)}` };
+    const enable = await app.inject({ method: 'POST', url: `/api/extensions/${extB}/enable`, headers });
+    const install = await app.inject({ method: 'POST', url: '/api/marketplace/install', headers, payload: { extension_id: `none-${tag}` } });
+    await app.close();
+    if (pg) {
+      assert.deepEqual([enable.statusCode, enable.json().code], [409, 'extensions_sqlite_only']);
+      assert.deepEqual([install.statusCode, install.json().code], [409, 'extensions_sqlite_only']);
+      assert.equal(await q.one('SELECT 1 AS ok FROM extension_configs WHERE extension_id = ?', extB), undefined, 'nothing written');
+    } else {
+      assert.equal(enable.statusCode, 200, enable.body);
+      assert.notEqual(install.json().code, 'extensions_sqlite_only');
+    }
   });
 }

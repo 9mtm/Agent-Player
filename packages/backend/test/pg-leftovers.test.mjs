@@ -30,6 +30,12 @@ const ctx = {
   Runner: (await import('../src/plugins/extension-runner.ts')).ExtensionRunner,
   Fastify: (await import('fastify')).default,
   extDir: join(dir, 'extensions'),
+  routes: {
+    registerAuthGate: (await import('../src/auth/auth-gate.ts')).registerAuthGate,
+    generateToken: (await import('../src/auth/jwt.ts')).generateToken,
+    extensionsRoutes: (await import('../src/api/routes/extensions.ts')).extensionsRoutes,
+    marketplaceRoutes: (await import('../src/api/routes/marketplace.ts')).marketplaceRoutes,
+  },
 };
 
 leftoversScenario(test, () => ctx, { tag: randomBytes(4).toString('hex') });

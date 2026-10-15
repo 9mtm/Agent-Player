@@ -6,7 +6,7 @@
 import type { FastifyInstance } from 'fastify';
 import { handleError } from '../error-handler.js';
 import { q, run, sql, tableColumns, tableNames } from '../../repositories/sql-steps.js';
-import { getExtensionRunner } from '../../plugins/extension-runner.js';
+import { getExtensionRunner, extensionsAvailable, EXTENSIONS_SQLITE_ONLY } from '../../plugins/extension-runner.js';
 import { getExtensionTools } from '../../tools/index.js';
 import { readdirSync, existsSync, readFileSync } from 'fs';
 import { resolve, join } from 'path';
@@ -124,6 +124,7 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const { id } = request.params;
+      if (!extensionsAvailable()) return reply.code(409).send(EXTENSIONS_SQLITE_ONLY); // Q-33
       const extensionRunner = getExtensionRunner();
 
       await extensionRunner.enableExtension(id);
