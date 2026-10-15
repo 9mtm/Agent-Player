@@ -76,7 +76,7 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
       </section>
       <section className="page page-scroll" hidden={page !== 'agents'}><div className="page-column"><AgentsDestination client={client}/></div></section>
       <section className="page page-scroll page-board" hidden={page !== 'board'}>{board && <TaskBoard controller={board}/>}</section>
-      <section className="page page-scroll" hidden={page !== 'memory'}><div className="page-column"><MemoryPanel client={client}/></div></section>
+      <section className="page page-scroll page-wide" hidden={page !== 'memory'}><MemoryPanel client={client}/></section>
       <section className="page page-scroll" hidden={page !== 'account'}><div className="page-column"><AccountPanel client={client}/></div></section>
     </main>
     <footer className="statusbar">

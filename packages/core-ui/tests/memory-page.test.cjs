@@ -18,7 +18,7 @@ test('drawer ids come only from the tabs and a valid key', () => {
   for (const bad of ['', '   ', '../x', 'a..b', 'x/y', 'x?y']) assert.equal(drawerId('task', bad), '', bad);
 });
 
-test('the memory page renders pickers and sends nothing on its own', async () => {
+test('the memory page starts with one button and sends nothing on its own', async () => {
   const calls = []; const base = createLoginMock();
   const client = new SessionClient({ mock: async r => { calls.push(r); return base(r); } });
   client.selectMode('mock'); await client.login('demo@example.invalid', 'mock-only');
@@ -26,13 +26,10 @@ test('the memory page renders pickers and sends nothing on its own', async () =>
   const html = renderToStaticMarkup(React.createElement(MemoryPanel, { client }));
   assert.equal(calls.length, before, 'no request from rendering');
   assert.match(html, /aria-label="Memory review"/);
-  assert.match(html, /role="tablist" aria-label="Memory drawers"/);
-  for (const label of ['About you', 'Lessons', 'Project', 'Task', 'Person']) assert.match(html, new RegExp(`role="tab"[^>]*>${label}<`));
-  assert.match(html, /aria-selected="true"[^>]*>About you</);
-  assert.match(html, />Read memory</);
-  assert.match(html, /Use an agent ID/);
+  assert.match(html, />Open memory</);
   assert.match(html, /Offline practice: fictional memory only/);
-  assert.doesNotMatch(html, /Waiting for your review/, 'columns appear only after a read');
+  assert.doesNotMatch(html, /Use an agent ID|Read memory|Load team/, 'the old form is gone');
+  assert.doesNotMatch(html, /role="tablist"/, 'drawers appear once an agent is chosen');
 });
 
 test('stored memory hides the generated file header only', () => {
