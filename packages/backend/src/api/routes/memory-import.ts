@@ -32,6 +32,10 @@ import { requestMeta } from '../../repositories/audit.js';
 import { ScopeError, actorOrReply, requireOwner } from '../../repositories/scope.js';
 import { ImportError, MAX_TOTAL_BYTES } from '../../memory/import/pipeline.js';
 import { MemoryFileError } from '../../memory/memory-files.js';
+import { listLocalSessions } from '../../memory/import/local-agents.js';
+import { MAX_SESSIONS_PER_IMPORT, getJob, importedSessions, runningJob, startImport } from '../../memory/import/local-import.js';
+import { isLoopbackPeer } from './terminal.js';
+import { redactImportText } from '../../memory/import/redact.js';
 
 /** base64 of the total limit plus JSON overhead. */
 const PREVIEW_BODY_LIMIT = Math.ceil(MAX_TOTAL_BYTES * 4 / 3) + 1024 * 1024;
@@ -99,6 +103,40 @@ export async function memoryImportRoutes(fastify: FastifyInstance) {
       audit(request, owner, 'memory_import.preview', '-', { code: err instanceof ImportError ? err.code : 'error' }, false);
       return fail(reply, err);
     }
+  });
+
+  // ---- MEM-IMPORT-01: conversations other agents saved on this computer (this machine only) ----
+  const localOwner = (request: FastifyRequest, reply: FastifyReply): Actor | null => {
+    const owner = ownerOf(request, reply);
+    if (owner === null) return null;
+    if (!isLoopbackPeer(request)) { reply.code(403).send({ error: 'Reading local agent conversations works only on this computer', code: 'not_loopback' }); return null; }
+    return owner;
+  };
+  fastify.get('/api/memory/import/local', { config }, async (request, reply) => {
+    const owner = localOwner(request, reply);
+    if (owner === null) return reply;
+    const [sessions, done] = await Promise.all([listLocalSessions(), importedSessions(owner.userId!)]);
+    const job = runningJob(owner.userId!);
+    // Titles come from the first message: secrets are removed from them too.
+    return { sessions: sessions.map((x) => ({ ...x, title: redactImportText(x.title).text, imported: done.get(x.id) ?? null })), archive: '~/.dpro/imports', ...(job ? { job } : {}) };
+  });
+  fastify.post('/api/memory/import/local', { config }, async (request, reply) => {
+    const owner = localOwner(request, reply);
+    if (owner === null) return reply;
+    const ids = body(request).sessionIds;
+    if (!Array.isArray(ids) || !ids.length || ids.length > MAX_SESSIONS_PER_IMPORT || !ids.every((x) => typeof x === 'string' && /^[0-9a-f]{32}$/.test(x)) || new Set(ids).size !== ids.length) {
+      return reply.code(400).send({ error: `Choose 1-${MAX_SESSIONS_PER_IMPORT} conversations`, code: 'invalid_input' });
+    }
+    if (runningJob(owner.userId!)) return reply.code(409).send({ error: 'An import is already running', code: 'import_running' });
+    const job = startImport(owner.userId!, ids as string[]);
+    audit(request, owner, 'memory_import.local', job.id, { sessions: ids.length });
+    return reply.code(202).send({ job });
+  });
+  fastify.get<{ Params: { id: string } }>('/api/memory/import/local/jobs/:id', { config }, async (request, reply) => {
+    const owner = localOwner(request, reply);
+    if (owner === null) return reply;
+    const job = getJob(owner.userId!, request.params.id);
+    return job ? { job } : reply.code(404).send({ error: 'Not found', code: 'not_found' });
   });
 
   fastify.get('/api/memory/import', { config }, async (request, reply) => {
