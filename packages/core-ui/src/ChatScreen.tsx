@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 import type { KeyboardEvent } from 'react';
 import type { ChatController, Turn } from './chat';
 import { UiIcon } from './ui-icons';
+import { Markdown } from './markdown';
 
 /**
  * The chat screen: an empty state with the product name, the conversation
@@ -75,7 +76,7 @@ function TurnView({ turn, last, sending }: { turn: Turn; last: boolean; sending:
     <div className={`assistant-text${streaming ? ' streaming' : ''}`}>
       <p className="sr-only">Assistant</p>
       {turn.content
-        ? <div className="turn-text">{turn.content}</div>
+        ? <div className="turn-text md-host"><Markdown text={turn.content}/></div>
         : <div className="turn-pending">{streaming ? <span className="typing" aria-label="Waiting for the reply"><i/><i/><i/></span> : 'No message text received.'}</div>}
       {turn.content && !streaming && <div className="turn-actions"><CopyButton text={turn.content}/></div>}
       {(turn.events > 0 || turn.partial || turn.replayed) && <p className="turn-meta">
