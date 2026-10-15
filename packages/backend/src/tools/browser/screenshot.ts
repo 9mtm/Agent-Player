@@ -5,7 +5,7 @@
  * Supports full page, specific elements, and custom viewports
  */
 
-import type { Tool, ToolResult } from './types.js';
+import type { Tool, ToolResult } from '../types.js';
 import { getBrowserController } from '../../browser/controller.js';
 
 interface BrowserScreenshotParams {
@@ -91,7 +91,8 @@ Returns the path to the saved screenshot image.`,
     ],
   },
 
-  async execute(params: BrowserScreenshotParams): Promise<ToolResult> {
+  async execute(rawParams): Promise<ToolResult> {
+    const params = rawParams as BrowserScreenshotParams;
     const controller = getBrowserController();
     let sessionId: string | null = null;
 
@@ -149,9 +150,23 @@ Returns the path to the saved screenshot image.`,
       }
 
       // Take screenshot
+      // An element screenshot is a clip of its bounding box (the controller
+      // had no selector option; the element was ignored before).
+      let clip;
+      if (params.element) {
+        const info = await controller.getElementInfo(sessionId, params.element);
+        if (!info?.boundingBox) {
+          await controller.closeSession(sessionId);
+          return {
+            content: [{ type: 'text', text: `Element "${params.element}" not found on the page` }],
+            error: 'Element not found',
+          };
+        }
+        clip = info.boundingBox;
+      }
       const screenshotResult = await controller.screenshot(sessionId, {
-        fullPage: params.fullPage,
-        selector: params.element,
+        fullPage: clip ? false : params.fullPage,
+        clip,
       });
 
       // Close session

@@ -6,10 +6,16 @@
  */
 
 export interface ToolParameter {
-  type: string;
+  /** JSON Schema type; may be absent when `oneOf` gives the alternatives. */
+  type?: string;
   description?: string;
   enum?: string[];
-  required?: boolean;
+  /** true for a required top-level parameter; inside an 'object' item, the list of required keys (JSON Schema). */
+  required?: boolean | string[];
+  /** Alternative schemas (JSON Schema `oneOf`). */
+  oneOf?: ToolParameter[];
+  /** Properties of an 'object' parameter (JSON Schema). */
+  properties?: Record<string, ToolParameter>;
   /** Element schema of an 'array' parameter (JSON Schema `items`). */
   items?: ToolParameter;
   /** Bounds of a 'number' / 'integer' parameter (JSON Schema). */

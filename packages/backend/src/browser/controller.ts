@@ -28,6 +28,7 @@ import {
   type BoundingBox,
   DEFAULT_BROWSER_CONFIG,
 } from './types.js';
+import { checkBrowserUrl, guardPage } from './url-guard.js';
 
 // Puppeteer types (dynamic import)
 type Browser = any;
@@ -42,6 +43,8 @@ interface SessionData {
   networkRequests: NetworkRequest[];
   networkResponses: NetworkResponse[];
   consoleMessages: ConsoleMessage[];
+  /** BROWSER-01: requests the URL guard refused (newest last, bounded). */
+  blockedRequests: Array<{ url: string; reason: string; at: Date }>;
 }
 
 export class BrowserController {
@@ -108,7 +111,24 @@ export class BrowserController {
     }
 
     const browser = await puppeteer.launch(launchOptions);
+    // BROWSER-01: every page may only load public http(s) (or data:/about:);
+    // pop-ups and new tabs are guarded as soon as they appear.
+    const blockedRequests: SessionData['blockedRequests'] = [];
+    const onBlocked = (url: string, reason: string) => {
+      blockedRequests.push({ url, reason, at: new Date() });
+      if (blockedRequests.length > 200) blockedRequests.splice(0, 50);
+      console.warn(`[Browser] Blocked request (${reason})`);
+    };
+    browser.on('targetcreated', async (target: any) => {
+      try {
+        const opened = await target.page();
+        if (opened) await guardPage(opened, onBlocked);
+      } catch {
+        // Not a page target, or it closed already.
+      }
+    });
     const page = await browser.newPage();
+    await guardPage(page, onBlocked);
     const pageId = `page_${uuidv4()}`;
 
     // Configure page
@@ -154,6 +174,7 @@ export class BrowserController {
       networkRequests: [],
       networkResponses: [],
       consoleMessages: [],
+      blockedRequests,
     };
 
     // Set up event listeners
@@ -165,6 +186,17 @@ export class BrowserController {
 
     console.log(`[Browser] Created session: ${sessionId}`);
     return session;
+  }
+
+  /** The current (Puppeteer) page of a session, for the page helpers of the browser tools. */
+  getPage(sessionId: string): Page | null {
+    const sessionData = this.sessions.get(sessionId);
+    return sessionData ? this.getCurrentPage(sessionData) : null;
+  }
+
+  /** BROWSER-01: requests the URL guard refused in this session. */
+  getBlockedRequests(sessionId: string): Array<{ url: string; reason: string; at: Date }> {
+    return [...(this.sessions.get(sessionId)?.blockedRequests ?? [])];
   }
 
   /**
@@ -222,6 +254,10 @@ export class BrowserController {
 
     const page = this.getCurrentPage(sessionData);
     if (!page) return { success: false, error: 'No active page' };
+
+    // BROWSER-01: a clear refusal instead of net::ERR_BLOCKED_BY_CLIENT.
+    const verdict = await checkBrowserUrl(url);
+    if (!verdict.ok) return { success: false, error: `Blocked: ${verdict.reason}` };
 
     const action = this.startAction(sessionData, 'navigate', undefined, url);
     sessionData.session.status = 'navigating';

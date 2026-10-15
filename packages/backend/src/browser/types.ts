@@ -144,7 +144,8 @@ export interface BoundingBox {
 /** Navigation options */
 export interface NavigationOptions {
   /** Wait until state */
-  waitUntil?: 'load' | 'domcontentloaded' | 'networkidle';
+  /** Puppeteer values (the controller drives Puppeteer); 'networkidle' is kept for older callers. */
+  waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' | 'networkidle0' | 'networkidle2';
   /** Timeout override */
   timeout?: number;
   /** Referer header */

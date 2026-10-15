@@ -4,6 +4,7 @@
  * Allows AI agents to search for and install Claude Skills from Anthropic
  */
 
+import type { ToolResult } from './types.js';
 import { anthropicSkillsService } from '../services/anthropic-skills-service.js';
 
 export const skillInstallTool = {
@@ -18,7 +19,7 @@ Use this tool when the user asks to:
 The tool will search Anthropic's repository, find matching skills, and install them automatically.`,
 
   input_schema: {
-    type: 'object',
+    type: 'object' as const,
     properties: {
       action: {
         type: 'string',
@@ -45,7 +46,25 @@ The tool will search Anthropic's repository, find matching skills, and install t
   /**
    * Execute the skill install tool
    */
-  async execute(input: {
+  /**
+   * Tool entry point: the registry and its callers read `content` (a
+   * ToolResult); the JSON text used to be returned bare, so callers saw no
+   * result at all.
+   */
+  async execute(raw: Record<string, any>): Promise<ToolResult> {
+    const text = await this.run(raw as { action: string; query?: string; skillPath?: string });
+    let failed: string | undefined;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && parsed.success === false) failed = String(parsed.error || 'skill_install failed');
+    } catch {
+      // Not JSON: plain text result.
+    }
+    return { content: [{ type: 'text', text }], ...(failed ? { error: failed } : {}) };
+  },
+
+  /** The tool's work; returns its JSON result as text. */
+  async run(input: {
     action: string;
     query?: string;
     skillPath?: string;

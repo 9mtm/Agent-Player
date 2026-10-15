@@ -5,15 +5,22 @@
  * Professional data extraction with multiple modes
  */
 
-import type { Tool, ToolResult } from './types.js';
+import type { Tool, ToolResult } from '../types.js';
 import { getBrowserController } from '../../browser/controller.js';
 import {
-  extractTextContent,
   extractLinks,
   extractImages,
   extractTableData,
+  extractStructuredData,
+  extractText,
   getPageMetadata,
 } from './page-utils.js';
+
+/** Table rows as { headers, rows }: the first row is the header row. */
+function toTable(rows: string[][]): { headers: string[]; rows: string[][] } | null {
+  if (rows.length === 0) return null;
+  return { headers: rows[0], rows: rows.slice(1) };
+}
 
 interface BrowserExtractParams {
   /** URL to extract data from */
@@ -102,7 +109,8 @@ Returns extracted data in a structured format.`,
     ],
   },
 
-  async execute(params: BrowserExtractParams): Promise<ToolResult> {
+  async execute(rawParams): Promise<ToolResult> {
+    const params = rawParams as BrowserExtractParams;
     const controller = getBrowserController();
     let sessionId: string | null = null;
 
@@ -163,46 +171,49 @@ Returns extracted data in a structured format.`,
         title: navResult.title,
       };
 
+      // The page helpers work on the Puppeteer page (they were given the session id).
+      const page = controller.getPage(sessionId);
+      if (!page) throw new Error('No active page');
+
       // Extract based on mode
       switch (params.extract) {
         case 'text': {
-          const text = await extractText(sessionId, params.selector!, {
+          result.text = await extractText(page, params.selector!, {
             multiple: params.multiple,
             trim: params.trim !== false, // Default to true
           });
-          result.text = text;
           break;
         }
 
         case 'links': {
-          const links = await extractLinks(sessionId, params.container);
+          const links = await extractLinks(page, params.container);
           result.links = links;
           result.linkCount = links.length;
           break;
         }
 
         case 'images': {
-          const images = await extractImages(sessionId, params.container);
+          const images = await extractImages(page, params.container);
           result.images = images;
           result.imageCount = images.length;
           break;
         }
 
         case 'table': {
-          const table = await extractTable(sessionId, params.selector!);
+          const table = toTable(await extractTableData(page, params.selector!));
           result.table = table;
           result.rowCount = table?.rows?.length || 0;
           break;
         }
 
         case 'metadata': {
-          const metadata = await getPageMetadata(sessionId);
+          const metadata = await getPageMetadata(page);
           result.metadata = metadata;
           break;
         }
 
         case 'structured': {
-          const structuredData = await extractStructuredData(sessionId);
+          const structuredData = await extractStructuredData(page);
           result.structuredData = structuredData;
           break;
         }
@@ -210,10 +221,10 @@ Returns extracted data in a structured format.`,
         case 'all': {
           // Extract everything
           const [links, images, metadata, structuredData] = await Promise.all([
-            extractLinks(sessionId),
-            extractImages(sessionId),
-            getPageMetadata(sessionId),
-            extractStructuredData(sessionId),
+            extractLinks(page),
+            extractImages(page),
+            getPageMetadata(page),
+            extractStructuredData(page),
           ]);
 
           result.links = links;

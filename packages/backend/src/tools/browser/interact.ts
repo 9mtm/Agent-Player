@@ -5,9 +5,8 @@
  * Maintains session for sequential actions
  */
 
-import type { Tool, ToolResult } from './types.js';
+import type { Tool, ToolResult } from '../types.js';
 import { getBrowserController } from '../../browser/controller.js';
-import { fillForm } from './page-utils.js';
 
 interface BrowserInteractParams {
   /** URL to interact with (creates new session if not provided sessionId) */
@@ -151,7 +150,8 @@ Returns the session ID if keepAlive is true, allowing you to continue interactin
     ],
   },
 
-  async execute(params: BrowserInteractParams): Promise<ToolResult> {
+  async execute(rawParams): Promise<ToolResult> {
+    const params = rawParams as BrowserInteractParams;
     const controller = getBrowserController();
     let sessionId: string | null = null;
     let ownSession = false; // Track if we created the session
@@ -271,7 +271,21 @@ Returns the session ID if keepAlive is true, allowing you to continue interactin
             if (!action.fields || action.fields.length === 0) {
               throw new Error('Fill form action requires "fields" array');
             }
-            result = await fillForm(sessionId, action.fields, action.submitSelector);
+            // Fields are CSS selectors (the page helper it called matched input
+            // names and needed the page, not the session id).
+            let filled = 0;
+            for (const field of action.fields) {
+              const typed = await controller.type(sessionId, field.selector, String(field.value ?? ''));
+              if (!typed.success) throw new Error(`Could not fill "${field.selector}": ${typed.error}`);
+              filled++;
+            }
+            let submitted = false;
+            if (action.submitSelector) {
+              const clicked = await controller.click(sessionId, action.submitSelector);
+              if (!clicked.success) throw new Error(`Could not click "${action.submitSelector}": ${clicked.error}`);
+              submitted = true;
+            }
+            result = { success: true, filled, submitted };
             actionResults.push({ action: 'fill_form', ...result });
             break;
           }

@@ -20,23 +20,24 @@ export interface PageMetadata {
  * Extract page metadata
  */
 export async function getPageMetadata(page: Page): Promise<PageMetadata> {
-  return await page.evaluate(() => {
-    const title = document.title || '';
-    const url = window.location.href;
-
-    const getMetaContent = (name: string): string | undefined => {
-      const meta = document.querySelector(`meta[name="${name}"], meta[property="${name}"]`);
-      return meta?.getAttribute('content') || undefined;
-    };
-
-    return {
-      title,
-      url,
-      description: getMetaContent('description') || getMetaContent('og:description'),
-      keywords: getMetaContent('keywords')?.split(',').map(k => k.trim()),
-      ogImage: getMetaContent('og:image')
-    };
-  });
+  // No named function inside the page callback: under tsx (how the backend
+  // runs) a named inner function gets a __name() wrapper that does not exist
+  // in the page, and the whole call failed with "__name is not defined".
+  const meta = await page.evaluate((names: string[]) => {
+    const found: Record<string, string | undefined> = {};
+    for (const name of names) {
+      const el = document.querySelector(`meta[name="${name}"], meta[property="${name}"]`);
+      found[name] = el?.getAttribute('content') || undefined;
+    }
+    return { title: document.title || '', url: window.location.href, found };
+  }, ['description', 'og:description', 'keywords', 'og:image']);
+  return {
+    title: meta.title,
+    url: meta.url,
+    description: meta.found['description'] || meta.found['og:description'],
+    keywords: meta.found['keywords']?.split(',').map((k) => k.trim()),
+    ogImage: meta.found['og:image'],
+  };
 }
 
 /**
@@ -57,6 +58,30 @@ export async function extractTextContent(
 
     return document.body.textContent || '';
   });
+}
+
+/**
+ * Text of the elements matching `selector`: the first one, or all of them
+ * with `multiple` (an empty result when nothing matches, never a throw).
+ */
+export async function extractText(
+  page: Page,
+  selector: string,
+  opts: { multiple?: boolean; trim?: boolean } = {}
+): Promise<string | string[]> {
+  const texts = await page.$$eval(selector, (els) => els.map((el) => el.textContent || ''));
+  const clean = opts.trim === false ? texts : texts.map((t) => t.replace(/\s+/g, ' ').trim());
+  return opts.multiple ? clean : (clean[0] ?? '');
+}
+
+/** JSON-LD blocks of the page (schema.org data); unparsable blocks are skipped. */
+export async function extractStructuredData(page: Page): Promise<unknown[]> {
+  const blocks = await page.$$eval('script[type="application/ld+json"]', (els) => els.map((el) => el.textContent || ''));
+  const out: unknown[] = [];
+  for (const b of blocks) {
+    try { out.push(JSON.parse(b)); } catch { /* not JSON */ }
+  }
+  return out;
 }
 
 /**

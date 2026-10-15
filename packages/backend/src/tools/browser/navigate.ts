@@ -5,7 +5,7 @@
  * Integrated with Agent Player's browser automation system
  */
 
-import type { Tool, ToolResult } from './types.js';
+import type { Tool, ToolResult } from '../types.js';
 import { getBrowserController } from '../../browser/controller.js';
 
 interface BrowserNavigateParams {
@@ -78,7 +78,8 @@ You can optionally wait for specific elements to load or take a screenshot.`,
     ],
   },
 
-  async execute(params: BrowserNavigateParams): Promise<ToolResult> {
+  async execute(rawParams): Promise<ToolResult> {
+    const params = rawParams as BrowserNavigateParams;
     const controller = getBrowserController();
     let sessionId: string | null = null;
 
@@ -125,7 +126,7 @@ You can optionally wait for specific elements to load or take a screenshot.`,
       const result: any = {
         success: true,
         url: params.url,
-        finalUrl: navResult.url,
+        finalUrl: navResult.finalUrl,
         title: navResult.title,
       };
 
@@ -145,7 +146,8 @@ You can optionally wait for specific elements to load or take a screenshot.`,
       // Extract page info if requested
       if (params.extractInfo) {
         const { getPageMetadata } = await import('./page-utils.js');
-        const metadata = await getPageMetadata(sessionId);
+        const page = controller.getPage(sessionId);
+        const metadata = page ? await getPageMetadata(page) : null;
         result.metadata = metadata;
       }
 
@@ -167,7 +169,7 @@ You can optionally wait for specific elements to load or take a screenshot.`,
         content: [
           {
             type: 'text',
-            text: `Successfully navigated to: ${navResult.title}\n\nURL: ${navResult.url}\nStatus: Page loaded successfully${
+            text: `Successfully navigated to: ${navResult.title}\n\nURL: ${navResult.finalUrl}\nStatus: Page loaded successfully${
               result.screenshot ? `\nScreenshot: ${result.screenshot}` : ''
             }${
               result.metadata
