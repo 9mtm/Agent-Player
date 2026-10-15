@@ -12,7 +12,7 @@
 
 import { backgroundEnabled } from '../../config/background.js';
 import type { FastifyInstance } from 'fastify';
-import { getDatabase } from '../../db/index.js';
+import { q } from '../../repositories/sql-steps.js';
 import { randomUUID } from 'node:crypto';
 
 interface CameraSession {
@@ -56,17 +56,16 @@ export async function cameraRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /api/camera/sessions — start session
   fastify.post('/api/camera/sessions', async (request, reply) => {
     const { mode = 'vision', agent_id = '', room_id, notes = '' } = request.body as any;
-    const db = getDatabase();
     const id = randomUUID();
     const roomId = room_id || randomUUID();
     const now = new Date().toISOString();
 
-    db.prepare(`
+    await q.run(`
       INSERT INTO camera_sessions (id, room_id, user_id, agent_id, mode, started_at, notes)
-      VALUES (?, ?, 'local', ?, ?, ?, ?)
-    `).run(id, roomId, agent_id, mode, now, notes);
+      VALUES (?, ?, 'local', ?, ?, ?, ?)`,
+      id, roomId, agent_id, mode, now, notes);
 
-    const session = db.prepare('SELECT * FROM camera_sessions WHERE id = ?').get(id) as CameraSession;
+    const session = await q.one<CameraSession>('SELECT * FROM camera_sessions WHERE id = ?', id);
     return reply.send({ session, roomId });
   });
 
@@ -74,9 +73,8 @@ export async function cameraRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.patch<{ Params: { id: string } }>('/api/camera/sessions/:id', async (request, reply) => {
     const { id } = request.params;
     const { file_id, frame_count, notes } = request.body as any;
-    const db = getDatabase();
 
-    const session = db.prepare('SELECT * FROM camera_sessions WHERE id = ?').get(id) as CameraSession | undefined;
+    const session = await q.one<CameraSession>('SELECT * FROM camera_sessions WHERE id = ?', id);
     if (!session) return reply.status(404).send({ error: 'Session not found' });
 
     const now = new Date().toISOString();
@@ -84,34 +82,35 @@ export async function cameraRoutes(fastify: FastifyInstance): Promise<void> {
     const endMs = new Date(now).getTime();
     const duration_s = Math.round((endMs - startMs) / 1000);
 
-    db.prepare(`
+    await q.run(`
       UPDATE camera_sessions
       SET ended_at = ?, duration_s = ?, file_id = COALESCE(?, file_id),
           frame_count = COALESCE(?, frame_count), notes = COALESCE(?, notes)
-      WHERE id = ?
-    `).run(now, duration_s, file_id ?? null, frame_count ?? null, notes ?? null, id);
+      WHERE id = ?`,
+      now, duration_s, file_id ?? null, frame_count ?? null, notes ?? null, id);
 
-    const updated = db.prepare('SELECT * FROM camera_sessions WHERE id = ?').get(id) as CameraSession;
+    const updated = await q.one<CameraSession>('SELECT * FROM camera_sessions WHERE id = ?', id);
     return reply.send({ session: updated });
   });
 
   // GET /api/camera/sessions — list (most recent first)
   fastify.get('/api/camera/sessions', async (request, reply) => {
     const { limit = '20', offset = '0', mode } = request.query as any;
-    const db = getDatabase();
     let sql = 'SELECT * FROM camera_sessions';
-    const params: any[] = [];
-    if (mode) { sql += ' WHERE mode = ?'; params.push(mode); }
+    const params: Array<string | number> = [];
+    if (mode) { sql += ' WHERE mode = ?'; params.push(String(mode)); }
     sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(limit, 10), parseInt(offset, 10));
-    const sessions = db.prepare(sql).all(...params) as CameraSession[];
+    // Bound integers on both drivers (a non-numeric value reached the SQL before).
+    const lim = Number.parseInt(String(limit), 10);
+    const off = Number.parseInt(String(offset), 10);
+    params.push(Number.isFinite(lim) ? Math.min(Math.max(lim, 1), 200) : 20, Number.isFinite(off) ? Math.max(off, 0) : 0);
+    const sessions = await q.all<CameraSession>(sql, ...params);
     return reply.send({ sessions, total: sessions.length });
   });
 
   // DELETE /api/camera/sessions/:id
   fastify.delete<{ Params: { id: string } }>('/api/camera/sessions/:id', async (request, reply) => {
-    const db = getDatabase();
-    db.prepare('DELETE FROM camera_sessions WHERE id = ?').run(request.params.id);
+    await q.run('DELETE FROM camera_sessions WHERE id = ?', request.params.id);
     return reply.send({ success: true });
   });
 
