@@ -20,6 +20,8 @@
 # test/pg-skills.integration.test.mjs
 # test/pg-routes.integration.test.mjs and test/pg-boot.integration.test.mjs and (B2.2d-6)
 # test/pg-leftovers.integration.test.mjs
+# test/pg-routes.integration.test.mjs and test/pg-boot.integration.test.mjs and (B2.2d-8)
+# test/pg-chat-sessions.integration.test.mjs
 # against it, then always drops it.
 #
 # Usage: scripts/pg/integration.sh [report-dir]
@@ -84,5 +86,6 @@ AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-workflows.integ
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-camera.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-camera-output.txt"
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-skills.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-skills-output.txt"
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-leftovers.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-leftovers-output.txt"
+AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-chat-sessions.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-chat-sessions-output.txt"
 test "${PIPESTATUS[0]}" -eq 0
 echo "reports in $OUT_DIR"

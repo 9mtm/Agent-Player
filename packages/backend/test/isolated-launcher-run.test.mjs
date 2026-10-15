@@ -87,7 +87,9 @@ test.after(async () => {
 
 const listening = await new Promise((resolve) => {
   const done = (v) => { clearInterval(tick); clearTimeout(limit); resolve(v); };
-  const tick = setInterval(() => { if (out.includes(`listening on 127.0.0.1:${port}`)) done(true); }, 100);
+  // The launcher prints two lines (listening, then data dir); wait for both, or a poll
+  // between the two writes sees only the first (flaked under a loaded full-suite run).
+  const tick = setInterval(() => { if (out.includes(`listening on 127.0.0.1:${port}`) && out.includes('data dir: ')) done(true); }, 100);
   const limit = setTimeout(() => done(false), 150_000);
   exited.then(() => done(false));
 });
