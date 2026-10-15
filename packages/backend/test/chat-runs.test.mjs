@@ -326,3 +326,24 @@ test('task plan: every agent may call plan_steps (no grant); the steps travel in
   assert.equal(typeof planSteps([{ title: 'a', status: 'active' }, { title: 'b', status: 'active' }]), 'string', 'one active step at a time');
   assert.equal(typeof planSteps(Array.from({ length: 13 }, (_, i) => ({ title: `s${i}`, status: 'pending' }))), 'string');
 });
+
+test('team chat: another agent can write the next reply; it is stored per reply and earlier replies are named', async () => {
+  const { getDatabase } = await import(new URL('../src/db/database.ts', import.meta.url).href);
+  const db = getDatabase();
+  for (const [id, name] of [['team-a', 'Nora'], ['team-b', 'Omar']]) db.prepare("INSERT OR IGNORE INTO agents_config (id, name, provider, model) VALUES (?, ?, 'local', 'llama3.2:3b')").run(id, name);
+  const c = (await call('r-owner', 'POST', '/api/chat/conversations', { agentId: 'team-a' })).json().conversation;
+  script.push([{ message: { content: 'Nora here: draft ready.' } }, { done: true }]);
+  const r1 = rid(); await call('r-owner', 'POST', `/api/chat/conversations/${c.id}/runs`, { runId: r1, message: 'draft it' }); await ended(r1);
+  script.push([{ message: { content: 'Omar: reviewed.' } }, { done: true }]);
+  bodies.length = 0;
+  const r2 = rid();
+  const res = await call('r-owner', 'POST', `/api/chat/conversations/${c.id}/runs`, { runId: r2, message: '@Omar review it', agentId: 'team-b' });
+  assert.equal(res.statusCode, 202, res.body); await ended(r2);
+  const msgs = bodies[0].messages;
+  assert.ok(msgs.some((m) => m.role === 'assistant' && m.content.startsWith('[Nora] Nora here')), 'the earlier reply is named');
+  assert.match(msgs[0].content, /Several agents of the team answer/);
+  const stored = (await call('r-owner', 'GET', `/api/chat/conversations/${c.id}/messages`)).json().messages.filter((m) => m.role === 'assistant');
+  assert.deepEqual(stored.map((m) => m.agentId), [null, 'team-b']);
+  assert.equal((await call('r-owner', 'POST', `/api/chat/conversations/${c.id}/runs`, { runId: rid(), message: 'x', agentId: 'nobody' })).statusCode, 400);
+  assert.equal((await call('r-other', 'POST', `/api/chat/conversations/${c.id}/runs`, { runId: rid(), message: 'x', agentId: 'team-b' })).statusCode, 404, 'not their conversation');
+});

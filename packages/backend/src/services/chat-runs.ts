@@ -226,6 +226,8 @@ export interface StartRunInput {
   runId: string;
   userId: string;
   sessionId: string;
+  /** CHAT-PRO-02 I: the agent writing this reply (stored with it). */
+  agentId?: string | null;
   execute: (reply: FastifyReply) => Promise<unknown>;
 }
 
@@ -258,7 +260,7 @@ export class ChatRunRegistry {
       const status: TurnStatus = run.stopping ? 'stopped' : run.error ? 'error' : 'complete';
       run.settle(this.now());
       try {
-        await this.persist(run.sessionId, { runId: run.id, content: run.answer, parts: run.parts, status, durationMs: this.now() - run.startedAt });
+        await this.persist(run.sessionId, { runId: run.id, content: run.answer, parts: run.parts, status, durationMs: this.now() - run.startedAt, agentId: input.agentId ?? null });
       } catch (err) {
         console.error('[ChatRuns] Could not store the turn', { runId: run.id, name: (err as Error)?.name ?? 'Error' });
       }

@@ -44,10 +44,12 @@ export interface ConversationMessage {
   runId: string | null;
   durationMs: number | null;
   createdAt: string;
+  /** CHAT-PRO-02 I: the agent that wrote an assistant reply (null = the conversation's agent). */
+  agentId?: string | null;
 }
 
 interface SessionRow { id: string; user_id: string; title: string | null; agent_id: string | null; project_id?: string | null; pinned: number; created_at: string; updated_at: string; preview?: string | null }
-interface MessageRow { id: string; role: ConversationMessage['role']; content: string; parts: string | null; status: TurnStatus | null; run_id: string | null; duration_ms: number | null; created_at: string }
+interface MessageRow { id: string; role: ConversationMessage['role']; content: string; parts: string | null; status: TurnStatus | null; run_id: string | null; duration_ms: number | null; created_at: string; agent_id?: string | null }
 
 const PREVIEW_CHARS = 140;
 
@@ -67,7 +69,7 @@ function parseParts(raw: string | null): TurnPart[] | null {
 function toMessage(r: MessageRow): ConversationMessage {
   return {
     id: r.id, role: r.role, content: r.content, parts: parseParts(r.parts), status: r.status ?? 'complete',
-    runId: r.run_id, durationMs: r.duration_ms, createdAt: r.created_at,
+    runId: r.run_id, durationMs: r.duration_ms, createdAt: r.created_at, agentId: r.agent_id ?? null,
   };
 }
 
@@ -140,13 +142,13 @@ export async function addUserMessage(sessionId: string, content: string, runId: 
 }
 
 /** Stores the assistant's turn of a run (once per run id). */
-export async function addAssistantMessage(sessionId: string, input: { runId: string; content: string; parts: TurnPart[]; status: TurnStatus; durationMs: number }): Promise<ConversationMessage> {
+export async function addAssistantMessage(sessionId: string, input: { runId: string; content: string; parts: TurnPart[]; status: TurnStatus; durationMs: number; agentId?: string | null }): Promise<ConversationMessage> {
   const id = orderedId();
   return sql().tx(function* (): Step<ConversationMessage> {
     const existing = yield* one<MessageRow>("SELECT * FROM chat_messages WHERE run_id = ? AND role = 'assistant'", input.runId);
     if (existing) return toMessage(existing);
-    yield* run("INSERT INTO chat_messages (id, session_id, role, content, parts, status, run_id, duration_ms) VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?)",
-      id, sessionId, input.content, JSON.stringify(input.parts), input.status, input.runId, Math.max(0, Math.round(input.durationMs)));
+    yield* run("INSERT INTO chat_messages (id, session_id, role, content, parts, status, run_id, duration_ms, agent_id) VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, ?)",
+      id, sessionId, input.content, JSON.stringify(input.parts), input.status, input.runId, Math.max(0, Math.round(input.durationMs)), input.agentId ?? null);
     yield* run('UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?', sessionId);
     return toMessage((yield* one<MessageRow>('SELECT * FROM chat_messages WHERE id = ?', id))!);
   });

@@ -28,6 +28,7 @@ import { MAX_AUDIO_BYTES, STT_LANGUAGES, SttError, sttSetup, transcribe } from '
 import { chatRuns, MAX_RUNNING_PER_USER, type RunEvent } from '../../services/chat-runs.js';
 import { openSseStream } from '../../services/chat-sse.js';
 import { executeChatTurn } from './chat.js';
+import { q } from '../../repositories/sql-steps.js';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/;
 /** A model id the chat may pick (local model names like qwen3.8:27b, or claude-…). */
@@ -41,6 +42,21 @@ const TITLE_CHARS = 120;
 type Req = FastifyRequest<{ Params: { id?: string; runId?: string }; Querystring: { after?: string }; Body: any }>;
 
 function caller(request: FastifyRequest): string { return (request as any).chatUserId as string; }
+
+/** The team's agents by id (name), for choosing who answers and naming earlier replies. */
+async function agentNames(): Promise<Map<string, string>> {
+  const rows = await q.all<{ id: string; name: string | null }>('SELECT id, name FROM agents_config');
+  return new Map(rows.map((r) => [r.id, r.name || r.id]));
+}
+
+/** Replies written by another agent than the one answering now carry that agent's name, so the history stays honest. */
+export function namedReplies(messages: readonly ConversationMessage[], team: ReadonlyMap<string, string>, current: string | undefined, conversationAgent: string | null = null): ConversationMessage[] {
+  return messages.map((m) => {
+    const writer = m.agentId ?? conversationAgent;
+    if (m.role !== 'assistant' || (writer ?? null) === (current ?? null)) return m;
+    return { ...m, content: `[${(writer && team.get(writer)) || 'Main agent'}] ${m.content}` };
+  });
+}
 
 /** The model history from stored turns: user/assistant text only, newest kept within the budget. */
 export function historyFor(messages: readonly ConversationMessage[], budget = HISTORY_CHARS): { role: 'user' | 'assistant'; content: string }[] {
@@ -77,6 +93,7 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     const user = authenticateActiveUser(request);
     if (!user || user.role === 'guest') return reply.code(401).send({ error: 'Authentication required' });
     (request as any).chatUserId = user.id;
+    (request as any).chatUserRole = user.role;
   });
   const notFound = (reply: FastifyReply) => reply.code(404).send({ error: 'Not found', code: 'not_found' });
   const bad = (reply: FastifyReply, error: string) => reply.code(400).send({ error, code: 'invalid_request' });
@@ -122,6 +139,11 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     if (typeof b.runId !== 'string' || !ID.test(b.runId)) return bad(reply, 'runId must be 8-128 characters (A-Z, a-z, 0-9, _ . : -)');
     if (typeof b.message !== 'string' || !b.message.trim() || b.message.length > MESSAGE_CHARS) return bad(reply, 'message must be 1-100000 characters');
     if (b.model !== undefined && (typeof b.model !== 'string' || !MODEL.test(b.model))) return bad(reply, 'invalid model');
+    // CHAT-PRO-02 I: another agent of the team may write this reply (owner only: other users talk to the conversation's agent).
+    if (b.agentId !== undefined && (typeof b.agentId !== 'string' || !AGENT_ID.test(b.agentId))) return bad(reply, 'invalid agentId');
+    const team = await agentNames();
+    if (b.agentId !== undefined && (!team.has(b.agentId) || (request as any).chatUserRole !== 'owner')) return bad(reply, 'unknown agent');
+    const replyAgent: string | undefined = b.agentId ?? c.agentId ?? undefined;
     const existing = chatRuns.get(b.runId);
     if (existing) return existing.userId === userId && existing.sessionId === c.id ? reply.code(202).send({ runId: existing.id, replayed: true }) : reply.code(409).send({ error: 'runId already used', code: 'run_id_reused' });
     const busy = chatRuns.activeFor(c.id);
@@ -135,13 +157,13 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     const prior = await listConversationMessages(c.id);
     if (prior.some((m) => m.runId === b.runId)) return reply.code(409).send({ error: 'runId already used', code: 'run_id_reused' });
     const userMessage = await addUserMessage(c.id, b.message, b.runId);
-    const messages = historyFor([...prior, userMessage]);
+    const messages = historyFor(namedReplies([...prior, userMessage], team, replyAgent, c.agentId));
     chatRuns.start({
-      runId: b.runId, userId, sessionId: c.id,
+      runId: b.runId, userId, sessionId: c.id, agentId: b.agentId ?? null,
       execute: (runReply) => executeChatTurn(runReply, {
-        agentId: c.agentId ?? undefined, messages, stream: true, sessionId: c.id, userId, uiSet: 'chat',
+        agentId: replyAgent, messages, stream: true, sessionId: c.id, userId, uiSet: 'chat',
         ...(project ? { memoryScope: { project: project.slug }, ...(project.folder ? { fileReadRoot: project.folder } : {}) } : {}),
-        systemPromptAppend: [project ? projectNote(project.name, project.folder, project.repoUrl) : '', PLAN_NOTE].filter(Boolean).join('\n\n'),
+        systemPromptAppend: [project ? projectNote(project.name, project.folder, project.repoUrl) : '', PLAN_NOTE, prior.some((m) => m.role === 'assistant' && (m.agentId ?? c.agentId ?? null) !== (replyAgent ?? null)) ? TEAM_NOTE : ''].filter(Boolean).join('\n\n'),
         ...(b.model ? { model: b.model, provider: /^claude-/.test(b.model) ? 'claude' as const : 'ollama' as const } : {}),
       }),
     });
@@ -172,6 +194,8 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     return { git: p.folder ? await gitInfo(p.folder) : { branch: null, remote: null, dirty: null } };
   });
 
+  /** CHAT-PRO-02 I: more than one agent has answered in this conversation. */
+  const TEAM_NOTE = 'Several agents of the team answer in this conversation. Earlier replies written by another agent start with that agent\'s name in brackets, like [Name]. Build on their work; do not repeat it, and do not write as them.';
   /** CHAT-PRO-02 H: how the agent shows its work in the chat. */
   const PLAN_NOTE = 'When a request needs several steps (3 or more), first call plan_steps with the whole plan so the owner sees it, then work through it and call plan_steps again with the whole list as each step finishes. Keep steps short. Skip the plan for a quick question or a one-step answer.';
 
