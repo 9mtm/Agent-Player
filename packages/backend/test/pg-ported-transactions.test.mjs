@@ -15,11 +15,26 @@
 //     PostgreSQL path fails with PgConfigError, never with a SQLite result).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const backend = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+// Every store under a temp folder: importing the modules below may open the
+// main SQLite database at the default path (<cwd>/.data, the real .data when
+// run from the main checkout).
+const startDir = process.cwd();
+const tmp = mkdtempSync(join(tmpdir(), 'ap-pg-ported-'));
+process.chdir(tmp);
+process.env.HOME = tmp;
+process.env.AGENT_PLAYER_DATA_DIR = join(tmp, 'data');
+process.env.DATABASE_PATH = join(tmp, 'data', 'agent-player.db');
+test.after(() => {
+  process.chdir(startDir);
+  rmSync(tmp, { recursive: true, force: true });
+});
 
 /** Every module ported to the driver-neutral SQL steps (B2.2b-3, B2.2b-4 memory). */
 export const PORTED = [

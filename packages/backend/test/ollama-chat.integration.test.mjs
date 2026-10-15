@@ -27,13 +27,19 @@ const available = await modelAvailable();
 
 test('POST /api/chat answers through local Ollama', { skip: !available && `Ollama model ${MODEL} not available`, timeout: 300_000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'ap-ollama-chat-'));
-  process.env.DATABASE_PATH = join(dir, 'agent-player.db');
+  // Every store under the temp folder: the agent files (.data/agents/<id>) were
+  // written below the cwd, i.e. the real .data when run from the main checkout.
+  const startDir = process.cwd();
+  process.chdir(dir);
+  process.env.HOME = dir;
+  process.env.AGENT_PLAYER_DATA_DIR = join(dir, 'data');
+  process.env.DATABASE_PATH = join(dir, 'data', 'agent-player.db');
   process.env.OLLAMA_THINK ??= 'false';
   process.env.JWT_SECRET = randomBytes(64).toString('hex'); // throwaway, test only
 
-  const { getDatabase, closeDatabase } = await import('../src/db/database.ts');
+  const { getDatabase, closeDatabase } = await import(join(startDir, 'src/db/database.ts'));
   const { default: Fastify } = await import('fastify');
-  const { chatRoutes } = await import('../src/api/routes/chat.ts');
+  const { chatRoutes } = await import(join(startDir, 'src/api/routes/chat.ts'));
 
   const db = getDatabase();
   await db.initialize();
@@ -43,7 +49,7 @@ test('POST /api/chat answers through local Ollama', { skip: !available && `Ollam
   ).run(MODEL);
   // S0-Q.9: /api/chat needs a verified bearer token.
   db.prepare(`INSERT INTO users (id, email, username, password_hash, role, status) VALUES ('u-test', 'u-test@example.test', 'u-test', 'x', 'owner', 'active')`).run();
-  const { generateToken } = await import('../src/auth/jwt.ts');
+  const { generateToken } = await import(join(startDir, 'src/auth/jwt.ts'));
   const headers = { authorization: `Bearer ${generateToken('u-test', 1)}` };
 
   const app = Fastify();
@@ -51,6 +57,7 @@ test('POST /api/chat answers through local Ollama', { skip: !available && `Ollam
   t.after(async () => {
     await app.close();
     closeDatabase();
+    process.chdir(startDir);
     rmSync(dir, { recursive: true, force: true });
   });
 
