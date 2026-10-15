@@ -60,6 +60,8 @@ export interface StorageSaveOptions {
 export interface StorageQuery {
   zone?: StorageZone;
   category?: string;
+  /** FIX-STO-01: also match sub-categories (`<category>/…`), e.g. an extension's folders. */
+  categoryTree?: boolean;
   q?: string;
   tags?: string[];
   limit?: number;
@@ -78,6 +80,23 @@ function calcExpiresAt(ttl: StorageTTL): string | null {
   if (ms === null) return null;
   if (ms === 0) return new Date(Date.now() + 60 * 1000).toISOString();
   return new Date(Date.now() + ms).toISOString();
+}
+
+/**
+ * FIX-STO-01: SQL for "this category or any `<category>/…` below it", with
+ * LIKE wildcards in the name escaped (an extension id may contain `_`), so
+ * `extensions/ab` never matches `extensions/abc` or `extensions/a_`.
+ * The same text works on SQLite and PostgreSQL.
+ */
+export function categorySubtreeSql(column = 'category'): string {
+  return `(${column} = ? OR ${column} LIKE ? ESCAPE '\\')`;
+}
+export function categorySubtreeParams(category: string): [string, string] {
+  return [category, `${category.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`];
+}
+/** True when `category` is `base` or below it (`base/…`). */
+export function inCategoryTree(category: string, base: string): boolean {
+  return category === base || category.startsWith(`${base}/`);
 }
 
 function rowToFile(row: Record<string, unknown>): StorageFile {
@@ -373,7 +392,10 @@ export class StorageManager {
     const like = q.dialect === 'postgres' ? 'ILIKE' : 'LIKE';
 
     if (query.zone) { conditions.push('zone = ?'); params.push(query.zone); }
-    if (query.category) { conditions.push('category = ?'); params.push(query.category); }
+    if (query.category) {
+      if (query.categoryTree) { conditions.push(categorySubtreeSql()); params.push(...categorySubtreeParams(query.category)); }
+      else { conditions.push('category = ?'); params.push(query.category); }
+    }
     if (query.q) {
       conditions.push(`(description ${like} ? OR filename ${like} ?)`);
       params.push(`%${query.q}%`, `%${query.q}%`);

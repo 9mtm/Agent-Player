@@ -14,6 +14,7 @@ import type { Dialect } from '../db/pg/dialect.js';
 import { nowTs } from '../db/pg/dialect.js';
 import { outsidePgTransaction } from '../db/pg/pool.js';
 import { all, dialect, num, one, run, sql, type Step } from '../repositories/sql-steps.js';
+import { categorySubtreeParams, categorySubtreeSql } from './storage-manager.js';
 
 export interface ExtensionAnalytics {
   extensionId: string;
@@ -254,9 +255,10 @@ function* getDailyBreakdown(extensionId: string, days: number): Step<DailyStats[
  * analytics steps on both drivers.
  */
 function* getStorageUsage(extensionId: string): Step<StorageStats> {
+  // FIX-STO-01: the extension's category and every sub-category below it.
   const row = yield* one<{ files: number; bytes: unknown }>(
-    `SELECT COUNT(*) AS files, SUM(size_bytes) AS bytes FROM storage_files WHERE zone = 'cdn' AND category = ?`,
-    `extensions/${extensionId}`);
+    `SELECT COUNT(*) AS files, SUM(size_bytes) AS bytes FROM storage_files WHERE zone = 'cdn' AND ${categorySubtreeSql()}`,
+    ...categorySubtreeParams(`extensions/${extensionId}`));
   // SUM is numeric (text) on PostgreSQL and null when there are no files.
   const totalBytes = num<number | null>(row?.bytes) ?? 0;
 

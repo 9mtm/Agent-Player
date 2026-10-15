@@ -90,6 +90,24 @@ export function storageScenario(test, getM, { tag, skip = false }) {
     assert.deepEqual(none.storageUsage, { fileCount: 0, totalBytes: 0, totalMB: 0 });
   });
 
+  test('FIX-STO-01: an extension subtree search finds sub-category files; wildcards never leak to other extensions', { skip }, async () => {
+    const { mgr, analytics, storage } = m();
+    const ext = `ex_${tag}`; // `_` is a LIKE wildcard: must be matched literally
+    await mgr.save({ zone: 'cdn', category: `extensions/${ext}`, data: 'a', filename: `t1-${tag}.txt` });
+    await mgr.save({ zone: 'cdn', category: `extensions/${ext}/img`, data: 'bb', filename: `t2-${tag}.txt` });
+    await mgr.save({ zone: 'cdn', category: `extensions/${ext}/img/deep`, data: 'ccc', filename: `t3-${tag}.txt` });
+    await mgr.save({ zone: 'cdn', category: `extensions/${ext}x`, data: 'zzzz', filename: `o1-${tag}.txt` }); // prefix sibling
+    await mgr.save({ zone: 'cdn', category: `extensions/exA${tag}/img`, data: 'zzzzz', filename: `o2-${tag}.txt` }); // matches only if '_' were a wildcard
+    const names = async (category, categoryTree) => (await mgr.search({ zone: 'cdn', category, categoryTree, limit: 100 })).map((f) => f.filename).sort();
+    assert.deepEqual(await names(`extensions/${ext}`, true), [`t1-${tag}.txt`, `t2-${tag}.txt`, `t3-${tag}.txt`]);
+    assert.deepEqual(await names(`extensions/${ext}`, false), [`t1-${tag}.txt`], 'exact match without categoryTree');
+    assert.deepEqual(await names(`extensions/${ext}/img`, true), [`t2-${tag}.txt`, `t3-${tag}.txt`]);
+    const usage = (await analytics.getExtensionAnalytics(ext)).storageUsage;
+    assert.deepEqual([usage.fileCount, usage.totalBytes], [3, 6]);
+    assert.equal(storage.inCategoryTree(`extensions/${ext}/img`, `extensions/${ext}`), true);
+    assert.equal(storage.inCategoryTree(`extensions/${ext}x`, `extensions/${ext}`), false, 'no bare-prefix match');
+  });
+
   test('dashboard storage-usage widget sums size_bytes per zone', { skip }, async () => {
     const { app, q } = m();
     const res = await app.inject({ method: 'GET', url: '/api/dashboard/widgets/storage-usage' });

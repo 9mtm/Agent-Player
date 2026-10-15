@@ -43,7 +43,7 @@ const app = Fastify();
 await app.register(registerDashboardRoutes);
 await app.ready();
 
-const ctx = { mgr: getStorageManager(), q, analytics, app, base, outsideFile };
+const ctx = { mgr: getStorageManager(), q, analytics, app, base, outsideFile, storage: await import('../src/services/storage-manager.ts') };
 storageScenario(test, () => ctx, { tag });
 
 test.after(async () => {

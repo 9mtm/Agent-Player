@@ -541,7 +541,8 @@ export function createExtensionApi(
           ? `extensions/${extensionId}/${category}`
           : `extensions/${extensionId}`;
 
-        const files = await storageManager.search({ zone: 'cdn', category: cat, limit: 1000 });
+        // FIX-STO-01: files saved with a sub-category live below `cat`.
+        const files = await storageManager.search({ zone: 'cdn', category: cat, categoryTree: true, limit: 1000 });
 
         return Promise.all(files.map(async f => ({
           id: f.id,
@@ -555,12 +556,14 @@ export function createExtensionApi(
        * Delete file from extension's storage
        */
       async delete(fileId: string): Promise<boolean> {
-        const { getStorageManager } = await import('../services/storage-manager.js');
+        const { getStorageManager, inCategoryTree } = await import('../services/storage-manager.js');
         const storageManager = getStorageManager();
 
-        // Verify file belongs to this extension before deletion
+        // Verify file belongs to this extension before deletion (FIX-STO-01:
+        // `extensions/<id>` or below it — a bare prefix let extension "ab"
+        // delete the files of extension "abc")
         const file = await storageManager.getById(fileId);
-        if (!file || !file.category.startsWith(`extensions/${extensionId}`)) {
+        if (!file || !inCategoryTree(file.category, `extensions/${extensionId}`)) {
           throw new Error('Access denied: file does not belong to this extension');
         }
 

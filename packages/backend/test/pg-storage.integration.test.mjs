@@ -65,7 +65,7 @@ if (URL_) {
   const app = Fastify();
   await app.register(registerDashboardRoutes);
   await app.ready();
-  ctx = { mgr: getStorageManager(), q, analytics, app, base, outsideFile };
+  ctx = { mgr: getStorageManager(), q, analytics, app, base, outsideFile, storage: await import('../src/services/storage-manager.ts') };
   closeAll = async () => {
     await app.close();
     Object.assign(console, quiet);

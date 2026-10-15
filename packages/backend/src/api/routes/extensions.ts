@@ -288,6 +288,7 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
       const storageFiles = await storageManager.search({
         zone: 'cdn',
         category: `extensions/${id}`,
+        categoryTree: true, // FIX-STO-01: sub-category files too
         limit: 10000,
       });
 
