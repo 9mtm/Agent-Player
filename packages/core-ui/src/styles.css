@@ -1135,3 +1135,27 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .panel-list code { font-size:11px; color:var(--text-3); }
 .app-shell .panel-list dd.panel-wrap { white-space:normal; overflow:visible; overflow-wrap:anywhere; }
 @media (max-width: 900px) { .app-shell .chat-layout[data-max] .chat-panel.chat-pane { inline-size:100%; } }
+
+/* Task plan (CHAT-PRO-02 H) */
+.app-shell .plan-card { border:1px solid var(--stroke-3); border-radius:10px; margin:2px 0 10px; overflow:hidden; background:color-mix(in srgb,var(--text) 2%,var(--canvas)); }
+.app-shell .plan-head { display:flex; align-items:center; gap:8px; inline-size:100%; padding:8px 12px; border:0; background:none; color:inherit; font:inherit; font-size:12.5px; cursor:pointer; text-align:start; }
+.app-shell .plan-head > svg:first-child { color:var(--accent); flex:none; }
+.app-shell .plan-title { font-weight:600; }
+.app-shell .plan-count { color:var(--text-3); font-variant-numeric:tabular-nums; font-size:12px; }
+.app-shell .plan-bar { flex:0 0 72px; block-size:4px; border-radius:2px; background:var(--stroke-3); overflow:hidden; }
+.app-shell .plan-bar i { display:block; block-size:100%; background:var(--accent); border-radius:2px; transition:inline-size .3s ease; }
+.app-shell .plan-now { flex:1; min-inline-size:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-3); font-size:12px; }
+.app-shell .plan-chevron { margin-inline-start:auto; color:var(--text-3); transition:transform .15s; display:inline-flex; }
+.app-shell .plan-head[aria-expanded="true"] .plan-chevron { transform:rotate(90deg); }
+.app-shell .plan-steps { list-style:none; margin:0; padding:2px 12px 10px; display:grid; gap:2px; border-block-start:1px solid var(--stroke-3); }
+.app-shell .plan-steps li { display:grid; grid-template-columns:18px 1fr; align-items:start; gap:8px; padding:4px 0; font-size:13px; line-height:1.4; }
+.app-shell .plan-mark { inline-size:14px; block-size:14px; margin-block-start:2px; border-radius:50%; box-shadow:inset 0 0 0 1.5px var(--stroke-1, var(--text-3)); display:grid; place-items:center; color:#fff; }
+.app-shell .plan-steps li[data-status="done"] .plan-mark { background:var(--accent); box-shadow:none; }
+.app-shell .plan-steps li[data-status="done"] .plan-step { color:var(--text-3); }
+.app-shell .plan-steps li[data-status="active"] .plan-step { font-weight:600; }
+.app-shell .plan-steps li[data-status="active"] .plan-mark { box-shadow:inset 0 0 0 1.5px var(--accent); }
+.app-shell .plan-spin { inline-size:6px; block-size:6px; border-radius:50%; background:var(--accent); animation:plan-pulse 1.1s ease-in-out infinite; }
+.app-shell .plan-steps li[data-status="halted"] .plan-mark { box-shadow:inset 0 0 0 1.5px #d29922; }
+.app-shell .plan-steps li[data-status="skipped"] .plan-step { color:var(--text-3); text-decoration:line-through; }
+@keyframes plan-pulse { 50% { transform:scale(.55); opacity:.5; } }
+@media (prefers-reduced-motion: reduce) { .app-shell .plan-spin { animation:none; } .app-shell .plan-bar i { transition:none; } }

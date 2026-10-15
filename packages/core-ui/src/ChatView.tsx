@@ -12,7 +12,8 @@ import type { SessionClient } from './session';
 import { Markdown } from './markdown';
 import { UiIcon } from './ui-icons';
 import type { UiIconName } from './ui-icons';
-import { approxTokens, duration, splitWork, toolCount, toolView, turnOutputs, workSummary } from './turns';
+import { approxTokens, duration, splitWork, toolCount, toolView, turnOutputs, turnPlan, withoutPlan, workSummary } from './turns';
+import type { PlanStep } from './turns';
 import type { Part, ToolCall, ToolKind, Turn } from './turns';
 
 /** Pixels from the bottom within which the thread keeps following new text. */
@@ -209,7 +210,7 @@ function ChatSidePanel({ controller, client }: { controller: ConversationsContro
   const model = s.models.find(m => m.id === s.model)?.label ?? (s.model || "Agent's model");
   const replies = s.turns.filter(t => t.role === 'assistant');
   const worked = replies.reduce((n, t) => n + (t.durationMs ?? 0), 0);
-  const tools = workSummary(s.turns.flatMap(t => t.parts));
+  const tools = workSummary(s.turns.flatMap(t => withoutPlan(t.parts)));
   const home = project?.folder?.match(/^\/Users\/[^/]+/)?.[0];
   return <aside className="chat-panel" aria-label="Conversation details">
     <section className="panel-card">
@@ -321,15 +322,18 @@ function UserMessage({ turn }: { turn: Turn }) {
 /** One assistant turn: live parts in order while running; work folded once finished. */
 function AssistantTurn({ turn, last, onRetry }: { turn: Turn; last: boolean; onRetry?: () => void }) {
   const live = turn.status === 'running';
-  const { work, answer } = splitWork(turn.parts);
-  const tools = toolCount(turn.parts);
+  const plan = turnPlan(turn.parts);
+  const parts = plan ? withoutPlan(turn.parts) : turn.parts;
+  const { work, answer } = splitWork(parts);
+  const tools = toolCount(parts);
   const answerText = answer.filter(p => p.kind === 'text').map(p => (p as { text: string }).text).join('');
   const [quiet, since] = useQuiet(turn, live);
   return <article className="chat-assistant" aria-busy={live || undefined}>
     <p className="sr-only">Agent</p>
+    {plan && <PlanCard steps={plan} live={live} status={turn.status}/>}
     {live
-      ? <>{turn.parts.map((p, i) => <PartView key={i} part={p} live last={i === turn.parts.length - 1}/>)}
-        {(quiet || turn.parts.length === 0) && <WorkingRow since={since} label={turn.parts.length ? 'Working' : 'Thinking'}/>}</>
+      ? <>{parts.map((p, i) => <PartView key={i} part={p} live last={i === parts.length - 1}/>)}
+        {(quiet || parts.length === 0) && <WorkingRow since={since} label={parts.length ? 'Working' : 'Thinking'}/>}</>
       : <>
         {tools > 0
           ? <WorkedRow parts={work} ms={turn.durationMs}/>
@@ -343,6 +347,34 @@ function AssistantTurn({ turn, last, onRetry }: { turn: Turn; last: boolean; onR
         <TurnFooter text={answerText || turn.content} ms={turn.durationMs} stopped={turn.status === 'stopped'}/>
       </>}
   </article>;
+}
+
+/** The agent's task plan as a live checklist; folds to one line once every step is done. */
+function PlanCard({ steps, live, status }: { steps: readonly PlanStep[]; live: boolean; status: Turn['status'] }) {
+  const done = steps.filter(s => s.status === 'done').length;
+  const counted = steps.filter(s => s.status !== 'skipped').length;
+  const finished = !live && steps.every(s => s.status === 'done' || s.status === 'skipped');
+  const [open, setOpen] = useState(!finished);
+  const halted = !live && status !== 'complete';
+  const active = steps.find(s => s.status === 'active');
+  return <section className="plan-card" aria-label="Task plan" data-live={live || undefined}>
+    <button type="button" className="plan-head" aria-expanded={open} onClick={() => setOpen(v => !v)}>
+      <UiIcon name="check" size={12}/>
+      <span className="plan-title">{finished ? 'Plan done' : 'Plan'}</span>
+      <span className="plan-count">{done} of {counted}</span>
+      <span className="plan-bar" aria-hidden="true"><i style={{ inlineSize: `${counted ? Math.round((done / counted) * 100) : 0}%` }}/></span>
+      {!open && active && <span className="plan-now" dir="auto">{active.title}</span>}
+      <span className="plan-chevron" aria-hidden="true"><UiIcon name="chevron" size={10}/></span>
+    </button>
+    {open && <ol className="plan-steps">{steps.map((s, i) => {
+      const state = s.status === 'active' && halted ? 'halted' : s.status;
+      return <li key={i} data-status={state}>
+        <span className="plan-mark" aria-hidden="true">{state === 'done' ? <UiIcon name="check" size={10}/> : state === 'active' ? <i className="plan-spin"/> : null}</span>
+        <span className="plan-step" dir="auto">{s.title}</span>
+        <span className="sr-only">{state === 'done' ? 'done' : state === 'active' ? 'in progress' : state === 'halted' ? 'stopped here' : state === 'skipped' ? 'skipped' : 'to do'}</span>
+      </li>;
+    })}</ol>}
+  </section>;
 }
 
 /** True when a live turn produced nothing for QUIET_MS; returns when that quiet began. */

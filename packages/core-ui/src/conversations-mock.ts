@@ -33,6 +33,13 @@ export function createConversationsMock(options: { stepMs?: number } = {}) {
       { type: 'tool_result', step: 1, results: [{ id: 'c1', name: 'read_file', output: '# Brief\nFictional notes for practice.', isError: false, ms: 12 }, { id: 'c2', name: 'exec', output: 'brief.md\nideas.md', isError: false, ms: 30 }] },
       ...ANSWER.map(content => ({ type: 'text', content })),
     ];
+    if (/make a plan/i.test(prompt)) {
+      const plan = (a: string, b: string, c: string) => JSON.stringify({ steps: [{ title: 'Read the notes', status: a }, { title: 'Draft the plan', status: b }, { title: 'Check with the owner', status: c }] });
+      ev.splice(2, 0, { type: 'tool_start', step: 0, tools: [{ id: 'p0', name: 'plan_steps', input: plan('active', 'pending', 'pending') }] },
+        { type: 'tool_result', step: 0, results: [{ id: 'p0', name: 'plan_steps', output: 'Plan shown to the owner.', isError: false, ms: 1 }] });
+      ev.splice(ev.length - 1, 0, { type: 'tool_start', step: 2, tools: [{ id: 'p1', name: 'plan_steps', input: plan('done', 'done', 'active') }] },
+        { type: 'tool_result', step: 2, results: [{ id: 'p1', name: 'plan_steps', output: 'Plan shown to the owner.', isError: false, ms: 1 }] });
+    }
     if (/fail/i.test(prompt)) ev.splice(2, ev.length - 2, { type: 'text', content: 'Partial answer before a fictional failure.' });
     return ev;
   };

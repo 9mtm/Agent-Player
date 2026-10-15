@@ -178,3 +178,34 @@ export function approxTokens(turns: readonly Turn[]): number {
   for (const t of turns) { chars += t.content.length; for (const p of t.parts) if (p.kind === 'tools') for (const c of p.calls) chars += c.input.length + (c.output?.length ?? 0); }
   return Math.round(chars / 4);
 }
+
+/** The agent's live task plan (CHAT-PRO-02 H): its latest plan_steps call. */
+export const PLAN_TOOL = 'plan_steps';
+export type PlanStatus = 'pending' | 'active' | 'done' | 'skipped';
+export type PlanStep = Readonly<{ title: string; status: PlanStatus }>;
+const PLAN_STATUS: readonly string[] = ['pending', 'active', 'done', 'skipped'];
+
+/** The newest plan in this turn (a refused call does not replace the last good plan), or null. */
+export function turnPlan(parts: readonly Part[]): PlanStep[] | null {
+  let plan: PlanStep[] | null = null;
+  for (const p of parts) if (p.kind === 'tools') for (const c of p.calls) {
+    if (c.name !== PLAN_TOOL || c.isError) continue;
+    const steps = args(c.input).steps;
+    if (!Array.isArray(steps) || !steps.length) continue;
+    const clean = steps.slice(0, 12).filter((s): s is { title: string; status?: string } => !!s && typeof s === 'object' && typeof (s as { title?: unknown }).title === 'string' && !!(s as { title: string }).title.trim())
+      .map(s => ({ title: s.title.trim().slice(0, 120), status: (PLAN_STATUS.includes(s.status ?? '') ? s.status : 'pending') as PlanStatus }));
+    if (clean.length) plan = clean;
+  }
+  return plan;
+}
+
+/** The parts without plan updates: the plan is shown on its own, not as tool work. */
+export function withoutPlan(parts: readonly Part[]): Part[] {
+  const out: Part[] = [];
+  for (const p of parts) {
+    if (p.kind !== 'tools') { out.push(p); continue; }
+    const calls = p.calls.filter(c => c.name !== PLAN_TOOL);
+    if (calls.length) out.push(calls.length === p.calls.length ? p : { ...p, calls });
+  }
+  return out;
+}

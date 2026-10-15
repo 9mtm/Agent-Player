@@ -246,3 +246,22 @@ test('GitHub card: upstream, ahead/behind, last commit and github.com links only
   assert.match(html, /Compare \/ pull request/);
   assert.match(html, /3 commits are only on this computer/);
 });
+
+test('task plan: the latest plan_steps call shows as a live checklist, not as tool work', async t => {
+  const { turnPlan, withoutPlan } = require('../src/turns.ts');
+  const call = (id, steps, isError = false) => ({ id, name: 'plan_steps', input: JSON.stringify({ steps }), running: false, isError });
+  const parts = [{ kind: 'tools', step: 0, calls: [call('a', [{ title: 'One', status: 'active' }, { title: 'Two', status: 'pending' }])] },
+    { kind: 'tools', step: 1, calls: [{ id: 'r', name: 'read', input: '{"path":"x.md"}', running: false }, call('b', [{ title: 'One', status: 'done' }, { title: 'Two', status: 'active' }])] },
+    { kind: 'tools', step: 2, calls: [call('c', [{ title: 'broken', status: 'done' }], true)] }];
+  assert.deepEqual(turnPlan(parts).map(s => s.status), ['done', 'active'], 'a refused call does not replace the last good plan');
+  assert.deepEqual(withoutPlan(parts).flatMap(p => p.calls.map(c => c.name)), ['read']);
+
+  const { c } = await fixture(t);
+  await c.load(); await new Promise(r => setTimeout(r, 30));
+  await c.send('Make a plan for launch week'); await until(() => !c.getSnapshot().runId);
+  const html = renderToStaticMarkup(React.createElement(ChatView, { controller: c, mode: 'mock' }));
+  assert.match(html, /aria-label="Task plan"/);
+  assert.match(html, /2 of 3/);
+  assert.match(html, /Check with the owner/);
+  assert.doesNotMatch(html, /plan steps/i, 'the plan call is not listed as a tool');
+});
