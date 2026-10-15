@@ -135,7 +135,7 @@ The tool will search Anthropic's repository, find matching skills, and install t
 
       // 3. LIST installed skills
       if (action === 'list_installed') {
-        const installed = anthropicSkillsService.getInstalledSkills();
+        const installed = await anthropicSkillsService.getInstalledSkills();
 
         if (installed.length === 0) {
           return JSON.stringify({
