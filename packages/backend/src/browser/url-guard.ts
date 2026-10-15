@@ -37,10 +37,27 @@ export async function checkBrowserUrl(raw: string, lookup?: LookupFn): Promise<U
     return { ok: false, reason: 'invalid URL' };
   }
   if (NO_NETWORK_SCHEMES.has(url.protocol)) return { ok: true };
+  return checkPublicHttpUrl(raw, lookup);
+}
+
+/**
+ * SEC-NET-01: whether a server-side request may go to `raw`: http(s) to a
+ * public address only (no data:/about: either). Used by the web_fetch tool.
+ * Never throws.
+ */
+export async function checkPublicHttpUrl(raw: string, lookup?: LookupFn): Promise<UrlVerdict> {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { ok: false, reason: 'invalid URL' };
+  }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return { ok: false, reason: `scheme ${url.protocol} is not allowed` };
   if (url.username || url.password) return { ok: false, reason: 'credentials in the URL are not allowed' };
 
-  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
+  // Loopback by name, whatever a resolver answers.
+  if (host === 'localhost' || host.endsWith('.localhost')) return { ok: false, reason: `host ${host} is loopback` };
   if (isIP(host)) {
     return isBlockedAddress(host) ? { ok: false, reason: `address ${host} is not public` } : { ok: true };
   }

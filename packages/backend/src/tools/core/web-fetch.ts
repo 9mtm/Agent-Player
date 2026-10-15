@@ -5,9 +5,70 @@
  */
 
 import type { Tool, ToolResult } from '../types.js';
+import { checkPublicHttpUrl } from '../../browser/url-guard.js';
+import type { LookupFn } from '../../services/net/safe-fetch.js';
 
 const DEFAULT_TIMEOUT = 10000; // 10 seconds
 const MAX_CONTENT_LENGTH = 1024 * 1024 * 5; // 5MB
+const MAX_REDIRECTS = 5;
+
+export class WebFetchBlockedError extends Error {}
+
+export interface PublicFetchDeps {
+  fetchImpl?: typeof fetch;
+  lookup?: LookupFn;
+}
+
+/**
+ * SEC-NET-01: a request the agent asked for, only to public addresses.
+ * The URL and every redirect hop must be http(s) to a public address (the
+ * safe-fetch blocked list): before, any URL, method and header went out and
+ * redirects were followed, so an agent could reach 127.0.0.1 services, the
+ * LAN or cloud metadata. Redirects are followed by hand (at most
+ * MAX_REDIRECTS); 303, and 301/302 after a POST, continue as GET without a
+ * body. Limit: the address is checked here and resolved again by fetch (a
+ * DNS rebinding window remains).
+ */
+export async function fetchPublic(rawUrl: string, init: RequestInit, deps: PublicFetchDeps = {}): Promise<{ response: Response; finalUrl: string }> {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  let url = rawUrl;
+  let request: RequestInit = { ...init };
+  for (let hop = 0; ; hop++) {
+    const verdict = await checkPublicHttpUrl(url, deps.lookup);
+    if (!verdict.ok) throw new WebFetchBlockedError(`Blocked: ${verdict.reason}`);
+    const response = await fetchImpl(url, { ...request, redirect: 'manual' });
+    const location = response.headers.get('location');
+    if (response.status < 300 || response.status >= 400 || !location) return { response, finalUrl: url };
+    if (hop >= MAX_REDIRECTS) throw new WebFetchBlockedError(`Too many redirects (more than ${MAX_REDIRECTS})`);
+    url = new URL(location, url).toString();
+    const method = String(request.method || 'GET').toUpperCase();
+    if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === 'POST')) {
+      request = { ...request, method: 'GET', body: undefined };
+    }
+  }
+}
+
+/** The body as text, refusing more than `max` bytes (the content-length header alone was trusted before). */
+export async function readTextCapped(response: Response, max: number = MAX_CONTENT_LENGTH): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel();
+      throw new Error(`Content too large: more than ${max} bytes`);
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
+/** Test hook: the fetch and DNS lookup web_fetch uses (defaults: global fetch, system DNS). */
+export const webFetchDeps: PublicFetchDeps = {};
 
 export const webFetchTool: Tool = {
   name: 'web_fetch',
@@ -74,23 +135,29 @@ export const webFetchTool: Tool = {
     } = params;
 
     try {
-      console.log(`[WebFetchTool] 🌐 Fetching: ${url}`);
+      // Host only: a query string may carry tokens.
+      let host = '';
+      try { host = new URL(url).host; } catch { /* checked below */ }
+      console.log(`[WebFetchTool] 🌐 Fetching from: ${host || '(invalid URL)'}`);
       console.log(`[WebFetchTool]   Method: ${method}`);
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT);
 
-      const response = await fetch(url, {
-        method,
-        headers: {
-          'User-Agent': 'AgentPlayer/1.0',
-          ...headers,
-        },
-        body: body ? body : undefined,
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeout);
+      let response: Response;
+      try {
+        ({ response } = await fetchPublic(url, {
+          method,
+          headers: {
+            'User-Agent': 'AgentPlayer/1.0',
+            ...headers,
+          },
+          body: body ? body : undefined,
+          signal: controller.signal,
+        }, webFetchDeps));
+      } finally {
+        clearTimeout(timeout);
+      }
 
       // Check content length
       const contentLength = response.headers.get('content-length');
@@ -110,11 +177,15 @@ export const webFetchTool: Tool = {
       let content: string;
 
       // Try to parse as text
+      const raw = await readTextCapped(response);
       if (contentType.includes('json')) {
-        const json = await response.json();
-        content = JSON.stringify(json, null, 2);
+        try {
+          content = JSON.stringify(JSON.parse(raw), null, 2);
+        } catch {
+          content = raw;
+        }
       } else {
-        content = await response.text();
+        content = raw;
       }
 
       // ENHANCEMENT: Smart filtering
