@@ -293,7 +293,7 @@ const sampleCases = [
   }, true), '[AiTools] POST /api/ai-tools/:id/install'],
   ['memory-quality', 'GET', '/api/memory-quality/stats', undefined, () => patch(repositories.memory, 'qualityStats', async () => { throw secretError(); }), '[MemoryQuality] GET /api/memory-quality/stats'],
   ['memory-sharing', 'GET', '/api/memory-sharing/shared', undefined, () => patch(repositories.memory, 'shared', async () => { throw secretError(); }), '[MemorySharing] GET /api/memory-sharing/shared'],
-  ['world-generator', 'POST', '/api/world-generator/ai', { prompt: 'p', agent_id: 'a' }, () => failSql(/FROM agents\b/), '[WorldGenerator] POST /api/world-generator/ai'],
+  ['world-generator', 'POST', '/api/world-generator/ai', { prompt: 'p', agent_id: 'a' }, () => failSql(/SELECT model FROM agents_config\b/), '[WorldGenerator] POST /api/world-generator/ai'],
 ];
 
 test('the sample covers all 18 route files', () => {

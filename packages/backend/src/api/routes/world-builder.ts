@@ -3,9 +3,8 @@
  * CRUD operations for world builder data
  */
 
-import { dataPath } from '../../config/data-root.js';
 import { FastifyInstance } from 'fastify';
-import { getDatabase } from '../../db/index.js';
+import { createWorldWithFile, findOwnedWorld, updateWorldMeta, worldFilePath, worldsDir } from '../../repositories/user-worlds.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { sendInternalError } from '../error-handler.js';
 import { safeErrorFields } from '../../services/safe-error-log.js';
@@ -23,14 +22,8 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
       }
 
       const { id } = request.params as { id: string };
-      const db = getDatabase();
-
       // Get world from user_worlds table
-      const world = db.prepare(`
-        SELECT id, name, description, glb_file_id, created_at, updated_at
-        FROM user_worlds
-        WHERE id = ? AND user_id = ?
-      `).get(id, userId) as any;
+      const world = await findOwnedWorld(id, userId);
 
       if (!world) {
         return reply.status(404).send({ error: 'World not found' });
@@ -40,13 +33,11 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
       let objects = [];
       if (world.glb_file_id) {
         try {
-          const file = db.prepare('SELECT filepath FROM storage_files WHERE id = ?')
-            .get(world.glb_file_id) as any;
+          // Contained under the storage dir (B2.2d-10), else null.
+          const fullPath = await worldFilePath(world.glb_file_id);
 
-          if (file && file.filepath) {
+          if (fullPath) {
             const fs = await import('fs');
-            const path = await import('path');
-            const fullPath = dataPath('storage', file.filepath);
 
             if (fs.existsSync(fullPath)) {
               const content = fs.readFileSync(fullPath, 'utf-8');
@@ -82,10 +73,10 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
   fastify.post('/api/world-builder', async (request, reply) => {
     try {
       fastify.log.info('[World Builder API] 🔍 POST /api/world-builder called');
-      fastify.log.info('[World Builder API] 🔍 Request body:', JSON.stringify(request.body, null, 2));
+      fastify.log.info({ detail: JSON.stringify(request.body, null, 2) }, '[World Builder API] 🔍 Request body:');
 
       const userId = getUserIdFromRequest(request);
-      fastify.log.info('[World Builder API] 🔍 User ID from JWT:', userId);
+      fastify.log.info({ detail: userId }, '[World Builder API] 🔍 User ID from JWT:');
 
       if (!userId) {
         fastify.log.error('[World Builder API] ❌ Unauthorized - no user ID');
@@ -99,27 +90,26 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
       };
 
       fastify.log.info('[World Builder API] 🔍 Parsed data:');
-      fastify.log.info('[World Builder API] 🔍 - name:', name);
-      fastify.log.info('[World Builder API] 🔍 - description:', description);
-      fastify.log.info('[World Builder API] 🔍 - objects:', objects);
+      fastify.log.info({ detail: name }, '[World Builder API] 🔍 - name:');
+      fastify.log.info({ detail: description }, '[World Builder API] 🔍 - description:');
+      fastify.log.info({ detail: objects }, '[World Builder API] 🔍 - objects:');
 
       if (!name) {
         fastify.log.error('[World Builder API] ❌ World name is missing!');
         return reply.status(400).send({ error: 'World name is required' });
       }
 
-      const db = getDatabase();
       const timestamp = Date.now();
       const worldId = `world_${timestamp}`;
 
-      fastify.log.info('[World Builder API] 🔍 Generated world ID:', worldId);
+      fastify.log.info({ detail: worldId }, '[World Builder API] 🔍 Generated world ID:');
 
       // Save objects to file
       const fs = await import('fs');
       const path = await import('path');
 
-      const storagePath = dataPath('storage', 'cdn', 'worlds');
-      fastify.log.info('[World Builder API] 🔍 Storage path:', storagePath);
+      const storagePath = worldsDir();
+      fastify.log.info({ detail: storagePath }, '[World Builder API] 🔍 Storage path:');
 
       if (!fs.existsSync(storagePath)) {
         fastify.log.info('[World Builder API] 📁 Creating storage directory...');
@@ -135,49 +125,22 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
         created_at: new Date().toISOString(),
       };
 
-      fastify.log.info('[World Builder API] 💾 Writing file:', filepath);
+      fastify.log.info({ detail: filepath }, '[World Builder API] 💾 Writing file:');
       fs.writeFileSync(filepath, JSON.stringify(worldData, null, 2));
       fastify.log.info('[World Builder API] ✅ File written successfully');
 
-      // Create storage file record
+      // Create the storage file record and the world row (one transaction)
       const fileId = `file_${timestamp}`;
-      fastify.log.info('[World Builder API] 💾 Creating storage_files record...');
-      db.prepare(`
-        INSERT INTO storage_files (id, zone, category, filename, filepath, mime_type, size_bytes, description, created_by, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-      `).run(
-        fileId,
-        'cdn',
-        'worlds',
-        filename,
-        `/cdn/worlds/${filename}`,
-        'application/json',
-        JSON.stringify(worldData).length,
-        `World Builder: ${name}`,
-        userId
-      );
-      fastify.log.info('[World Builder API] ✅ storage_files record created');
-
-      // Create world record
-      fastify.log.info('[World Builder API] 💾 Creating user_worlds record...');
-      db.prepare(`
-        INSERT INTO user_worlds (
-          id, user_id, name, description, glb_file_id,
-          is_public, max_players,
-          spawn_position_x, spawn_position_y, spawn_position_z,
-          created_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-      `).run(
+      fastify.log.info('[World Builder API] 💾 Creating storage_files + user_worlds records...');
+      await createWorldWithFile({
         worldId,
         userId,
         name,
-        description || '',
-        fileId,
-        0, // private by default
-        1, // single player
-        0, 0, 0 // spawn at origin
-      );
+        description: description || '',
+        isPublic: 0, // private by default
+        maxPlayers: 1, // single player
+        file: { id: fileId, filename, sizeBytes: JSON.stringify(worldData).length, description: `World Builder: ${name}` },
+      });
       fastify.log.info('[World Builder API] ✅ user_worlds record created');
 
       const response = {
@@ -190,7 +153,7 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
       };
 
       fastify.log.info('[World Builder API] ✅ POST successful!');
-      fastify.log.info('[World Builder API] 🔍 Response:', JSON.stringify(response, null, 2));
+      fastify.log.info({ detail: JSON.stringify(response, null, 2) }, '[World Builder API] 🔍 Response:');
 
       return reply.send(response);
     } catch (error: any) {
@@ -207,7 +170,7 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
       fastify.log.info('[World Builder API] 🔍 PUT /api/world-builder/:id called');
 
       const userId = getUserIdFromRequest(request);
-      fastify.log.info('[World Builder API] 🔍 User ID from JWT:', userId);
+      fastify.log.info({ detail: userId }, '[World Builder API] 🔍 User ID from JWT:');
 
       if (!userId) {
         fastify.log.error('[World Builder API] ❌ Unauthorized - no user ID');
@@ -221,16 +184,13 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
         objects: any[];
       };
 
-      fastify.log.info('[World Builder API] 🔍 World ID:', id);
-      fastify.log.info('[World Builder API] 🔍 Update data:', { name, description, objectsCount: objects?.length });
-
-      const db = getDatabase();
+      fastify.log.info({ detail: id }, '[World Builder API] 🔍 World ID:');
+      fastify.log.info({ detail: { name, description, objectsCount: objects?.length } }, '[World Builder API] 🔍 Update data:');
 
       // Check if world exists and belongs to user
-      const world = db.prepare('SELECT glb_file_id FROM user_worlds WHERE id = ? AND user_id = ?')
-        .get(id, userId) as any;
+      const world = await findOwnedWorld(id, userId);
 
-      fastify.log.info('[World Builder API] 🔍 Existing world:', world);
+      fastify.log.info({ detail: world }, '[World Builder API] 🔍 Existing world:');
 
       if (!world) {
         fastify.log.error('[World Builder API] ❌ World not found or unauthorized');
@@ -241,17 +201,14 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
       if (world.glb_file_id) {
         fastify.log.info('[World Builder API] 💾 Updating file content...');
 
-        const file = db.prepare('SELECT filepath FROM storage_files WHERE id = ?')
-          .get(world.glb_file_id) as any;
+        // Contained under the storage dir (B2.2d-10): a stored key that
+        // leaves it is never written to.
+        const fullPath = await worldFilePath(world.glb_file_id);
 
-        fastify.log.info('[World Builder API] 🔍 Storage file:', file);
-
-        if (file && file.filepath) {
+        if (fullPath) {
           const fs = await import('fs');
-          const path = await import('path');
-          const fullPath = dataPath('storage', file.filepath);
 
-          fastify.log.info('[World Builder API] 🔍 File full path:', fullPath);
+          fastify.log.info({ detail: fullPath }, '[World Builder API] 🔍 File full path:');
 
           const worldData = {
             name,
@@ -263,7 +220,7 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
           fs.writeFileSync(fullPath, JSON.stringify(worldData, null, 2));
           fastify.log.info('[World Builder API] ✅ File updated successfully');
         } else {
-          fastify.log.warn('[World Builder API] ⚠️ No file record found for glb_file_id:', world.glb_file_id);
+          fastify.log.warn({ detail: world.glb_file_id }, '[World Builder API] ⚠️ No file record found for glb_file_id:');
         }
       } else {
         fastify.log.warn('[World Builder API] ⚠️ No glb_file_id in world record');
@@ -271,11 +228,7 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
 
       // Update world record
       fastify.log.info('[World Builder API] 💾 Updating user_worlds record...');
-      db.prepare(`
-        UPDATE user_worlds
-        SET name = ?, description = ?, updated_at = datetime('now')
-        WHERE id = ? AND user_id = ?
-      `).run(name, description || '', id, userId);
+      await updateWorldMeta(id, userId, name, description || '');
       fastify.log.info('[World Builder API] ✅ user_worlds record updated');
 
       const response = {
@@ -288,7 +241,7 @@ export async function worldBuilderRoutes(fastify: FastifyInstance) {
       };
 
       fastify.log.info('[World Builder API] ✅ PUT successful!');
-      fastify.log.info('[World Builder API] 🔍 Response:', JSON.stringify(response, null, 2));
+      fastify.log.info({ detail: JSON.stringify(response, null, 2) }, '[World Builder API] 🔍 Response:');
 
       return reply.send(response);
     } catch (error: any) {
