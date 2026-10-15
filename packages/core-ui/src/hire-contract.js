@@ -10,6 +10,12 @@ export const companySizes = ['solo', 'small', 'medium', 'large'];
 export const nameLanguages = ['en', 'ar', 'de', 'fr', 'es', 'zh', 'ja', 'ko', 'pt-BR', 'ru', 'tr', 'hi'];
 export const CATALOGUE_PATH = '/api/onboarding/team-catalogue';
 export const PLAN_PATH = '/api/onboarding/team-plan';
+// ONBOARD-TEAM-02: total headcount split + batch hire.
+export const DISTRIBUTION_PATH = '/api/onboarding/team-distribution';
+export const BATCHES_PATH = '/api/onboarding/team-batches';
+export const MAX_TOTAL = 1000;
+export const MAX_RUN = 50;
+export const teamRoles = ['manager', 'specialist', 'evaluator'];
 export const MAX_GRANTS = 500;
 export const MAX_AVAILABLE = 2000;
 
@@ -62,9 +68,52 @@ export function validPlanBody(b) {
     && b.departments.every(department) && new Set(b.departments).size === b.departments.length;
 }
 
+const headcount = x => Number.isSafeInteger(x) && x >= 1 && x <= MAX_TOTAL;
+const batchIdOk = x => typeof x === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(x);
+export const validBatchId = batchIdOk;
+const departmentList = d => Array.isArray(d) && d.length >= 1 && d.length <= 12 && d.every(department) && new Set(d).size === d.length;
+
+/** A batch path: /api/onboarding/team-batches/:id or …/:id/run. */
+export function batchPath(path) {
+  const m = /^\/api\/onboarding\/team-batches\/([^/?#]+)(\/run)?$/.exec(path);
+  return m && batchIdOk(m[1]) ? { id: m[1], run: m[2] === '/run' } : null;
+}
+
+/** POST team-distribution: departments with a total, or with the owner's count per department. */
+export function validDistributionBody(b) {
+  if (!record(b) || !onlyKeys(b, ['departments', 'total', 'counts']) || !departmentList(b.departments)) return false;
+  if (b.total === undefined && b.counts === undefined) return false;
+  if (b.total !== undefined && !headcount(b.total)) return false;
+  if (b.counts === undefined) return true;
+  if (!record(b.counts)) return false;
+  const keys = Object.keys(b.counts);
+  return keys.length === b.departments.length && keys.every(k => b.departments.includes(k) && headcount(b.counts[k]))
+    && keys.reduce((a, k) => a + b.counts[k], 0) <= MAX_TOTAL;
+}
+
+/** POST team-batches: a reviewed plan, one entry per department, persona per role optional. */
+export function validBatchBody(b) {
+  if (!record(b) || !onlyKeys(b, ['id', 'language', 'departments']) || !batchIdOk(b.id) || (b.language !== undefined && !nameLanguages.includes(b.language))) return false;
+  const d = b.departments;
+  if (!Array.isArray(d) || d.length < 1 || d.length > 12) return false;
+  const ok = d.every(x => record(x) && onlyKeys(x, ['department', 'count', 'presets']) && department(x.department) && headcount(x.count)
+    && (x.presets === undefined || (record(x.presets) && Object.entries(x.presets).every(([r, p]) => teamRoles.includes(r) && presets.includes(p)))));
+  return ok && new Set(d.map(x => x.department)).size === d.length && d.reduce((a, x) => a + x.count, 0) <= MAX_TOTAL;
+}
+
+export function validRunBody(b) {
+  if (!record(b) || !onlyKeys(b, ['max', 'retryFailed'])) return false;
+  if (b.max !== undefined && !(Number.isSafeInteger(b.max) && b.max >= 1 && b.max <= MAX_RUN)) return false;
+  return b.retryFailed === undefined || typeof b.retryFailed === 'boolean';
+}
+
 export function allowedHire(method, path, body) {
   if (path === CATALOGUE_PATH) return method === 'GET' && body === undefined;
   if (path === PLAN_PATH) return method === 'POST' && validPlanBody(body);
+  if (path === DISTRIBUTION_PATH) return method === 'POST' && validDistributionBody(body);
+  if (path === BATCHES_PATH) return (method === 'GET' && body === undefined) || (method === 'POST' && validBatchBody(body));
+  const batch = batchPath(path);
+  if (batch) return batch.run ? method === 'POST' && validRunBody(body) : method === 'GET' && body === undefined;
   if (path === '/api/agents') return method === 'POST' && validCreateBody(body);
   if (!grantsAgentId(path)) return false;
   if (method === 'GET') return body === undefined;
@@ -73,7 +122,8 @@ export function allowedHire(method, path, body) {
 
 /** True when this response belongs to the hire contract (create result or a grants path). */
 export function hireRoute(path, status) {
-  return path === CATALOGUE_PATH || path === PLAN_PATH || grantsAgentId(path) !== null || (path === '/api/agents' && (status === 201 || status === 400 || status === 403));
+  return path === CATALOGUE_PATH || path === PLAN_PATH || path === DISTRIBUTION_PATH || path === BATCHES_PATH || batchPath(path) !== null
+    || grantsAgentId(path) !== null || (path === '/api/agents' && (status === 201 || status === 400 || status === 403));
 }
 
 const fail = () => { throw Error('Invalid hire response'); };
@@ -125,6 +175,7 @@ function catalogueResult(status, body) {
   if (status !== 200) return null;
   if (!record(body) || !Array.isArray(body.sizes) || !Array.isArray(body.departments) || body.departments.length > 100) fail();
   return {
+    ...(headcount(body.maxTotal) ? { maxTotal: body.maxTotal } : {}),
     sizes: body.sizes.filter(x => record(x) && companySizes.includes(x.id)).map(x => ({ id: x.id, label: clip(x.label, 60) })),
     departments: body.departments.filter(x => record(x) && department(x.id)).map(x => ({ id: x.id, label: clip(x.label, 60), summary: clip(x.summary, 200) })),
   };
@@ -146,9 +197,79 @@ function planResult(status, body) {
   return status === 400 && code === 'invalid_plan' ? { code } : null;
 }
 
+const count0 = x => Number.isSafeInteger(x) && x >= 0 && x <= MAX_TOTAL;
+const known = (status, body, codes) => {
+  const code = record(body) ? body.code : undefined;
+  if (status === 403 && code === 'read_only_stage') return { code };
+  return codes.includes(code) ? { code } : null;
+};
+
+function distributionResult(status, body) {
+  if (status !== 200) return status === 400 ? known(status, body, ['invalid_plan']) : known(status, body, []);
+  if (!record(body) || !headcount(body.total) || !Array.isArray(body.departments) || body.departments.length < 1 || body.departments.length > 12) fail();
+  const departments = body.departments.map(d => {
+    if (!record(d) || !department(d.department) || !headcount(d.count) || !record(d.roles) || !record(d.presets) || !record(d.titles)) fail();
+    const roles = {}; const ps = {}; const titles = {};
+    for (const r of teamRoles) {
+      if (!count0(d.roles[r]) || !presets.includes(d.presets[r])) fail();
+      roles[r] = d.roles[r]; ps[r] = d.presets[r]; titles[r] = clip(d.titles[r], 80);
+    }
+    if (roles.manager + roles.specialist + roles.evaluator !== d.count) fail();
+    return { department: d.department, departmentLabel: clip(d.departmentLabel, 64), count: d.count, roles, presets: ps, titles };
+  });
+  if (departments.reduce((a, d) => a + d.count, 0) !== body.total) fail();
+  return { total: body.total, departments };
+}
+
+function progress(p) {
+  if (!record(p) || !batchIdOk(p.id) || !headcount(p.total) || ![p.created, p.failed, p.pending].every(count0) || typeof p.done !== 'boolean') fail();
+  if (p.created + p.failed + p.pending !== p.total || !Array.isArray(p.departments) || p.departments.length > 12) fail();
+  return {
+    id: p.id, total: p.total, created: p.created, failed: p.failed, pending: p.pending, done: p.done,
+    departments: p.departments.map(d => {
+      if (!record(d) || !department(d.department) || ![d.total, d.created, d.failed].every(count0)) fail();
+      return { department: d.department, total: d.total, created: d.created, failed: d.failed };
+    }),
+  };
+}
+
+function batchesResult(status, body) {
+  if (status === 200 && record(body) && Array.isArray(body.batches)) {
+    if (body.batches.length > 10) fail();
+    return { batches: body.batches.map(progress) };
+  }
+  if ((status === 200 || status === 201) && record(body) && typeof body.created === 'boolean') return { created: body.created, batch: progress(body.batch) };
+  if (status === 200 || status === 201) fail();
+  return known(status, body, status === 409 ? ['batch_conflict'] : status === 400 ? ['invalid_plan'] : []);
+}
+
+const runCodes = ['create_failed', 'name_unavailable'];
+function batchResult(batch, status, body) {
+  if (status === 200 && !batch.run) {
+    if (!record(body)) fail();
+    return { batch: progress(body.batch) };
+  }
+  if (status === 200) {
+    if (!record(body) || !Array.isArray(body.results) || body.results.length > MAX_RUN) fail();
+    return {
+      batch: progress(body.batch),
+      results: body.results.map(r => {
+        if (!record(r) || !Number.isSafeInteger(r.seq) || r.seq < 1 || !['created', 'failed'].includes(r.status)) fail();
+        if (r.status === 'created') return displayName(r.name) ? { seq: r.seq, status: r.status, name: r.name } : { seq: r.seq, status: r.status };
+        return { seq: r.seq, status: r.status, ...(runCodes.includes(r.code) ? { code: r.code } : {}) };
+      }),
+    };
+  }
+  return known(status, body, status === 404 ? ['batch_not_found'] : status === 409 ? ['batch_running'] : status === 400 ? ['invalid_plan'] : []);
+}
+
 export function hireResponse(path, status, body) {
   if (path === CATALOGUE_PATH) return catalogueResult(status, body);
   if (path === PLAN_PATH) return planResult(status, body);
+  if (path === DISTRIBUTION_PATH) return distributionResult(status, body);
+  if (path === BATCHES_PATH) return batchesResult(status, body);
+  const batch = batchPath(path);
+  if (batch) return batchResult(batch, status, body);
   if (path === '/api/agents') return createResult(status, body);
   const agentId = grantsAgentId(path);
   if (!agentId) fail();

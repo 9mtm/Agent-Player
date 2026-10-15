@@ -2,7 +2,9 @@ import { namingKey, validatedDisplayName } from './naming';
 import { validVersion } from './agents';
 import type { PublicAgent } from './agents';
 import type { WireRequest, WireResponse } from './session';
-import type { CreateBody } from './hire';
+import type { CreateBody, Preset } from './hire';
+import { rolesFor } from './team-split';
+import type { TeamRole } from './team-split';
 
 /** Fictional tools for offline practice only. */
 const mockTools = [
@@ -30,6 +32,18 @@ export function createAgentsMock() {
     return { agentId: id, source: 'default', parentAgentId: null, version: g.version, grants: g.tools.map(tool => ({ tool, scopes: null })),
       ...(withAvailable ? { available: mockTools.map(t => ({ ...t, extensionId: null, mcp: null })) } : {}) };
   };
+  // ONBOARD-TEAM-02: fictional batches (equal split; same role rule as the server).
+  const batches = new Map<string, { plan: string; items: { dep: string; role: TeamRole; preset: string; status: 'pending' | 'created' | 'failed'; name?: string }[] }>();
+  const progressOf = (id: string) => {
+    const b = batches.get(id)!; const deps = [...new Set(b.items.map(i => i.dep))];
+    const n = (st: string, dep?: string) => b.items.filter(i => i.status === st && (!dep || i.dep === dep)).length;
+    return { id, total: b.items.length, created: n('created'), failed: n('failed'), pending: n('pending'), done: n('pending') === 0, createdAt: 'x',
+      departments: deps.map(dep => ({ department: dep, total: b.items.filter(i => i.dep === dep).length, created: n('created', dep), failed: n('failed', dep) })) };
+  };
+  const label = (dep: string) => dep.replace(/^./, c => c.toUpperCase());
+  const share = (dep: string, count: number) => ({ department: dep, departmentLabel: label(dep), count, roles: rolesFor(count),
+    titles: { manager: `${label(dep)} lead`, specialist: `${label(dep)} specialist`, evaluator: `${label(dep)} reviewer` },
+    presets: { manager: dep === 'finance' ? 'careful-auditor' : dep === 'marketing' ? 'bold-creative' : 'balanced-assistant', specialist: dep === 'finance' ? 'careful-auditor' : dep === 'marketing' ? 'bold-creative' : 'balanced-assistant', evaluator: 'strict-evaluator' } });
   const create = (b: CreateBody): WireResponse => {
     let name = b.name ? validatedDisplayName(b.name) : `Offline hire ${hired + 1}`;
     if (!name) return { status: 400, body: null };
@@ -70,6 +84,44 @@ export function createAgentsMock() {
         let n = 0;
         const hires = b.departments.flatMap(dep => roles.map(role => ({ department: dep, departmentLabel: dep.replace(/^./, c => c.toUpperCase()), role, title: `Offline ${role}`, description: `Offline ${role} in ${dep}.`, preset: dep === 'finance' ? 'careful-auditor' : dep === 'marketing' ? 'bold-creative' : 'balanced-assistant', name: `Offline plan ${++n}` })));
         return { status: 200, body: { size: b.size, language: 'en', hires } };
+      }
+      if (request.method === 'POST' && request.path === '/api/onboarding/team-distribution') {
+        const b = request.body as { departments: string[]; total?: number; counts?: Record<string, number> };
+        let counts = b.counts;
+        if (!counts) {
+          const total = b.total!; if (total < b.departments.length) return { status: 400, body: { code: 'invalid_plan' } };
+          const base = Math.floor(total / b.departments.length); let extra = total - base * b.departments.length;
+          counts = Object.fromEntries(b.departments.map(d => [d, base + (extra-- > 0 ? 1 : 0)]));
+        }
+        const departments = b.departments.map(d => share(d, counts![d]));
+        return { status: 200, body: { total: departments.reduce((a, d) => a + d.count, 0), departments } };
+      }
+      if (request.path === '/api/onboarding/team-batches') {
+        if (request.method === 'GET') return { status: 200, body: { batches: [...batches.keys()].filter(id => batches.get(id)!.items.some(i => i.status !== 'created')).map(progressOf) } };
+        const b = request.body as { id: string; departments: { department: string; count: number; presets?: Partial<Record<TeamRole, string>> }[] };
+        const plan = JSON.stringify(b.departments);
+        const existing = batches.get(b.id);
+        if (existing) return existing.plan === plan ? { status: 200, body: { created: false, batch: progressOf(b.id) } } : { status: 409, body: { code: 'batch_conflict' } };
+        const items = b.departments.flatMap(d => { const s = share(d.department, d.count); return (['manager', 'specialist', 'evaluator'] as const).flatMap(role => Array.from({ length: s.roles[role] }, () => ({ dep: d.department, role, preset: d.presets?.[role] ?? s.presets[role], status: 'pending' as const }))); });
+        batches.set(b.id, { plan, items });
+        return { status: 201, body: { created: true, batch: progressOf(b.id) } };
+      }
+      const batchMatch = /^\/api\/onboarding\/team-batches\/([^/]+)(\/run)?$/.exec(request.path);
+      if (batchMatch) {
+        const id = batchMatch[1]; const b = batches.get(id);
+        if (!b) return { status: 404, body: { code: 'batch_not_found' } };
+        if (!batchMatch[2]) return { status: 200, body: { batch: progressOf(id) } };
+        const body = request.body as { max?: number; retryFailed?: boolean };
+        if (body.retryFailed) b.items.forEach(i => { if (i.status === 'failed') i.status = 'pending'; });
+        const results: unknown[] = [];
+        b.items.forEach((item, i) => {
+          if (item.status !== 'pending' || results.length >= (body.max ?? 25)) return;
+          const r = create({ role: item.role, department: item.dep, description: `${label(item.dep)} ${item.role}.`, personality: { preset: item.preset as Preset } });
+          const agent = (r.body as { agent?: { id: string; name: string } }).agent;
+          if (r.status === 201 && agent) { item.status = 'created'; item.name = agent.name; results.push({ seq: i + 1, status: 'created', agentId: agent.id, name: agent.name }); }
+          else { item.status = 'failed'; results.push({ seq: i + 1, status: 'failed', code: 'create_failed' }); }
+        });
+        return { status: 200, body: { results, batch: progressOf(id) } };
       }
       const grantsFor = /^\/api\/agents\/([^/]+)\/tool-grants$/.exec(request.path)?.[1];
       if (grantsFor) {

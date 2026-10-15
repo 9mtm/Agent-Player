@@ -137,5 +137,5 @@ test('ephemeral fictional HTTP bridge: catalogue, plan and hires end to end with
   await w.hireAll(); assert.equal(w.getSnapshot().step, 'done');
   assert.doesNotMatch(JSON.stringify(seen), /private-fixture/);
   assert.deepEqual(upstream.filter(u => u.path.startsWith('/api/onboarding') || u.path === '/api/agents').map(u => `${u.method} ${u.path}`),
-    ['GET /api/onboarding/team-catalogue', 'POST /api/onboarding/team-plan', 'POST /api/agents']);
+    ['GET /api/onboarding/team-catalogue', 'GET /api/onboarding/team-batches', 'POST /api/onboarding/team-plan', 'POST /api/agents']);
 });

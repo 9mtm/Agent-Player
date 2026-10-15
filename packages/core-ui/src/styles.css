@@ -393,3 +393,25 @@ form > label { display:block; margin-block-end:8px; }
 .auth-workspace h1 { font-size:16px; margin-block-end:12px; }
 .auth-workspace input:not([type="checkbox"]) { padding:6px 8px; border-radius:2.4px; border:1px solid var(--border); background:var(--canvas); }
 .auth-workspace button.primary { min-block-size:32px; border-radius:2.4px; font-weight:600; }
+
+/* ONBOARD-TEAM-02: total headcount review and batch progress */
+.company-total { margin-top:12px; }
+.company-total input { max-inline-size:10rem; }
+.company-open { margin-top:16px; padding:10px 12px; border-radius:4.8px; background:var(--canvas); box-shadow:inset 0 0 0 1px var(--stroke-3); }
+.company-open h4 { margin:0 0 8px; }
+.company-open ul, .company-shares, .company-batch-deps { list-style:none; margin:0; padding:0; }
+.company-open li { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.company-shares { display:grid; gap:8px; }
+.company-share { display:grid; gap:8px; padding:10px 12px; border-radius:4.8px; background:var(--canvas); box-shadow:inset 0 0 0 1px var(--stroke-3); }
+.company-share-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; }
+.company-share-head strong { min-inline-size:9rem; }
+.company-share-head small, .company-people { color:var(--muted); }
+.company-count { display:inline-flex; align-items:center; gap:6px; }
+.company-count input { inline-size:6rem; }
+.company-share-personas { display:flex; flex-wrap:wrap; gap:8px 16px; }
+.company-share-personas label { display:inline-flex; align-items:center; gap:6px; }
+.company-people summary { cursor:pointer; }
+.company-people ul { margin:6px 0 0; padding-inline-start:1.2rem; }
+.company-total-line { margin:4px 0; }
+.company-progress { inline-size:100%; block-size:10px; accent-color:var(--accent); }
+.company-batch-deps li { display:flex; justify-content:space-between; gap:12px; padding:4px 0; border-bottom:1px solid var(--stroke-3); }

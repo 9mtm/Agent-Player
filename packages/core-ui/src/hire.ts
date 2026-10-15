@@ -12,7 +12,10 @@ export type HireRequest =
   | { method: 'POST'; path: '/api/agents'; body: CreateBody }
   | { method: 'GET'; path: string }
   | { method: 'PUT'; path: string; body: { grants: string[]; expectedVersion: number } }
-  | { method: 'POST'; path: '/api/onboarding/team-plan'; body: { size: 'solo' | 'small' | 'medium' | 'large'; departments: string[]; language?: string } };
+  | { method: 'POST'; path: '/api/onboarding/team-plan'; body: { size: 'solo' | 'small' | 'medium' | 'large'; departments: string[]; language?: string } }
+  | { method: 'POST'; path: '/api/onboarding/team-distribution'; body: { departments: string[]; total?: number; counts?: Record<string, number> } }
+  | { method: 'POST'; path: '/api/onboarding/team-batches'; body: { id: string; language?: string; departments: { department: string; count: number; presets?: Partial<Record<'manager' | 'specialist' | 'evaluator', Preset>> }[] } }
+  | { method: 'POST'; path: string; body: { max?: number; retryFailed?: boolean } };
 
 export type Tool = Readonly<{ name: string; description: string; requiresApproval: boolean; allowedByServer: boolean; execClass: boolean }>;
 export type Draft = Readonly<{ name: string; role: Role; department: string; description: string; preset: Preset; presetChosen: boolean; dialect: Dialect | ''; traits: Readonly<Partial<Record<TraitName, number>>> }>;

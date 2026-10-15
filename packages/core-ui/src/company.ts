@@ -1,12 +1,18 @@
 import { SessionFailure } from './session-failure';
-import { department as validDepartment, displayName, validCreateBody, CATALOGUE_PATH, PLAN_PATH } from './hire-contract.js';
+import { department as validDepartment, displayName, validCreateBody, BATCHES_PATH, CATALOGUE_PATH, DISTRIBUTION_PATH, MAX_TOTAL, PLAN_PATH } from './hire-contract.js';
 import type { CreateBody, Preset, Role } from './hire';
 import type { SessionClient } from './session';
+import { rolesFor } from './team-split';
+import type { TeamRole } from './team-split';
 
 export type CompanySize = 'solo' | 'small' | 'medium' | 'large';
 export type PlanBody = { size: CompanySize; departments: string[]; language?: string };
 export type CatalogueDepartment = Readonly<{ id: string; label: string; summary: string }>;
-export type Catalogue = Readonly<{ sizes: readonly Readonly<{ id: CompanySize; label: string }>[]; departments: readonly CatalogueDepartment[] }>;
+export type Catalogue = Readonly<{ sizes: readonly Readonly<{ id: CompanySize; label: string }>[]; departments: readonly CatalogueDepartment[]; maxTotal?: number }>;
+/** ONBOARD-TEAM-02: one department of a total headcount, as the owner edits it. */
+export type Share = Readonly<{ department: string; departmentLabel: string; count: number; presets: Readonly<Record<TeamRole, Preset>>; titles: Readonly<Record<TeamRole, string>> }>;
+export type BatchProgress = Readonly<{ id: string; total: number; created: number; failed: number; pending: number; done: boolean; departments: readonly Readonly<{ department: string; total: number; created: number; failed: number }>[] }>;
+type BatchBody = { id: string; departments: { department: string; count: number; presets: Record<TeamRole, Preset> }[] };
 export type HireStatus = 'planned' | 'creating' | 'created' | 'failed' | 'unknown';
 export type PlannedHire = Readonly<{
   key: string; department: string; departmentLabel: string; role: Role; title: string; description: string; preset: Preset;
@@ -17,6 +23,8 @@ export type CompanyState = Readonly<{
   step: CompanyStep; owner: boolean;
   phase: 'idle' | 'loading' | 'ready' | 'planning' | 'hiring' | 'done' | 'error' | 'stopped' | 'denied';
   catalogue?: Catalogue; size?: CompanySize; departments: readonly string[]; hires: readonly PlannedHire[]; notice?: string;
+  /** Total headcount mode (instead of a size): the split the owner reviews, the running batch, unfinished batches found on Start. */
+  total?: number; shares: readonly Share[]; batch?: BatchProgress; open: readonly BatchProgress[];
 }>;
 
 export const MAX_DEPARTMENTS = 12;
@@ -31,8 +39,22 @@ export function hireBody(h: PlannedHire): CreateBody | null {
   return validCreateBody(body) ? body : null;
 }
 
+/** Total of a split as the owner edited it. */
+export const sharesTotal = (shares: readonly Share[]) => shares.reduce((a, x) => a + x.count, 0);
+/** Role split of a share (the server applies the same rule). */
+export const shareRoles = (x: Share) => rolesFor(x.count);
+
+/** A fresh batch id (letters, digits and -). */
+function newBatchId(): string {
+  const c = globalThis.crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  const bytes = new Uint8Array(16); c.getRandomValues(bytes);
+  return [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 export class CompanyController {
-  #state: CompanyState = Object.freeze({ step: 'size', owner: false, phase: 'denied', departments: [], hires: [] });
+  #state: CompanyState = Object.freeze({ step: 'size', owner: false, phase: 'denied', departments: [], hires: [], shares: [], open: [] });
+  #batchBody?: BatchBody; #batchStored = false;
   #listeners = new Set<() => void>();
   #disposed = false; #ticket = 0; #abort?: AbortController; #identity = ''; #unsubscribe: () => void;
   constructor(readonly client: SessionClient) { this.#unsubscribe = client.subscribe(this.#sync); this.#sync(); }
@@ -44,7 +66,8 @@ export class CompanyController {
     if (identity === this.#identity) return;
     this.#identity = identity; this.#invalidate();
     const owner = s.phase === 'authenticated' && s.user?.role === 'owner';
-    this.#publish({ step: 'size', owner, phase: owner ? 'idle' : 'denied', catalogue: undefined, size: undefined, departments: [], hires: [], notice: s.phase === 'authenticated' && !owner ? 'Only the owner can build the company.' : undefined });
+    this.#batchBody = undefined; this.#batchStored = false;
+    this.#publish({ step: 'size', owner, phase: owner ? 'idle' : 'denied', catalogue: undefined, size: undefined, departments: [], hires: [], total: undefined, shares: [], batch: undefined, open: [], notice: s.phase === 'authenticated' && !owner ? 'Only the owner can build the company.' : undefined });
   };
   #invalidate() { this.#ticket++; this.#abort?.abort(); }
   #begin(phase: CompanyState['phase']) { this.#invalidate(); this.#abort = new AbortController(); this.#publish({ phase, notice: undefined }); return this.#ticket; }
@@ -54,12 +77,13 @@ export class CompanyController {
     if (status === 401 || status === 403) { this.#invalidate(); this.#publish({ phase: 'denied', notice: 'Access denied. Sign in again as the owner.' }); return true; }
     return false;
   }
-  dispose() { this.#disposed = true; this.#invalidate(); this.#unsubscribe(); this.#publish({ owner: false, phase: 'denied', hires: [] }); }
+  dispose() { this.#disposed = true; this.#invalidate(); this.#unsubscribe(); this.#publish({ owner: false, phase: 'denied', hires: [], shares: [], batch: undefined, open: [] }); }
 
   restart() {
     if (!this.#state.owner || this.#busy()) return;
     this.#invalidate();
-    this.#publish({ step: 'size', phase: this.#state.catalogue ? 'ready' : 'idle', size: undefined, departments: [], hires: [], notice: undefined });
+    this.#batchBody = undefined; this.#batchStored = false;
+    this.#publish({ step: 'size', phase: this.#state.catalogue ? 'ready' : 'idle', size: undefined, departments: [], hires: [], total: undefined, shares: [], batch: undefined, notice: undefined });
   }
 
   /** Explicit read of sizes and departments (never on mount). */
@@ -73,12 +97,27 @@ export class CompanyController {
       const b = r.body as Catalogue | null;
       if (r.status !== 200 || !b || !b.sizes.length) throw Error();
       this.#publish({ catalogue: Object.freeze(b), phase: 'ready' });
-    } catch { if (ticket === this.#ticket) this.#publish({ phase: 'error', notice: 'The list of departments could not be read. Try again.' }); }
+    } catch { if (ticket === this.#ticket) this.#publish({ phase: 'error', notice: 'The list of departments could not be read. Try again.' }); return; }
+    // Unfinished batch hires (e.g. the page was reloaded mid-run): offered for resuming. Not fatal when unreadable.
+    try {
+      const r = await this.client.request({ method: 'GET', path: BATCHES_PATH }, this.#abort!.signal);
+      if (ticket !== this.#ticket) return;
+      const b = r.body as { batches?: BatchProgress[] } | null;
+      if (r.status === 200 && b?.batches) this.#publish({ open: Object.freeze(b.batches.map(x => Object.freeze(x))) });
+    } catch { /* the wizard works without it */ }
   }
 
   chooseSize(size: CompanySize) {
     if (!this.#state.owner || this.#busy() || !this.#state.catalogue?.sizes.some(s => s.id === size)) return;
-    this.#publish({ size, step: 'departments', notice: undefined });
+    this.#publish({ size, total: undefined, step: 'departments', notice: undefined });
+  }
+  /** Total headcount instead of a size (ONBOARD-TEAM-02). */
+  chooseTotal(total: number) {
+    const s = this.#state; if (!s.owner || this.#busy() || !s.catalogue) return false;
+    const max = s.catalogue.maxTotal ?? MAX_TOTAL;
+    if (!Number.isSafeInteger(total) || total < 1 || total > max) { this.#publish({ notice: `Enter a whole number from 1 to ${max}.` }); return false; }
+    this.#publish({ total, size: undefined, step: 'departments', notice: undefined });
+    return true;
   }
   back() {
     const s = this.#state; if (this.#busy()) return;
@@ -105,6 +144,7 @@ export class CompanyController {
   /** Ask the server for a proposed team (reads only; names are not reserved). */
   async propose() {
     const s = this.#state;
+    if (s.total !== undefined) return this.distribute();
     if (!s.owner || this.#busy() || !s.size || !s.departments.length) return;
     const ticket = this.#begin('planning');
     try {
@@ -159,6 +199,125 @@ export class CompanyController {
     const failed = this.#state.hires.filter(h => h.include && h.status === 'failed').length;
     this.#publish(failed
       ? { phase: 'stopped', step: 'review', notice: `${failed} hire${failed === 1 ? '' : 's'} could not be created. Fix them and hire again; the others are already on your team.` }
+      : { phase: 'done', step: 'done', notice: undefined });
+  }
+
+  // ---- Total headcount (ONBOARD-TEAM-02) ----
+
+  /** Ask the server to split the total over the chosen departments (reads nothing). */
+  async distribute() {
+    const s = this.#state;
+    if (!s.owner || this.#busy() || s.total === undefined || !s.departments.length) return;
+    if (s.total < s.departments.length) return this.#publish({ notice: `${s.total} ${s.total === 1 ? 'person is' : 'people are'} too few for ${s.departments.length} departments; each needs at least one.` });
+    const ticket = this.#begin('planning');
+    try {
+      const r = await this.client.request({ method: 'POST', path: DISTRIBUTION_PATH, body: { departments: [...s.departments], total: s.total } }, this.#abort!.signal);
+      if (ticket !== this.#ticket) return;
+      if (this.#refused(r.status, r.body)) return;
+      const b = r.body as { departments?: (Share & { roles: unknown })[]; code?: string } | null;
+      if (r.status !== 200 || !b?.departments) return this.#publish({ phase: 'error', notice: b?.code === 'invalid_plan' ? 'The server refused these choices. Check the total and the departments.' : 'The team could not be split. Try again.' });
+      const shares = b.departments.map(d => Object.freeze({ department: d.department, departmentLabel: d.departmentLabel, count: d.count, presets: Object.freeze({ ...d.presets }), titles: Object.freeze({ ...d.titles }) }));
+      this.#publish({ shares: Object.freeze(shares), step: 'review', phase: 'ready' });
+    } catch (error) {
+      if (ticket !== this.#ticket) return;
+      this.#publish({ phase: 'error', notice: error instanceof SessionFailure && error.code === 'blocked' ? 'Nothing was sent. Check the choices.' : 'The team could not be split. Try again.' });
+    }
+  }
+
+  /** Edit one department of the split: its headcount or the persona for one role. */
+  editShare(department: string, patch: { count?: number; role?: TeamRole; preset?: Preset }) {
+    const s = this.#state; if (!s.owner || this.#busy() || s.step !== 'review' || !s.shares.length) return;
+    const max = s.catalogue?.maxTotal ?? MAX_TOTAL;
+    if (patch.count !== undefined && (!Number.isSafeInteger(patch.count) || patch.count < 1 || patch.count > max)) return this.#publish({ notice: `Each department needs 1 to ${max} people.` });
+    this.#publish({ notice: undefined, shares: Object.freeze(s.shares.map(x => x.department !== department ? x : Object.freeze({
+      ...x,
+      ...(patch.count !== undefined ? { count: patch.count } : {}),
+      ...(patch.role && patch.preset ? { presets: Object.freeze({ ...x.presets, [patch.role]: patch.preset }) } : {}),
+    }))) });
+  }
+
+  /** Store the reviewed split as one batch, then create the agents in chunks with progress. */
+  async hireBatch() {
+    const s = this.#state;
+    if (!s.owner || this.#busy() || s.step !== 'review' || !s.shares.length) return;
+    const total = s.shares.reduce((a, x) => a + x.count, 0);
+    const max = s.catalogue?.maxTotal ?? MAX_TOTAL;
+    if (total > max) return this.#publish({ notice: `At most ${max} people in total; you have ${total}.` });
+    this.#batchBody = { id: newBatchId(), departments: s.shares.map(x => ({ department: x.department, count: x.count, presets: { ...x.presets } })) };
+    this.#batchStored = false;
+    await this.#store();
+  }
+
+  /** Go on after a break (lost connection, another window, a reload): never creates anyone twice. */
+  async continueBatch() {
+    const s = this.#state; if (!s.owner || this.#busy()) return;
+    if (this.#batchBody && !this.#batchStored) return this.#store();
+    if (s.batch) return this.#run(s.batch.id, false);
+  }
+
+  /** Resume an unfinished batch found on Start. */
+  async resume(id: string) {
+    const s = this.#state; const found = s.open.find(b => b.id === id);
+    if (!s.owner || this.#busy() || !found) return;
+    this.#batchBody = undefined; this.#batchStored = true;
+    this.#publish({ batch: found, step: 'hiring', notice: undefined });
+    await this.#run(id, found.pending === 0 && found.failed > 0);
+  }
+
+  /** Try the failed people of the current batch again. */
+  async retryFailed() {
+    const s = this.#state; if (!s.owner || this.#busy() || !s.batch || !s.batch.failed) return;
+    await this.#run(s.batch.id, true);
+  }
+
+  async #store() {
+    const body = this.#batchBody!;
+    const ticket = this.#begin('hiring');
+    this.#publish({ step: 'hiring' });
+    try {
+      const r = await this.client.request({ method: 'POST', path: BATCHES_PATH, body }, this.#abort!.signal);
+      if (ticket !== this.#ticket) return;
+      if (this.#refused(r.status, r.body)) return;
+      const b = r.body as { batch?: BatchProgress; code?: string } | null;
+      if ((r.status === 200 || r.status === 201) && b?.batch) {
+        this.#batchStored = true;
+        this.#publish({ batch: Object.freeze(b.batch) });
+        return this.#loop(ticket, b.batch.id, false);
+      }
+      this.#publish({ phase: 'error', step: 'review', notice: b?.code === 'invalid_plan' ? 'The server refused this team. Check the counts.' : 'The hire could not start. Nothing was created.' });
+    } catch {
+      if (ticket !== this.#ticket) return;
+      this.#publish({ phase: 'stopped', notice: 'The connection broke before the hire started. Press Continue: the same plan is sent again and nobody is hired twice.' });
+    }
+  }
+
+  async #run(id: string, retry: boolean) {
+    const ticket = this.#begin('hiring');
+    this.#publish({ step: 'hiring' });
+    await this.#loop(ticket, id, retry);
+  }
+
+  async #loop(ticket: number, id: string, retry: boolean) {
+    for (let first = true; ; first = false) {
+      if (ticket !== this.#ticket || this.#disposed) return;
+      let r;
+      try {
+        r = await this.client.request({ method: 'POST', path: `${BATCHES_PATH}/${id}/run`, body: retry && first ? { max: 25, retryFailed: true } : { max: 25 } }, this.#abort!.signal);
+      } catch {
+        if (ticket !== this.#ticket) return;
+        return this.#publish({ phase: 'stopped', notice: 'The connection broke. Press Continue to go on; nobody is hired twice.' });
+      }
+      if (ticket !== this.#ticket) return;
+      if (this.#refused(r.status, r.body)) return;
+      const b = r.body as { batch?: BatchProgress; code?: string } | null;
+      if (r.status === 409 && b?.code === 'batch_running') return this.#publish({ phase: 'stopped', notice: 'This hire is running in another window. Press Continue when it has finished there.' });
+      if (r.status !== 200 || !b?.batch) return this.#publish({ phase: 'error', notice: b?.code === 'batch_not_found' ? 'This hire was not found.' : 'The hire stopped. Press Continue to try again.' });
+      this.#publish({ batch: Object.freeze(b.batch), open: Object.freeze(this.#state.open.filter(x => x.id !== id)) });
+      if (b.batch.done) break;
+    }
+    const done = this.#state.batch!;
+    this.#publish(done.failed
+      ? { phase: 'stopped', notice: `${done.created} hired; ${done.failed} could not be created. Try them again.` }
       : { phase: 'done', step: 'done', notice: undefined });
   }
 
