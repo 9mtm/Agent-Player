@@ -174,6 +174,8 @@ export class ConversationsController {
     const id = c?.projectId ?? (this.#state.activeId ? null : this.#state.projectFilter || null);
     return id ? this.#state.projects.find(p => p.id === id) : undefined;
   }
+  /** Reloads the project's git state (branch, changes, ahead/behind). */
+  refreshGit() { return this.loadGit(); }
   private async loadGit() {
     const p = this.activeProject();
     if (!p?.folder) { this.publish({ git: null }); return; }

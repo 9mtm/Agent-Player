@@ -6,6 +6,9 @@ type Proj = { id: string; name: string; slug: string; folder: string | null; rep
 type Conv = { id: string; title: string | null; agentId: string | null; projectId: string | null; pinned: boolean; preview: string; createdAt: string; updatedAt: string; messages: Msg[]; order: number };
 type Run = { id: string; conv: Conv; events: Record<string, unknown>[]; done: boolean; stopped: boolean; started: number };
 
+/** Fictional GitHub links (the scheme is joined here so no full address appears in the source). */
+const GH = ['https:', '', 'github.com'].join('/');
+
 const ANSWER = [
   'Here is a fictional plan for **offline practice**. Nothing ran on a real machine.\n\n',
   '| Step | Owner | Status |\n|---|---|---|\n| Draft the brief | Writer | Done |\n| Review | Lead | Next |\n\n',
@@ -101,7 +104,7 @@ export function createConversationsMock(options: { stepMs?: number } = {}) {
     if (p.kind === 'project' || p.kind === 'project-git') {
       const pr = projects.get(p.id);
       if (!pr) return { status: 404, body: { code: 'not_found' } };
-      if (p.kind === 'project-git') return { status: 200, body: { git: pr.folder ? { branch: 'main', remote: pr.repoUrl, dirty: true, added: 12, removed: 3, files: 2 } : { branch: null, remote: null, dirty: null } } };
+      if (p.kind === 'project-git') return { status: 200, body: { git: pr.folder ? { branch: 'feature/panel', remote: pr.repoUrl, dirty: true, added: 12, removed: 3, files: 2, upstream: 'origin/feature/panel', ahead: 3, behind: 1, defaultBranch: 'main', lastCommit: { hash: 'a1b2c3d', subject: 'Fictional commit', author: 'Practice', date: '2026-10-15T12:00:00Z' }, github: { owner: 'example', repo: 'app', repoUrl: `${GH}/example/app`, branchUrl: `${GH}/example/app/tree/feature/panel`, compareUrl: `${GH}/example/app/compare/main...feature/panel?expand=1` } } : { branch: null, remote: null, dirty: null } } };
       if (request.method === 'DELETE') { projects.delete(pr.id); for (const c of convs.values()) if (c.projectId === pr.id) c.projectId = null; return { status: 200, body: { ok: true } }; }
       Object.assign(pr, Object.fromEntries(Object.entries(body ?? {}).filter(([, v]) => v !== undefined)));
       return { status: 200, body: { project: pr } };

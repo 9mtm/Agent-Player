@@ -241,8 +241,33 @@ function ChatSidePanel({ controller, client }: { controller: ConversationsContro
           : <p className="muted">No uncommitted changes.</p>)
         : <p className="muted">Not a git folder.</p>}
     </section>}
+    {project?.folder && s.git?.branch && <GitHubCard git={s.git} onRefresh={() => void controller.refreshGit()}/>}
     {client && <AgentPanel client={client} agentId={conv?.agentId || s.agentId || s.agents[0]?.id || ''}/>}
   </aside>;
+}
+
+/** The branch against GitHub: upstream, ahead/behind (last known state, offline), last commit, links to open on github.com. */
+function GitHubCard({ git, onRefresh }: { git: NonNullable<ReturnType<ConversationsController['getSnapshot']>['git']>; onRefresh: () => void }) {
+  const gh = git.github;
+  const when = git.lastCommit?.date ? new Date(git.lastCommit.date) : null;
+  return <section className="panel-card" aria-label="GitHub">
+    <h3>{gh ? 'GitHub' : 'Git'} <button type="button" className="row-tool panel-head-tool" aria-label="Reload git status" title="Reload" onClick={onRefresh}><UiIcon name="refresh" size={11}/></button></h3>
+    <dl className="panel-list">
+      {gh && <div><dt><UiIcon name="globe" size={12}/></dt><dd dir="ltr"><a href={gh.repoUrl} target="_blank" rel="noopener noreferrer">{gh.owner}/{gh.repo}</a></dd></div>}
+      <div><dt aria-label="Branch">⎇</dt><dd dir="ltr">{git.branch}</dd></div>
+      <div><dt aria-label="Upstream">↕</dt><dd>{git.upstream
+        ? <><span dir="ltr">{git.upstream}</span>{git.ahead !== null && git.ahead !== undefined && <span className="git-sync"> · ↑{git.ahead} ↓{git.behind ?? 0}</span>}</>
+        : <span className="muted">Not on GitHub yet (never pushed)</span>}</dd></div>
+      {git.lastCommit && <div><dt aria-label="Last commit"><UiIcon name="check" size={12}/></dt><dd title={`${git.lastCommit.author}${when ? ` · ${when.toLocaleString()}` : ''}`}><code dir="ltr">{git.lastCommit.hash}</code> <span dir="auto">{git.lastCommit.subject}</span></dd></div>}
+    </dl>
+    {git.upstream && (git.ahead ?? 0) > 0 && <p className="muted git-note">{git.ahead} {git.ahead === 1 ? 'commit is' : 'commits are'} only on this computer. Pushing is your call.</p>}
+    {(git.behind ?? 0) > 0 && <p className="muted git-note">GitHub has {git.behind} newer {git.behind === 1 ? 'commit' : 'commits'} (as of the last sync with GitHub).</p>}
+    {gh && <div className="git-links">
+      {gh.branchUrl && <a className="link-button" href={gh.branchUrl} target="_blank" rel="noopener noreferrer">Open branch</a>}
+      {gh.compareUrl && <a className="link-button" href={gh.compareUrl} target="_blank" rel="noopener noreferrer" title={`Compare ${git.defaultBranch} with ${git.branch} and open a pull request on GitHub`}>Compare / pull request</a>}
+    </div>}
+    <p className="muted git-note">Counts are from the last sync with GitHub; nothing is sent to GitHub from here.</p>
+  </section>;
 }
 
 /** Dictation: record, then the words land in the composer (transcribed on this computer). */

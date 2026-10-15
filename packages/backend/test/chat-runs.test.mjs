@@ -277,3 +277,27 @@ test('microphone: owner only, base64 audio only, unknown containers refused befo
   assert.equal(audioKind(Buffer.from('OggS________')), 'ogg');
   assert.equal(audioKind(Buffer.from('#!/bin/sh echo')), null);
 });
+
+test('git status: upstream with ahead/behind from local refs, last commit, github links only for github remotes', async () => {
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const env = { PATH: process.env.PATH, HOME: dir, GIT_CONFIG_NOSYSTEM: '1' };
+  const id = ['-c', 'user.name=T', '-c', 'user.email=t@example.invalid'];
+  const bare = join(dir, 'origin.git'); const work = join(dir, 'proj-gh');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare], { env });
+  mkdirSync(work, { recursive: true });
+  const g = (...a) => execFileSync('git', ['-C', work, ...a], { env }).toString();
+  g('init', '-q', '-b', 'main'); writeFileSync(join(work, 'a.txt'), 'a'); g('add', '.'); g(...id, 'commit', '-qm', 'first');
+  g('remote', 'add', 'origin', bare); g('push', '-q', '-u', 'origin', 'main');
+  g('checkout', '-q', '-b', 'feature/x'); g('push', '-q', '-u', 'origin', 'feature/x');
+  writeFileSync(join(work, 'b.txt'), 'b'); g('add', '.'); g(...id, 'commit', '-qm', 'second one');
+  g('remote', 'set-head', 'origin', 'main');
+  const { gitInfo, githubRepo } = await import(new URL('../src/repositories/chat-conversations.ts', import.meta.url).href);
+  const info = await gitInfo(work);
+  assert.equal(info.branch, 'feature/x'); assert.equal(info.upstream, 'origin/feature/x');
+  assert.deepEqual([info.ahead, info.behind], [1, 0]);
+  assert.equal(info.defaultBranch, 'main'); assert.equal(info.lastCommit.subject, 'second one');
+  assert.equal(info.github, null, 'a non-github remote gets no github links');
+  assert.deepEqual(githubRepo('git@github.com:o/r.git'), { owner: 'o', repo: 'r' });
+  assert.equal(githubRepo('https://gitlab.com/o/r'), null);
+});

@@ -1,7 +1,10 @@
 export const CONVERSATIONS_PATH: '/api/chat/conversations';
 export const PROJECTS_PATH: '/api/chat/projects';
 export type WireProject = { id: string; name: string; slug: string; folder: string | null; repoUrl: string | null };
-export type WireGit = { branch: string | null; remote: string | null; dirty: boolean | null; added?: number | null; removed?: number | null; files?: number | null };
+export type WireGit = { branch: string | null; remote: string | null; dirty: boolean | null; added?: number | null; removed?: number | null; files?: number | null;
+  upstream?: string | null; ahead?: number | null; behind?: number | null; defaultBranch?: string | null;
+  lastCommit?: { hash: string; subject: string; author: string; date: string } | null;
+  github?: { owner: string; repo: string; repoUrl: string; branchUrl: string | null; compareUrl: string | null } | null };
 export type WireChange = { path: string; status: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked'; added: number | null; removed: number | null; from?: string };
 export type WireChanges = { branch: string | null; truncated: boolean; notGit: boolean; changes: WireChange[] };
 export type WireDiff = { path: string; diff: string; truncated: boolean; binary: boolean; hidden: boolean };

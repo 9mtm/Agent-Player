@@ -127,6 +127,9 @@ function project(x) {
 
 const ERROR_CODES = { 503: ['stt_unavailable'], 500: ['stt_failed'], 400: ['invalid_request', 'invalid_project', 'bad_path', 'no_folder', 'stt_invalid'], 404: ['not_found'], 409: ['conversation_busy', 'run_id_reused'], 429: ['rate_limited', 'stt_busy'] };
 
+/** A link on github.com only (repository, branch or compare page). */
+const githubUrl = x => typeof x === 'string' && x.length <= 600 && /^https:\/\/github\.com\/[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}(\/[A-Za-z0-9._~%\/-]*(\.\.\.[A-Za-z0-9._~%\/-]+)?(\?expand=1)?)?$/.test(x);
+
 /** Reviewed fields only. Throws on a malformed success body. */
 export function conversationResponse(path, status, body) {
   const p = conversationPath(path);
@@ -140,7 +143,16 @@ export function conversationResponse(path, status, body) {
   if (p.kind === 'projects' && status === 200) { if (!Array.isArray(body.projects)) throw Error('protocol'); return { projects: body.projects.slice(0, 500).map(project) }; }
   if (p.kind === 'projects' || (p.kind === 'project' && record(body.project))) return { project: project(body.project) };
   if (p.kind === 'project') { if (body.ok !== true) throw Error('protocol'); return { ok: true }; }
-  if (p.kind === 'project-git') { const g = record(body.git) ? body.git : {}; const count = x => (Number.isSafeInteger(x) && x >= 0 ? x : null); return { git: { branch: typeof g.branch === 'string' ? g.branch.slice(0, 200) : null, remote: typeof g.remote === 'string' ? g.remote.slice(0, 300) : null, dirty: typeof g.dirty === 'boolean' ? g.dirty : null, added: count(g.added), removed: count(g.removed), files: count(g.files) } }; }
+  if (p.kind === 'project-git') {
+    const g = record(body.git) ? body.git : {}; const count = x => (Number.isSafeInteger(x) && x >= 0 ? x : null);
+    const s = (x, max) => (typeof x === 'string' && x ? x.slice(0, max) : null);
+    const lc = record(g.lastCommit) && typeof g.lastCommit.hash === 'string' && /^[0-9a-f]{4,40}$/.test(g.lastCommit.hash) ? g.lastCommit : null;
+    const gh = record(g.github) && githubUrl(g.github.repoUrl) ? g.github : null;
+    return { git: { branch: s(g.branch, 200), remote: s(g.remote, 300), dirty: typeof g.dirty === 'boolean' ? g.dirty : null, added: count(g.added), removed: count(g.removed), files: count(g.files),
+      upstream: s(g.upstream, 200), ahead: count(g.ahead), behind: count(g.behind), defaultBranch: s(g.defaultBranch, 200),
+      lastCommit: lc ? { hash: lc.hash, subject: str(lc.subject, 200), author: str(lc.author, 100), date: str(lc.date, 40) } : null,
+      github: gh ? { owner: str(gh.owner, 39), repo: str(gh.repo, 100), repoUrl: gh.repoUrl, branchUrl: githubUrl(gh.branchUrl) ? gh.branchUrl : null, compareUrl: githubUrl(gh.compareUrl) ? gh.compareUrl : null } : null } };
+  }
   const n = x => (Number.isSafeInteger(x) && x >= 0 ? x : null);
   if (p.kind === 'transcribe') return typeof body.text === 'string' ? { text: body.text.slice(0, 20_000), ms: n(body.ms) ?? 0 }
     : { available: body.available === true, missing: Array.isArray(body.missing) ? body.missing.filter(m => typeof m === 'string').slice(0, 5).map(m => m.slice(0, 40)) : [] };

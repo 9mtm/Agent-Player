@@ -1077,3 +1077,10 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .mic-error { font-size:11px; color:var(--danger); max-inline-size:22ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 @keyframes mic-blink { 50% { opacity:.25; } }
 @media (prefers-reduced-motion: reduce) { .app-shell .mic-dot { animation:none; } }
+
+/* GitHub card */
+.app-shell .panel-card h3 .panel-head-tool { float:inline-end; margin-block-start:-2px; }
+.app-shell .git-sync { color:var(--text-3); font-variant-numeric:tabular-nums; }
+.app-shell .git-note { font-size:11px; margin:4px 0 0; }
+.app-shell .git-links { display:flex; flex-wrap:wrap; gap:10px; margin-block-start:6px; font-size:12px; }
+.app-shell .panel-list code { font-size:11px; color:var(--text-3); }

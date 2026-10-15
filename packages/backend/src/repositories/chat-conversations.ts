@@ -223,17 +223,49 @@ export async function deleteProject(userId: string, id: string): Promise<boolean
   });
 }
 
-/** The folder's git branch and origin URL (local commands only, no network). */
-export function gitInfo(folder: string): Promise<{ branch: string | null; remote: string | null; dirty: boolean | null; added: number | null; removed: number | null; files: number | null }> {
+/** A GitHub repository named by a remote URL (https or ssh form), or null. */
+export function githubRepo(remote: string | null): { owner: string; repo: string } | null {
+  const m = remote ? /^(?:https:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9-]{1,39})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?$/.exec(remote) : null;
+  return m ? { owner: m[1], repo: m[2] } : null;
+}
+
+export type GitInfo = {
+  branch: string | null; remote: string | null; dirty: boolean | null; added: number | null; removed: number | null; files: number | null;
+  upstream?: string | null; ahead?: number | null; behind?: number | null; defaultBranch?: string | null;
+  lastCommit?: { hash: string; subject: string; author: string; date: string } | null;
+  github?: { owner: string; repo: string; repoUrl: string; branchUrl: string | null; compareUrl: string | null } | null;
+};
+
+/**
+ * The folder's git state: branch, origin URL, uncommitted changes, upstream
+ * with ahead/behind counts and the last commit. Local commands only: no
+ * fetch, so ahead/behind compare against the last known remote state.
+ */
+export function gitInfo(folder: string): Promise<GitInfo> {
   const git = (args: string[]) => new Promise<string | null>((resolve) => {
-    execFile('git', ['-C', folder, ...args], { timeout: 3000, env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '', GIT_TERMINAL_PROMPT: '0' } },
+    execFile('git', ['-C', folder, ...args], { timeout: 3000, env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } },
       (err, out) => resolve(err ? null : String(out).trim()));
   });
-  return Promise.all([git(['rev-parse', '--abbrev-ref', 'HEAD']), git(['remote', 'get-url', 'origin']), git(['status', '--porcelain']), git(['diff', '--shortstat', 'HEAD'])])
-    .then(([branch, remote, status, stat]) => {
+  return Promise.all([git(['rev-parse', '--abbrev-ref', 'HEAD']), git(['remote', 'get-url', 'origin']), git(['status', '--porcelain']), git(['diff', '--shortstat', 'HEAD']),
+    git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']), git(['rev-list', '--left-right', '--count', '@{u}...HEAD']),
+    git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']), git(['log', '-1', '--format=%h%x1f%s%x1f%an%x1f%cI'])])
+    .then(([branch, remote, status, stat, upstream, counts, originHead, last]) => {
       // "3 files changed, 10 insertions(+), 2 deletions(-)" (uncommitted changes against HEAD)
       const n = (re: RegExp) => { const m = stat === null ? null : re.exec(stat); return stat === null ? null : m ? Number(m[1]) : 0; };
-      return { branch: branch || null, remote: remote ? remote.replace(/\/\/[^/@]+@/, '//') : null, dirty: status === null ? null : status.length > 0,
-        added: n(/(\d+) insertion/), removed: n(/(\d+) deletion/), files: n(/(\d+) files? changed/) };
+      const cleanRemote = remote ? remote.replace(/\/\/[^/@]+@/, '//') : null;
+      const ab = counts ? /^(\d+)\s+(\d+)$/.exec(counts) : null;
+      const defaultBranch = originHead ? originHead.replace(/^origin\//, '') : null;
+      const lc = last ? last.split('\x1f') : null;
+      const gh = githubRepo(cleanRemote);
+      const onBranch = branch && branch !== 'HEAD' ? branch : null;
+      const enc = (b: string) => b.split('/').map(encodeURIComponent).join('/');
+      const base = gh ? `https://github.com/${gh.owner}/${gh.repo}` : null;
+      return { branch: branch || null, remote: cleanRemote, dirty: status === null ? null : status.length > 0,
+        added: n(/(\d+) insertion/), removed: n(/(\d+) deletion/), files: n(/(\d+) files? changed/),
+        upstream: upstream || null, behind: ab ? Number(ab[1]) : null, ahead: ab ? Number(ab[2]) : null, defaultBranch,
+        lastCommit: lc && lc.length === 4 ? { hash: lc[0], subject: lc[1].slice(0, 200), author: lc[2].slice(0, 100), date: lc[3] } : null,
+        github: gh && base ? { ...gh, repoUrl: base,
+          branchUrl: onBranch && upstream ? `${base}/tree/${enc(onBranch)}` : null,
+          compareUrl: onBranch && defaultBranch && onBranch !== defaultBranch ? `${base}/compare/${enc(defaultBranch)}...${enc(onBranch)}?expand=1` : null } : null };
     });
 }

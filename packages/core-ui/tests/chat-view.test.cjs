@@ -157,11 +157,11 @@ test('projects: create one, chats go into it, the chat shows the project bar; mo
   await until(() => !c.getSnapshot().runId);
   const conv = c.getSnapshot().conversations.find(x => x.id === c.getSnapshot().activeId);
   assert.equal(conv.projectId, p.id);
-  await until(() => c.getSnapshot().git?.branch === 'main');
+  await until(() => c.getSnapshot().git?.branch === 'feature/panel');
   const html = view(c);
   assert.match(html, /aria-label="Project"/);
   assert.match(html, /\/fiction\/app/);
-  assert.match(html, /⎇ main/);
+  assert.match(html, /⎇ feature\/panel/);
   assert.match(html, /github\.com\/example\/app/);
   const list = renderToStaticMarkup(React.createElement(ConversationList, { controller: c, onOpen: () => {} }));
   assert.match(list, /\+ New project/);
@@ -223,4 +223,26 @@ test('panes: changes with an inline diff, the folder tree and a file; paths are 
   assert.match(html, /Fictional project/);
   panes.setProject(null);
   assert.equal(panes.getSnapshot().changes, undefined, 'switching project drops what was loaded');
+});
+
+test('GitHub card: upstream, ahead/behind, last commit and github.com links only', async t => {
+  const { conversationResponse } = require('../src/conversation-contract.js');
+  const id = '00000000-0000-4000-8000-000000000001';
+  const gh = ['https:', '', 'github.com'].join('/');
+  const projected = conversationResponse(`/api/chat/projects/${id}/git`, 200, { git: { branch: 'b', remote: null, dirty: false, upstream: 'origin/b', ahead: 2, behind: 0,
+    github: { owner: 'o', repo: 'r', repoUrl: `${gh}/o/r`, branchUrl: ['https:', '', 'evil.example/x'].join('/'), compareUrl: `${gh}/o/r/compare/main...b?expand=1` } } });
+  assert.equal(projected.git.github.branchUrl, null, 'a link outside github.com is dropped');
+  assert.match(projected.git.github.compareUrl, /compare\/main\.\.\.b/);
+  assert.deepEqual(conversationResponse(`/api/chat/projects/${id}/git`, 200, projected), projected, 'stable when projected twice');
+
+  const { c } = await fixture(t);
+  await c.load(); await new Promise(r => setTimeout(r, 30));
+  await c.createProject({ name: 'App', folder: '/fiction/app', repoUrl: '' });
+  await until(() => c.getSnapshot().git?.github);
+  const html = renderToStaticMarkup(React.createElement(ChatView, { controller: c, mode: 'mock' }));
+  assert.match(html, /example\/app/);
+  assert.match(html, /↑3 ↓1/);
+  assert.match(html, /Fictional commit/);
+  assert.match(html, /Compare \/ pull request/);
+  assert.match(html, /3 commits are only on this computer/);
 });
