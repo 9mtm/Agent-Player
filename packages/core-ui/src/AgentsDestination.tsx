@@ -9,8 +9,9 @@ import { CompanyWizard } from './CompanyWizard';
 import { namingLanguages, validatedDisplayName } from './naming';
 import type { NamingLanguage } from './naming';
 import type { SessionClient } from './session';
+import { ConnectorsSection } from './ConnectorsSection';
 
-export function AgentsDestination({ client, active = false, onOpenMemory }: { client: SessionClient; active?: boolean; onOpenMemory?: () => void }) {
+export function AgentsDestination({ client, active = false, onOpenMemory, focusConnectors = false }: { client: SessionClient; active?: boolean; onOpenMemory?: () => void; focusConnectors?: boolean }) {
   const [open, setOpen] = useState<string | null>(null);
   // The effect owns subscription cleanup; construction also supports offline SSR without reads.
   const [controller, setController] = useState<AgentsController>();
@@ -42,7 +43,8 @@ export function AgentsDestination({ client, active = false, onOpenMemory }: { cl
     </div>}
     {owner && company && building && <CompanyWizard controller={company} onClose={() => { setBuilding(false); if (company.getSnapshot().hires.some(x => x.status === 'created')) void controller?.list(); }}/>}
     {owner && hire && hiring && !building && <HireAgent controller={hire} onClose={() => { setHiring(false); if (hire.getSnapshot().step === 'done') void controller?.list(); }}/>}
-    {!hiring && !building && (controller ? <TeamGrid controller={controller} onOpen={setOpen}/> : <p>Agents are not loaded.</p>)}
+    {!hiring && !building && (controller ? <TeamGrid controller={controller} onOpen={setOpen}/> : <p className="fine-print" role="status">Loading your team…</p>)}
+    {owner && !hiring && !building && <ConnectorsSection client={client} active={active} focus={focusConnectors}/>}
   </section>;
 }
 

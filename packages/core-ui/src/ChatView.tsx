@@ -36,7 +36,7 @@ const SUGGESTIONS = [
  * finished turn folds its work into "Worked for …". Behaviour lives in
  * ConversationsController; this file is layout and local view state only.
  */
-export function ChatView({ controller, mode, productName = 'Dpro', client }: { controller: ConversationsController; mode: 'live' | 'mock'; productName?: string; client?: SessionClient }) {
+export function ChatView({ controller, mode, productName = 'Dpro', client, onAddConnector }: { controller: ConversationsController; mode: 'live' | 'mock'; productName?: string; client?: SessionClient; onAddConnector?: () => void }) {
   const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const thread = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -191,7 +191,7 @@ export function ChatView({ controller, mode, productName = 'Dpro', client }: { c
       </form>
     </div>
   </div>
-  {pane === 'details' && <ChatSidePanel controller={controller} client={client}/>}
+  {pane === 'details' && <ChatSidePanel controller={controller} client={client} onAddConnector={onAddConnector}/>}
   {panes && (pane === 'changes' || pane === 'files') && <aside className="chat-panel chat-pane" aria-label={pane === 'changes' ? 'Changes' : 'Files'}>
     {pane === 'changes' ? <ChangesPane panes={panes}/> : <FilesPane panes={panes}/>}
   </aside>}
@@ -200,7 +200,7 @@ export function ChatView({ controller, mode, productName = 'Dpro', client }: { c
 }
 
 /** Details of the open conversation: where it works, how big it is, what it produced. */
-function ChatSidePanel({ controller, client }: { controller: ConversationsController; client?: SessionClient }) {
+function ChatSidePanel({ controller, client, onAddConnector }: { controller: ConversationsController; client?: SessionClient; onAddConnector?: () => void }) {
   const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const project = controller.activeProject();
   const conv = s.conversations.find(c => c.id === s.activeId);
@@ -244,7 +244,7 @@ function ChatSidePanel({ controller, client }: { controller: ConversationsContro
         : <p className="muted">Not a git folder.</p>}
     </section>}
     {project?.folder && s.git?.branch && <GitHubCard git={s.git} onRefresh={() => void controller.refreshGit()}/>}
-    {client && <AgentPanel client={client} agentId={conv?.agentId || s.agentId || s.agents[0]?.id || ''}/>}
+    {client && <AgentPanel client={client} onAddConnector={onAddConnector} agentId={conv?.agentId || s.agentId || s.agents[0]?.id || ''}/>}
   </aside>;
 }
 
@@ -275,15 +275,16 @@ function GitHubCard({ git, onRefresh }: { git: NonNullable<ReturnType<Conversati
 /** Dictation: record, then the words land in the composer (transcribed on this computer). */
 function MicButton({ mic }: { mic: MicController }) {
   const m = useSyncExternalStore(mic.subscribe, mic.getSnapshot, mic.getSnapshot);
-  if (m.phase === 'unknown' || (m.phase === 'off' && !m.missing?.length)) return null;
+  // Shown only when speech-to-text is set up on this computer (nothing to fix from here otherwise).
+  if (m.phase === 'unknown' || m.phase === 'off') return null;
   const clock = `${Math.floor(m.seconds / 60)}:${String(m.seconds % 60).padStart(2, '0')}`;
   return <span className="composer-mic">
     {m.error && <span className="mic-error" role="alert">{m.error}</span>}
     {m.phase === 'recording' && <><span className="mic-clock" aria-live="polite"><i className="mic-dot" aria-hidden="true"/>{clock}</span>
       <button type="button" className="row-tool" aria-label="Discard the recording" title="Discard" onClick={() => void mic.cancel()}><UiIcon name="close" size={11}/></button></>}
-    <button type="button" className="tool mic-button" data-phase={m.phase} disabled={m.phase === 'off' || m.phase === 'transcribing'}
+    <button type="button" className="tool mic-button" data-phase={m.phase} disabled={m.phase === 'transcribing'}
       aria-label={m.phase === 'recording' ? 'Stop and turn into text' : m.phase === 'transcribing' ? 'Turning speech into text' : 'Dictate'}
-      title={m.phase === 'off' ? `Speech-to-text is not set up (missing ${m.missing?.join(', ')})` : m.phase === 'recording' ? 'Stop and turn into text' : m.phase === 'transcribing' ? 'Turning speech into text…' : 'Dictate (speech to text on this computer)'}
+      title={m.phase === 'recording' ? 'Stop and turn into text' : m.phase === 'transcribing' ? 'Turning speech into text…' : 'Dictate (speech to text on this computer)'}
       onClick={() => void (m.phase === 'recording' ? mic.stop() : mic.start())}>
       {m.phase === 'recording' ? <UiIcon name="stop" size={11}/> : m.phase === 'transcribing' ? <span className="pulse" aria-hidden="true"/> : <UiIcon name="mic" size={14}/>}
     </button>
@@ -432,13 +433,13 @@ function ToolRow({ call }: { call: ToolCall }) {
   const v = toolView(call);
   const hasDetail = !!(call.output || call.input.length > 2);
   return <div className="tool-row" data-error={call.isError || undefined} data-open={open || undefined}>
-    <button type="button" className="scaffold-row" aria-expanded={hasDetail ? open : undefined} onClick={() => hasDetail && setOpen(v => !v)}>
+    {(() => { const Row = hasDetail ? 'button' : 'div'; return <Row {...(hasDetail ? { type: 'button' as const, 'aria-expanded': open, onClick: () => setOpen(v => !v) } : {})} className="scaffold-row" data-static={hasDetail ? undefined : true}>
       {call.running ? <span className="spinner" aria-hidden="true"/> : <UiIcon name={call.isError ? 'alert' : KIND_ICON[v.kind]} size={12}/>}
       <span className="tool-title"><span className={call.running ? 'shimmer' : 'tool-verb'}>{v.verb}</span>{v.target && <span className="tool-target" dir="auto">{v.kind === 'command' ? <code>{v.target}</code> : v.target}</span>}</span>
       {call.isError && <span className="tool-meta error">failed</span>}
       {!call.running && call.ms !== undefined && call.ms >= 100 && <span className="tool-meta">{duration(call.ms) === '0s' ? `${(call.ms / 1000).toFixed(1)}s` : duration(call.ms)}</span>}
       {hasDetail && <span className="caret" aria-hidden="true"><UiIcon name="chevron" size={11}/></span>}
-    </button>
+    </Row>; })()}
     {open && <ToolDetail call={call} kind={v.kind} command={v.command} args={v.args}/>}
   </div>;
 }

@@ -96,8 +96,8 @@ export function MemoryPanel({ client, active = false }: { client: SessionClient;
       <p>What each agent remembers about you and its work, and the changes it asks you to approve.{state.mode === 'mock' ? ' Offline practice: fictional memory only.' : ''}</p>
     </header>
     {!agents.length
-      ? <div className="memory-start"><button type="button" className="primary" disabled={!owner || teamState?.phase === 'listing'} onClick={() => void team?.list()}>{teamState?.phase === 'listing' ? 'Opening…' : 'Open memory'}</button>
-        {!owner && <p className="fine-print">Only the owner can read agents' memory.</p>}</div>
+      ? <div className="memory-start">{owner ? <button type="button" className="primary" disabled={teamState?.phase === 'listing'} onClick={() => void team?.list()}>{teamState?.phase === 'listing' ? 'Opening…' : 'Open memory'}</button>
+        : <p className="fine-print">Only the owner can read agents' memory.</p>}</div>
       : <div className="memory-layout">
         <nav className="memory-team" aria-label="Agents">
           {agents.length > 8 && <input aria-label="Find an agent" placeholder="Find an agent" value={query} onChange={e => setQuery(e.target.value)}/>}

@@ -85,28 +85,37 @@ function Row({ c, active, running, onOpen, controller }: { c: Conversation; acti
 function ProjectPicker({ controller }: { controller: ConversationsController }) {
   const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [form, setForm] = useState({ name: '', folder: '', repoUrl: '' });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   if (s.access === 'denied') return null;
-  if (adding) return <form className="project-form" onSubmit={async e => {
-    e.preventDefault(); setBusy(true); const err = await controller.createProject(form); setBusy(false);
-    if (err) setError(err); else { setAdding(false); setForm({ name: '', folder: '', repoUrl: '' }); setError(null); }
+  const close = () => { setAdding(false); setEditing(null); setConfirmDelete(false); setError(null); setForm({ name: '', folder: '', repoUrl: '' }); };
+  if (adding || editing) return <form className="project-form" aria-label={editing ? 'Edit project' : 'New project'} onSubmit={async e => {
+    e.preventDefault(); setBusy(true); const err = editing ? await controller.editProject(editing, form) : await controller.createProject(form); setBusy(false);
+    if (err) setError(err); else close();
   }}>
     <input autoFocus placeholder="Project name" aria-label="Project name" value={form.name} maxLength={80} onChange={e => setForm({ ...form, name: e.target.value })}/>
     <input placeholder="Folder, e.g. ~/Projects/app" aria-label="Project folder" value={form.folder} onChange={e => setForm({ ...form, folder: e.target.value })} dir="ltr"/>
     <input placeholder="Git repo (optional)" aria-label="Git repository" value={form.repoUrl} onChange={e => setForm({ ...form, repoUrl: e.target.value })} dir="ltr"/>
     {error && <p className="project-error" role="alert">{error}</p>}
     <div className="project-form-actions">
-      <button type="submit" className="link-button" disabled={busy || !form.name.trim()}>Create</button>
-      <button type="button" className="link-button" onClick={() => { setAdding(false); setError(null); }}>Cancel</button>
+      <button type="submit" className="link-button" disabled={busy || !form.name.trim()}>{editing ? 'Save' : 'Create'}</button>
+      <button type="button" className="link-button" onClick={close}>Cancel</button>
+      {editing && (confirmDelete
+        ? <span className="project-delete">Delete the project? Its chats stay. <button type="button" className="link-button danger" disabled={busy} onClick={async () => { setBusy(true); await controller.removeProject(editing); setBusy(false); close(); }}>Yes, delete</button></span>
+        : <button type="button" className="link-button danger" onClick={() => setConfirmDelete(true)}>Delete</button>)}
     </div>
   </form>;
+  const current = s.projects.find(p => p.id === s.projectFilter);
   return <div className="project-picker">
     <select aria-label="Project" value={s.projectFilter} onChange={e => { if (e.target.value === '__new') setAdding(true); else { controller.filterProject(e.target.value); controller.newChat(); } }}>
       <option value="">All chats</option>
       {s.projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
       <option value="__new">+ New project…</option>
     </select>
+    {current && <button type="button" className="row-tool" aria-label={`Edit project ${current.name}`} title="Rename, change folder or repo, or delete"
+      onClick={() => { setForm({ name: current.name, folder: current.folder ?? '', repoUrl: current.repoUrl ?? '' }); setEditing(current.id); }}><UiIcon name="pencil" size={12}/></button>}
   </div>;
 }

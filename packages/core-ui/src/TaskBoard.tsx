@@ -29,7 +29,8 @@ export function TaskBoard({ controller, active = false }: { controller: BoardCon
   if (!s.boardId) return <section aria-label="Task board" className="board">
     <div className="board-head"><div><h2>Boards</h2><p className="fine-print">Plan the company's work on boards: one for the whole company, one per department, or shared by departments.</p></div></div>
     {(s.notice || s.phase === 'loading') && <p role="status" className="board-notice">{s.notice ?? 'Reading the boards…'}</p>}
-    <div className="hire-actions"><button type="button" className="primary" disabled={busy || !s.owner} onClick={() => void controller.load()}>Open the boards</button></div>
+    {s.owner ? <div className="hire-actions"><button type="button" className="primary" disabled={busy} onClick={() => void controller.load()}>Open the boards</button></div>
+      : <p className="fine-print">Only the owner plans the boards.</p>}
   </section>;
 
   return <section aria-label="Task board" className="board board-with-rail" data-color={s.meta?.color}>

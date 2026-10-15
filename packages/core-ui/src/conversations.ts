@@ -157,6 +157,21 @@ export class ConversationsController {
       return r.status === 400 ? 'Check the folder: it must be a full path to an existing folder (not the whole disk or your home folder). The repo must be an https or git@ address.' : 'The project was not created.';
     } catch { return 'The project was not created (no connection).'; }
   }
+  /** Renames a project or changes its folder or repo (empty folder/repo clears it). */
+  async editProject(id: string, input: { name: string; folder: string; repoUrl: string }): Promise<string | null> {
+    const name = input.name.trim();
+    if (!name) return 'Give the project a name.';
+    try {
+      const r = await this.call('PUT', `/api/chat/projects/${id}`, { name, folder: input.folder.trim() || null, repoUrl: input.repoUrl.trim() || null });
+      if (r.status === 200 && record(r.body) && record(r.body.project)) {
+        const p = r.body.project as Project;
+        this.publish({ projects: this.#state.projects.map(x => (x.id === id ? p : x)).sort((a, b) => a.name.localeCompare(b.name)) });
+        void this.loadGit();
+        return null;
+      }
+      return r.status === 400 ? 'Check the folder: it must be a full path to an existing folder (not the whole disk or your home folder). The repo must be an https or git@ address.' : 'The project was not saved.';
+    } catch { return 'The project was not saved (no connection).'; }
+  }
   async removeProject(id: string) {
     const r = await this.call('DELETE', `/api/chat/projects/${id}`);
     if (!this.live() || r.status !== 200) return;

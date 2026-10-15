@@ -10,7 +10,7 @@ import { UiIcon } from './ui-icons';
  * what it may do on its own, and the memory it can read. Every switch saves
  * to the agent right away; risky "allow" asks for a second click.
  */
-export function AgentPanel({ client, agentId }: { client: SessionClient; agentId: string }) {
+export function AgentPanel({ client, agentId, onAddConnector }: { client: SessionClient; agentId: string; onAddConnector?: () => void }) {
   const [card, setCard] = useState<AgentCardController | null>(null);
   useEffect(() => {
     if (!agentId) { setCard(null); return; }
@@ -18,10 +18,10 @@ export function AgentPanel({ client, agentId }: { client: SessionClient; agentId
     return () => c.dispose();
   }, [client, agentId]);
   if (!card) return null;
-  return <AgentPanelBody card={card}/>;
+  return <AgentPanelBody card={card} onAddConnector={onAddConnector}/>;
 }
 
-export function AgentPanelBody({ card }: { card: AgentCardController }) {
+export function AgentPanelBody({ card, onAddConnector }: { card: AgentCardController; onAddConnector?: () => void }) {
   const s = useSyncExternalStore(card.subscribe, card.getSnapshot, card.getSnapshot);
   const [open, setOpen] = useState<string | null>(null);
   const [risky, setRisky] = useState(false);
@@ -38,7 +38,7 @@ export function AgentPanelBody({ card }: { card: AgentCardController }) {
       {!g ? <p className="muted">Loading…</p> : <ul className="panel-groups">{groups.map(({ name, tools }) => {
         const n = tools.filter(t => granted.has(t.name)).length;
         const allowed = tools.filter(t => t.allowedByServer);
-        if (name === 'Connectors' && !tools.length) return <li key={name} className="panel-group"><span className="panel-group-name"><UiIcon name="globe" size={12}/>Connectors</span><span className="muted">none added yet</span></li>;
+        if (name === 'Connectors' && !tools.length) return <li key={name} className="panel-group"><span className="panel-group-name"><UiIcon name="globe" size={12}/>Connectors</span>{onAddConnector ? <button type="button" className="link-button" onClick={onAddConnector}>Add a connector</button> : <span className="muted">none yet</span>}</li>;
         return <li key={name} className="panel-group" data-open={open === name || undefined}>
           <button type="button" className="panel-group-name" aria-expanded={open === name} onClick={() => setOpen(open === name ? null : name)}>{name}<span className="muted">{n}/{tools.length}</span></button>
           <label className="switch" title={n ? `Turn ${name.toLowerCase()} off` : `Turn ${name.toLowerCase()} on`}>
