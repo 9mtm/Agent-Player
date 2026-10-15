@@ -162,8 +162,14 @@ export function createSameOriginTransport(origin: string, fetcher: typeof fetch)
   };
 }
 
+/** Where a local test build keeps its sign-in across a refresh (dev-session-keep.ts). */
+export type TokenKeep = { load(): string | null; save(token: string | null): void };
+
 export class SessionClient {
   #token: string | undefined;
+  #keep: TokenKeep | undefined;
+  /** Set by resume(): a later sign-in in this tab is kept too. */
+  #nextKeep: TokenKeep | undefined;
   // One private slot per client; changing account or mode discards the prior binding.
   // Logout clears authentication, but retains this advisory credential for next login.
   #device: { email: string; token: string } | undefined;
@@ -182,11 +188,12 @@ export class SessionClient {
   #reset(mode: Mode, phase: SessionState['phase'], notice?: SessionState['notice'], setup?: SessionState['setup'], delay?: number) {
     for (const controller of this.#pending) controller.abort();
     this.#pending.clear(); this.#token = undefined;
+    this.#keep?.save(null); this.#keep = undefined;
     this.#publish({ mode, phase, epoch: this.#state.epoch + 1, ...(notice ? { notice } : {}), ...(setup ? { setup } : {}), ...(retryAfterSeconds(delay) !== undefined ? { retryAfterSeconds: delay } : {}) });
   }
   selectMode(mode: Mode) {
     if (!this.canUse(mode) || this.#state.phase === 'signing-out') return;
-    this.#device = undefined; this.#deviceBinding = undefined;
+    this.#device = undefined; this.#deviceBinding = undefined; this.#nextKeep = undefined;
     this.#reset(mode, 'signed-out');
   }
   cancel() { this.#reset(this.#state.mode, 'signed-out', this.#state.phase === 'signing-out' ? 'logout-unknown' : undefined); }
@@ -231,6 +238,7 @@ export class SessionClient {
     }
   }
   async login(email: string, password: string) {
+    const keep = this.#nextKeep;
     if (this.#state.mode === 'fixture' || this.#state.phase === 'signing-out') return;
     // Discovery is advisory; explicit low-level login still authenticates through login + me.
     // Once checked, unavailable/incomplete discovery cannot fall through to a login.
@@ -266,8 +274,28 @@ export class SessionClient {
       if (me.status !== 200 || !record(me.body)) throw new SessionFailure('unavailable');
       const current = user(me.body.user);
       if (current.id !== loginUser.id) throw new SessionFailure('unavailable');
-      this.#token = token; this.#publish({ mode: this.#state.mode, phase: 'authenticated', epoch, user: current });
+      this.#token = token; this.#keep = keep; keep?.save(token); this.#publish({ mode: this.#state.mode, phase: 'authenticated', epoch, user: current });
     } catch { if (epoch === this.#state.epoch) this.#reset(this.#state.mode, 'signed-out', 'unavailable', setup); }
+  }
+  /**
+   * Local test build only: signs back in with a kept token after a refresh
+   * (checked with /api/auth/me). Returns false when there was nothing to
+   * resume or the token no longer works; the kept copy is then dropped.
+   */
+  async resume(keep: TokenKeep): Promise<boolean> {
+    if (this.#state.mode !== 'live' || this.#state.phase !== 'signed-out') return false;
+    const token = keep.load();
+    if (!token) { this.#nextKeep = keep; return false; }
+    this.#reset('live', 'signing-in'); const epoch = this.#state.epoch;
+    this.#nextKeep = keep;
+    try {
+      const me = await this.#send('GET', '/api/auth/me', undefined, token, epoch);
+      if (epoch !== this.#state.epoch) return false;
+      if (me.status !== 200 || !record(me.body)) { keep.save(null); this.#reset('live', 'signed-out'); return false; }
+      this.#token = token; this.#keep = keep; keep.save(token);
+      this.#publish({ mode: 'live', phase: 'authenticated', epoch, user: user(me.body.user) });
+      return true;
+    } catch { if (epoch === this.#state.epoch) { keep.save(null); this.#reset('live', 'signed-out'); } return false; }
   }
   request = async (request: Request, signal?: AbortSignal): Promise<WireResponse> => {
     if (!this.#token || this.#state.phase !== 'authenticated') throw new SessionFailure('blocked');

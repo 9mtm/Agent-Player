@@ -6,6 +6,7 @@ import { createLoginMock } from './session-mock';
 
 import { retryAfterNotice } from './retry-after.js';
 import { devQuickLoginAccounts } from './dev-quick-login';
+import { devSessionKeep } from './dev-session-keep';
 
 const notices = {
   published_password: 'Sign-in refused because the password is a published default. Reset it from the CLI.',
@@ -30,7 +31,11 @@ export function AuthBoundary({ client: supplied, children }: { client?: SessionC
     if (!liveOnly) return;
     const s = client.getSnapshot();
     if (s.mode === 'fixture') client.selectMode('live');
-    if (client.getSnapshot().phase === 'signed-out' && !client.getSnapshot().setup) void client.discoverSetup();
+    if (client.getSnapshot().phase !== 'signed-out' || client.getSnapshot().setup) return;
+    // Local test build: a refresh signs back in (dev-session-keep.ts).
+    const keep = devSessionKeep(typeof window !== 'undefined' ? window.location.hostname : '');
+    if (keep) void client.resume(keep).then(ok => { if (!ok && client.getSnapshot().phase === 'signed-out') void client.discoverSetup(); });
+    else void client.discoverSetup();
   }, [client, liveOnly, state.mode]);
   // Signed in: the workspace's own status bar carries the mode and the way out.
   const signedIn = state.mode !== 'fixture' && state.phase === 'authenticated';

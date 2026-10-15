@@ -134,7 +134,9 @@ test('entry source exception rejects direct calls, alternate origins, missing gu
 test('source boundary: only injected session transport may network; no browser storage or HTML sinks', () => {
   for (const name of fs.readdirSync(path.join(root, 'src'))) {
     const source = fs.readFileSync(path.join(root, 'src', name), 'utf8');
-    assert.doesNotMatch(source, /\b(XMLHttpRequest|WebSocket|EventSource|localStorage|sessionStorage|indexedDB|dangerouslySetInnerHTML)\b|document\.cookie/, name);
+    // dev-session-keep.ts alone may use session storage, and only for the local test build.
+    if (name === 'dev-session-keep.ts') assert.doesNotMatch(source, /\b(XMLHttpRequest|WebSocket|EventSource|localStorage|indexedDB|dangerouslySetInnerHTML)\b|document\.cookie/, name);
+    else assert.doesNotMatch(source, /\b(XMLHttpRequest|WebSocket|EventSource|localStorage|sessionStorage|indexedDB|dangerouslySetInnerHTML)\b|document\.cookie/, name);
     if (name === 'entry-client.ts') assertEntryBinding(source);
     else if (name !== 'session.ts') assert.doesNotMatch(source, /\bfetch\b|https?:\/\//, name);
     else { assert.match(source, /fetcher: typeof fetch/); assert.doesNotMatch(source, /\bfetch\s*\(/); }
