@@ -103,7 +103,9 @@ form > label { display:block; margin-block-end:8px; }
 .auth-workspace form, .auth-workspace label { display: grid; gap: 8px; margin-block: 8px; }
 .auth-workspace pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.auth-boundary { height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.auth-boundary { height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); color: var(--text); background: var(--canvas); }
+.dev-quick-login { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border: 1px dashed var(--border); padding: 8px; margin: 0; }
+.dev-quick-login legend { font-size: 11px; color: var(--muted); padding-inline: 4px; }
 .auth-boundary > .shell { min-height: 0; height: 100%; }
 .auth-workspace input[type="checkbox"] { inline-size: auto; justify-self: start; }
 
