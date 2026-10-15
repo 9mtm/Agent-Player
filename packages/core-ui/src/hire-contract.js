@@ -6,6 +6,10 @@ import { traitNames } from './personality-contract.js';
 export const roles = ['main', 'manager', 'specialist', 'evaluator'];
 export const presets = ['balanced-assistant', 'careful-auditor', 'bold-creative', 'precise-developer', 'strict-evaluator'];
 export const dialects = ['ar-IQ', 'ar', 'en', 'de', 'fr', 'es', 'zh', 'ja', 'ko', 'pt-BR', 'ru', 'tr', 'hi'];
+export const companySizes = ['solo', 'small', 'medium', 'large'];
+export const nameLanguages = ['en', 'ar', 'de', 'fr', 'es', 'zh', 'ja', 'ko', 'pt-BR', 'ru', 'tr', 'hi'];
+export const CATALOGUE_PATH = '/api/onboarding/team-catalogue';
+export const PLAN_PATH = '/api/onboarding/team-plan';
 export const MAX_GRANTS = 500;
 export const MAX_AVAILABLE = 2000;
 
@@ -50,7 +54,17 @@ export function validGrantsBody(b) {
   return Array.isArray(b.grants) && b.grants.length <= MAX_GRANTS && b.grants.every(toolName) && new Set(b.grants).size === b.grants.length;
 }
 
+/** POST /api/onboarding/team-plan body: size, 1-12 departments, optional name language. */
+export function validPlanBody(b) {
+  if (!record(b) || !onlyKeys(b, ['size', 'departments', 'language']) || !companySizes.includes(b.size)) return false;
+  if (b.language !== undefined && !nameLanguages.includes(b.language)) return false;
+  return Array.isArray(b.departments) && b.departments.length >= 1 && b.departments.length <= 12
+    && b.departments.every(department) && new Set(b.departments).size === b.departments.length;
+}
+
 export function allowedHire(method, path, body) {
+  if (path === CATALOGUE_PATH) return method === 'GET' && body === undefined;
+  if (path === PLAN_PATH) return method === 'POST' && validPlanBody(body);
   if (path === '/api/agents') return method === 'POST' && validCreateBody(body);
   if (!grantsAgentId(path)) return false;
   if (method === 'GET') return body === undefined;
@@ -59,7 +73,7 @@ export function allowedHire(method, path, body) {
 
 /** True when this response belongs to the hire contract (create result or a grants path). */
 export function hireRoute(path, status) {
-  return grantsAgentId(path) !== null || (path === '/api/agents' && (status === 201 || status === 400 || status === 403));
+  return path === CATALOGUE_PATH || path === PLAN_PATH || grantsAgentId(path) !== null || (path === '/api/agents' && (status === 201 || status === 400 || status === 403));
 }
 
 const fail = () => { throw Error('Invalid hire response'); };
@@ -107,7 +121,34 @@ function grantsResult(agentId, status, body) {
 }
 
 /** Project a backend response to the reviewed fields only (never error text). */
+function catalogueResult(status, body) {
+  if (status !== 200) return null;
+  if (!record(body) || !Array.isArray(body.sizes) || !Array.isArray(body.departments) || body.departments.length > 100) fail();
+  return {
+    sizes: body.sizes.filter(x => record(x) && companySizes.includes(x.id)).map(x => ({ id: x.id, label: clip(x.label, 60) })),
+    departments: body.departments.filter(x => record(x) && department(x.id)).map(x => ({ id: x.id, label: clip(x.label, 60), summary: clip(x.summary, 200) })),
+  };
+}
+
+function planResult(status, body) {
+  if (status === 200) {
+    if (!record(body) || !companySizes.includes(body.size) || !Array.isArray(body.hires) || body.hires.length > 60) fail();
+    return {
+      size: body.size,
+      hires: body.hires.map(h => {
+        if (!record(h) || !department(h.department) || !roles.includes(h.role) || !presets.includes(h.preset) || !displayName(h.name) || !description(h.description)) fail();
+        return { department: h.department, departmentLabel: clip(h.departmentLabel, 64), role: h.role, title: clip(h.title, 80), description: h.description, preset: h.preset, name: h.name };
+      }),
+    };
+  }
+  const code = record(body) ? body.code : undefined;
+  if (status === 403 && code === 'read_only_stage') return { code };
+  return status === 400 && code === 'invalid_plan' ? { code } : null;
+}
+
 export function hireResponse(path, status, body) {
+  if (path === CATALOGUE_PATH) return catalogueResult(status, body);
+  if (path === PLAN_PATH) return planResult(status, body);
   if (path === '/api/agents') return createResult(status, body);
   const agentId = grantsAgentId(path);
   if (!agentId) fail();

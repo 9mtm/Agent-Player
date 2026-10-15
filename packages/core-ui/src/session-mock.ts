@@ -35,7 +35,7 @@ export function createLoginMock(agents = createAgentsMock(), setup: 'existing-ow
     if (request.path === '/api/auth/me') return { status: 200, body: { user } };
     if (request.path === '/api/auth/logout') { active = ''; return { status: 200, body: { success: true } }; }
     if (personalityRoute(request.path)) return personality.transport(request);
-    if (request.path === '/api/agents' || request.path.startsWith('/api/agents/')) return agents.transport(request);
+    if (request.path === '/api/agents' || request.path.startsWith('/api/agents/') || request.path.startsWith('/api/onboarding/team-')) return agents.transport(request);
     if (request.path.startsWith('/api/memory/')) return memory.transport(request);
     // A permission failure exercises protected-content clearing without simulating sign-out.
     return { status: 403, body: null };
