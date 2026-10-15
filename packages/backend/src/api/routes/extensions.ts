@@ -637,7 +637,7 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const { id } = request.params;
-      const { getExtensionAnalytics } = await import('../services/extension-analytics.js');
+      const { getExtensionAnalytics } = await import('../../services/extension-analytics.js');
 
       const analytics = await getExtensionAnalytics(id);
 
@@ -662,7 +662,7 @@ export async function extensionsRoutes(fastify: FastifyInstance) {
     },
   }, async (request, reply) => {
     try {
-      const { getOverviewAnalytics } = await import('../services/extension-analytics.js');
+      const { getOverviewAnalytics } = await import('../../services/extension-analytics.js');
 
       const overview = await getOverviewAnalytics();
 

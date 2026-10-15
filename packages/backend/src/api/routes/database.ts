@@ -792,7 +792,7 @@ export async function databaseRoutes(fastify: FastifyInstance) {
       const safeName = validateTableName(table);
       const db = getDatabase();
 
-      const rows = db.prepare(`SELECT * FROM ${safeName}`).all();
+      const rows = db.prepare(`SELECT * FROM ${safeName}`).all() as Record<string, unknown>[];
 
       if (format === 'json') {
         reply.header('Content-Type', 'application/json');
@@ -978,7 +978,7 @@ export async function databaseRoutes(fastify: FastifyInstance) {
       const db = getDatabase();
 
       const placeholders = ids.map(() => '?').join(', ');
-      const rows = db.prepare(`SELECT * FROM ${safeName} WHERE ${primaryKey} IN (${placeholders})`).all(...ids);
+      const rows = db.prepare(`SELECT * FROM ${safeName} WHERE ${primaryKey} IN (${placeholders})`).all(...ids) as Record<string, unknown>[];
 
       if (format === 'json') {
         reply.header('Content-Type', 'application/json');

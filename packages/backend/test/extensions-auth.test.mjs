@@ -148,3 +148,11 @@ test('read-only metadata routes stay public', async () => {
   assert.ok(!status.body.includes(SECRET));
   assert.equal((await call('GET', '/api/extensions/canary/i18n/en')).statusCode, 404);
 });
+
+test('TSC-03: the analytics routes answer for the owner (they imported a module path that does not exist and always failed)', async () => {
+  for (const url of ['/api/extensions/canary/analytics', '/api/extensions/analytics/overview']) {
+    const res = await call('GET', url, token('u-owner'));
+    assert.equal(res.statusCode, 200, `${url} -> ${res.statusCode} ${res.body}`);
+    assert.equal(JSON.parse(res.body).success, true);
+  }
+});

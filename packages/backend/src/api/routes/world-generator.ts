@@ -114,7 +114,7 @@ Generate the 3D world JSON description:`,
         const jsonStr = jsonMatch ? jsonMatch[1] : claudeResponse.content;
         worldData = JSON.parse(jsonStr);
       } catch (parseErr) {
-        fastify.log.error('Failed to parse Claude response:', parseErr);
+        fastify.log.error({ err: parseErr }, 'Failed to parse Claude response');
         return reply.status(500).send({
           error: 'Failed to parse AI response',
           details: claudeResponse.content.substring(0, 200),
