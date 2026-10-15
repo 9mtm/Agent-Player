@@ -1,0 +1,4 @@
+[
+  { "label": "Test owner", "email": "owner@isolated.invalid", "password": "replace-with-the-test-password" },
+  { "label": "Test admin", "email": "admin@isolated.invalid", "password": "replace-with-the-test-password" }
+]

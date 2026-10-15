@@ -2,4 +2,5 @@
 /dist/
 /.npm-cache/
 /.build-evidence/
+/dev-accounts.local.json
 !package-lock.json
