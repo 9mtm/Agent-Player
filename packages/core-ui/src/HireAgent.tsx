@@ -1,8 +1,9 @@
 import { useSyncExternalStore } from 'react';
 import {
-  allDialects, allPresets, allRoles, allTraits, dialectLabel, memoryTool, presetHelp, presetLabel, roleHelp, roleLabel, traitLabel,
+  allCategories, allDialects, allDrawerKinds, allPresets, allRoles, allTraits, categoryLabel, dialectLabel, drawerKindLabel, isRisky, memoryTool, modeLabel,
+  presetHelp, presetLabel, roleHelp, roleLabel, traitLabel,
 } from './hire';
-import type { HireController, Tool } from './hire';
+import type { HireController, Permissions, Tool } from './hire';
 
 const steps = [
   { key: 'role', label: 'Role' }, { key: 'persona', label: 'Persona' },
@@ -78,11 +79,13 @@ export function HireAgent({ controller, onClose }: { controller: HireController;
     {s.step === 'memory' && <div className="hire-form">
       <p><bdi>{who}</bdi> is hired. Choose what it may do with memory. Memory stays inside your company.</p>
       <ToolList tools={memory} selected={s.selected} disabled={busy || s.scoped || s.phase === 'unknown'} onToggle={t => controller.toggle(t)} empty="No memory tools on this server."/>
+      {s.permissions && <MemoryScope controller={controller} p={s.permissions} disabled={busy || s.phase === 'unknown'}/>}
       <div className="hire-actions"><button type="button" className="primary" disabled={busy} onClick={() => controller.next()}>Next: permissions</button></div>
     </div>}
 
     {s.step === 'permissions' && <div className="hire-form">
-      <p>Pick the tools <bdi>{who}</bdi> may use. Tools marked “Asks you first” always wait for your approval before they act.</p>
+      <p>Choose how <bdi>{who}</bdi> works with each kind of tool: Off, Ask me first, or Allow. Then pick the tools it may use; tools marked “Asks you first” always wait for your approval.</p>
+      {s.permissions && <ModeTable controller={controller} p={s.permissions} confirm={s.confirmRisky} disabled={busy || s.phase === 'unknown'}/>}
       <ToolList tools={other} selected={s.selected} disabled={busy || s.scoped || s.phase === 'unknown'} onToggle={t => controller.toggle(t)} empty="No other tools on this server."/>
       <div className="hire-actions">
         <button type="button" disabled={busy} onClick={() => controller.back()}>Back</button>
@@ -122,4 +125,34 @@ function ToolList({ tools, selected, disabled, onToggle, empty }: { tools: reado
       </label>
     </li>;
   })}</ul>;
+}
+
+/** CORE-PERMS-01: which memory drawers the agent may read and write. */
+function MemoryScope({ controller, p, disabled }: { controller: HireController; p: Permissions; disabled: boolean }) {
+  return <fieldset className="hire-scope" disabled={disabled}><legend>Memory drawers</legend>
+    <table className="hire-scope-table"><thead><tr><th scope="col">Drawer</th><th scope="col">Read</th><th scope="col">Write</th></tr></thead>
+      <tbody>{allDrawerKinds.map(k => {
+        const read = p.memoryRead.includes(k); const write = p.memoryWrite.includes(k);
+        return <tr key={k}><th scope="row">{drawerKindLabel[k]}</th>
+          <td><input type="checkbox" aria-label={`Read ${drawerKindLabel[k]}`} checked={read} onChange={e => controller.setMemory(k, { read: e.target.checked })}/></td>
+          <td><input type="checkbox" aria-label={`Write ${drawerKindLabel[k]}`} checked={write} disabled={!read} onChange={e => controller.setMemory(k, { write: e.target.checked })}/></td>
+        </tr>;
+      })}</tbody>
+    </table>
+    <label className="check"><input type="checkbox" checked={p.sharedMemory} onChange={e => controller.setShared(e.target.checked)}/> May see memories other agents share with the team</label>
+  </fieldset>;
+}
+
+/** CORE-PERMS-01: off / ask / allow per kind of tool; Allow on risky kinds needs a confirmation. */
+function ModeTable({ controller, p, confirm, disabled }: { controller: HireController; p: Permissions; confirm: boolean; disabled: boolean }) {
+  const risky = allCategories.filter(c => isRisky(c) && p.modes[c] === 'allow');
+  return <fieldset className="hire-scope" disabled={disabled}><legend>What it may do</legend>
+    <ul className="hire-modes">{allCategories.map(c => <li key={c}>
+      <span>{categoryLabel[c]}{isRisky(c) && <span className="badge">Risky</span>}</span>
+      <span className="hire-mode-choices" role="radiogroup" aria-label={categoryLabel[c]}>{(['off', 'ask', 'allow'] as const).map(m =>
+        <label key={m} className="hire-mode"><input type="radio" name={`mode-${c}`} checked={p.modes[c] === m} onChange={() => controller.setMode(c, m)}/>{modeLabel[m]}</label>)}
+      </span>
+    </li>)}</ul>
+    {risky.length > 0 && <label className="check hire-risky"><input type="checkbox" checked={confirm} onChange={e => controller.setConfirmRisky(e.target.checked)}/> I understand that {risky.map(c => categoryLabel[c].toLowerCase()).join(', ')} will run without asking me.</label>}
+  </fieldset>;
 }

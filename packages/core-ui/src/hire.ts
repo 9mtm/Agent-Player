@@ -1,6 +1,6 @@
 import { SessionFailure } from './session-failure';
 import { traitNames } from './personality-contract.js';
-import { department as validDepartment, dialects, displayName, presets, roles, validCreateBody, MAX_GRANTS } from './hire-contract.js';
+import { department as validDepartment, dialects, displayName, presets, roles, riskyCategories, validCreateBody, MAX_GRANTS } from './hire-contract.js';
 import type { SessionClient } from './session';
 
 export type Role = 'main' | 'manager' | 'specialist' | 'evaluator';
@@ -12,10 +12,27 @@ export type HireRequest =
   | { method: 'POST'; path: '/api/agents'; body: CreateBody }
   | { method: 'GET'; path: string }
   | { method: 'PUT'; path: string; body: { grants: string[]; expectedVersion: number } }
+  | { method: 'PUT'; path: string; body: PermissionsBody }
   | { method: 'POST'; path: '/api/onboarding/team-plan'; body: { size: 'solo' | 'small' | 'medium' | 'large'; departments: string[]; language?: string } }
   | { method: 'POST'; path: '/api/onboarding/team-distribution'; body: { departments: string[]; total?: number; counts?: Record<string, number> } }
   | { method: 'POST'; path: '/api/onboarding/team-batches'; body: { id: string; language?: string; departments: { department: string; count: number; presets?: Partial<Record<'manager' | 'specialist' | 'evaluator', Preset>> }[] } }
   | { method: 'POST'; path: string; body: { max?: number; retryFailed?: boolean } };
+
+/** CORE-PERMS-01: memory scope and off / ask / allow per tool category. */
+export type DrawerKind = 'owner' | 'project' | 'experience' | 'task' | 'people';
+export type PermissionCategory = 'browser' | 'network' | 'message' | 'delete' | 'install' | 'money' | 'settings';
+export type PermissionMode = 'off' | 'ask' | 'allow';
+export type Permissions = Readonly<{ memoryRead: readonly DrawerKind[]; memoryWrite: readonly DrawerKind[]; sharedMemory: boolean; modes: Readonly<Record<PermissionCategory, PermissionMode>>; version: number }>;
+export type PermissionsBody = { memoryRead: DrawerKind[]; memoryWrite: DrawerKind[]; sharedMemory: boolean; modes: Record<PermissionCategory, PermissionMode>; expectedVersion: number; confirmRisky?: boolean };
+export const allDrawerKinds: readonly DrawerKind[] = ['owner', 'project', 'experience', 'task', 'people'];
+export const drawerKindLabel: Record<DrawerKind, string> = { owner: 'About you', experience: 'Lessons learned', project: 'Projects', task: 'Tasks', people: 'People you know' };
+export const allCategories: readonly PermissionCategory[] = ['browser', 'network', 'message', 'delete', 'install', 'money', 'settings'];
+export const categoryLabel: Record<PermissionCategory, string> = {
+  browser: 'Use a web browser', network: 'Read the internet and outside tools', message: 'Send messages for you', delete: 'Delete data',
+  install: 'Install skills or code', money: 'Spend money or trade', settings: 'Change settings or saved keys',
+};
+export const modeLabel: Record<PermissionMode, string> = { off: 'Off', ask: 'Ask me first', allow: 'Allow' };
+export const isRisky = (c: PermissionCategory) => (riskyCategories as readonly string[]).includes(c);
 
 export type Tool = Readonly<{ name: string; description: string; requiresApproval: boolean; allowedByServer: boolean; execClass: boolean }>;
 export type Draft = Readonly<{ name: string; role: Role; department: string; description: string; preset: Preset; presetChosen: boolean; dialect: Dialect | ''; traits: Readonly<Partial<Record<TraitName, number>>> }>;
@@ -25,6 +42,8 @@ export type HireState = Readonly<{
   phase: 'editing' | 'creating' | 'loading' | 'saving' | 'done' | 'error' | 'unknown' | 'denied';
   agent?: Readonly<{ id: string; name?: string; version: number }>;
   tools: readonly Tool[]; selected: readonly string[]; grantsVersion?: number; scoped: boolean;
+  /** CORE-PERMS-01: loaded with the tools; confirmRisky = the owner ticked "I understand" for a risky Allow. */
+  permissions?: Permissions; confirmRisky: boolean;
   notice?: string;
 }>;
 
@@ -90,7 +109,7 @@ const emptyDraft: Draft = Object.freeze({ name: '', role: 'specialist', departme
 const record = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
 
 export class HireController {
-  #state: HireState = Object.freeze({ step: 'role', draft: emptyDraft, owner: false, phase: 'denied', tools: [], selected: [], scoped: false });
+  #state: HireState = Object.freeze({ step: 'role', draft: emptyDraft, owner: false, phase: 'denied', tools: [], selected: [], scoped: false, confirmRisky: false });
   #listeners = new Set<() => void>();
   #disposed = false; #ticket = 0; #abort?: AbortController; #identity = ''; #unsubscribe: () => void;
   constructor(readonly client: SessionClient) { this.#unsubscribe = client.subscribe(this.#sync); this.#sync(); }
@@ -102,7 +121,7 @@ export class HireController {
     if (identity === this.#identity) return;
     this.#identity = identity; this.#invalidate();
     const owner = s.phase === 'authenticated' && s.user?.role === 'owner';
-    this.#publish({ step: 'role', draft: emptyDraft, owner, phase: owner ? 'editing' : 'denied', agent: undefined, tools: [], selected: [], grantsVersion: undefined, scoped: false,
+    this.#publish({ step: 'role', draft: emptyDraft, owner, phase: owner ? 'editing' : 'denied', agent: undefined, tools: [], selected: [], grantsVersion: undefined, scoped: false, permissions: undefined, confirmRisky: false,
       notice: s.phase === 'authenticated' && !owner ? 'Only the owner can hire agents.' : undefined });
   };
   #invalidate() { this.#ticket++; this.#abort?.abort(); }
@@ -121,7 +140,7 @@ export class HireController {
   restart() {
     if (!this.#state.owner || this.#busy()) return;
     this.#invalidate();
-    this.#publish({ step: 'role', draft: emptyDraft, phase: 'editing', agent: undefined, tools: [], selected: [], grantsVersion: undefined, scoped: false, notice: undefined });
+    this.#publish({ step: 'role', draft: emptyDraft, phase: 'editing', agent: undefined, tools: [], selected: [], grantsVersion: undefined, scoped: false, permissions: undefined, confirmRisky: false, notice: undefined });
   }
   edit(patch: Partial<Omit<Draft, 'traits' | 'presetChosen'>>) {
     if (!this.#state.owner || this.#state.agent || this.#busy()) return;
@@ -157,6 +176,34 @@ export class HireController {
     if (selected.length > MAX_GRANTS) return;
     this.#publish({ selected: Object.freeze(selected), phase: 'editing' });
   }
+
+  /** Memory scope: read / write per drawer kind (write needs read), and team-shared memories. */
+  setMemory(kind: DrawerKind, patch: { read?: boolean; write?: boolean }) {
+    const s = this.#state; const p = s.permissions;
+    if (!s.owner || !p || this.#busy() || s.phase === 'done' || s.phase === 'unknown') return;
+    let read = [...p.memoryRead]; let write = [...p.memoryWrite];
+    if (patch.read === false) { read = read.filter(k => k !== kind); write = write.filter(k => k !== kind); }
+    if (patch.read === true && !read.includes(kind)) read.push(kind);
+    if (patch.write === false) write = write.filter(k => k !== kind);
+    if (patch.write === true && read.includes(kind) && !write.includes(kind)) write.push(kind);
+    const order = (x: DrawerKind[]) => allDrawerKinds.filter(k => x.includes(k));
+    this.#publish({ permissions: Object.freeze({ ...p, memoryRead: order(read), memoryWrite: order(write) }), phase: 'editing' });
+  }
+  setShared(on: boolean) {
+    const s = this.#state; const p = s.permissions;
+    if (!s.owner || !p || this.#busy() || s.phase === 'done' || s.phase === 'unknown') return;
+    this.#publish({ permissions: Object.freeze({ ...p, sharedMemory: on }), phase: 'editing' });
+  }
+  setMode(category: PermissionCategory, mode: PermissionMode) {
+    const s = this.#state; const p = s.permissions;
+    if (!s.owner || !p || this.#busy() || s.phase === 'done' || s.phase === 'unknown' || !allCategories.includes(category)) return;
+    const modes = Object.freeze({ ...p.modes, [category]: mode });
+    const stillRisky = allCategories.some(c => isRisky(c) && modes[c] === 'allow');
+    this.#publish({ permissions: Object.freeze({ ...p, modes }), confirmRisky: stillRisky && s.confirmRisky, phase: 'editing' });
+  }
+  setConfirmRisky(on: boolean) { if (this.#state.permissions && !this.#busy()) this.#publish({ confirmRisky: on }); }
+  /** Categories set to Allow that run without approval and need the owner's confirmation. */
+  riskyAllowed(): PermissionCategory[] { const p = this.#state.permissions; return p ? allCategories.filter(c => isRisky(c) && p.modes[c] === 'allow') : []; }
 
   /** One deliberate create; an unknown outcome is never retried automatically. */
   async create() {
@@ -195,7 +242,12 @@ export class HireController {
       const grants = b.grants as { tool: string; scoped: boolean }[];
       const tools = Object.freeze((b.available as Tool[]).map(t => Object.freeze({ ...t })));
       const scoped = grants.some(g => g.scoped);
-      this.#publish({ tools, selected: Object.freeze(grants.map(g => g.tool)), grantsVersion: b.version as number, scoped, phase: 'editing',
+      const pr = await this.client.request({ method: 'GET', path: `/api/agents/${agentId}/permissions` }, this.#abort!.signal);
+      if (ticket !== this.#ticket) return;
+      if (this.#denied(pr.status, pr.body)) return;
+      if (pr.status !== 200 || !record(pr.body)) throw Error();
+      const permissions = Object.freeze({ ...(pr.body as Permissions) });
+      this.#publish({ tools, selected: Object.freeze(grants.map(g => g.tool)), grantsVersion: b.version as number, scoped, permissions, confirmRisky: false, phase: 'editing',
         notice: scoped ? 'Some permissions have limits this page cannot show, so editing is off here.' : undefined });
     } catch {
       if (ticket === this.#ticket) this.#publish({ phase: 'error', notice: 'The agent was hired, but its permissions could not be read. Try again.' });
@@ -206,6 +258,7 @@ export class HireController {
   async save() {
     const s = this.#state;
     if (!s.owner || !s.agent || this.#busy() || s.scoped || s.grantsVersion === undefined || s.phase === 'unknown' || s.phase === 'done') return;
+    if (this.riskyAllowed().length && !s.confirmRisky) return this.#publish({ notice: 'Confirm that the risky tools may run without asking you, or set them to Ask me first.' });
     const ticket = this.#begin('saving');
     const path = `/api/agents/${s.agent.id}/tool-grants`;
     try {
@@ -213,12 +266,31 @@ export class HireController {
       if (ticket !== this.#ticket) return;
       if (this.#denied(r.status, r.body)) return;
       const b = r.body as { version?: number; code?: string } | null;
-      if (r.status === 200 && b?.version) return this.#publish({ grantsVersion: b.version, phase: 'done', step: 'done', notice: undefined });
       if (r.status === 409 && b?.code === 'version_conflict') {
         await this.#loadTools(s.agent.id);
         return this.#publish({ notice: 'Permissions changed elsewhere. The latest ones are shown; review and save again.' });
       }
-      this.#publish({ phase: 'error', notice: 'Permissions were not saved.' });
+      if (r.status !== 200 || !b?.version) return this.#publish({ phase: 'error', notice: 'Permissions were not saved.' });
+      this.#publish({ grantsVersion: b.version });
+      // CORE-PERMS-01: then the memory scope and the off / ask / allow modes.
+      const p = s.permissions;
+      if (p) {
+        const body: PermissionsBody = { memoryRead: [...p.memoryRead], memoryWrite: [...p.memoryWrite], sharedMemory: p.sharedMemory, modes: { ...p.modes }, expectedVersion: p.version,
+          ...(this.riskyAllowed().length ? { confirmRisky: s.confirmRisky } : {}) };
+        const pr = await this.client.request({ method: 'PUT', path: `/api/agents/${s.agent.id}/permissions`, body }, this.#abort!.signal);
+        if (ticket !== this.#ticket) return;
+        if (this.#denied(pr.status, pr.body)) return;
+        const pb = pr.body as (Permissions & { code?: string }) | null;
+        if (pr.status === 409 && pb?.code === 'version_conflict') {
+          await this.#loadTools(s.agent.id);
+          return this.#publish({ notice: 'Permissions changed elsewhere. The latest ones are shown; review and save again.' });
+        }
+        if (pr.status !== 200 || !pb || typeof pb.version !== 'number') {
+          return this.#publish({ phase: 'error', notice: pb?.code === 'risky_not_confirmed' ? 'Confirm that the risky tools may run without asking you, or set them to Ask me first.' : 'The tools were saved, but memory and approval settings were not. Try saving again.' });
+        }
+        this.#publish({ permissions: Object.freeze({ ...pb }) });
+      }
+      this.#publish({ phase: 'done', step: 'done', notice: undefined });
     } catch (error) {
       if (ticket !== this.#ticket) return;
       if (error instanceof SessionFailure && error.code === 'blocked') return this.#publish({ phase: 'editing', notice: 'Nothing was sent.' });

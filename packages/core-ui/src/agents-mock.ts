@@ -26,6 +26,7 @@ export function createAgentsMock() {
   ]);
   const registry = new Map([...rows.values()].map(a => [namingKey(a.name), a.id]));
   const grants = new Map<string, { version: number; tools: string[] }>();
+  const permissions = new Map<string, { agentId: string; memoryRead: string[]; memoryWrite: string[]; sharedMemory: boolean; modes: Record<string, string>; version: number }>();
   let hired = 0;
   const grantsView = (id: string, withAvailable: boolean) => {
     const g = grants.get(id) ?? { version: 1, tools: [...defaultGrants] }; grants.set(id, g);
@@ -122,6 +123,20 @@ export function createAgentsMock() {
           else { item.status = 'failed'; results.push({ seq: i + 1, status: 'failed', code: 'create_failed' }); }
         });
         return { status: 200, body: { results, batch: progressOf(id) } };
+      }
+      // CORE-PERMS-01: fictional per-agent memory scope and modes (new agents: everything on "ask").
+      const permsFor = /^\/api\/agents\/([^/]+)\/permissions$/.exec(request.path)?.[1];
+      if (permsFor) {
+        if (!rows.has(permsFor)) return { status: 404, body: null };
+        const kinds = ['owner', 'project', 'experience', 'task', 'people'];
+        const current = permissions.get(permsFor) ?? { agentId: permsFor, memoryRead: kinds, memoryWrite: kinds, sharedMemory: false,
+          modes: { browser: 'ask', network: 'ask', message: 'ask', delete: 'ask', install: 'ask', money: 'ask', settings: 'ask' }, version: 1 };
+        if (request.method === 'GET') return { status: 200, body: { ...current, stored: true } };
+        const b = request.body as { memoryRead: string[]; memoryWrite: string[]; sharedMemory: boolean; modes: Record<string, string>; expectedVersion: number };
+        if (b.expectedVersion !== current.version) return { status: 409, body: { code: 'version_conflict', currentVersion: current.version, ...current } };
+        const next = { agentId: permsFor, memoryRead: b.memoryRead, memoryWrite: b.memoryWrite, sharedMemory: b.sharedMemory, modes: b.modes, version: current.version + 1 };
+        permissions.set(permsFor, next);
+        return { status: 200, body: { ...next, stored: true } };
       }
       const grantsFor = /^\/api\/agents\/([^/]+)\/tool-grants$/.exec(request.path)?.[1];
       if (grantsFor) {
