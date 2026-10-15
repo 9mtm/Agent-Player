@@ -18,10 +18,9 @@ export function AgentsDestination({ client }: { client: SessionClient }) {
     setController(c); setPersonality(p);
     return () => { unsubscribe(); c.dispose(); p.dispose(); };
   }, [client]);
-  return <section aria-label="Agents"><h2>Agents</h2>
-    <p>Read agents, select one, then edit or generate a draft. Only Save changes its name. Stable IDs never change.</p>
-    <p>Editing is currently restricted to owners in this UI. Server permissions are enforced separately.</p>
-    <p>{client.getSnapshot().mode === 'mock' ? 'Offline fictional agents only.' : 'Injected authenticated client. Reads and writes require explicit actions.'} Copy: English draft.</p>
+  return <section aria-label="Agents"><h2>Your team</h2>
+    <p>Each agent is a member of your staff with its own name, role, memory and personality. Load the team, pick an agent, and rename it or review its personality changes.{client.getSnapshot().mode === 'mock' ? ' Offline practice: fictional agents only.' : ''}</p>
+    <p className="fine-print">Only Save changes a name; stable IDs never change. Editing is owner-only here; the server enforces permissions separately.</p>
     {controller ? <AgentsReview controller={controller}/> : <p>Agents are not loaded.</p>}
     {personality && <PersonalityReview controller={personality}/>}
   </section>;
@@ -32,7 +31,7 @@ export function AgentsReview({ controller }: { controller: AgentsController }) {
   const busy = ['listing', 'reading', 'saving', 'reconciling', 'generating'].includes(s.phase);
   const name = validatedDisplayName(s.draft);
   return <>
-    <button disabled={busy} onClick={() => void controller.list()}>Read agents</button>
+    <button disabled={busy} onClick={() => void controller.list()}>Load team</button>
     <label>Selected agent<select value={s.selected?.id ?? ''} disabled={busy} onChange={e => void controller.select(e.target.value)}>
       <option value="">Select an agent</option>{s.agents.map(a => <option value={a.id} key={a.id}>{a.name ?? 'Name unavailable'} · {a.id}</option>)}
     </select></label>

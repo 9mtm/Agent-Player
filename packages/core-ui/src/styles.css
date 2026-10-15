@@ -176,7 +176,7 @@ form > label { display:block; margin-block-end:8px; }
 .chat-screen { flex:1 1 auto; min-block-size:0; display:flex; flex-direction:column; position:relative; }
 .chat-thread { flex:1 1 auto; min-block-size:0; overflow:auto; overscroll-behavior:contain; }
 .chat-empty { block-size:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:24px 24px 96px; gap:14px; container-type:inline-size; }
-.chat-wordmark { margin:0; font-size:clamp(2.75rem,11cqi,6.5rem); line-height:.9; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); max-inline-size:none; white-space:nowrap; }
+.chat-wordmark { margin:0; font-size:clamp(2.75rem,11cqi,6.5rem); line-height:.9; font-weight:800; letter-spacing:-.01em; color:var(--accent); max-inline-size:none; white-space:nowrap; }
 .chat-tagline { margin:0 auto; color:var(--text-3); font-size:14px; line-height:1.45; max-inline-size:34rem; }
 .chat-column { max-inline-size:48rem; margin:0 auto; padding:20px 24px 120px; display:grid; gap:18px; }
 .turn { display:grid; gap:12px; }
@@ -213,6 +213,41 @@ form > label { display:block; margin-block-end:8px; }
 .round-button:disabled { background:color-mix(in srgb,var(--text) 30%,transparent); color:var(--canvas); }
 @media (max-width: 640px) { .app-shell { grid-template-columns:1fr; } .app-shell .sidebar { display:none; } }
 @media (prefers-reduced-motion: reduce) { .typing i, .assistant-text.streaming .turn-text::after { animation:none; } .app-shell * { transition:none !important; } }
+
+/* Workspace pages (agents, memory, account): one look for every form element. */
+.app-shell .page-column > section, .app-shell .page-column > .panel { display:grid; gap:12px; }
+.app-shell .page-column h2 { font-size:18px; font-weight:600; letter-spacing:-.01em; margin:0 0 2px; }
+.app-shell .page-column h3 { font-size:13px; font-weight:600; margin:8px 0 0; }
+.app-shell .page-column h4 { font-size:12.5px; font-weight:600; margin:0; }
+.app-shell .page-column p { margin:0; font-size:12.5px; line-height:1.5; color:var(--text-2); max-inline-size:68ch; }
+.app-shell .page-column > section > section, .app-shell .page-column section[aria-label="Personality proposal review"], .app-shell .page-column .memory-destination > section {
+  background:var(--surface); border-radius:4.8px; padding:16px; box-shadow:inset 0 0 0 1px var(--stroke-3); display:grid; gap:10px; margin-block-start:8px; }
+.app-shell .page-column label:not(.check) { display:grid; gap:4px; font-size:11.5px; font-weight:500; color:var(--text-3); max-inline-size:28rem; }
+.app-shell .page-column input:not([type="checkbox"]), .app-shell .page-column select, .app-shell .page-column textarea {
+  block-size:30px; padding:0 8px; font-size:13px; color:var(--text); background:var(--canvas); border:1px solid var(--border); border-radius:2.4px; transition:border-color .2s ease; }
+.app-shell .page-column textarea { block-size:auto; min-block-size:72px; padding:6px 8px; }
+.app-shell .page-column input:focus, .app-shell .page-column select:focus, .app-shell .page-column textarea:focus { outline:0; border-color:color-mix(in srgb,var(--accent) 55%,var(--border)); }
+.app-shell .page-column button { min-block-size:28px; padding:0 10px; border-radius:2.4px; font-size:12px; font-weight:500; background:var(--surface); color:var(--text); box-shadow:inset 0 0 0 1px var(--border); justify-self:start; }
+.app-shell .page-column button:hover:not(:disabled) { background:var(--row-hover); }
+.app-shell .page-column button.primary { background:var(--accent); color:var(--on-accent); box-shadow:none; }
+.app-shell .page-column button.primary:hover:not(:disabled) { background:var(--accent-hover); }
+.app-shell .page-column button:disabled { opacity:.45; background:var(--surface); color:var(--text-3); }
+.app-shell .page-column p[role="status"] { justify-self:start; font-size:11.5px; color:var(--text-3); padding:2px 8px; border-radius:2.4px; background:var(--row-hover); }
+.app-shell .page-column dl { display:grid; grid-template-columns:max-content 1fr; gap:6px 16px; margin:0; font-size:12.5px; }
+.app-shell .page-column dl > div { display:contents; }
+.app-shell .page-column dt { color:var(--text-3); }
+.app-shell .page-column dd { margin:0; overflow-wrap:anywhere; }
+.app-shell .page-column table { border-collapse:separate; border-spacing:0; inline-size:100%; font-size:12.5px; border:1px solid var(--stroke-3); border-radius:3.2px; overflow:hidden; }
+.app-shell .page-column caption { caption-side:top; text-align:start; font-size:11.5px; color:var(--text-3); padding-block-end:6px; }
+.app-shell .page-column th { text-align:start; font-size:11.5px; font-weight:500; color:var(--text-3); background:var(--row-hover); padding:6px 10px; }
+.app-shell .page-column td { padding:6px 10px; border-block-start:1px solid var(--stroke-3); }
+.app-shell .page-column pre { margin:0; padding:10px 12px; border-radius:3.2px; background:var(--canvas); box-shadow:inset 0 0 0 1px var(--border); font:12px/1.5 Menlo,Monaco,"SF Mono",monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+.app-shell .page-column details { border-radius:3.2px; box-shadow:inset 0 0 0 1px var(--border); padding:8px 12px; }
+.app-shell .page-column summary { cursor:pointer; font-size:12.5px; font-weight:500; }
+.app-shell .page-column ul { margin:0; padding-inline-start:18px; font-size:12.5px; color:var(--text-2); }
+.app-shell .page-column .badge { justify-self:start; font-size:11px; padding:1px 6px; border-radius:2.4px; border:1px solid var(--stroke-3); color:var(--text-2); }
+
+.app-shell .page-column p.fine-print { font-size:11.5px; color:var(--text-3); }
 
 /* Sign-in card */
 .auth-workspace { max-inline-size:380px; margin:clamp(24px,10vh,96px) auto; padding:28px; background:var(--surface); border-radius:4.8px; box-shadow:inset 0 0 0 1px var(--border),0 6px 20px rgba(17,24,39,.06); }
