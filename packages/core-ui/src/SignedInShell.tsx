@@ -4,15 +4,18 @@ import type { SessionClient } from './session';
 import { ChatController } from './chat';
 import { ChatScreen } from './ChatScreen';
 import { AgentsDestination } from './AgentsDestination';
+import { BoardController } from './board';
+import { TaskBoard } from './TaskBoard';
 import { AccountPanel, MemoryPanel } from './SessionPanels';
 import { Icon } from './icons';
 import type { IconName } from './icons';
 import { UiIcon } from './ui-icons';
 
-type Page = 'chat' | 'agents' | 'memory' | 'account';
-const pages: ReadonlyArray<{ key: Page; label: string; icon: IconName }> = [
+type Page = 'chat' | 'agents' | 'board' | 'memory' | 'account';
+const pages: ReadonlyArray<{ key: Page; label: string; icon: IconName | 'board' }> = [
   { key: 'chat', label: 'Chat', icon: 'message-circle' },
   { key: 'agents', label: 'Agents', icon: 'user' },
+  { key: 'board', label: 'Board', icon: 'board' },
   { key: 'memory', label: 'Memory', icon: 'database' },
   { key: 'account', label: 'Account', icon: 'settings' },
 ];
@@ -31,6 +34,8 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
   const [chat, setChat] = useState<ChatController>();
   const [chatKey, setChatKey] = useState(0);
   useEffect(() => { const c = new ChatController(client); setChat(c); return () => c.dispose(); }, [client, chatKey]);
+  const [board, setBoard] = useState<BoardController>();
+  useEffect(() => { const b = new BoardController(client); setBoard(b); return () => b.dispose(); }, [client]);
   const chatState = useSyncExternalStore(
     chat ? chat.subscribe : noopSubscribe,
     chat ? chat.getSnapshot : nullSnapshot,
@@ -47,7 +52,7 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
       </button>
       <nav aria-label="Workspace">{pages.map(p =>
         <button key={p.key} className="nav-item" aria-current={page === p.key ? 'page' : undefined} onClick={() => setPage(p.key)}>
-          <Icon name={p.icon}/>{p.label}
+          {p.icon === 'board' ? <UiIcon name="board" size={14}/> : <Icon name={p.icon}/>}{p.label}
         </button>)}
       </nav>
       <p className="section-label"><span className="checker" aria-hidden="true"/>Conversations</p>
@@ -70,6 +75,7 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
         {chat ? <ChatScreen key={chatKey} controller={chat} mode={mode}/> : <p>Chat is not connected.</p>}
       </section>
       <section className="page page-scroll" hidden={page !== 'agents'}><div className="page-column"><AgentsDestination client={client}/></div></section>
+      <section className="page page-scroll page-board" hidden={page !== 'board'}>{board && <TaskBoard controller={board}/>}</section>
       <section className="page page-scroll" hidden={page !== 'memory'}><div className="page-column"><MemoryPanel client={client}/></div></section>
       <section className="page page-scroll" hidden={page !== 'account'}><div className="page-column"><AccountPanel client={client}/></div></section>
     </main>

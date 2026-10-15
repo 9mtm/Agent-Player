@@ -1,6 +1,8 @@
 import { allowedPersonality, personalityRoute, personalityResponse } from './personality-contract.js';
+import { allowedBoard, boardRoute, boardResponse, BOARDS_PATH } from './board-contract.js';
 import { allowedHire, batchPath, grantsAgentId, permissionsAgentId, hireResponse, hireRoute, BATCHES_PATH, CATALOGUE_PATH, DISTRIBUTION_PATH, PLAN_PATH } from './hire-contract.js';
 import type { HireRequest } from './hire';
+import type { BoardRequest } from './board';
 import { validDeviceToken, validLoginBody } from './login-contract.js';
 import { setupStatus } from './setup-status.js';
 import { validChatBody, validKey, validId, chatError, SSEParser, CHAT_DEADLINE_MS, CHAT_IDLE_MS } from './chat-protocol.js';
@@ -24,7 +26,7 @@ export { SessionFailure } from './session-failure';
 export interface WireRequest { method: 'GET' | 'POST' | 'PUT'; path: string; body?: unknown; headers: Readonly<Record<string, string>>; signal: AbortSignal }
 export interface WireResponse { status: number; body: unknown; retryAfterSeconds?: number; stream?: ReadableStream<Uint8Array>; streamIds?: ChatIds }
 export type WireTransport = (request: WireRequest) => Promise<WireResponse>;
-type Request = AgentRequest | HireRequest | MemoryRequest | SuggestionRequest | { method: 'GET'; path: '/api/auth/me' };
+type Request = AgentRequest | HireRequest | MemoryRequest | SuggestionRequest | BoardRequest | { method: 'GET'; path: '/api/auth/me' };
 const record = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
 const id = (x: string) => /^[A-Za-z0-9][A-Za-z0-9_.@-]{0,199}$/.test(x) && !x.includes('..');
 function user(value: unknown): User {
@@ -35,7 +37,7 @@ function user(value: unknown): User {
 }
 // Reject before URL normalization. No generic URL, header, key or mutation escape hatch.
 export function allowedRequest(method: string, path: string, body?: unknown): boolean {
-  if (allowedPersonality(method, path, body) || allowedHire(method, path, body)) return true;
+  if (allowedPersonality(method, path, body) || allowedHire(method, path, body) || allowedBoard(method, path, body)) return true;
   const agentId = /^\/api\/agents\/([^/?#]+)$/.exec(path)?.[1];
   if (method === 'PUT') return validAgentId(agentId) && record(body) && Object.keys(body).length === 2 && Object.keys(body).every(k => k === 'name' || k === 'expectedVersion') && typeof body.name === 'string' && validatedDisplayName(body.name) === body.name && validVersion(body.expectedVersion);
   if (method === 'GET' && body === undefined && (path === '/api/agents' || validAgentId(agentId))) return true;
@@ -84,6 +86,7 @@ function projectResponse(path: string, response: WireResponse): WireResponse {
   const notice = boundaryNotice(response); if (notice) return { status: response.status, body: { code: notice } };
   if (personalityRoute(path)) return { status: response.status, body: personalityResponse(path, response.status, response.body) };
   if (hireRoute(path, response.status)) return { status: response.status, body: hireResponse(path, response.status, response.body) };
+  if (boardRoute(path)) return { status: response.status, body: boardResponse(path, response.status, response.body) };
   if (path === '/api/agents' || (path.startsWith('/api/agents/') && path !== '/api/agents/name-suggestion')) return agentResponse(path, response);
   if (response.status === 200 && (path === '/api/auth/login' || path === '/api/auth/me')) {
     if (!record(response.body)) throw new SessionFailure('unavailable');
@@ -262,7 +265,7 @@ export class SessionClient {
     if (request.method === 'PUT' && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     if (request.method === 'POST' && request.path.startsWith('/api/memory/') && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     if (personalityRoute(request.path) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
-    if (((request.method === 'POST' && request.path === '/api/agents') || grantsAgentId(request.path) || request.path === CATALOGUE_PATH || request.path === PLAN_PATH || request.path === DISTRIBUTION_PATH || request.path === BATCHES_PATH || batchPath(request.path) || permissionsAgentId(request.path)) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
+    if (((request.method === 'POST' && request.path === '/api/agents') || grantsAgentId(request.path) || request.path === CATALOGUE_PATH || request.path === PLAN_PATH || request.path === DISTRIBUTION_PATH || request.path === BATCHES_PATH || batchPath(request.path) || permissionsAgentId(request.path) || request.path === BOARDS_PATH || request.path.startsWith(`${BOARDS_PATH}/`)) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     const epoch = this.#state.epoch;
     const result = await this.#send(request.method, request.path, 'body' in request ? request.body : undefined, this.#token, epoch, signal);
     if (epoch !== this.#state.epoch) return safeResponse(request.path, result);

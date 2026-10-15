@@ -1,0 +1,11 @@
+export const BOARDS_PATH: '/api/boards';
+export const priorities: readonly ['low', 'normal', 'high', 'urgent'];
+export const MAX_TITLE: number;
+export const MAX_DESCRIPTION: number;
+export const MAX_COMMENT: number;
+export function boardPath(path: string): { kind: string; board: string; column?: string; card?: string } | null;
+export function validNewCard(x: unknown): boolean;
+export function validCardEdit(x: unknown): boolean;
+export function allowedBoard(method: string, path: string, body?: unknown): boolean;
+export function boardRoute(path: string): boolean;
+export function boardResponse(path: string, status: number, body: unknown): unknown;
