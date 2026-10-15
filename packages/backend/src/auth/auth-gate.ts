@@ -174,6 +174,7 @@ export const TIER_RULES: readonly Rule[] = [
   { methods: '*', prefix: '/api/approvals', access: 'owner' },      // runs held agent tool calls (S1.3)
   { methods: '*', exact: '/api/agents/:id/tool-grants', access: 'owner' }, // agent permissions (S1.4)
   { methods: '*', exact: '/api/agents/:id/permissions', access: 'owner' }, // memory scope + off/ask/allow (CORE-PERMS-01)
+  { methods: '*', prefix: '/api/boards', access: 'owner' },        // company task board (BOARD-01)
   { methods: '*', pattern: /^\/api\/agents\/:id\/personality\/(current|versions|lock|unlock|rollback)$/, access: 'owner' }, // versioned personality (CORE-01)
   { methods: ['GET'], pattern: /^\/api\/agents\/:id\/personality\/proposals(\/:pid)?$/, access: 'owner' }, // review drift proposals (CORE-01c)
   { methods: ['POST'], pattern: /^\/api\/agents\/:id\/personality\/proposals\/:pid\/(approve|reject)$/, access: 'owner' }, // decide drift (CORE-01c)

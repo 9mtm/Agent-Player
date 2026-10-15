@@ -96,6 +96,10 @@ function chatStageEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 export const STAGE3_ROUTES: ReadonlySet<string> = new Set([
   'POST /api/agents', 'GET /api/agents/:id/tool-grants', 'PUT /api/agents/:id/tool-grants',
   'GET /api/agents/:id/permissions', 'PUT /api/agents/:id/permissions',
+  // BOARD-01: the company task board (owner only)
+  'GET /api/boards', 'GET /api/boards/:id', 'POST /api/boards/:id/columns', 'PUT /api/boards/:id/columns/:columnId',
+  'POST /api/boards/:id/cards', 'PUT /api/boards/:id/cards/:cardId',
+  'GET /api/boards/:id/cards/:cardId/comments', 'POST /api/boards/:id/cards/:cardId/comments',
   // ONBOARD-TEAM-01: the company catalogue and the proposed team (both only read; names are not reserved)
   'GET /api/onboarding/team-catalogue', 'POST /api/onboarding/team-plan',
   // ONBOARD-TEAM-02: total headcount + batch hire (creates agents like POST /api/agents)
