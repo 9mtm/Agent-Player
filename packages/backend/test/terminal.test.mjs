@@ -108,7 +108,7 @@ test('a peer that is not loopback is refused', async () => {
 
 test('the shell environment is an allow-list (no server secrets)', () => {
   const env = mgr.shellEnv('darwin', { PATH: '/bin', HOME: '/h', JWT_SECRET: 'x', OPENAI_API_KEY: 'y', DATABASE_URL: 'z' });
-  assert.deepEqual(Object.keys(env).sort(), ['COLORTERM', 'HOME', 'PATH', 'TERM']);
+  assert.deepEqual(Object.keys(env).sort(), ['COLORTERM', 'HOME', 'PATH', 'PROMPT_EOL_MARK', 'TERM']);
   const win = mgr.shellEnv('win32', { Path: 'x', PATH: 'C:\\Windows', SystemRoot: 'C:\\Windows', ENCRYPTION_KEY: 'k' });
   assert.equal(win.ENCRYPTION_KEY, undefined);
   assert.equal(win.SystemRoot, 'C:\\Windows');

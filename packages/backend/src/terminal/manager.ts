@@ -71,6 +71,8 @@ export function shellEnv(os: NodeJS.Platform = platform(), env: NodeJS.ProcessEn
   }
   out.TERM = 'xterm-256color';
   out.COLORTERM = 'truecolor';
+  // zsh marks output without a final newline with a reverse "%"; a fresh screen has none to mark.
+  if (os !== 'win32') out.PROMPT_EOL_MARK = '';
   return out;
 }
 
