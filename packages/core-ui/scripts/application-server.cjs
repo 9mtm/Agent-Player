@@ -1,0 +1,261 @@
+const { allowedPersonality, personalityRoute, personalityResponse } = require('../src/personality-contract.js');
+const { validDeviceToken, validLoginBody } = require('../src/login-contract.js');
+const { setupStatus } = require('../src/setup-status.js');
+const { memoryResponse } = require('./memory-response.cjs');
+const { validChatBody, validKey, validId, chatError, SSEParser, CHAT_BYTES, CHAT_DEADLINE_MS, CHAT_IDLE_MS } = require('../src/chat-protocol.js');
+const http = require('node:http');
+const { performance } = require('node:perf_hooks');
+const KEEPALIVE_MS = 3000;
+const { root, readCurrent } = require('./build-artifacts.cjs');
+const { HEADERS, requestPath } = require('./preview.cjs');
+const HOST = '127.0.0.1';
+const LIMIT = 128 * 1024;
+const RESPONSE_LIMIT = 4 * 1024 * 1024;
+const languages = ['en', 'ar', 'de', 'fr', 'es', 'zh', 'ja', 'ko', 'pt-BR', 'ru', 'tr', 'hi'];
+const record = x => x !== null && typeof x === 'object' && !Array.isArray(x);
+const { validAgentId: agentId } = require('../src/agent-id.js');
+const { retryAfterSeconds } = require('../src/retry-after.js');
+const version = x => Number.isSafeInteger(x) && x > 0;
+const name = x => typeof x === 'string' && x.length > 0 && [...x].length <= 60 && x.normalize('NFKC').replace(/\s+/g, ' ').trim() === x && !/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069]/u.test(x);
+const agent = x => {
+  if (!record(x) || !agentId(x.id) || !version(x.version)) throw Error();
+  return name(x.name) && x.nameUnavailable !== true
+    ? { id: x.id, name: x.name, version: x.version }
+    : { id: x.id, version: x.version, nameUnavailable: true };
+};
+function allowed(method, target, body) {
+  if (allowedPersonality(method, target, body)) return true;
+  const id = /^\/api\/agents\/([^/?#]+)$/.exec(target)?.[1];
+  if (method === 'PUT') return agentId(id) && record(body) && Object.keys(body).length === 2 && Object.keys(body).every(k => k === 'name' || k === 'expectedVersion') && name(body.name) && version(body.expectedVersion);
+  if (method === 'GET' && body === undefined && (target === '/api/agents' || agentId(id))) return true;
+  if (method === 'POST') {
+    if (target === '/api/chat') return validChatBody(body);
+    if (/^\/api\/memory\/proposals\/[A-Za-z0-9-]{1,64}\/(approve|reject)$/.test(target)) return record(body) && Object.keys(body).length === 1 && /^[a-f0-9]{64}$/.test(body.expectedReviewHash) && typeof body.expectedReviewHash === 'string';
+    if (target === '/api/auth/logout') return body === undefined;
+    if (target === '/api/auth/login') return validLoginBody(body);
+    return target === '/api/agents/name-suggestion' && record(body) && Object.keys(body).length === 2 && languages.includes(body.language) && Array.isArray(body.exclude) && body.exclude.length <= 100 && body.exclude.every(x => typeof x === 'string' && x.length <= 200);
+  }
+  if (method !== 'GET' || body !== undefined) return false;
+  if (['/api/setup/status', '/api/auth/me', '/api/memory/proposals', '/api/memory/proposals?status=pending'].includes(target)) return true;
+  if (/^\/api\/memory\/proposals\/[A-Za-z0-9-]{1,64}$/.test(target)) return true;
+  const m = /^\/api\/memory\/files\/([^/?#]+)\?agentId=([^&#]+)$/.exec(target);
+  if (!m) return false;
+  try {
+    const d = decodeURIComponent(m[1]), a = decodeURIComponent(m[2]);
+    const drawer = d === 'owner' || d === 'experience' || /^project:[a-z0-9][a-z0-9_-]{0,63}$/.test(d) || (/^(task|people):[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}$/.test(d) && !d.includes('..'));
+    return drawer && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(a) && !a.includes('..') && encodeURIComponent(d) === m[1] && encodeURIComponent(a) === m[2];
+  } catch { return false; }
+}
+// Stage 1 is an explicit route-identity subset, not permission for arbitrary GETs.
+// Keep this list fixed when expanding the ordinary bridge. Static agent names
+// must be reviewed against backend route registration before widening this gate.
+function stage1Route(method, target) {
+  if (method === 'POST') return target === '/api/auth/login' || target === '/api/auth/logout';
+  if (method !== 'GET') return false;
+  const id = /^\/api\/agents\/([^/?#]+)/.exec(target)?.[1];
+  if (id && ['status', 'name-suggestion'].includes(id.toLowerCase())) return false;
+  const read = ['/api/setup/status', '/api/auth/me', '/api/agents', '/api/memory/proposals', '/api/memory/proposals?status=pending'].includes(target)
+    || /^\/api\/agents\/[^/?#]+$/.test(target)
+    || /^\/api\/agents\/[^/?#]+\/personality\/proposals(?:\/[^/?#]+)?$/.test(target)
+    || /^\/api\/memory\/proposals\/[A-Za-z0-9-]{1,64}$/.test(target)
+    || /^\/api\/memory\/files\/[^/?#]+\?agentId=[^&#]+$/.test(target);
+  return read && allowed('GET', target, undefined);
+}
+function project(target, status, body) {
+  if (target === '/api/setup/status') return setupStatus(status, body);
+  if (target === '/api/chat') return chatError(status, body);
+  if ((status === 403 && ['inactive_user', 'forbidden'].includes(body?.code)) || (status === 401 && body?.code === 'unauthenticated')) return { code: body.code };
+  const boundaryCode = body?.code;
+  if ((status === 403 && ['published_password', 'account_inactive', 'origin_not_allowed', 'read_only_stage'].includes(boundaryCode)) || (status === 429 && boundaryCode === 'rate_limited') || (status === 421 && boundaryCode === 'host_not_allowed')) return { code: boundaryCode };
+  if (personalityRoute(target)) return personalityResponse(target, status, body);
+  if (target === '/api/agents' || (target.startsWith('/api/agents/') && target !== '/api/agents/name-suggestion')) {
+    if (status === 200 && target === '/api/agents') {
+      if (!Array.isArray(body?.agents) || body.agents.length > 10000) throw Error();
+      const agents = body.agents.map(agent); if (new Set(agents.map(a => a.id)).size !== agents.length) throw Error();
+      return { agents };
+    }
+    if (status === 200 || (status === 409 && body?.code === 'version_conflict')) {
+      const a = agent(body?.agent); if (a.id !== target.slice('/api/agents/'.length)) throw Error();
+      if (status === 200) return { agent: a };
+      if (body.currentVersion !== a.version) throw Error();
+      return { code: 'version_conflict', currentVersion: a.version, agent: a };
+    }
+    const code = body?.code;
+    return (status === 409 && code === 'name_taken') || (status === 400 && code === 'invalid_version') || (status === 403 && code === 'reserved_agent') ? { code } : null;
+  }
+  if (status !== 200) {
+    const decision = /^\/api\/memory\/proposals\/[A-Za-z0-9-]{1,64}\/(approve|reject)$/.test(target);
+    const code = body?.code;
+    return decision && ((status === 409 && ['already_decided', 'stale', 'review_changed'].includes(code)) || (status === 400 && code === 'review_hash_required')) ? { code } : null;
+  }
+  if (target === '/api/auth/login' || target === '/api/auth/me') {
+    const u = body?.user;
+    if (!record(u) || !['id', 'email', 'username', 'role'].every(k => typeof u[k] === 'string')) throw Error();
+    const user = Object.fromEntries(['id', 'email', 'username', 'role'].map(k => [k, u[k]]));
+    if (target.endsWith('/me')) return { user };
+    if (typeof body.token !== 'string' || !/^[A-Za-z0-9._~-]{1,8192}$/.test(body.token)) throw Error();
+    if (!validDeviceToken(body.deviceToken)) throw Error();
+    return { user, token: body.token, deviceToken: body.deviceToken };
+  }
+  if (target === '/api/auth/logout') { if (body?.success !== true) throw Error(); return { success: true }; }
+  if (target === '/api/agents/name-suggestion') return { name: body?.name, language: body?.language, exhausted: body?.exhausted };
+  return memoryResponse(target, body);
+}
+const passiveHeaders = new Set(['host', 'origin', 'authorization', 'accept', 'content-type', 'content-length', 'connection', 'user-agent', 'accept-encoding', 'accept-language', 'cache-control', 'pragma', 'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'cookie']);
+// Internal factory accepts only numeric loopback ports for ephemeral mock tests.
+// The executable below exposes no destination, host, port or environment overrides.
+function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly = false, upstreamPort = 42521, timeoutMs = 10000, streamTimeoutMs = CHAT_DEADLINE_MS, streamIdleMs = CHAT_IDLE_MS } = {}) {
+  if (typeof stage1ReadOnly !== 'boolean') throw Error('Invalid stage1 configuration');
+  if (!['candidate', 'current'].includes(channel) || !Number.isInteger(upstreamPort) || upstreamPort < 1 || upstreamPort > 65535 || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10000) throw Error('Invalid launch configuration');
+  if (!Number.isInteger(streamTimeoutMs) || streamTimeoutMs < 1 || streamTimeoutMs > CHAT_DEADLINE_MS || !Number.isInteger(streamIdleMs) || streamIdleMs < 1 || streamIdleMs > CHAT_IDLE_MS) throw Error('Invalid stream limits');
+  const assets = readCurrent(packageRoot, channel); // Pin validated bytes for this server lifetime.
+  const server = http.createServer({ maxHeaderSize: 16384, requestTimeout: 10000, headersTimeout: 10000 }, async (req, res) => {
+    for (const [k, v] of Object.entries(HEADERS)) res.setHeader(k, v);
+    const send = (status, body = null, type = 'application/json; charset=utf-8') => {
+      if (res.destroyed || res.writableEnded) return;
+      if (res.headersSent) { res.destroy(); return; }
+      const data = Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body));
+      res.writeHead(status, { 'Content-Type': type, 'Content-Length': data.length }); res.end(req.method === 'HEAD' ? undefined : data);
+    };
+    let upstream;
+    let idle;
+    let timer = setTimeout(() => { send(504); upstream?.destroy(); }, timeoutMs);
+    const cleanup = () => { clearTimeout(timer); clearTimeout(idle); upstream?.destroy(); };
+    res.once('close', cleanup); res.once('finish', cleanup);
+    req.once('aborted', cleanup);
+    req.on('error', () => { cleanup(); res.destroy(); });
+    const host = `${HOST}:${req.socket.localPort}`, origin = `http://${host}`;
+    const raw = req.url || '';
+    if (req.headers.host !== host) return send(421);
+    const duplicates = new Set();
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      const key = req.rawHeaders[i].toLowerCase();
+      if (duplicates.has(key)) return send(400);
+      duplicates.add(key);
+    }
+    if ((req.headers.origin && req.headers.origin !== origin) || (req.headers['sec-fetch-site'] && !['same-origin', 'none'].includes(req.headers['sec-fetch-site']))) return send(403);
+    if (stage1ReadOnly && raw.startsWith('/api/') && !stage1Route(req.method, raw)) return send(403, { code: 'stage1_read_only' });
+    if (requestPath(raw) === null || raw.length > 2048) return send(400);
+    if (!raw.startsWith('/api/')) {
+      if (!['GET', 'HEAD'].includes(req.method)) return send(405);
+      if (raw.includes('?') || req.headers.authorization || req.headers['transfer-encoding'] || Number(req.headers['content-length'] || 0)) return send(400);
+      const name = ['/', '/chat', '/agents', '/memory', '/tasks', '/settings', '/channels'].includes(raw) ? 'index.html' : raw.slice(1);
+      const data = assets.files.get(name);
+      if (!data) return send(404);
+      return send(200, data, name.endsWith('.html') ? 'text/html; charset=utf-8' : name.endsWith('.js') ? 'text/javascript; charset=utf-8' : name.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/plain; charset=utf-8');
+    }
+    if (!['GET', 'POST', 'PUT'].includes(req.method)) return send(405);
+    const chat = raw === '/api/chat' && req.method === 'POST';
+    if (Object.keys(req.headers).some(k => !passiveHeaders.has(k) && !(chat && k === 'idempotency-key')) || (req.headers.connection && !/^(close|keep-alive)$/i.test(req.headers.connection)) || (req.headers['sec-fetch-mode'] && req.headers['sec-fetch-mode'] !== 'same-origin') || (req.headers['sec-fetch-dest'] && req.headers['sec-fetch-dest'] !== 'empty')) return send(400);
+    if (['POST', 'PUT'].includes(req.method) && req.headers.origin !== origin) return send(403);
+    if (chat && !validKey(req.headers['idempotency-key'])) return send(400);
+    const login = raw === '/api/auth/login';
+    const discovery = raw === '/api/setup/status' && req.method === 'GET';
+    const auth = req.headers.authorization;
+    if ((login || discovery) ? auth !== undefined : typeof auth !== 'string' || auth.length > 8200 || !/^Bearer [A-Za-z0-9._~-]+$/.test(auth)) return send(401);
+    const length = Number(req.headers['content-length'] || 0);
+    if (!Number.isSafeInteger(length) || length < 0 || length > LIMIT) return send(413);
+    if (req.headers['content-type'] && !/^application\/json(?:;\s*charset=utf-8)?$/i.test(req.headers['content-type'])) return send(415);
+    try {
+      const chunks = []; let size = 0;
+      for await (const chunk of req) { size += chunk.length; if (size > LIMIT) return send(413); chunks.push(chunk); }
+      const bytes = Buffer.concat(chunks);
+      if (bytes.length && req.headers['content-type'] === undefined) return send(415);
+      const body = bytes.length ? JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) : undefined;
+      if (!allowed(req.method, raw, body)) return send(400);
+      if (res.destroyed || res.writableEnded) return;
+      const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
+      const headers = { Host: `${HOST}:${upstreamPort}`, Accept: chat ? 'text/event-stream' : 'application/json', ...(chat ? { 'Idempotency-Key': req.headers['idempotency-key'] } : {}), ...(auth ? { Authorization: auth } : {}), ...(req.headers.origin ? { Origin: origin } : {}), ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {}) };
+      // Request-body intake keeps its ordinary bound. Chat header wait and body
+      // share one absolute stream deadline, including upstream model startup.
+      if (chat) {
+        clearTimeout(timer);
+        timer = setTimeout(() => { send(504); upstream?.destroy(); }, streamTimeoutMs);
+      }
+      upstream = http.request({ hostname: HOST, port: upstreamPort, path: raw, method: req.method, headers, agent: false, maxHeaderSize: 16384 }, response => {
+        const fail = () => { response.destroy(); send(502); };
+        const status = response.statusCode;
+        if (chat && status === 200) {
+          const runId = response.headers['x-run-id'], messageId = response.headers['x-message-id'];
+          if (response.headers.location || response.headers['set-cookie'] || response.headers['content-encoding']
+            || !/^text\/event-stream(?:\s*;|$)/i.test(response.headers['content-type'] || '')
+            || !validId(runId) || !validId(messageId) || Number(response.headers['content-length'] || 0) > CHAT_BYTES) return fail();
+          const parser = new SSEParser({ runId, messageId });
+          const expire = () => { send(504); response.destroy(); upstream.destroy(); };
+          const touch = () => { clearTimeout(idle); idle = setTimeout(expire, streamIdleMs); };
+          touch();
+          let lastKeepalive = -Infinity;
+          let outputBytes = 0;
+          const write = text => {
+            outputBytes += Buffer.byteLength(text);
+            if (outputBytes > CHAT_BYTES) throw Error('limit');
+            if (!res.write(text)) response.pause();
+          };
+          // Only projected frames, fixed heartbeats and validated identifiers leave the bridge.
+          res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'X-Run-Id': runId, 'X-Message-Id': messageId });
+          res.flushHeaders();
+          response.on('data', chunk => {
+            touch();
+            try {
+              const frames = parser.push(chunk);
+              for (const frame of frames) write(`data: ${JSON.stringify(frame)}\n\n`);
+              const now = performance.now();
+              if (!frames.length && now - lastKeepalive >= KEEPALIVE_MS) {
+                write(': keepalive\n\n'); lastKeepalive = now;
+              }
+            } catch { fail(); }
+          });
+          res.on('drain', () => response.resume());
+          response.on('error', () => { res.destroy(); });
+          response.on('aborted', () => { res.destroy(); });
+          response.on('end', () => { try { parser.finish(); res.end(); } catch { res.destroy(); } });
+          return;
+        }
+        const responseLimit = chat ? 16384 : RESPONSE_LIMIT;
+        if (status >= 300 && status < 400 || response.headers.location || response.headers['set-cookie'] || response.headers['content-encoding'] || !/^application\/json(?:\s*;|$)/i.test(response.headers['content-type'] || '') || Number(response.headers['content-length'] || 0) > responseLimit) return fail();
+        const parts = []; let count = 0;
+        response.on('data', chunk => { count += chunk.length; if (count > responseLimit) fail(); else parts.push(chunk); });
+        response.on('error', () => send(502));
+        response.on('end', () => {
+          try {
+            const projected = project(raw, status, JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(parts))));
+            // Fetch may automatically retry 421 POSTs. Do not expose a retry-triggering
+            // status for any non-GET; preserve the reviewed code with a bridge 502.
+            const delayHeaders = response.rawHeaders.filter((value, i) => i % 2 === 0 && value.toLowerCase() === 'retry-after').length;
+            const delay = status === 429 && delayHeaders === 1 ? retryAfterSeconds(response.headers['retry-after']) : undefined;
+            if (delay !== undefined && !res.headersSent) res.setHeader('Retry-After', String(delay));
+            send(req.method !== 'GET' && status === 421 ? 502 : status, projected);
+          }
+          catch { send(502); }
+        });
+      });
+      upstream.on('error', () => send(502));
+      upstream.on('upgrade', (_response, socket) => { socket.destroy(); send(502); });
+      upstream.end(payload);
+    } catch { send(400); }
+  });
+  server.on('checkContinue', (_req, res) => { res.writeHead(417); res.end(); });
+  server.on('upgrade', (_req, socket) => socket.destroy());
+  server.on('connect', (_req, socket) => socket.destroy());
+  server.on('clientError', (_error, socket) => socket.destroy());
+  return server;
+}
+async function startApplication(channel, { stage1ReadOnly = false } = {}) {
+  const server = createApplicationServer({ channel, stage1ReadOnly });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen({ host: HOST, port: 42522, exclusive: true }, resolve); });
+  return server;
+}
+function parseLaunchArgs(args) {
+  if (![2, 3].includes(args.length) || (args.length === 3 && args[2] !== '--stage1-read-only') || args[0] !== '--enable-isolated-api' || !['--candidate', '--current'].includes(args[1])) return null;
+  return { channel: args[1].slice(2), stage1ReadOnly: args[2] === '--stage1-read-only' };
+}
+if (require.main === module) {
+  const options = parseLaunchArgs(process.argv.slice(2));
+  if (!options) {
+    console.error('Required: --enable-isolated-api --candidate|--current [--stage1-read-only]'); process.exitCode = 1;
+  } else startApplication(options.channel, options).then(server => {
+    console.log('Isolated application server on http://127.0.0.1:42522; explicit client injection required.');
+    for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { server.close(); server.closeAllConnections(); });
+  }).catch(error => { console.error(error.code === 'EADDRINUSE' ? 'Port 42522 occupied; no fallback or termination attempted.' : 'Application server unavailable.'); process.exitCode = 1; });
+}
+module.exports = { createApplicationServer, startApplication, allowed, stage1Route, parseLaunchArgs, LIMIT, RESPONSE_LIMIT };

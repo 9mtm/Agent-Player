@@ -1,0 +1,54 @@
+{
+  "project": "Tabler Icons",
+  "repository": "https://github.com/tabler/tabler-icons",
+  "tag": "v3.34.1",
+  "revision": "e8fcec66034d15fa893d4d3c740e584f8518ed44",
+  "license": {
+    "file": "LICENSE",
+    "source_url": "https://raw.githubusercontent.com/tabler/tabler-icons/e8fcec66034d15fa893d4d3c740e584f8518ed44/LICENSE",
+    "sha256": "d5a3f948ae5cb95bfc4d2f767ef2bf6a778815b0ddb2d1c48037744cf636518e",
+    "notice": "Copyright (c) 2020-2024 Pawe\u0142 Kuna"
+  },
+  "files": [
+    {
+      "file": "settings.svg",
+      "source_url": "https://raw.githubusercontent.com/tabler/tabler-icons/e8fcec66034d15fa893d4d3c740e584f8518ed44/icons/outline/settings.svg",
+      "sha256": "98f10cef0571a9bbaf954c8a5d368107c247215fad68bc62a6b2c7dfc0e29642"
+    },
+    {
+      "file": "command.svg",
+      "source_url": "https://raw.githubusercontent.com/tabler/tabler-icons/e8fcec66034d15fa893d4d3c740e584f8518ed44/icons/outline/command.svg",
+      "sha256": "193f7f9a0e40f51edc8377df0b5c4b4e3905a9f16aa4a46f796a155c4344785c"
+    },
+    {
+      "file": "database.svg",
+      "source_url": "https://raw.githubusercontent.com/tabler/tabler-icons/e8fcec66034d15fa893d4d3c740e584f8518ed44/icons/outline/database.svg",
+      "sha256": "29d5c3f4626229b111d4b14c77a020304fe585ff0d959d7c1e41d24151d1aa62"
+    },
+    {
+      "file": "message-circle.svg",
+      "source_url": "https://raw.githubusercontent.com/tabler/tabler-icons/e8fcec66034d15fa893d4d3c740e584f8518ed44/icons/outline/message-circle.svg",
+      "sha256": "5d0200d903d3c362209acbd10afa06da46dfa1b8bef75b7a22c1739476ab192a"
+    },
+    {
+      "file": "clock.svg",
+      "source_url": "https://raw.githubusercontent.com/tabler/tabler-icons/e8fcec66034d15fa893d4d3c740e584f8518ed44/icons/outline/clock.svg",
+      "sha256": "40ff79a70fd12fdadb8a359684285adf01a633b7cf0b83d1093fbfb500f8e67f"
+    },
+    {
+      "file": "messages.svg",
+      "source_url": "https://raw.githubusercontent.com/tabler/tabler-icons/e8fcec66034d15fa893d4d3c740e584f8518ed44/icons/outline/messages.svg",
+      "sha256": "4e62579f877cad24b2605bf2cea5513f91d831d252624af9770a40c1b66e7cca"
+    },
+    {
+      "file": "user.svg",
+      "source_url": "https://raw.githubusercontent.com/tabler/tabler-icons/e8fcec66034d15fa893d4d3c740e584f8518ed44/icons/outline/user.svg",
+      "sha256": "d3ef20fbd4eb1eb2d7b03f6c5180ce07bb259188b2f6f3aa1ab708b4a93a5d88"
+    },
+    {
+      "file": "dice.svg",
+      "source_url": "https://raw.githubusercontent.com/tabler/tabler-icons/e8fcec66034d15fa893d4d3c740e584f8518ed44/icons/outline/dice.svg",
+      "sha256": "ab6a0512d21c46a9b1e4b5932a84d863e9814e52091f6076ff9ce1ba71166a70"
+    }
+  ]
+}

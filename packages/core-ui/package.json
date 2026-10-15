@@ -1,0 +1,39 @@
+{
+  "name": "@agent-player/core-ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 42522 --strictPort",
+    "build": "node scripts/build.cjs",
+    "typecheck": "node scripts/typecheck.cjs",
+    "test": "node --test tests/*.test.cjs",
+    "preview": "node scripts/preview.cjs",
+    "package:preview": "node scripts/package-preview.cjs",
+    "build:candidate": "node scripts/build.cjs --candidate",
+    "serve:isolated": "node scripts/application-server.cjs"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.7"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "files": [
+    "src/",
+    "assets/",
+    "scripts/",
+    "index.html",
+    "tsconfig.json",
+    "vite.config.ts",
+    "THIRD_PARTY_NOTICES.txt",
+    "dependency-provenance.json"
+  ]
+}
