@@ -545,3 +545,20 @@ form > label { display:block; margin-block-end:8px; }
 .board-inline { display:flex; gap:6px; }
 .board-inline input { flex:1 1 auto; }
 @media (max-width: 900px) { .board-with-rail { grid-template-columns:1fr; } .board-rail { position:static; max-block-size:none; border-inline-end:0; } }
+/* BOARD-03 step B: richer cards */
+.board-cover { display:block; block-size:8px; border-radius:6px 6px 0 0; background:var(--sw); }
+.board-labels { display:flex; flex-wrap:wrap; gap:4px; }
+.board-label { font-size:10.5px; font-weight:600; padding:1px 7px; border-radius:4px; color:#fff; background:var(--sw); border:0; }
+.board-labels.pick .board-label { cursor:pointer; opacity:.45; }
+.board-labels.pick .board-label[aria-pressed="true"] { opacity:1; box-shadow:0 0 0 2px var(--canvas), 0 0 0 3px var(--sw); }
+.board-type { display:inline-block; margin-inline-end:6px; padding:0 5px; border-radius:4px; font-size:10.5px; font-weight:600; box-shadow:inset 0 0 0 1px var(--stroke-3); }
+.board-type.t-bug { color:#e5484d; } .board-type.t-idea { color:#f08c00; } .board-type.t-milestone { color:#8e4ec6; } .board-type.t-request { color:#12a594; }
+.board-check { padding:0 5px; border-radius:4px; }
+.board-check.complete { color:#fff; background:#22a06b; }
+.board-checklist { display:grid; gap:6px; }
+.board-checklist-head { display:flex; justify-content:space-between; align-items:center; }
+.board-checklist h4 { margin:0; }
+.board-checklist ul { list-style:none; margin:0; padding:0; display:grid; gap:2px; }
+.board-checklist li { display:flex; justify-content:space-between; align-items:center; gap:6px; }
+.board-checklist li label { display:flex !important; align-items:center; gap:6px; font-size:12.5px; }
+.board-done { text-decoration:line-through; color:var(--muted); }
