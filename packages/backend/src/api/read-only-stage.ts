@@ -107,7 +107,16 @@ export const STAGE3_ROUTES: ReadonlySet<string> = new Set([
   // ONBOARD-TEAM-02: total headcount + batch hire (creates agents like POST /api/agents)
   'POST /api/onboarding/team-distribution', 'POST /api/onboarding/team-batches', 'GET /api/onboarding/team-batches',
   'GET /api/onboarding/team-batches/:id', 'POST /api/onboarding/team-batches/:id/run',
+  // CHAT-REBUILD-01: saved conversations and resumable runs (the turn itself runs on the local model only)
+  'GET /api/chat/conversations', 'POST /api/chat/conversations', 'PUT /api/chat/conversations/:id', 'DELETE /api/chat/conversations/:id',
+  'GET /api/chat/conversations/:id/messages', 'POST /api/chat/conversations/:id/runs', 'POST /api/chat/runs/:runId/stop',
 ]);
+/** The one stage-3 event stream: a run's events, with nothing but an optional numeric `after` in the query. */
+const RUN_EVENTS_ROUTE = '/api/chat/runs/:runId/events';
+const RUN_EVENTS_URL = /^\/api\/chat\/runs\/[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}\/events(\?after=\d{1,9})?$/;
+function runEventsRoute(method: string, rawUrl: string, route: string | undefined): boolean {
+  return hireStageEnabled() && method === 'GET' && route === RUN_EVENTS_ROUTE && RUN_EVENTS_URL.test(rawUrl);
+}
 function hireStageEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return (env.AGENT_PLAYER_ISOLATED_STAGE ?? '').trim() === '3' && (env.AGENT_PLAYER_LOCAL_MODEL_ONLY ?? '').trim() === '1';
 }
@@ -208,13 +217,14 @@ export async function readOnlyAllows(request: FastifyRequest, opts: ReadOnlyStag
   if (headers.upgrade !== undefined || String(headers.connection ?? '').toLowerCase().includes('upgrade')) return false;
   const stageChat = chatStageEnabled() && method === 'POST' && !!route && rawUrl === route && route === STAGE2_CHAT_ROUTE;
   if (stageChat) return true;
+  if (runEventsRoute(method, rawUrl, route)) return true;
   if (String(headers.accept ?? '').toLowerCase().includes('text/event-stream')) return false;
 
   if (method === 'GET' || method === 'HEAD') {
     if (method === 'GET' && hireStageRoute(method, rawUrl, route)) return true;
     return cleanPath(rawUrl) !== null && isSafeRead(method, route);
   }
-  if (method === 'PUT') return hireStageRoute(method, rawUrl, route);
+  if (method === 'PUT' || method === 'DELETE') return hireStageRoute(method, rawUrl, route);
 
   if (method === 'OPTIONS') {
     // Only @fastify/cors' preflight route ('*'), never a custom OPTIONS handler.

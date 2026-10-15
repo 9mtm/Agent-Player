@@ -53,8 +53,29 @@ test('the chat screen renders a reply as Markdown, escaped', () => {
     edit() {}, send() {}, cancel() {}, selectAgent() {},
   };
   const out = renderToStaticMarkup(createElement(ChatScreen, { controller, mode: 'mock' }));
-  assert.match(out, /<h4 class="md-h md-h2">Plan<\/h4>/);
+  assert.match(out, /<h4 class="md-h md-h2" dir="auto">Plan<\/h4>/);
   assert.match(out, /<li><strong>one<\/strong><\/li>/);
   assert.ok(!/<img|<i>hi/.test(out));
   assert.match(out, /&lt;i&gt;hi&lt;\/i&gt;/);
+});
+
+test('tables, task lists and code blocks with language, copy and folding', () => {
+  const b = parseBlocks('| Name | Score |\n|:---|---:|\n| A | 1 |\n| B | 2 |\n\n- [x] done\n- [ ] todo');
+  assert.equal(b[0].kind, 'table');
+  assert.deepEqual(b[0].header, ['Name', 'Score']);
+  assert.deepEqual(b[0].align, ['left', 'right']);
+  assert.deepEqual(b[0].rows, [['A', '1'], ['B', '2']]);
+  const out = html('| Name | Score |\n|---|---|\n| <b>A</b> | **1** |\n\n- [x] done\n- [ ] todo');
+  assert.match(out, /<table class="md-table">/);
+  assert.match(out, /<td dir="auto">&lt;b&gt;A&lt;\/b&gt;<\/td>/);
+  assert.match(out, /<li class="md-task" data-done="true">/);
+  const code = Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n');
+  const folded = html('```python\n' + code + '\n```');
+  assert.match(folded, /<span class="md-code-lang">python<\/span>/);
+  assert.match(folded, /Show 16 more lines/);
+  assert.ok(!folded.includes('line 29'));
+  const streaming = html('```python\n' + code);
+  assert.ok(streaming.includes('line 29'), 'an open fence (still streaming) is not folded');
+  assert.match(streaming, /data-streaming="true"/);
+  assert.match(html('مرحبا بكم'), /<p dir="auto">/);
 });

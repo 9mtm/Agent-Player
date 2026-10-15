@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { DragEvent } from 'react';
 import { allCardTypes, allPriorities, cardTypeLabel, cardsIn, matches, priorityLabel } from './board';
 import type { BoardColor, BoardController, BoardSummary, Card, CardType, Column } from './board';
@@ -14,7 +14,7 @@ const typeMark: Record<CardType, string> = { task: '✓', idea: '✦', bug: '⚑
 const colorLabel: Record<BoardColor, string> = { blue: 'Blue', green: 'Green', orange: 'Orange', red: 'Red', purple: 'Purple', pink: 'Pink', teal: 'Teal', gray: 'Gray' };
 
 /** The company's boards: a list of boards (company, per department, shared), the open board's columns, and a card panel. */
-export function TaskBoard({ controller }: { controller: BoardController }) {
+export function TaskBoard({ controller, active = false }: { controller: BoardController; active?: boolean }) {
   const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const [newColumn, setNewColumn] = useState('');
   const [mode, setMode] = useState<'board' | 'new' | 'settings'>('board');
@@ -23,6 +23,8 @@ export function TaskBoard({ controller }: { controller: BoardController }) {
   const departments = [...new Set(s.cards.flatMap(c => c.departments))].sort();
   const openCard = s.cards.find(c => c.id === s.open);
   const visible = s.cards.filter(c => matches(c, s.filter)).length;
+  // Opening the page shows the boards at once (one read the first time the page is shown).
+  useEffect(() => { if (active && s.owner && s.phase === 'idle' && !s.boardId) void controller.load(); }, [active, s.owner, s.phase, s.boardId, controller]);
 
   if (!s.boardId) return <section aria-label="Task board" className="board">
     <div className="board-head"><div><h2>Boards</h2><p className="fine-print">Plan the company's work on boards: one for the whole company, one per department, or shared by departments.</p></div></div>

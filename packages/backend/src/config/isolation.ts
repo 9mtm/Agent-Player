@@ -36,6 +36,8 @@ export interface IsolatedLaunchConfig {
    * 3 = stage 2 plus hiring agents (create + tool grants) on the fresh fake data.
    */
   stage: 1 | 2 | 3;
+  /** Stage 3 with AGENT_PLAYER_LOCAL_MODEL_TOOLS=1: the local model may use the agent's granted tools. */
+  localTools?: boolean;
 }
 
 /** Database selectors that must stay unset (SQLite under the data dir only). */
@@ -66,6 +68,8 @@ export const ISOLATED_STAGE_ENV = 'AGENT_PLAYER_ISOLATED_STAGE';
  */
 export const LOCAL_CHAT_OLLAMA_URL = 'http://127.0.0.1:11434';
 export const LOCAL_MODEL_ONLY_ENV = 'AGENT_PLAYER_LOCAL_MODEL_ONLY';
+/** Stage 3 only: also offer the agent's granted tools to the local model (CHAT-REBUILD-01 long-task tests). Exec-class tools stay off. */
+export const LOCAL_MODEL_TOOLS_ENV = 'AGENT_PLAYER_LOCAL_MODEL_TOOLS';
 
 /** Dead loopback port forced for every local-model endpoint (nothing listens on port 9). */
 export const DEAD_OLLAMA_URL = 'http://127.0.0.1:9';
@@ -231,6 +235,8 @@ export function checkLauncherEnv(
     if (set(env, name) && env[name]!.trim().toLowerCase() !== forced) errors.push(`${name} must be unset or ${forced}`);
   }
   if (set(env, LOCAL_MODEL_ONLY_ENV)) errors.push(`${LOCAL_MODEL_ONLY_ENV} must be unset (the launcher sets it for stage 2)`);
+  const toolsValue = (env[LOCAL_MODEL_TOOLS_ENV] ?? '').trim();
+  if (toolsValue !== '' && (toolsValue !== '1' || stage !== 3)) errors.push(`${LOCAL_MODEL_TOOLS_ENV} must be unset, or 1 with stage 3`);
   // ISO-2: the launcher sets every provider endpoint itself (the dead port;
   // in stage 2 OLLAMA_URL is the local Ollama); an inherited value, even a
   // loopback one, is refused, never passed through.
@@ -239,7 +245,7 @@ export function checkLauncherEnv(
     errors.push(`${name} must be unset (the launcher sets every model endpoint itself)`);
   }
   if (errors.length || dataDir === null || port === null || origins === null) return { ok: false, errors };
-  return { ok: true, config: { dataDir, port, origins, stage } };
+  return { ok: true, config: { dataDir, port, origins, stage, ...(toolsValue === '1' ? { localTools: true } : {}) } };
 }
 
 export function isLoopbackHttpUrl(value: string): boolean {
@@ -281,6 +287,7 @@ export function buildIsolatedChildEnv(
     child.OLLAMA_URL = LOCAL_CHAT_OLLAMA_URL;
     child[LOCAL_MODEL_ONLY_ENV] = '1';
   }
+  if (cfg.stage === 3 && cfg.localTools) child[LOCAL_MODEL_TOOLS_ENV] = '1';
   for (const name of ['LANG', 'LC_ALL', 'TZ']) {
     if (parent[name]) child[name] = parent[name];
   }
@@ -313,6 +320,7 @@ export function checkIsolatedServerEnv(env: NodeJS.ProcessEnv, ctx: IsolationCon
   }
   if (localChat && (env[LOCAL_MODEL_ONLY_ENV] ?? '').trim() !== '1') errors.push(`${LOCAL_MODEL_ONLY_ENV} must be 1 in stages 2 and 3`);
   if (!localChat && set(env, LOCAL_MODEL_ONLY_ENV)) errors.push(`${LOCAL_MODEL_ONLY_ENV} must be unset in stage 1`);
+  if (set(env, LOCAL_MODEL_TOOLS_ENV) && ((env[LOCAL_MODEL_TOOLS_ENV] ?? '').trim() !== '1' || stage !== '3')) errors.push(`${LOCAL_MODEL_TOOLS_ENV} must be unset, or 1 in stage 3`);
   for (const name of Object.keys(env)) {
     if (isProviderEndpointVar(name) && set(env, name) && !isLoopbackHttpUrl(env[name]!)) {
       errors.push(`${name} must be a loopback http URL`);

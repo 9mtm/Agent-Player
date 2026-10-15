@@ -385,6 +385,20 @@ test('stage 3 (hire test): exactly create agent + read/replace its tool grants, 
     assertReadOnly(await req('POST', '/api/onboarding/team-batches/stage3%2fbatch/run', { payload: {} }), 'batch run encoding trick');
     assertReadOnly(await req('DELETE', '/api/onboarding/team-batches/stage3-batch-1'), 'batch delete');
     assertReadOnly(await req('POST', '/api/onboarding', { payload: { step: 'profile', data: {} } }), 'other onboarding writes');
+    // CHAT-REBUILD-01: saved conversations + the one run event stream.
+    const conv = await req('POST', '/api/chat/conversations', { payload: { title: 'Stage chat' } });
+    assert.equal(conv.statusCode, 201, conv.body);
+    const cid = conv.json().conversation.id;
+    assert.equal((await req('GET', '/api/chat/conversations')).statusCode, 200);
+    assert.equal((await req('PUT', `/api/chat/conversations/${cid}`, { payload: { pinned: true } })).statusCode, 200);
+    assert.equal((await req('GET', `/api/chat/conversations/${cid}/messages`)).statusCode, 200);
+    const sse = { 'accept': 'text/event-stream' };
+    assert.equal((await req('GET', '/api/chat/runs/run-unknown-1/events?after=3', { headers: sse })).statusCode, 404, 'events stream passes the stage (unknown run)');
+    assertReadOnly(await req('GET', '/api/chat/runs/run-unknown-1/events?after=3&x=1', { headers: sse }), 'events query trick');
+    assertReadOnly(await req('GET', '/api/chat/runs/run-unknown-1/events?after=-1', { headers: sse }), 'events negative after');
+    assertReadOnly(await req('PUT', `/api/chat/conversations/${cid}?x=1`, { payload: { pinned: false } }), 'conversation PUT query trick');
+    assert.equal((await req('DELETE', `/api/chat/conversations/${cid}`)).statusCode, 200);
+    assertReadOnly(await req('DELETE', '/api/sessions/x'), 'other DELETE');
     // Still behind the auth gate.
     assert.equal((await req('POST', '/api/agents', { payload: { role: 'specialist' }, auth: false })).statusCode, 401);
     // Only those routes; tricks and neighbours stay refused.

@@ -1,8 +1,9 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import type { SessionClient } from './session';
-import { ChatController } from './chat';
-import { ChatScreen } from './ChatScreen';
+import { ConversationsController } from './conversations';
+import { ChatView } from './ChatView';
+import { ConversationList } from './ConversationList';
 import { AgentsDestination } from './AgentsDestination';
 import { BoardController } from './board';
 import { TaskBoard } from './TaskBoard';
@@ -10,6 +11,8 @@ import { AccountPanel, MemoryPanel } from './SessionPanels';
 import { Icon } from './icons';
 import type { IconName } from './icons';
 import { UiIcon } from './ui-icons';
+import { CommandPalette } from './CommandPalette';
+import type { Command } from './CommandPalette';
 
 type Page = 'chat' | 'agents' | 'board' | 'memory' | 'account';
 const pages: ReadonlyArray<{ key: Page; label: string; icon: IconName | 'board' }> = [
@@ -31,23 +34,51 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
   const [page, setPage] = useState<Page>('chat');
   const [theme, setTheme] = useState<'light' | 'dark'>(() =>
     typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-  const [chat, setChat] = useState<ChatController>();
-  const [chatKey, setChatKey] = useState(0);
-  useEffect(() => { const c = new ChatController(client); setChat(c); return () => c.dispose(); }, [client, chatKey]);
+  const [chat, setChat] = useState<ConversationsController>();
+  useEffect(() => { const c = new ConversationsController(client); setChat(c); void c.load(); return () => c.dispose(); }, [client]);
   const [board, setBoard] = useState<BoardController>();
   useEffect(() => { const b = new BoardController(client); setBoard(b); return () => b.dispose(); }, [client]);
   const chatState = useSyncExternalStore(
     chat ? chat.subscribe : noopSubscribe,
     chat ? chat.getSnapshot : nullSnapshot,
     chat ? chat.getSnapshot : nullSnapshot);
-  const title = chatState?.turns[0]?.prompt.trim().slice(0, 60);
   const user = state.user!;
   const mode = state.mode === 'mock' ? 'mock' : 'live';
+  const [rail, setRail] = useState(true);
+  const [palette, setPalette] = useState(false);
+  const boardState = useSyncExternalStore(board ? board.subscribe : noopSubscribe, board ? board.getSnapshot : nullSnapshot, board ? board.getSnapshot : nullSnapshot);
+  // ⌘K / Ctrl+K opens the command box anywhere in the workspace.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(v => !v); } };
+    window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  const newChat = () => { chat?.newChat(); setPage('chat'); };
+  const commands: Command[] = [
+    ...pages.map(p => ({ id: `go-${p.key}`, group: 'Go to', label: p.label, run: () => setPage(p.key) })),
+    { id: 'new-chat', group: 'Actions', label: 'New chat', run: newChat },
+    ...(chatState?.conversations ?? []).slice(0, 30).map(c => ({ id: `chat-${c.id}`, group: 'Conversations', label: c.title || c.preview || 'New chat', run: () => { void chat?.open(c.id); setPage('chat'); } })),
+    { id: 'theme', group: 'Actions', label: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme', run: () => setTheme(t => t === 'dark' ? 'light' : 'dark') },
+    { id: 'rail', group: 'Actions', label: rail ? 'Hide the sidebar' : 'Show the sidebar', run: () => setRail(v => !v) },
+  ];
+  const active = chatState?.conversations.find(c => c.id === chatState.activeId);
+  const pageTitle = page === 'chat' && active ? (active.title || 'Chat') : pages.find(p => p.key === page)?.label ?? '';
+  const openCards = boardState?.boards.reduce((a, b) => a + b.cards, 0);
 
-  return <div className="shell app-shell" data-theme={theme} lang="en" dir="ltr">
+  return <div className="shell app-shell" data-theme={theme} data-rail={rail ? 'open' : 'closed'} lang="en" dir="ltr">
+    <header className="titlebar">
+      <div className="titlebar-tools">
+        <button type="button" className="tool" aria-label={rail ? 'Hide the sidebar' : 'Show the sidebar'} title={rail ? 'Hide the sidebar' : 'Show the sidebar'} aria-pressed={rail} onClick={() => setRail(v => !v)}><UiIcon name="sidebar" size={14}/></button>
+        <button type="button" className="tool" aria-label="New chat" title="New chat" onClick={newChat}><UiIcon name="compose" size={14}/></button>
+      </div>
+      <p className="titlebar-title">{pageTitle}</p>
+      <div className="titlebar-tools end">
+        <button type="button" className="titlebar-cmdk" onClick={() => setPalette(true)} aria-label="Commands (⌘K)"><UiIcon name="search" size={13}/>Commands<kbd>⌘K</kbd></button>
+        <button type="button" className="tool" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} aria-label="Switch theme" title="Switch theme"><UiIcon name={theme === 'dark' ? 'sun' : 'moon'} size={14}/></button>
+      </div>
+    </header>
     <aside className="sidebar">
       <div className="sidebar-brand"><span className="workspace-mark" aria-hidden="true"/>Dpro</div>
-      <button className="nav-item new-chat" onClick={() => { setChatKey(k => k + 1); setPage('chat'); }} disabled={chatState?.phase === 'sending'}>
+      <button className="nav-item new-chat" onClick={newChat}>
         <UiIcon name="compose" size={15}/>New chat
       </button>
       <nav aria-label="Workspace">{pages.map(p =>
@@ -57,35 +88,40 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
       </nav>
       <p className="section-label"><span className="checker" aria-hidden="true"/>Conversations</p>
       <div className="session-list">
-        {title
-          ? <button className="session-row" aria-current={page === 'chat' ? 'true' : undefined} onClick={() => setPage('chat')}><span className="dot" aria-hidden="true"/><span className="session-title">{title}</span></button>
-          : <p className="session-empty">No conversation yet. History of earlier conversations is not loaded.</p>}
+        {chat && <ConversationList controller={chat} onOpen={() => setPage('chat')}/>}
       </div>
       <div className="sidebar-footer">
         <button className="user-chip" onClick={() => setPage('account')} title="Account">
           <span className="avatar" aria-hidden="true">{(user.username || '?').slice(0, 1).toUpperCase()}</span>
           <span className="user-name"><bdi>{user.username}</bdi><small>{user.role}</small></span>
         </button>
-        <button className="icon-button" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} aria-label="Switch theme"><UiIcon name={theme === 'dark' ? 'sun' : 'moon'} size={15}/></button>
       </div>
     </aside>
     <main id="content" className="page-area">
       {notice && <p className="page-notice" role="status">{notice}</p>}
       <section className="page page-chat" aria-label="Chat" hidden={page !== 'chat'}>
-        {chat ? <ChatScreen key={chatKey} controller={chat} mode={mode}/> : <p>Chat is not connected.</p>}
+        {chat ? <ChatView controller={chat} mode={mode}/> : <p>Chat is not connected.</p>}
       </section>
-      <section className="page page-scroll" hidden={page !== 'agents'}><div className="page-column"><AgentsDestination client={client}/></div></section>
-      <section className="page page-scroll page-board" hidden={page !== 'board'}>{board && <TaskBoard controller={board}/>}</section>
-      <section className="page page-scroll page-wide" hidden={page !== 'memory'}><MemoryPanel client={client}/></section>
+      <section className="page page-scroll" hidden={page !== 'agents'}><div className="page-column"><AgentsDestination client={client} active={page === 'agents'}/></div></section>
+      <section className="page page-scroll page-board page-ui" hidden={page !== 'board'}>{board && <TaskBoard controller={board} active={page === 'board'}/>}</section>
+      <section className="page page-scroll page-wide page-ui" hidden={page !== 'memory'}><MemoryPanel client={client} active={page === 'memory'}/></section>
       <section className="page page-scroll" hidden={page !== 'account'}><div className="page-column"><AccountPanel client={client}/></div></section>
     </main>
     <footer className="statusbar">
-      <span><span className={`status-dot ${mode}`} aria-hidden="true"/>{mode === 'mock' ? 'Offline practice — fictional data' : 'Connected · this installation'}</span>
-      <span className="statusbar-actions">
-        <span>Copy: English draft</span>
-        <button className="statusbar-button" onClick={() => client.selectMode('fixture')} title="Clears this local session; the server sign-in stays until you sign out">Leave to fixture</button>
+      <span className="statusbar-group">
+        <span className="status-item"><span className={`status-dot ${mode}`} aria-hidden="true"/>{mode === 'mock' ? 'Offline practice — fictional data' : 'Connected · this installation'}</span>
+        <button type="button" className="status-item" onClick={() => setPage('agents')}>Agents</button>
+        <button type="button" className="status-item" onClick={() => setPage('board')}>Board{typeof openCards === 'number' && boardState?.boards.length ? ` · ${openCards} cards` : ''}</button>
+        <button type="button" className="status-item" onClick={() => setPage('memory')}>Memory</button>
+      </span>
+      <span className="statusbar-group">
+        <button type="button" className="status-item" onClick={() => setPalette(true)}>⌘K</button>
+        <span className="status-item">Copy: English draft</span>
+        <button className="status-item statusbar-button" onClick={() => client.selectMode('fixture')} title="Clears this local session; the server sign-in stays until you sign out">Leave to fixture</button>
+        <span className="status-item">Dpro</span>
       </span>
     </footer>
+    <CommandPalette open={palette} commands={commands} onClose={() => setPalette(false)}/>
   </div>;
 }
 
