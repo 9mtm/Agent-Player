@@ -11,7 +11,7 @@
 # test/pg-routes.integration.test.mjs and test/pg-boot.integration.test.mjs and (B2.2d)
 # test/pg-storage, pg-evaluation, pg-workflows, pg-camera, pg-skills,
 # pg-leftovers, pg-chat-sessions, pg-claude-import, pg-worlds, pg-marketplace,
-# pg-calendar, pg-voice-messages and pg-orchestrator (.integration.test.mjs)
+# pg-calendar, pg-voice-messages, pg-orchestrator and pg-boot-background (.integration.test.mjs)
 # against it, then always drops it.
 #
 # Usage: scripts/pg/integration.sh [report-dir]
@@ -95,5 +95,7 @@ test "${PIPESTATUS[0]}" -eq 0
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-voice-messages.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-voice-messages-output.txt"
 test "${PIPESTATUS[0]}" -eq 0
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-orchestrator.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-orchestrator-output.txt"
+test "${PIPESTATUS[0]}" -eq 0
+AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test --test-force-exit test/pg-boot-background.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-boot-background-output.txt"
 test "${PIPESTATUS[0]}" -eq 0
 echo "reports in $OUT_DIR"
