@@ -25,17 +25,29 @@ export function AgentsDestination({ client }: { client: SessionClient }) {
     {personality && <PersonalityReview controller={personality}/>}
   </section>;
 }
+/** Readable status for each controller phase (the controller keeps its own words). */
+const phaseLabel: Record<string, string> = {
+  idle: 'Team not loaded yet', listing: 'Loading the team…', reading: 'Opening the agent…', ready: 'Ready',
+  generating: 'Suggesting a name…', saving: 'Saving…', saved: 'Saved', review: 'Changed elsewhere — review before saving',
+  unknown: 'Outcome unknown — reconcile before editing', reconciling: 'Checking the latest version…', error: 'Something went wrong', denied: 'Access denied',
+};
 export function AgentsReview({ controller }: { controller: AgentsController }) {
   const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const [language, setLanguage] = useState<NamingLanguage>('en');
   const busy = ['listing', 'reading', 'saving', 'reconciling', 'generating'].includes(s.phase);
   const name = validatedDisplayName(s.draft);
   return <>
-    <button disabled={busy} onClick={() => void controller.list()}>Load team</button>
-    <label>Selected agent<select value={s.selected?.id ?? ''} disabled={busy} onChange={e => void controller.select(e.target.value)}>
+    <button disabled={busy} onClick={() => void controller.list()}>{s.agents.length ? 'Reload team' : 'Load team'}</button>
+    {s.agents.length > 0 && <ul className="team-grid" aria-label="Team members">{s.agents.map(a =>
+      <li key={a.id}><button type="button" className="team-card" aria-pressed={s.selected?.id === a.id} disabled={busy} onClick={() => void controller.select(a.id)}>
+        <span className="team-avatar" aria-hidden="true">{(a.name ?? '?').trim().slice(0, 1).toUpperCase() || '?'}</span>
+        <span className="team-text"><bdi className="team-name">{a.name ?? 'Name unavailable'}</bdi><bdi className="team-id">{a.id}</bdi></span>
+      </button></li>)}
+    </ul>}
+    <label className={s.agents.length > 0 ? 'sr-only' : undefined}>Selected agent<select value={s.selected?.id ?? ''} disabled={busy} onChange={e => void controller.select(e.target.value)}>
       <option value="">Select an agent</option>{s.agents.map(a => <option value={a.id} key={a.id}>{a.name ?? 'Name unavailable'} · {a.id}</option>)}
     </select></label>
-    <p role="status">{s.notice ?? s.phase}</p>
+    <p role="status">{s.notice ?? phaseLabel[s.phase] ?? s.phase}</p>
     {s.selected && <>
       <dl><dt>Stable ID</dt><dd><bdi>{s.selected.id}</bdi></dd><dt>Latest acknowledged name</dt><dd><bdi>{s.selected.name ?? 'Name unavailable'}</bdi></dd><dt>Version</dt><dd>{s.selected.version}</dd></dl>
       <label>Draft name<input value={s.draft} disabled={!s.owner || s.selected.nameUnavailable || busy || s.unknown} onChange={e => controller.edit(e.target.value)}/></label>

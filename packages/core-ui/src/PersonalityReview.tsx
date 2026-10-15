@@ -2,6 +2,12 @@ import { useSyncExternalStore } from 'react';
 import { traitNames } from './personality-contract.js';
 import type { PersonalityController } from './personality';
 
+/** Readable status for each personality review phase. */
+const personalityLabel: Record<string, string> = {
+  idle: 'Select an agent to see its proposals', loading: 'Loading proposals…', ready: 'Ready', deciding: 'Recording your decision…',
+  denied: 'Access denied', error: 'Something went wrong', conflict: 'Changed elsewhere — reload', unknown: 'Outcome unknown — reload',
+  approved: 'Approved', rejected: 'Rejected',
+};
 export function PersonalityReview({ controller }: { controller: PersonalityController }) {
   const s = useSyncExternalStore(controller.subscribe,controller.getSnapshot,controller.getSnapshot);
   const p = s.detail, busy = s.phase === 'loading' || s.phase === 'deciding';
@@ -11,7 +17,7 @@ export function PersonalityReview({ controller }: { controller: PersonalityContr
     <p>Owner review only. Personality changes never grant tools, permissions or approval bypasses. Creation and preset editing are unavailable here.</p>
     <button disabled={!s.owner || !s.agentId || busy} onClick={() => void controller.list()}>Read personality proposals</button>
     {!s.owner && <p>Sign in as an owner to review proposals.</p>}
-    <p role="status">{s.notice ?? s.phase}</p>
+    <p role="status">{s.notice ?? personalityLabel[s.phase] ?? s.phase}</p>
     {s.phase === 'ready' && !s.proposals.length && <p>No personality proposals returned.</p>}
     <ul>{s.proposals.map(item => <li key={item.id}><button disabled={busy} onClick={() => void controller.open(item.id)}>Review proposal {item.id} · {item.status} · base {item.baseVersion}</button></li>)}</ul>
     {p && <article aria-label="Full personality proposal">

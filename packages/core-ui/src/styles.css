@@ -249,6 +249,14 @@ form > label { display:block; margin-block-end:8px; }
 
 .app-shell .page-column p.fine-print { font-size:11.5px; color:var(--text-3); }
 
+.app-shell .team-grid { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(auto-fill,minmax(14rem,1fr)); gap:8px; color:inherit; }
+.app-shell .page-column .team-card { inline-size:100%; justify-content:flex-start; gap:10px; min-block-size:52px; padding:8px 10px; border-radius:4.8px; background:var(--surface); box-shadow:inset 0 0 0 1px var(--stroke-3); text-align:start; }
+.app-shell .page-column .team-card[aria-pressed="true"] { box-shadow:inset 0 0 0 1px var(--accent); background:var(--row-active); }
+.team-avatar { inline-size:32px; block-size:32px; border-radius:4px; display:grid; place-items:center; flex-shrink:0; font-size:14px; font-weight:600; color:var(--on-accent); background:var(--accent); }
+.team-text { display:grid; min-inline-size:0; line-height:1.3; }
+.team-name { font-size:13px; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.team-id { font-size:11px; color:var(--text-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:Menlo,Monaco,"SF Mono",monospace; }
+
 /* Sign-in card */
 .auth-workspace { max-inline-size:380px; margin:clamp(24px,10vh,96px) auto; padding:28px; background:var(--surface); border-radius:4.8px; box-shadow:inset 0 0 0 1px var(--border),0 6px 20px rgba(17,24,39,.06); }
 .auth-workspace h1 { font-size:16px; margin-block-end:12px; }
