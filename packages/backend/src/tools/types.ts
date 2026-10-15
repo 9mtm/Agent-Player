@@ -51,6 +51,8 @@ export interface Tool {
   description: string;
   input_schema: ToolParameters;
   execute: (params: Record<string, any>, context?: ToolExecutionContext) => Promise<ToolResult>;
+  /** Touches nothing outside the run (no files, network or data): every agent has it, no grant needed. Built-in tools only. */
+  selfOnly?: boolean;
   extensionId?: string; // Optional: tracks which extension registered this tool
   /** Set by the Extension SDK when the extension's manifest declares `process`/`exec`. */
   execClass?: boolean;
@@ -99,6 +101,8 @@ export interface ToolExecutionContext {
    * `write` ignores it and always stays in the agent's workspace.
    */
   fileReadRoot?: string;
+  /** A chat run whose page shows the agent's live plan: self-only tools (plan_steps) are offered. */
+  chatPlan?: boolean;
   /**
    * B1-core: the actor of this tool call, attached by the tools registry
    * (repositories/actor.ts actorFromToolContext). Repositories take it first.

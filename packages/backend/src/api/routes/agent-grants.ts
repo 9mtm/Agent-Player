@@ -34,7 +34,8 @@ function ownerOf(request: FastifyRequest, reply: FastifyReply): string | null {
 
 async function registeredTools() {
   // B2.2c: the async registry, so MCP tools are listed on both drivers.
-  return (await createAgentToolsRegistry({ workspaceDir: process.cwd() })).listRegistered();
+  // Self-only tools (plan_steps) need no grant, so they are not listed for granting.
+  return (await createAgentToolsRegistry({ workspaceDir: process.cwd() })).listRegistered().filter((t) => !t.selfOnly);
 }
 
 export async function agentGrantsRoutes(fastify: FastifyInstance) {

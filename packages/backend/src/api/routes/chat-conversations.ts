@@ -140,8 +140,8 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
       runId: b.runId, userId, sessionId: c.id,
       execute: (runReply) => executeChatTurn(runReply, {
         agentId: c.agentId ?? undefined, messages, stream: true, sessionId: c.id, userId,
-        ...(project ? { memoryScope: { project: project.slug }, ...(project.folder ? { fileReadRoot: project.folder } : {}),
-          systemPromptAppend: projectNote(project.name, project.folder, project.repoUrl) } : {}),
+        ...(project ? { memoryScope: { project: project.slug }, ...(project.folder ? { fileReadRoot: project.folder } : {}) } : {}),
+        systemPromptAppend: [project ? projectNote(project.name, project.folder, project.repoUrl) : '', PLAN_NOTE].filter(Boolean).join('\n\n'),
         ...(b.model ? { model: b.model, provider: /^claude-/.test(b.model) ? 'claude' as const : 'ollama' as const } : {}),
       }),
     });
@@ -171,6 +171,9 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     if (!p) return notFound(reply);
     return { git: p.folder ? await gitInfo(p.folder) : { branch: null, remote: null, dirty: null } };
   });
+
+  /** CHAT-PRO-02 H: how the agent shows its work in the chat. */
+  const PLAN_NOTE = 'When a request needs several steps (3 or more), first call plan_steps with the whole plan so the owner sees it, then work through it and call plan_steps again with the whole list as each step finishes. Keep steps short. Skip the plan for a quick question or a one-step answer.';
 
   // ---- microphone (CHAT-PRO-02 C): a recorded clip → text, on this computer only (owner) ----
   fastify.get('/api/chat/transcribe', { config: { access: 'owner' } }, async () => { const s = sttSetup(); return { available: s.available, missing: s.missing }; });

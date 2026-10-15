@@ -13,6 +13,10 @@ import { defaultGrants, grantCallRefusal, isToolGranted, type AgentToolGrants } 
 import { approvalCategory, consumeApprovalTicket, isConfinedChannelReply, requestApproval } from './approvals.js';
 import { actorFromToolContextAsync } from '../repositories/actor.js';
 
+/** Self-only tools need no grant; an extension or MCP tool can never claim it. */
+const SELF_ONLY_TOOLS = new Set(['plan_steps']);
+const isSelfOnly = (tool: Tool) => tool.selfOnly === true && SELF_ONLY_TOOLS.has(tool.name) && !tool.extensionId && !(tool as { mcp?: unknown }).mcp && !tool.execClass;
+
 export class ToolsRegistry {
   private tools = new Map<string, Tool>();
   private context: ToolExecutionContext;
@@ -57,7 +61,7 @@ export class ToolsRegistry {
     return Array.from(this.tools.values()).filter((tool) =>
       isToolObjectAllowedByExecPolicy(tool)
       && (!policy || isToolAllowedInChannel(policy, tool))
-      && isToolGranted(grants, tool.name)
+      && (isSelfOnly(tool) ? this.context.chatPlan === true : isToolGranted(grants, tool.name))
       && modeFor(this.context.permissions, tool) !== 'off'
     );
   }
@@ -113,7 +117,7 @@ export class ToolsRegistry {
     }
 
     // SECURITY (S1.2): only tools granted to this agent run, even if the model emits others
-    const grantRefused = grantCallRefusal(this.grants(), toolName, tool, params);
+    const grantRefused = isSelfOnly(tool) && this.context.chatPlan === true ? null : grantCallRefusal(this.grants(), toolName, tool, params);
     if (grantRefused) {
       console.warn(`[ToolsRegistry] ⛔ Refused ungranted tool for agent ${this.context.agentId ?? '(none)'}: ${toolName}`);
       return grantRefused;

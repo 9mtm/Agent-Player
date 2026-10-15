@@ -537,7 +537,7 @@ async function streamChat(
   });
 
   // Get real tools from the tools registry (11 tools: exec, read, write, browser×4, memory×2, desktop)
-  const toolsRegistry = await createAgentToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers, ...(fileReadRoot ? { fileReadRoot } : {}) });
+  const toolsRegistry = await createAgentToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers, chatPlan: !toolPolicy, ...(fileReadRoot ? { fileReadRoot } : {}) });
   const tools = localModelOnly() && !localModelTools() ? [] : toolsRegistry.getToolsForAPI();
 
   console.log('[Chat] 🔧 Available tools:', tools.length);

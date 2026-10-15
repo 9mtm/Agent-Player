@@ -301,3 +301,26 @@ test('git status: upstream with ahead/behind from local refs, last commit, githu
   assert.deepEqual(githubRepo('git@github.com:o/r.git'), { owner: 'o', repo: 'r' });
   assert.equal(githubRepo('https://gitlab.com/o/r'), null);
 });
+
+test('task plan: every agent may call plan_steps (no grant); the steps travel in the run events; bad plans are refused', async () => {
+  const c = (await call('r-owner', 'POST', '/api/chat/conversations', {})).json().conversation;
+  const steps = [{ title: 'Read the notes', status: 'done' }, { title: 'Write the summary', status: 'active' }, { title: 'Check it', status: 'pending' }];
+  script.push(
+    [{ message: { tool_calls: [{ function: { name: 'plan_steps', arguments: { steps } } }] } }, { done: true }],
+    [{ message: { content: 'Working on it.' } }, { done: true }],
+  );
+  bodies.length = 0;
+  const runId = rid();
+  await call('r-owner', 'POST', `/api/chat/conversations/${c.id}/runs`, { runId, message: 'summarise the notes in three steps' });
+  await ended(runId);
+  assert.ok(bodies[0].tools.some((t) => t.function?.name === 'plan_steps'), 'the model is offered plan_steps');
+  assert.match(bodies[0].messages[0].content, /call plan_steps/);
+  const ev = frames((await call('r-owner', 'GET', `/api/chat/runs/${runId}/events`)).body);
+  const start = ev.find((f) => f.type === 'tool_start');
+  assert.equal(start.tools[0].name, 'plan_steps');
+  assert.deepEqual(JSON.parse(start.tools[0].input).steps, steps);
+  assert.match(ev.find((f) => f.type === 'tool_result').results[0].output, /Plan shown to the owner: 1\/3 done; now: Write the summary/);
+  const { planSteps } = await import(new URL('../src/tools/plan/plan-steps.ts', import.meta.url).href);
+  assert.equal(typeof planSteps([{ title: 'a', status: 'active' }, { title: 'b', status: 'active' }]), 'string', 'one active step at a time');
+  assert.equal(typeof planSteps(Array.from({ length: 13 }, (_, i) => ({ title: `s${i}`, status: 'pending' }))), 'string');
+});
