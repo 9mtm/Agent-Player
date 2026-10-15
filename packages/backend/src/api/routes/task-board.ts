@@ -14,6 +14,11 @@
  *                                            columnId?, beforeCardId?, archived? } -> card; 409 { code: 'version_conflict', card }
  *   GET   /api/boards/:id/cards/:cardId/comments        -> { comments }
  *   POST  /api/boards/:id/cards/:cardId/comments { body } -> 201 { comments }
+ *   POST  /api/boards/:id/labels { name, color } -> 201 board;  PUT /api/boards/:id/labels/:labelId { name?, color? } -> board
+ *   GET   /api/boards/:id/cards/:cardId/checklist -> { items }
+ *   POST  /api/boards/:id/cards/:cardId/checklist { text } -> 201 { items }
+ *   PUT   /api/boards/:id/cards/:cardId/checklist/:itemId { text?, done?, remove? } -> { items }
+ *   Cards also take type (task|idea|bug|milestone|request), startDate, cover (colour or null) and labels (label ids).
  * Errors: 400 { code: 'invalid_board' | 'invalid_version' }, 404 { code: 'not_found' }.
  */
 
@@ -21,7 +26,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { actorOf } from '../../auth/auth-gate.js';
 import { actorOrReply, requireOwner } from '../../repositories/scope.js';
 import {
-  BoardError, addColumn, addComment, createBoard, createCard, getBoard, listBoards, listComments, renameColumn, updateBoard, updateCard,
+  BoardError, addChecklistItem, addColumn, addComment, addLabel, createBoard, createCard, getBoard, listBoards, listChecklist, listComments, renameColumn,
+  updateBoard, updateCard, updateChecklistItem, updateLabel,
 } from '../../services/task-board.js';
 import { BOARD_COLORS, BOARD_TEMPLATES } from '../../services/board-templates.js';
 
@@ -49,8 +55,8 @@ function fail(err: unknown, reply: FastifyReply) {
 
 export async function taskBoardRoutes(fastify: FastifyInstance) {
   const config = { access: 'owner' as const };
-  type P = { id: string; columnId?: string; cardId?: string };
-  const ids = (p: P) => [p.id, p.columnId, p.cardId].every((x) => x === undefined || ID.test(x));
+  type P = { id: string; columnId?: string; cardId?: string; labelId?: string; itemId?: string };
+  const ids = (p: P) => [p.id, p.columnId, p.cardId, p.labelId, p.itemId].every((x) => x === undefined || ID.test(x));
 
   fastify.get<{ Querystring: { archived?: string } }>('/api/boards', { config }, async (request, reply) => {
     const owner = ownerOf(request, reply); if (owner === null) return reply;
@@ -114,5 +120,36 @@ export async function taskBoardRoutes(fastify: FastifyInstance) {
     try {
       return reply.code(201).send({ comments: await addComment(owner, request.params.id, request.params.cardId!, objectBody(request.body), { kind: 'user', id: owner }) });
     } catch (err) { return fail(err, reply); }
+  });
+
+  // BOARD-03 step B: labels and checklists
+  fastify.post<{ Params: P; Body: unknown }>('/api/boards/:id/labels', { config }, async (request, reply) => {
+    const owner = ownerOf(request, reply); if (owner === null) return reply;
+    if (!ids(request.params)) return reply.code(404).send({ error: 'Board not found', code: 'not_found' });
+    try { return reply.code(201).send(await addLabel(owner, request.params.id, objectBody(request.body))); } catch (err) { return fail(err, reply); }
+  });
+
+  fastify.put<{ Params: P; Body: unknown }>('/api/boards/:id/labels/:labelId', { config }, async (request, reply) => {
+    const owner = ownerOf(request, reply); if (owner === null) return reply;
+    if (!ids(request.params)) return reply.code(404).send({ error: 'Label not found', code: 'not_found' });
+    try { return await updateLabel(owner, request.params.id, request.params.labelId!, objectBody(request.body)); } catch (err) { return fail(err, reply); }
+  });
+
+  fastify.get<{ Params: P }>('/api/boards/:id/cards/:cardId/checklist', { config }, async (request, reply) => {
+    const owner = ownerOf(request, reply); if (owner === null) return reply;
+    if (!ids(request.params)) return reply.code(404).send({ error: 'Card not found', code: 'not_found' });
+    try { return { items: await listChecklist(owner, request.params.id, request.params.cardId!) }; } catch (err) { return fail(err, reply); }
+  });
+
+  fastify.post<{ Params: P; Body: unknown }>('/api/boards/:id/cards/:cardId/checklist', { config }, async (request, reply) => {
+    const owner = ownerOf(request, reply); if (owner === null) return reply;
+    if (!ids(request.params)) return reply.code(404).send({ error: 'Card not found', code: 'not_found' });
+    try { return reply.code(201).send({ items: await addChecklistItem(owner, request.params.id, request.params.cardId!, objectBody(request.body)) }); } catch (err) { return fail(err, reply); }
+  });
+
+  fastify.put<{ Params: P; Body: unknown }>('/api/boards/:id/cards/:cardId/checklist/:itemId', { config }, async (request, reply) => {
+    const owner = ownerOf(request, reply); if (owner === null) return reply;
+    if (!ids(request.params)) return reply.code(404).send({ error: 'Item not found', code: 'not_found' });
+    try { return { items: await updateChecklistItem(owner, request.params.id, request.params.cardId!, request.params.itemId!, objectBody(request.body)) }; } catch (err) { return fail(err, reply); }
   });
 }

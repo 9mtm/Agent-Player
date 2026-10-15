@@ -5,7 +5,7 @@
  */
 
 import type { Tool, ToolExecutionContext, ToolResult } from '../types.js';
-import { BoardError, agentCards, agentComment, agentMove } from '../../services/task-board.js';
+import { BoardError, agentCards, agentCheck, agentChecklist, agentComment, agentMove } from '../../services/task-board.js';
 
 const fail = (text: string): ToolResult => ({ content: [{ type: 'text', text }], error: text });
 
@@ -69,6 +69,38 @@ export const boardMoveTool: Tool = {
     try {
       const r = await agentMove(w.ownerId, w.agentId, params.card_id, params.column);
       return { content: [{ type: 'text', text: `Card moved to "${r.column}".` }], details: r };
+    } catch (err) { return boardError(err); }
+  },
+};
+
+export const boardChecklistTool: Tool = {
+  name: 'board_checklist',
+  description: 'Show the checklist of one of your board cards (item ids, text, done). Tick items with board_check as you finish them.',
+  input_schema: { type: 'object', properties: { card_id: { type: 'string', description: 'Card id from board_my_cards' } }, required: ['card_id'] },
+  async execute(params, context): Promise<ToolResult> {
+    const w = who(context); if (!w) return fail('No agent run: board cards are not available here.');
+    try {
+      const items = await agentChecklist(w.ownerId, w.agentId, params.card_id);
+      if (items.length === 0) return { content: [{ type: 'text', text: 'This card has no checklist.' }], details: { items } };
+      return { content: [{ type: 'text', text: items.map((i) => `- [${i.done ? 'x' : ' '}] ${i.text} (id ${i.id})`).join('\n') }], details: { items } };
+    } catch (err) { return boardError(err); }
+  },
+};
+
+export const boardCheckTool: Tool = {
+  name: 'board_check',
+  description: 'Tick (done: true) or untick (done: false) a checklist item on one of your board cards.',
+  input_schema: {
+    type: 'object',
+    properties: { card_id: { type: 'string' }, item_id: { type: 'string', description: 'Item id from board_checklist' }, done: { type: 'boolean' } },
+    required: ['card_id', 'item_id', 'done'],
+  },
+  async execute(params, context): Promise<ToolResult> {
+    const w = who(context); if (!w) return fail('No agent run: board cards are not available here.');
+    try {
+      const items = await agentCheck(w.ownerId, w.agentId, params.card_id, params.item_id, params.done);
+      const done = items.filter((i) => i.done).length;
+      return { content: [{ type: 'text', text: `Checklist: ${done} of ${items.length} done.` }], details: { done, total: items.length } };
     } catch (err) { return boardError(err); }
   },
 };

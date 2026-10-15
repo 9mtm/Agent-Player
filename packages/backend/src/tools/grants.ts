@@ -62,6 +62,8 @@ export const DEFAULT_AGENT_TOOLS: readonly string[] = [
   'board_my_cards',
   'board_comment',
   'board_move',
+  'board_checklist',
+  'board_check',
 ];
 
 /** Destination parameter of known send/call tools (for destination scopes). */

@@ -100,6 +100,8 @@ export const STAGE3_ROUTES: ReadonlySet<string> = new Set([
   'GET /api/boards', 'POST /api/boards', 'GET /api/boards/:id', 'PUT /api/boards/:id', 'POST /api/boards/:id/columns', 'PUT /api/boards/:id/columns/:columnId',
   'POST /api/boards/:id/cards', 'PUT /api/boards/:id/cards/:cardId',
   'GET /api/boards/:id/cards/:cardId/comments', 'POST /api/boards/:id/cards/:cardId/comments',
+  'POST /api/boards/:id/labels', 'PUT /api/boards/:id/labels/:labelId',
+  'GET /api/boards/:id/cards/:cardId/checklist', 'POST /api/boards/:id/cards/:cardId/checklist', 'PUT /api/boards/:id/cards/:cardId/checklist/:itemId',
   // ONBOARD-TEAM-01: the company catalogue and the proposed team (both only read; names are not reserved)
   'GET /api/onboarding/team-catalogue', 'POST /api/onboarding/team-plan',
   // ONBOARD-TEAM-02: total headcount + batch hire (creates agents like POST /api/agents)

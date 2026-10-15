@@ -196,3 +196,64 @@ test('many boards: templates, departments (company / department / shared), colou
   // Other accounts cannot see these boards.
   assert.equal((await call('GET', `/api/boards/${mkt.id}`, undefined, 'bd-admin')).statusCode, 403);
 });
+
+test('richer cards: types, labels, start date, cover, checklist with progress', async () => {
+  const nb = (await call('POST', '/api/boards', { name: 'Rich cards', template: 'simple' })).json();
+  assert.deepEqual(nb.labels.map((l) => [l.name, l.color]), [['Important', 'red'], ['Waiting', 'orange'], ['Quick win', 'green'], ['Needs owner', 'purple']]);
+  const RB = `/api/boards/${nb.id}`;
+  const important = nb.labels[0].id;
+  const created = await call('POST', `${RB}/cards`, { columnId: nb.columns[0].id, title: 'Fix the login bug', type: 'bug', startDate: '2026-10-20', dueDate: '2026-10-25', cover: 'red', labels: [important] });
+  assert.equal(created.statusCode, 201, created.body);
+  let card = created.json();
+  assert.deepEqual([card.type, card.startDate, card.dueDate, card.cover, card.labels, card.checklist], ['bug', '2026-10-20', '2026-10-25', 'red', [important], { done: 0, total: 0 }]);
+  for (const [payload, why] of [
+    [{ columnId: nb.columns[0].id, title: 'x', type: 'epic' }, 'type'], [{ columnId: nb.columns[0].id, title: 'x', cover: 'gold' }, 'cover'],
+    [{ columnId: nb.columns[0].id, title: 'x', startDate: '2026-11-02', dueDate: '2026-11-01' }, 'start after due'],
+    [{ columnId: nb.columns[0].id, title: 'x', labels: ['not-a-label'] }, 'unknown label'],
+  ]) assert.equal((await call('POST', `${RB}/cards`, payload)).statusCode, 400, why);
+  // A label from another board is refused.
+  const other = (await call('GET', `/api/boards/${board.id}`)).json();
+  assert.equal((await call('POST', `${RB}/cards`, { columnId: nb.columns[0].id, title: 'x', labels: [other.labels?.[0]?.id ?? 'zzz'] })).statusCode, 400);
+  // Edit: start after the existing due date is refused; type and cover change; labels cleared.
+  assert.equal((await call('PUT', `${RB}/cards/${card.id}`, { expectedVersion: 1, startDate: '2026-10-30' })).statusCode, 400);
+  card = (await call('PUT', `${RB}/cards/${card.id}`, { expectedVersion: 1, type: 'milestone', cover: null, labels: [] })).json();
+  assert.deepEqual([card.type, card.cover, card.labels, card.version], ['milestone', null, [], 2]);
+  // Labels: add and rename.
+  let b2 = (await call('POST', `${RB}/labels`, { name: 'Client', color: 'teal' })).json();
+  assert.ok(b2.labels.some((l) => l.name === 'Client' && l.color === 'teal'));
+  const client = b2.labels.find((l) => l.name === 'Client');
+  b2 = (await call('PUT', `${RB}/labels/${client.id}`, { name: 'Customer' })).json();
+  assert.ok(b2.labels.some((l) => l.id === client.id && l.name === 'Customer'));
+  assert.equal((await call('POST', `${RB}/labels`, { name: 'x', color: 'gold' })).statusCode, 400);
+  // Checklist: add, tick, reword, remove; progress on the card.
+  const C = `${RB}/cards/${card.id}/checklist`;
+  await call('POST', C, { text: 'Reproduce it' });
+  await call('POST', C, { text: 'Write the fix' });
+  let items = (await call('POST', C, { text: 'Test it' })).json().items;
+  assert.deepEqual(items.map((i) => i.text), ['Reproduce it', 'Write the fix', 'Test it']);
+  items = (await call('PUT', `${C}/${items[0].id}`, { done: true })).json().items;
+  items = (await call('PUT', `${C}/${items[1].id}`, { text: 'Write and review the fix' })).json().items;
+  items = (await call('PUT', `${C}/${items[2].id}`, { remove: true })).json().items;
+  assert.deepEqual(items.map((i) => [i.text, i.done]), [['Reproduce it', true], ['Write and review the fix', false]]);
+  assert.equal((await call('PUT', `${C}/${items[0].id}`, {})).statusCode, 400);
+  assert.equal((await call('POST', C, { text: '' })).statusCode, 400);
+  const view = (await call('GET', RB)).json();
+  assert.deepEqual(view.cards.find((x) => x.id === card.id).checklist, { done: 1, total: 2 });
+});
+
+test('agents tick checklist items only on their own cards', async () => {
+  const tools = await import(join(backendDir, 'src/tools/index.ts'));
+  const nb = (await call('POST', '/api/boards', { name: 'Agent checks', template: 'simple' })).json();
+  const RB = `/api/boards/${nb.id}`;
+  const mine = (await call('POST', `${RB}/cards`, { columnId: nb.columns[0].id, title: 'With steps', agents: ['ag-1'] })).json();
+  const other = (await call('POST', `${RB}/cards`, { columnId: nb.columns[0].id, title: 'Theirs', agents: ['ag-2'] })).json();
+  const items = (await call('POST', `${RB}/cards/${mine.id}/checklist`, { text: 'Step one' })).json().items;
+  const otherItems = (await call('POST', `${RB}/cards/${other.id}/checklist`, { text: 'Their step' })).json().items;
+  const reg = await tools.createAgentToolsRegistry({ workspaceDir: dir, agentId: 'ag-1', userId: 'bd-owner', sessionId: 's-check' });
+  const run = async (n, p) => { const s = { ...console }; console.log = () => {}; console.warn = () => {}; try { return (await reg.execute(n, p)).content.map((c) => c.text).join('\n'); } finally { Object.assign(console, s); } };
+  assert.match(await run('board_checklist', { card_id: mine.id }), /\[ \] Step one/);
+  assert.match(await run('board_check', { card_id: mine.id, item_id: items[0].id, done: true }), /1 of 1 done/);
+  assert.match(await run('board_check', { card_id: other.id, item_id: otherItems[0].id, done: true }), /not one of your board cards/);
+  assert.match(await run('board_check', { card_id: mine.id, item_id: otherItems[0].id, done: true }), /not one of your board cards/);
+  assert.equal((await call('GET', `${RB}/cards/${other.id}/checklist`)).json().items[0].done, false);
+});
