@@ -10,6 +10,9 @@
 
 import { tsParam } from '../db/pg/dialect.js';
 import { q } from '../repositories/sql-steps.js';
+
+// FIX-ACT-01: tool calls are logged as action_type 'tool_called' (logActivity,
+// task-run-executor); the queries below also count the old 'tool_call' name.
 import { v4 as uuidv4 } from 'uuid';
 
 interface ToolUsageStats {
@@ -43,7 +46,7 @@ export async function analyzeToolAccuracy(
             0 as avg_duration
         FROM agent_activity
         WHERE agent_id = ?
-        AND action_type = 'tool_call'
+        AND action_type IN ('tool_called', 'tool_call')
         AND created_at >= ${ts}
         AND created_at <= ${ts}
         AND tool_name IS NOT NULL
@@ -160,7 +163,7 @@ export function getToolUsageSummary(agentId: string, periodDays: number = 7) {
             MAX(created_at) as last_use
         FROM agent_activity
         WHERE agent_id = ?
-        AND action_type = 'tool_call'
+        AND action_type IN ('tool_called', 'tool_call')
         AND created_at >= ${tsParam(q.dialect)}
         AND tool_name IS NOT NULL
         GROUP BY tool_name

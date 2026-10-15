@@ -20,11 +20,11 @@ export function evaluationScenario(test, getM, { tag, skip = false }) {
     await q.run(`INSERT INTO chat_messages (id, session_id, role, content) VALUES (?, ?, 'assistant', ?)`, `ev-m1-${tag}`, `ev-s-${tag}`, long);
     await q.run(`INSERT INTO chat_messages (id, session_id, role, content) VALUES (?, ?, 'assistant', ?)`, `ev-m2-${tag}`, `ev-s-${tag}`, `${long} This describes an illegal activity in detail.`);
     await activity.logActivity({ agentId: agent, actionType: 'task_started', summary: 'start' });
+    // FIX-ACT-01: tool calls as the app logs them ('tool_called') are counted;
+    // one legacy 'tool_call' row still counts too.
     await activity.logActivity({ agentId: agent, actionType: 'tool_called', toolName: 'web_search' });
-    // The analyzers count action_type 'tool_call' (see the B2.2d-2 follow-ups).
-    for (let i = 0; i < 2; i++) {
-      await q.run(`INSERT INTO agent_activity (id, agent_id, action_type, tool_name) VALUES (?, ?, 'tool_call', 'web_search')`, `ev-a${i}-${tag}`, agent);
-    }
+    await activity.logActivity({ agentId: agent, actionType: 'tool_called', toolName: 'web_search' });
+    await q.run(`INSERT INTO agent_activity (id, agent_id, action_type, tool_name) VALUES (?, ?, 'tool_call', 'web_search')`, `ev-legacy-${tag}`, agent);
     const log = await activity.getActivityLog({ agentId: agent });
     assert.equal(log.length, 4);
     assert.ok(log.every((r) => r.agent_id === agent));
@@ -55,7 +55,7 @@ export function evaluationScenario(test, getM, { tag, skip = false }) {
     const latest = await framework.getLatestEvaluation(agent);
     assert.equal(latest.grade, hist[0].grade);
     const tu = await tools.getToolUsageSummary(agent, 1);
-    assert.deepEqual(tu.map((t) => [t.tool_name, t.total_calls]), [['web_search', 2]]);
+    assert.deepEqual(tu.map((t) => [t.tool_name, t.total_calls]), [['web_search', 3]]);
     const sf = await safety.getSafetyIssuesSummary(agent, 1);
     assert.ok(sf.length >= 1 && typeof sf[0].issue_count === 'number');
     const pf = await perf.getPerformanceSummary(agent, 1);
@@ -76,7 +76,7 @@ export function evaluationScenario(test, getM, { tag, skip = false }) {
     assert.ok(Array.isArray((await get(`/api/evaluation/${agent}/safety?periodDays=1`)).summary));
     assert.equal((await get(`/api/evaluation/${agent}/performance?periodDays=1`)).summary.total_requests, 4);
     const d = await get(`/api/evaluation/${agent}/dashboard?periodDays=1`);
-    assert.equal(d.toolAccuracy[0].total_calls, 2);
+    assert.equal(d.toolAccuracy[0].total_calls, 3);
     assert.equal(d.performance.total_requests, 4);
   });
 

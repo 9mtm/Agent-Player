@@ -58,7 +58,7 @@ async function identifySuccessPatterns(agentId, performanceData) {
   const successfulActivities = await sql().read(all(`
     SELECT * FROM agent_activity
     WHERE agent_id = ?
-      AND (action_type = 'task_completed' OR (action_type = 'tool_call' AND metadata NOT LIKE '%"error"%'))
+      AND (action_type = 'task_completed' OR (action_type IN ('tool_called', 'tool_call') AND metadata NOT LIKE '%"error"%'))
     ORDER BY created_at DESC
     LIMIT 100
   `, agentId));
