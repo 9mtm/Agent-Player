@@ -124,3 +124,26 @@ test('memory page: drawers, add to a project, edit, history and forget', async t
   const html = renderToStaticMarkup(React.createElement(MemoryPage, { client: cl }));
   assert.match(html, /Agent files and reviews/);
 });
+
+test('tools are grouped by kind; a group turns on or off together (server-off tools stay off)', async t => {
+  const { toolGroup } = require('../src/agent-card.ts');
+  assert.equal(toolGroup('memory_save'), 'Memory');
+  assert.equal(toolGroup('board_move'), 'Board');
+  assert.equal(toolGroup('read'), 'Files');
+  assert.equal(toolGroup('web_fetch'), 'Internet and browser');
+  assert.equal(toolGroup('browser_navigate'), 'Internet and browser');
+  assert.equal(toolGroup('telegram_send'), 'Messages and reminders');
+  assert.equal(toolGroup('exec'), 'System');
+  assert.equal(toolGroup('something_new'), 'Other');
+  const c = new AgentCardController(await client(), 'sample-main'); t.after(() => c.dispose());
+  await c.load(); await c.openTab('permissions');
+  c.setTools(['web_fetch', 'telegram_send', 'exec'], true);
+  const d = c.getSnapshot().grantDraft;
+  assert.ok(d.includes('web_fetch') && d.includes('telegram_send'));
+  assert.ok(!d.includes('exec'), 'a tool the server keeps off is never turned on');
+  c.setTools(['memory_search', 'memory_save'], false);
+  assert.ok(!c.getSnapshot().grantDraft.includes('memory_search'));
+  const html = renderToStaticMarkup(React.createElement(CardView, { card: c, onBack: () => {} }));
+  assert.match(html, /<span class="tool-group-name">Memory<\/span>/);
+  assert.match(html, /Turn all/);
+});

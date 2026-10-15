@@ -117,8 +117,7 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
       </span>
       <span className="statusbar-group">
         <button type="button" className="status-item" onClick={() => setPalette(true)}>⌘K</button>
-        <span className="status-item">Copy: English draft</span>
-        <button className="status-item statusbar-button" onClick={() => client.selectMode('fixture')} title="Clears this local session; the server sign-in stays until you sign out">Leave to fixture</button>
+        {client.canUse('mock') && <button className="status-item statusbar-button" onClick={() => client.selectMode('fixture')} title="Clears this local session; the server sign-in stays until you sign out">Leave to fixture</button>}
         <span className="status-item">Dpro</span>
       </span>
     </footer>

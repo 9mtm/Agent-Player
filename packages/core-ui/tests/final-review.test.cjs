@@ -46,7 +46,8 @@ test('AuthBoundary constructs mock only without injection, including injected li
   } });
   const live = new SessionClient({ live: async () => { throw Error('fictional refusal'); } });
   const output = () => renderToStaticMarkup(React.createElement(exports.AuthBoundary, { client: live }, 'Fixture'));
-  assert.match(output(), /Use live sign-in/); assert.equal(constructions, 0);
+  // Owner decision 2026-10-15: a live-only build shows no fictional workspace or practice controls.
+  assert.doesNotMatch(output(), /Use live sign-in|Fixture workspace|Open offline login mock/); assert.equal(constructions, 0);
   live.selectMode('live'); await live.login('fiction@example.invalid', 'fictional'); output();
   assert.equal(constructions, 0); assert.equal(live.canUse('mock'), false);
   renderToStaticMarkup(React.createElement(exports.AuthBoundary, {}, 'Fixture'));

@@ -24,6 +24,20 @@ const record = (x: unknown): x is Record<string, any> => !!x && typeof x === 'ob
 const profileOf = (a?: PublicAgent): ProfileDraft => ({ role: a?.role ?? '', department: a?.department ?? '', description: a?.description ?? '' });
 const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every(x => b.includes(x));
 
+/** Tool groups on the card, in display order. */
+export const TOOL_GROUPS = ['Memory', 'Board', 'Files', 'Internet and browser', 'Messages and reminders', 'System', 'Other'] as const;
+export type ToolGroup = (typeof TOOL_GROUPS)[number];
+/** Which group a tool belongs to, by its name. */
+export function toolGroup(name: string): ToolGroup {
+  if (/^memory_/.test(name)) return 'Memory';
+  if (/^board_/.test(name)) return 'Board';
+  if (/^(read|write|storage_)/.test(name)) return 'Files';
+  if (/^(web_|browser_)/.test(name)) return 'Internet and browser';
+  if (/^(create_reminder|telegram_|whatsapp_|email_|send_|notify)/.test(name)) return 'Messages and reminders';
+  if (/^(exec|execute_code|desktop_|skill_install|credentials_|sandbox)/.test(name)) return 'System';
+  return 'Other';
+}
+
 /** True when this memory's drawer is one the agent may read. */
 export function readable(m: MemoryItem, perms?: Pick<Permissions, 'memoryRead'>): boolean {
   return !!perms && perms.memoryRead.includes(m.drawer.kind);
@@ -139,6 +153,13 @@ export class AgentCardController {
       const grants = g.status === 200 && record(g.body) ? { version: g.body.version as number, granted: (g.body.grants as { tool: string }[]).map(x => x.tool), available: (g.body.available ?? []) as Grants['available'] } : undefined;
       this.publish({ permissions, permissionDraft: permissions && structuredClone(permissions), grants, grantDraft: grants?.granted });
     } catch { this.publish({ notice: 'Permissions could not be loaded.' }); }
+  }
+  /** Turns a whole group on or off (tools the server keeps off are never turned on). */
+  setTools(names: readonly string[], on: boolean) {
+    const g = this.#state.grants; const d = this.#state.grantDraft ?? [];
+    const allowed = new Set((g?.available ?? []).filter(t => t.allowedByServer).map(t => t.name));
+    const next = on ? [...new Set([...d, ...names.filter(n => allowed.has(n))])] : d.filter(n => !names.includes(n));
+    this.publish({ grantDraft: next, saved: undefined });
   }
   toggleTool(name: string) { const d = this.#state.grantDraft ?? []; this.publish({ grantDraft: d.includes(name) ? d.filter(x => x !== name) : [...d, name], saved: undefined }); }
   toggleDrawer(kind: string, access: 'read' | 'write') {

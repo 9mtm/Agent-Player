@@ -23,10 +23,19 @@ export function AuthBoundary({ client: supplied, children }: { client?: SessionC
   const client = supplied ?? fallback!;
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
   useEffect(() => () => client.cancel(), [client]);
+  // A build for real data (live transport only, no practice mode) opens the
+  // real sign-in at once: no fictional workspace in between.
+  const liveOnly = client.canUse('live') && !client.canUse('mock');
+  useEffect(() => {
+    if (!liveOnly) return;
+    const s = client.getSnapshot();
+    if (s.mode === 'fixture') client.selectMode('live');
+    if (client.getSnapshot().phase === 'signed-out' && !client.getSnapshot().setup) void client.discoverSetup();
+  }, [client, liveOnly, state.mode]);
   // Signed in: the workspace's own status bar carries the mode and the way out.
   const signedIn = state.mode !== 'fixture' && state.phase === 'authenticated';
   return <div className={`auth-boundary${signedIn ? ' signed-in' : ''}`}>
-    {!signedIn && <section className="auth-controls" aria-label="Session mode" lang="en" dir="ltr">
+    {!signedIn && !liveOnly && <section className="auth-controls" aria-label="Session mode" lang="en" dir="ltr">
       <strong>{state.mode === 'fixture' ? 'Fixture workspace — fictional data' : state.mode === 'mock' ? 'Offline login mock — fictional identity, no network' : 'Live session — explicitly enabled deployment'}</strong>
       {state.mode === 'fixture' ? <>
         {client.canUse('mock') && <button onClick={() => client.selectMode('mock')}>Open offline login mock</button>}
@@ -34,7 +43,7 @@ export function AuthBoundary({ client: supplied, children }: { client?: SessionC
       </> : <button disabled={state.phase === 'signing-out'} onClick={() => client.selectMode('fixture')}>Return to fixture (local session cleared)</button>}
       <span>Authentication copy: English draft.</span>
     </section>}
-    {state.mode === 'fixture' ? children : <SessionWorkspace key={`${state.mode}:${state.epoch}`} client={client}/>}
+    {state.mode === 'fixture' ? (liveOnly ? null : children) : <SessionWorkspace key={`${state.mode}:${state.epoch}`} client={client}/>}
   </div>;
 }
 function SessionWorkspace({ client }: { client: SessionClient }) {

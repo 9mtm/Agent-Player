@@ -62,6 +62,7 @@ for (const [id, role] of [['r-owner', 'owner'], ['r-other', 'user'], ['r-guest',
   db.prepare(`INSERT INTO users (id, email, username, password_hash, role, status, email_verified) VALUES (?, ?, ?, 'x', ?, 'active', 1)`).run(id, `${id}@example.test`, id, role);
 }
 db.prepare(`INSERT INTO agents_config (id, name, provider, model, is_primary) VALUES ('r-agent', 'Run Agent', 'ollama', 'qwen-test', 1)`).run();
+db.prepare(`INSERT INTO agents_config (id, name, provider, model, is_primary) VALUES ('r-claude', 'Claude Agent', 'claude', 'claude-sonnet-test', 0)`).run();
 
 const tools = await import(join(backendDir, 'src/tools/index.ts'));
 const grants = await import(join(backendDir, 'src/tools/grants.ts'));
@@ -180,4 +181,16 @@ test('historyFor keeps the newest turns within budget and starts with the user',
   assert.deepEqual(h.map((t) => t.role), ['user', 'assistant', 'user']);
   assert.match(h[1].content, /stopped by the user/);
   assert.equal(h.at(-1).content, 'now');
+});
+
+test('an agent set to Claude with no key answers with the local model', async () => {
+  const c = (await call('r-owner', 'POST', '/api/chat/conversations', { agentId: 'r-claude' })).json().conversation;
+  script.push([{ message: { content: 'Local answer.' } }, { done: true }]);
+  bodies.length = 0;
+  const runId = rid();
+  await call('r-owner', 'POST', `/api/chat/conversations/${c.id}/runs`, { runId, message: 'hello' });
+  await ended(runId);
+  assert.equal(bodies[0].model, 'qwen3.8:27b');
+  const m = (await call('r-owner', 'GET', `/api/chat/conversations/${c.id}/messages`)).json();
+  assert.equal(m.messages.at(-1).content, 'Local answer.');
 });
