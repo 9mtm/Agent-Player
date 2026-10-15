@@ -140,6 +140,21 @@ interface ChatMessage {
   content: string | any[]; // array for multimodal (vision) messages
 }
 
+/**
+ * The text of a message: the string itself, or the text parts of a
+ * multimodal (vision) message joined. The agent analyzers, the model router
+ * and the text-only providers need text; an array used to reach them as is
+ * (`.toLowerCase()` on an array, or "User: [object Object]" for a CLI model).
+ */
+export function messageText(content: string | any[] | undefined | null): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((part) => part && typeof part === 'object' && part.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text as string)
+    .join('\n');
+}
+
 interface ChatRequest {
   model?: string;
   agentId?: string;
@@ -396,9 +411,12 @@ async function streamChat(
 
   // Extract user message and history
   const userMessage = messages[messages.length - 1]?.content || '';
+  // Text form for the agent analyzers, the router and text-only providers;
+  // userMessage (maybe multimodal) still goes to the model that takes it.
+  const userText = messageText(userMessage);
   const history: Message[] = messages.slice(0, -1).map(m => ({
     role: m.role as 'system' | 'user' | 'assistant',
-    content: m.content,
+    content: messageText(m.content),
   }));
 
   console.log('[Chat]   Last message length:', typeof userMessage === 'string' ? userMessage.length : 'multimodal');
@@ -407,7 +425,7 @@ async function streamChat(
   let agentResponse;
   try {
     agentResponse = await agent.process({
-      message: userMessage,
+      message: userText,
       sessionId,
       history,
     });
@@ -503,7 +521,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
 
     // Analyze task and get recommended model
     const toolNames = tools.map((t: any) => t.name);
-    routingAnalysis = router.analyzeAndRoute(userMessage, history, toolNames);
+    routingAnalysis = router.analyzeAndRoute(userText, history, toolNames);
 
     // Convert tier to actual Claude model name
     selectedModel = ModelRouter.getModelName(routingAnalysis.recommendedModel);
@@ -521,7 +539,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       timestamp: Date.now(),
       model_used: routingAnalysis.recommendedModel,
       task_complexity: routingAnalysis.complexity,
-      message_length: userMessage.length,
+      message_length: userText.length,
       tools_used: toolNames.join(','),
       estimated_savings_percent: routingAnalysis.estimatedCostSavings || 0,
     }).catch((err) => {
@@ -562,8 +580,8 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       // Build Gemini prompt: system instructions + json-render + user message
       const geminiSystemParts = [customSystemPrompt, getJsonRenderPrompt()].filter(Boolean).join('\n\n---\n\n');
       const geminiFullPrompt = geminiSystemParts
-        ? `${geminiSystemParts}\n\n---\n\nUser: ${userMessage}`
-        : userMessage;
+        ? `${geminiSystemParts}\n\n---\n\nUser: ${userText}`
+        : userText;
       const result = await geminiCliTool.execute({ prompt: geminiFullPrompt });
       const text = result.content?.[0]?.text || '(no response)';
       const geminiModel = (result.details as any)?.model || 'gemini-2.0-flash';
@@ -592,8 +610,8 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       // Build Claude CLI prompt: system instructions + user message
       // NOTE: Skip json-render prompt for CLI to keep under Windows CMD length limit
       const claudeFullPrompt = customSystemPrompt
-        ? `${customSystemPrompt}\n\nUser: ${userMessage}`
-        : userMessage;
+        ? `${customSystemPrompt}\n\nUser: ${userText}`
+        : userText;
       const result = await claudeCliTool.execute({
         prompt: claudeFullPrompt,
         model: model || undefined,
@@ -760,9 +778,12 @@ async function nonStreamChat(
 
   // Extract user message and history
   const userMessage = messages[messages.length - 1]?.content || '';
+  // Text form for the agent analyzers, the router and text-only providers;
+  // userMessage (maybe multimodal) still goes to the model that takes it.
+  const userText = messageText(userMessage);
   const history: Message[] = messages.slice(0, -1).map(m => ({
     role: m.role as 'system' | 'user' | 'assistant',
-    content: m.content,
+    content: messageText(m.content),
   }));
 
   console.log('[Chat]   Last message length:', typeof userMessage === 'string' ? userMessage.length : 'multimodal');
@@ -771,7 +792,7 @@ async function nonStreamChat(
   let agentResponse;
   try {
     agentResponse = await agent.process({
-      message: userMessage,
+      message: userText,
       sessionId,
       history,
     });
@@ -822,7 +843,7 @@ async function nonStreamChat(
   // Gemini CLI provider (non-stream path)
   if (provider === 'gemini-cli') {
     console.log('[Chat] 🤖 Using Gemini CLI bridge (non-stream)');
-    const result = await geminiCliTool.execute({ prompt: userMessage });
+    const result = await geminiCliTool.execute({ prompt: userText });
     const text = result.content?.[0]?.text || '(no response)';
     return reply.send({ message: { role: 'assistant', content: text } });
   }
@@ -831,7 +852,7 @@ async function nonStreamChat(
   if (provider === 'claude-cli') {
     console.log('[Chat] 🔧 Using Claude Code CLI bridge (non-stream)');
     const result = await claudeCliTool.execute({
-      prompt: userMessage,
+      prompt: userText,
       model: model || undefined,
       timeout: 180000
     }, { workspaceDir: process.cwd(), userId, sessionId, agentId });

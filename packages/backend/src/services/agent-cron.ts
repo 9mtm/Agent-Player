@@ -115,7 +115,7 @@ export async function runHeartbeat(agent: AgentRow, heartbeatContent: string): P
 export type { AgentRow } from './task-run-executor.js';
 export { delegatingAgents } from './task-run-executor.js';
 
-const activeJobs = new Map<string, cron.ScheduledTask>();
+const activeJobs = new Map<string, ReturnType<typeof cron.schedule>>();
 
 /**
  * Run a single task for a given agent as a durable task run (CORE-08):

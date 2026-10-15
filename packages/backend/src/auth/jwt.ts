@@ -185,7 +185,7 @@ export function getUserIdFromRequestSafe(request: FastifyRequest): string | null
  * @returns JWT token string
  */
 export function generateToken(userId: string, tokenVersion: number = 1, expiresIn: string = '7d'): string {
-    return jwt.sign({ userId, tokenVersion }, getJwtSecret(), { expiresIn });
+    return jwt.sign({ userId, tokenVersion }, getJwtSecret(), { expiresIn: expiresIn as jwt.SignOptions['expiresIn'] });
 }
 
 /**
