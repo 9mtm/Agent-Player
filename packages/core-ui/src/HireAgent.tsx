@@ -78,7 +78,7 @@ export function HireAgent({ controller, onClose }: { controller: HireController;
 
     {s.step === 'memory' && <div className="hire-form">
       <p><bdi>{who}</bdi> is hired. Choose what it may do with memory. Memory stays inside your company.</p>
-      <ToolList tools={memory} selected={s.selected} disabled={busy || s.scoped || s.phase === 'unknown'} onToggle={t => controller.toggle(t)} empty="No memory tools on this server."/>
+      <ToolList tools={memory} selected={s.selected} disabled={busy || s.phase === 'unknown'} onToggle={t => controller.toggle(t)} empty="No memory tools on this server."/>
       {s.permissions && <MemoryScope controller={controller} p={s.permissions} disabled={busy || s.phase === 'unknown'}/>}
       <div className="hire-actions"><button type="button" className="primary" disabled={busy} onClick={() => controller.next()}>Next: permissions</button></div>
     </div>}
@@ -86,12 +86,12 @@ export function HireAgent({ controller, onClose }: { controller: HireController;
     {s.step === 'permissions' && <div className="hire-form">
       <p>Choose how <bdi>{who}</bdi> works with each kind of tool: Off, Ask me first, or Allow. Then pick the tools it may use; tools marked “Asks you first” always wait for your approval.</p>
       {s.permissions && <ModeTable controller={controller} p={s.permissions} confirm={s.confirmRisky} disabled={busy || s.phase === 'unknown'}/>}
-      <ToolList tools={other} selected={s.selected} disabled={busy || s.scoped || s.phase === 'unknown'} onToggle={t => controller.toggle(t)} empty="No other tools on this server."/>
+      <ToolList tools={other} selected={s.selected} disabled={busy || s.phase === 'unknown'} onToggle={t => controller.toggle(t)} empty="No other tools on this server."/>
       <div className="hire-actions">
         <button type="button" disabled={busy} onClick={() => controller.back()}>Back</button>
         {s.phase === 'unknown'
           ? <button type="button" disabled={busy} onClick={() => void controller.reconcile()}>Reload permissions</button>
-          : <button type="button" className="primary" disabled={busy || s.scoped || s.grantsVersion === undefined} onClick={() => void controller.save()}>Save permissions</button>}
+          : <button type="button" className="primary" disabled={busy || s.grantsVersion === undefined} onClick={() => void controller.save()}>Save permissions</button>}
       </div>
     </div>}
 

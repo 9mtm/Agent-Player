@@ -168,7 +168,7 @@ export class HireController {
   back() { if (this.#state.step === 'permissions' && !this.#busy()) this.#publish({ step: 'memory', notice: undefined }); }
   toggle(tool: string) {
     const s = this.#state;
-    if (!s.owner || !s.agent || this.#busy() || s.scoped || s.phase === 'done' || s.phase === 'unknown') return;
+    if (!s.owner || !s.agent || this.#busy() || s.phase === 'done' || s.phase === 'unknown') return;
     const t = s.tools.find(x => x.name === tool); if (!t) return;
     const on = s.selected.includes(tool);
     if (!on && !t.allowedByServer) return;
@@ -248,7 +248,7 @@ export class HireController {
       if (pr.status !== 200 || !record(pr.body)) throw Error();
       const permissions = Object.freeze({ ...(pr.body as Permissions) });
       this.#publish({ tools, selected: Object.freeze(grants.map(g => g.tool)), grantsVersion: b.version as number, scoped, permissions, confirmRisky: false, phase: 'editing',
-        notice: scoped ? 'Some permissions have limits this page cannot show, so editing is off here.' : undefined });
+        notice: scoped ? 'Some tools have limits (for example only certain chats). Saving keeps those limits.' : undefined });
     } catch {
       if (ticket === this.#ticket) this.#publish({ phase: 'error', notice: 'The agent was hired, but its permissions could not be read. Try again.' });
     }
@@ -257,12 +257,12 @@ export class HireController {
 
   async save() {
     const s = this.#state;
-    if (!s.owner || !s.agent || this.#busy() || s.scoped || s.grantsVersion === undefined || s.phase === 'unknown' || s.phase === 'done') return;
+    if (!s.owner || !s.agent || this.#busy() || s.grantsVersion === undefined || s.phase === 'unknown' || s.phase === 'done') return;
     if (this.riskyAllowed().length && !s.confirmRisky) return this.#publish({ notice: 'Confirm that the risky tools may run without asking you, or set them to Ask me first.' });
     const ticket = this.#begin('saving');
     const path = `/api/agents/${s.agent.id}/tool-grants`;
     try {
-      const r = await this.client.request({ method: 'PUT', path, body: { grants: [...s.selected], expectedVersion: s.grantsVersion } }, this.#abort!.signal);
+      const r = await this.client.request({ method: 'PUT', path, body: { grants: [...s.selected], expectedVersion: s.grantsVersion, keepScopes: true } }, this.#abort!.signal);
       if (ticket !== this.#ticket) return;
       if (this.#denied(r.status, r.body)) return;
       const b = r.body as { version?: number; code?: string } | null;

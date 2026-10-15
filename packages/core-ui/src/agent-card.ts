@@ -202,7 +202,7 @@ export class AgentCardController {
         if (r.status !== 200) { this.publish({ phase: 'ready', notice: r.status === 409 ? 'Permissions changed elsewhere. Reload the card and try again.' : 'Permissions were not saved.' }); return; }
       }
       if (g && gd && !same(g.granted, gd)) {
-        const r = await this.send('PUT', `/api/agents/${this.id}/tool-grants`, { grants: [...gd], expectedVersion: g.version });
+        const r = await this.send('PUT', `/api/agents/${this.id}/tool-grants`, { grants: [...gd], expectedVersion: g.version, keepScopes: true });
         if (r.status !== 200) { this.publish({ phase: 'ready', notice: r.status === 409 ? 'Tools changed elsewhere. Reload the card and try again.' : 'Tools were not saved.' }); return; }
       }
       this.publish({ permissions: undefined, grants: undefined });

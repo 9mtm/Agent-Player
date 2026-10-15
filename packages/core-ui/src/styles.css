@@ -1260,3 +1260,8 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .connector-approval { border:1px solid #d29922; border-radius:10px; padding:12px 14px; display:grid; gap:6px; background:color-mix(in srgb,#d29922 7%,transparent); }
 .app-shell .connector-approval pre { margin:0; padding:8px; border-radius:6px; background:var(--composer-fill); font-size:12px; white-space:pre-wrap; word-break:break-all; }
 @media (max-width: 720px) { .app-shell .connector-main { grid-template-columns:auto minmax(0,1fr); } .app-shell .connector-state, .app-shell .connector-actions { grid-column:2; justify-content:flex-start; } }
+.app-shell .persona-delta tr:not([data-changed]) { color:var(--text-3); }
+.app-shell .persona-delta tr[data-changed] th, .app-shell .persona-delta tr[data-changed] td:last-child { font-weight:600; }
+.app-shell .persona-suggestions { list-style:none; padding:0; display:flex; flex-wrap:wrap; gap:6px; }
+.app-shell .memory-tech { margin:8px 0; font-size:12px; }
+.app-shell .memory-tech summary { cursor:pointer; color:var(--text-3); }

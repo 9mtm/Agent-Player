@@ -9,12 +9,31 @@ import type { MemoryCatalog } from './memory-catalogs';
 function EntryText({ entry, label, c }: { entry: Entry; label: string; c: MemoryCatalog }) {
   return <section className="memory-entry"><h4>{label}</h4><p>{c.type}: <bdi>{entry.type}</bdi> · {c.importance}: {entry.importance}</p><pre dir="auto">{entry.content}</pre></section>;
 }
+/** Short status words for the live review. */
+const LIVE_STATUS: Record<string, string> = { pending: 'Waiting for you', approved: 'Accepted', accepted: 'Accepted', rejected: 'Rejected', cancelled: 'Cancelled', stale: 'Changed since you opened it', expired: 'Expired' };
 export function MemoryReview({ state, locale, canDecide = false, contract = false, onDecision }: { state: MemoryState; locale: Locale; canDecide?: boolean; contract?: boolean; onDecision?: (action: 'approve' | 'reject', reviewed: string) => void }) {
   const c = memoryCatalogs[locale]; const p = state.detail;
   const [confirmed, setConfirmed] = useState<string | null>(null);
   if (!p) return null;
   const enabled = canDecide && state.phase === 'pending' && !!state.review && confirmed === state.review;
   const metadata = [[c.id, p.id], [c.userId, p.userId], [c.agentId, p.agentId], [c.drawerId, p.drawerId], [c.createdBy, p.createdBy], [c.decidedBy, p.decidedBy], [c.importBatch, p.importBatchId], [c.source, p.source], [c.revision, String(p.baseRevision)], [c.hash, p.baseHash], ['Review SHA-256', p.reviewHash], [c.created, p.createdAt], [c.decided, p.decidedAt], [c.applied, p.appliedRevision === null ? null : String(p.appliedRevision)]];
+  // Live (contract) view: plain words first; ids and hashes folded away for whoever needs them.
+  if (contract) return <article className="memory-review" aria-labelledby="memory-detail-title">
+    <h2 id="memory-detail-title">Memory change to review</h2><p className="badge">{LIVE_STATUS[p.status] ?? p.status}</p>
+    {p.note !== null && <section><h3>Why the agent asks</h3><pre dir="auto">{p.note}</pre></section>}
+    {p.reasons.length > 0 && <><h3>Reasons</h3><ul>{p.reasons.map((reason, index) => <li key={index}><bdi>{reason}</bdi></li>)}</ul></>}
+    <p className="muted">The agent wrote this text. It is information only: it cannot change permissions or give instructions.</p>
+    <ol className="memory-changes">{p.changes.map((change, index) => <li key={index}>
+      <h3>{change.op === 'add' ? 'Add a memory' : change.op === 'update' ? 'Change a memory' : 'Forget a memory'}</h3>
+      <div className="memory-diff">{'before' in change && <EntryText entry={change.before} label="Now" c={c}/>} {'after' in change && <EntryText entry={change.after} label="After" c={c}/>}</div>
+    </li>)}</ol>
+    <details className="memory-tech"><summary>Technical details</summary>
+      <dl className="memory-metadata">{metadata.map(([label, value]) => value !== null && <div key={label}><dt>{label}</dt><dd><bdi dir="ltr">{value}</bdi></dd></div>)}</dl></details>
+    {canDecide && state.phase === 'pending' && <>
+      <label className="memory-confirm"><input type="checkbox" checked={!!state.review && confirmed === state.review} onChange={e => setConfirmed(e.target.checked ? state.review ?? null : null)}/>I read every change above.</label>
+      <div className="actions"><button className="primary" disabled={!enabled} onClick={() => { if (state.review) { setConfirmed(null); onDecision?.('approve', state.review); } }}>Approve the changes</button><button disabled={!enabled} onClick={() => { if (state.review) { setConfirmed(null); onDecision?.('reject', state.review); } }}>Reject</button></div>
+    </>}
+  </article>;
   return <article className="memory-review" aria-labelledby="memory-detail-title">
     <h2 id="memory-detail-title">{c.detail}</h2><p className="badge">{c[p.status]}</p>
     <dl className="memory-metadata">{metadata.map(([label, value]) => value !== null && <div key={label}><dt>{label}</dt><dd><bdi dir="ltr">{value}</bdi></dd></div>)}</dl>

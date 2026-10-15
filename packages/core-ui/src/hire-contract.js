@@ -77,9 +77,12 @@ export function grantsAgentId(path) {
   return m && validAgentId(m[1]) ? m[1] : null;
 }
 
-/** PUT /api/agents/:id/tool-grants body: plain tool names only (no scopes from this UI). */
+/**
+ * PUT /api/agents/:id/tool-grants body: plain tool names only (no scopes from this UI).
+ * keepScopes: true asks the server to keep the limits a still-granted tool already has.
+ */
 export function validGrantsBody(b) {
-  if (!record(b) || Object.keys(b).length !== 2 || !onlyKeys(b, ['grants', 'expectedVersion']) || !version(b.expectedVersion)) return false;
+  if (!record(b) || !onlyKeys(b, ['grants', 'expectedVersion', 'keepScopes']) || !('grants' in b) || !version(b.expectedVersion) || (b.keepScopes !== undefined && b.keepScopes !== true)) return false;
   return Array.isArray(b.grants) && b.grants.length <= MAX_GRANTS && b.grants.every(toolName) && new Set(b.grants).size === b.grants.length;
 }
 

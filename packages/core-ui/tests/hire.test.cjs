@@ -39,6 +39,8 @@ test('create body contract: role required, persona preset-based, nothing extra',
 
 test('grants contract: plain unique names with a version; no scopes from this page', () => {
   assert.equal(validGrantsBody({ grants: ['memory_search', 'web_fetch'], expectedVersion: 1 }), true);
+  assert.equal(validGrantsBody({ grants: ['memory_search'], expectedVersion: 1, keepScopes: true }), true);
+  assert.equal(validGrantsBody({ grants: ['memory_search'], expectedVersion: 1, keepScopes: false }), false);
   for (const bad of [
     { grants: ['a', 'a'], expectedVersion: 1 }, { grants: [{ tool: 'telegram_send', scopes: { destinations: ['x'] } }], expectedVersion: 1 },
     { grants: ['a'], expectedVersion: 0 }, { grants: ['a'] }, { grants: ['a'], expectedVersion: 1, parentAgentId: 'p' },
@@ -110,7 +112,7 @@ test('full offline hire: role → persona → one create → memory → permissi
   assert.match(markup(h), /Asks you first/); assert.match(markup(h), /Off on this server/);
   await h.save();
   const put = calls.find(c => c.method === 'PUT');
-  assert.deepEqual(put.body, { grants: ['memory_search', 'memory_save', 'storage_search', 'web_fetch'], expectedVersion: 1 });
+  assert.deepEqual(put.body, { grants: ['memory_search', 'memory_save', 'storage_search', 'web_fetch'], expectedVersion: 1, keepScopes: true });
   s = h.getSnapshot(); assert.equal(s.step, 'done'); assert.equal(s.phase, 'done'); assert.equal(s.grantsVersion, 2);
   assert.match(markup(h), /joined your team with 4 permissions/);
   h.restart(); assert.equal(h.getSnapshot().step, 'role'); assert.equal(h.getSnapshot().agent, undefined);

@@ -4,7 +4,7 @@
  * Every change is written to the audit log.
  *
  *   GET /api/agents/:id/tool-grants   stored grants + available tools
- *   PUT /api/agents/:id/tool-grants   { grants: [name | {tool, scopes}], parentAgentId?, expectedVersion? }
+ *   PUT /api/agents/:id/tool-grants   { grants: [name | {tool, scopes}], parentAgentId?, expectedVersion?, keepScopes? }
  *                                     (or If-Match: "<version>"); 409 { code: 'version_conflict', currentVersion, ...view }
  *                                     when the grants changed since they were read (BE-UI-01). Both
  *                                     responses carry `version` and an ETag.
@@ -65,7 +65,7 @@ export async function agentGrantsRoutes(fastify: FastifyInstance) {
     };
   });
 
-  fastify.put<{ Params: { id: string }; Body: { grants?: unknown; parentAgentId?: unknown; expectedVersion?: unknown } }>(
+  fastify.put<{ Params: { id: string }; Body: { grants?: unknown; parentAgentId?: unknown; expectedVersion?: unknown; keepScopes?: unknown } }>(
     '/api/agents/:id/tool-grants', { config }, async (request, reply) => {
       const ownerId = ownerOf(request, reply);
       if (ownerId === null) return reply;
@@ -80,9 +80,18 @@ export async function agentGrantsRoutes(fastify: FastifyInstance) {
         if (err instanceof VersionInputError) return reply.code(400).send({ error: err.message, code: 'invalid_version' });
         throw err;
       }
+      // keepScopes: a page that edits names only (no scope editor) keeps each still-granted
+      // tool's current limits instead of silently widening them. The version check below
+      // still refuses a save made against an older list.
+      let grants = body.grants;
+      if (body.keepScopes === true && Array.isArray(grants) && grants.every((g) => typeof g === 'string')) {
+        const current = await repositories.agents.grantView(actorOf(request), agentId, available).catch(() => null) as { grants?: { tool: string; scopes?: unknown }[] } | null;
+        const scoped = new Map((current?.grants ?? []).filter((g) => g.scopes !== null && g.scopes !== undefined).map((g) => [g.tool, g.scopes]));
+        grants = (grants as string[]).map((tool) => (scoped.has(tool) ? { tool, scopes: scoped.get(tool) } : tool));
+      }
       let change;
       try {
-        change = await repositories.agents.setGrants(actorOf(request), agentId, { grants: body.grants, parentAgentId: body.parentAgentId, expectedVersion }, available);
+        change = await repositories.agents.setGrants(actorOf(request), agentId, { grants, parentAgentId: body.parentAgentId, expectedVersion }, available);
       } catch (err: any) {
         if (err instanceof GrantConflictError) {
           const current = await repositories.agents.grantView(actorOf(request), agentId, available);

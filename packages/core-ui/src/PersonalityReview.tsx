@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import { traitNames } from './personality-contract.js';
 import type { PersonalityController } from './personality';
 
@@ -8,31 +8,44 @@ const personalityLabel: Record<string, string> = {
   denied: 'Access denied', error: 'Something went wrong', conflict: 'Changed elsewhere — reload', unknown: 'Outcome unknown — reload',
   approved: 'Approved', rejected: 'Rejected',
 };
+const STATUS: Record<string, string> = { pending: 'Waiting for you', approved: 'Approved', rejected: 'Rejected', cancelled: 'Cancelled', stale: 'Out of date', expired: 'Expired' };
+
+/**
+ * Persona changes an agent suggests about itself (small trait steps). The
+ * owner approves or rejects each one; approving never grants tools or
+ * permissions. Loads by itself when the card opens.
+ */
 export function PersonalityReview({ controller }: { controller: PersonalityController }) {
-  const s = useSyncExternalStore(controller.subscribe,controller.getSnapshot,controller.getSnapshot);
+  const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const p = s.detail, busy = s.phase === 'loading' || s.phase === 'deciding';
   const canDecide = s.owner && s.phase === 'ready' && p?.status === 'pending' && s.consent;
-  return <section aria-label="Personality proposal review">
-    <h3>Personality proposals</h3>
-    <p>Owner review only. Personality changes never grant tools, permissions or approval bypasses. Creation and preset editing are unavailable here.</p>
-    <button disabled={!s.owner || !s.agentId || busy} onClick={() => void controller.list()}>Read personality proposals</button>
-    {!s.owner && <p>Sign in as an owner to review proposals.</p>}
-    <p role="status">{s.notice ?? personalityLabel[s.phase] ?? s.phase}</p>
-    {s.phase === 'ready' && !s.proposals.length && <p>No personality proposals returned.</p>}
-    <ul>{s.proposals.map(item => <li key={item.id}><button disabled={busy} onClick={() => void controller.open(item.id)}>Review proposal {item.id} · {item.status} · base {item.baseVersion}</button></li>)}</ul>
-    {p && <article aria-label="Full personality proposal">
-      <dl><dt>Agent ID</dt><dd><bdi>{p.agentId}</bdi></dd><dt>Proposal ID</dt><dd><bdi>{p.id}</bdi></dd>
-        <dt>Base version</dt><dd>{p.baseVersion}</dd><dt>Status</dt><dd>{p.status}</dd><dt>Source</dt><dd>{p.source}</dd>
-        <dt>Created by</dt><dd><bdi>{p.createdBy}</bdi></dd><dt>Created at</dt><dd>{p.createdAt ?? 'Unavailable'}</dd>
-        <dt>Review hash</dt><dd className="personality-hash"><bdi>{p.reviewHash}</bdi></dd></dl>
-      <table><caption>Complete traits and delta (0–100; at most 5 points per changed trait)</caption><thead><tr><th>Trait</th><th>Base</th><th>Proposed</th><th>Delta</th></tr></thead>
-        <tbody>{traitNames.map(n => <tr key={n}><th scope="row">{n}</th><td>{p.baseTraits[n]}</td><td>{p.proposedTraits[n]}</td><td>{p.delta[n] === undefined ? 'Unchanged (0)' : `${p.delta[n]! > 0 ? '+' : ''}${p.delta[n]}`}</td></tr>)}</tbody></table>
-      <h4>Reason</h4><p className="personality-copy">{p.reason}</p><h4>Evidence references (untrusted text)</h4>
-      {p.evidence.length ? <ul>{p.evidence.map((e,i) => <li className="personality-copy" key={i}><bdi>{e}</bdi></li>)}</ul> : <p>No evidence references supplied.</p>}
-      <dl><dt>Decided by</dt><dd>{p.decidedBy ?? 'Not decided'}</dd><dt>Decided at</dt><dd>{p.decidedAt ?? 'Not decided'}</dd><dt>Decision note</dt><dd className="personality-copy">{p.decisionNote ?? 'None'}</dd><dt>Applied version</dt><dd>{p.appliedVersion ?? 'None'}</dd></dl>
-      <label><input type="checkbox" checked={s.consent} disabled={!s.owner || s.phase !== 'ready' || p.status !== 'pending'} onChange={e => controller.review(e.target.checked)}/>I reviewed all base and proposed traits, the full delta, reason and evidence for this agent and version.</label>
-      <button disabled={!canDecide} onClick={() => void controller.decide('approve')}>Approve personality change</button>
-      <button disabled={!canDecide} onClick={() => void controller.decide('reject')}>Reject personality proposal</button>
+  useEffect(() => { if (s.owner && s.agentId && s.phase === 'idle') void controller.list(); }, [controller, s.owner, s.agentId, s.phase]);
+  if (!s.owner) return null;
+  const changed = p ? traitNames.filter(n => p.delta[n] !== undefined && p.delta[n] !== 0) : [];
+  return <section aria-label="Suggested persona changes">
+    <h3>Suggested persona changes</h3>
+    <p className="fine-print">The agent may suggest small changes to its own traits. Nothing changes until you approve, and a persona never grants tools or permissions.</p>
+    {(s.notice || ['loading', 'error', 'denied', 'conflict', 'unknown'].includes(s.phase)) && <p role="status">{s.notice ?? personalityLabel[s.phase] ?? s.phase}
+      {['error', 'conflict', 'unknown'].includes(s.phase) && <> <button type="button" className="link-button" onClick={() => void controller.list()}>Reload</button></>}</p>}
+    {s.phase === 'ready' && !s.proposals.length && <p className="fine-print">No suggestions from this agent.</p>}
+    {s.proposals.length > 0 && <ul className="persona-suggestions">{s.proposals.map((item, i) => <li key={item.id}>
+      <button type="button" disabled={busy} aria-pressed={p?.id === item.id} onClick={() => void controller.open(item.id)}>Suggestion {s.proposals.length - i} · {STATUS[item.status] ?? item.status}</button></li>)}</ul>}
+    {p && <article aria-label="Suggested persona change">
+      <h4>Reason</h4><p className="personality-copy">{p.reason}</p>
+      <table className="persona-delta"><caption>{changed.length ? `All traits (0–100); ${changed.length} would change` : 'All traits (0–100); none would change'}</caption><thead><tr><th>Trait</th><th>Now</th><th>Suggested</th><th>Change</th></tr></thead>
+        <tbody>{traitNames.map(n => <tr key={n} data-changed={changed.includes(n) || undefined}><th scope="row">{n}</th><td>{p.baseTraits[n]}</td><td>{p.proposedTraits[n]}</td><td>{p.delta[n] === undefined || p.delta[n] === 0 ? '—' : `${p.delta[n]! > 0 ? '+' : ''}${p.delta[n]}`}</td></tr>)}</tbody></table>
+      {p.evidence.length > 0 && <><h4>What it noticed</h4><ul>{p.evidence.map((e, i) => <li className="personality-copy" key={i}><bdi>{e}</bdi></li>)}</ul>
+        <p className="fine-print">Written by the agent: information only.</p></>}
+      {p.status !== 'pending' && <p className="fine-print">{STATUS[p.status] ?? p.status}{p.decidedAt ? ` · ${new Date(p.decidedAt).toLocaleString()}` : ''}{p.decisionNote ? ` · ${p.decisionNote}` : ''}</p>}
+      <details className="memory-tech"><summary>Technical details</summary><dl>
+        <dt>Suggestion</dt><dd><bdi dir="ltr">{p.id}</bdi></dd><dt>From persona version</dt><dd>{p.baseVersion}</dd><dt>Source</dt><dd>{p.source}</dd>
+        <dt>Created</dt><dd>{p.createdAt ?? '—'}</dd><dt>Review hash</dt><dd className="personality-hash"><bdi dir="ltr">{p.reviewHash}</bdi></dd>
+        {p.appliedVersion !== null && p.appliedVersion !== undefined && <><dt>Applied as version</dt><dd>{p.appliedVersion}</dd></>}</dl></details>
+      {p.status === 'pending' && <>
+        <label className="memory-confirm"><input type="checkbox" checked={s.consent} disabled={s.phase !== 'ready'} onChange={e => controller.review(e.target.checked)}/>I read the change, the reason and what it noticed.</label>
+        <div className="actions"><button type="button" className="primary" disabled={!canDecide} onClick={() => void controller.decide('approve')}>Approve</button>
+          <button type="button" disabled={!canDecide} onClick={() => void controller.decide('reject')}>Reject</button></div>
+      </>}
     </article>}
   </section>;
 }

@@ -123,3 +123,16 @@ test('a sub-agent only receives a subset of its parent\'s grants', async () => {
   const cycle = await put('ga-parent', { grants: ['read'], parentAgentId: 'ga-sub' });
   assert.equal(cycle.statusCode, 400);
 });
+
+test('keepScopes: a name-only save keeps each still-granted tool\'s limits (never widens them)', async () => {
+  const first = await put('ga-agent', { grants: ['read', { tool: 'telegram_send', scopes: { destinations: ['chat-1'] } }] });
+  assert.equal(first.statusCode, 200, first.body);
+  const v = first.json().version;
+  const res = await put('ga-agent', { grants: ['read', 'telegram_send', 'memory_search'], keepScopes: true, expectedVersion: v });
+  assert.equal(res.statusCode, 200, res.body);
+  const tg = res.json().grants.find((g) => g.tool === 'telegram_send');
+  assert.deepEqual(tg.scopes, { destinations: ['chat-1'] }, 'the limit stays');
+  assert.equal(res.json().grants.find((g) => g.tool === 'memory_search').scopes ?? null, null);
+  const gone = await put('ga-agent', { grants: ['read'], keepScopes: true, expectedVersion: res.json().version });
+  assert.deepEqual(gone.json().grants.map((g) => g.tool), ['read'], 'unchecking still removes a limited tool');
+});
