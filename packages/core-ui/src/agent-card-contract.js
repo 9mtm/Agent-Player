@@ -121,8 +121,9 @@ export function agentCardResponse(path, status, body) {
   switch (p.kind) {
     case 'models': {
       if (!Array.isArray(body.models)) fail();
-      const list = body.models.filter(m => record(m) && modelId(m.id) && ['local', 'claude'].includes(m.provider)).slice(0, 200)
-        .map(m => ({ id: m.id, provider: m.provider === 'local' ? 'ollama' : 'claude', label: str(String(m.name ?? m.id).replace(/^[^A-Za-z0-9]+/u, ''), 80), size: str(m.size, 20) }));
+      // Runs twice on the live path (bridge, then browser): already-projected rows ("ollama", "label") pass unchanged.
+      const list = body.models.filter(m => record(m) && modelId(m.id) && ['local', 'ollama', 'claude'].includes(m.provider)).slice(0, 200)
+        .map(m => ({ id: m.id, provider: m.provider === 'claude' ? 'claude' : 'ollama', label: str(String(m.label ?? m.name ?? m.id).replace(/^[^A-Za-z0-9]+/u, ''), 80), size: str(m.size, 20) }));
       return { models: list };
     }
     case 'persona-current': {

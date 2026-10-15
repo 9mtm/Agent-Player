@@ -87,6 +87,17 @@ export function createConversationsMock(options: { stepMs?: number } = {}) {
       const pr: Proj = { id: `proj-${String(++n).padStart(8, '0')}`, name: body!.name.trim(), slug: body!.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-'), folder: body?.folder || null, repoUrl: body?.repoUrl || null };
       projects.set(pr.id, pr); return { status: 201, body: { project: pr } };
     }
+    if (p.kind === 'project-changes' || p.kind === 'project-diff' || p.kind === 'project-tree' || p.kind === 'project-file') {
+      const pr = projects.get(p.id);
+      if (!pr) return { status: 404, body: { code: 'not_found' } };
+      if (!pr.folder) return { status: 400, body: { code: 'no_folder' } };
+      if (p.kind === 'project-changes') return { status: 200, body: { branch: 'main', truncated: false, changes: [{ path: 'src/app.ts', status: 'modified', added: 2, removed: 1 }, { path: 'notes/plan.md', status: 'untracked', added: 3, removed: 0 }, { path: '.env', status: 'modified', added: 1, removed: 0 }] } };
+      if (p.kind === 'project-diff') return { status: 200, body: p.rel === '.env' ? { path: p.rel, diff: '', truncated: false, binary: false, hidden: true }
+        : { path: p.rel, diff: `diff --git a/${p.rel} b/${p.rel}\n--- a/${p.rel}\n+++ b/${p.rel}\n@@ -1,2 +1,3 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n+const c = 4;\n`, truncated: false, binary: false, hidden: false } };
+      if (p.kind === 'project-tree') return { status: 200, body: p.rel === '' ? { path: '', truncated: false, entries: [{ name: 'src', kind: 'dir', size: null }, { name: 'README.md', kind: 'file', size: 120 }] }
+        : { path: p.rel, truncated: false, entries: [{ name: 'app.ts', kind: 'file', size: 2048 }] } };
+      return { status: 200, body: { path: p.rel, text: '# Fictional project\nPractice data only.', size: 39, binary: false, hidden: false, truncated: false } };
+    }
     if (p.kind === 'project' || p.kind === 'project-git') {
       const pr = projects.get(p.id);
       if (!pr) return { status: 404, body: { code: 'not_found' } };

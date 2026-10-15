@@ -24,6 +24,10 @@ const shapes = {
   trash: <><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></>,
   more: <><circle cx="5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="19" cy="12" r="1.2" fill="currentColor"/></>,
   alert: <><circle cx="12" cy="12" r="9"/><path d="M12 7v6"/><path d="M12 16.5v.5"/></>,
+  diff: <><path d="M6 3v12"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M18 8.5V12a3 3 0 0 1-3 3H9"/><path d="M11 13l-2 2 2 2"/></>,
+  folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>,
+  'arrow-left': <><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></>,
+  close: <><path d="M6 6l12 12"/><path d="M18 6L6 18"/></>,
   refresh: <><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></>,
 } as const;
 

@@ -36,6 +36,10 @@ export function conversationPath(path) {
   if (pm) return uuid(pm[1]) ? { kind: 'project', id: pm[1] } : null;
   pm = /^\/api\/chat\/projects\/([^/?#]+)\/git$/.exec(path);
   if (pm) return uuid(pm[1]) ? { kind: 'project-git', id: pm[1] } : null;
+  pm = /^\/api\/chat\/projects\/([^/?#]+)\/changes$/.exec(path);
+  if (pm) return uuid(pm[1]) ? { kind: 'project-changes', id: pm[1] } : null;
+  pm = /^\/api\/chat\/projects\/([^/?#]+)\/(diff|tree|file)(?:\?path=([A-Za-z0-9%._~!*'()-]{0,3000}))?$/.exec(path);
+  if (pm) { const rel = paneRel(pm[3]); return uuid(pm[1]) && rel !== null && (rel !== '' || pm[2] === 'tree') ? { kind: `project-${pm[2]}`, id: pm[1], rel } : null; }
   let m = /^\/api\/chat\/conversations\/([^/?#]+)$/.exec(path);
   if (m) return uuid(m[1]) ? { kind: 'one', id: m[1] } : null;
   m = /^\/api\/chat\/conversations\/([^/?#]+)\/messages$/.exec(path);
@@ -49,12 +53,22 @@ export function conversationPath(path) {
   return null;
 }
 
+/** A project-relative path from ?path= (decoded): no "..", no leading "/", no NUL. null when invalid. */
+function paneRel(raw) {
+  if (raw === undefined || raw === '') return '';
+  let s; try { s = decodeURIComponent(raw); } catch { return null; }
+  if (s.length > 1024 || s.includes('\0') || s.startsWith('/') || s.includes('\\') || s.split('/').some(p => p === '..')) return null;
+  return s;
+}
+/** The path for a pane request: GET /api/chat/projects/:id/{diff|tree|file}?path=… */
+export function panePath(id, kind, rel = '') { return `/api/chat/projects/${id}/${kind}${rel ? `?path=${encodeURIComponent(rel)}` : ''}`; }
+
 export function conversationRoute(path) { return conversationPath(path) !== null; }
 
 export function allowedConversation(method, path, body) {
   const p = conversationPath(path);
   if (!p) return false;
-  if (method === 'GET') return body === undefined && ['list', 'messages', 'events', 'projects', 'project-git'].includes(p.kind);
+  if (method === 'GET') return body === undefined && ['list', 'messages', 'events', 'projects', 'project-git', 'project-changes', 'project-diff', 'project-tree', 'project-file'].includes(p.kind);
   if (method === 'DELETE') return body === undefined && (p.kind === 'one' || p.kind === 'project');
   if (method === 'POST' && p.kind === 'projects') return record(body) && onlyKeys(body, ['name', 'folder', 'repoUrl']) && title(body.name) && body.name.trim().length > 0
     && (body.folder === undefined || folderOk(body.folder)) && (body.repoUrl === undefined || repoOk(body.repoUrl));
@@ -102,7 +116,7 @@ function project(x) {
   return { id: x.id, name: x.name.slice(0, 80), slug: str(x.slug, 64), folder: typeof x.folder === 'string' ? x.folder.slice(0, 1024) : null, repoUrl: typeof x.repoUrl === 'string' ? x.repoUrl.slice(0, 300) : null };
 }
 
-const ERROR_CODES = { 400: ['invalid_request', 'invalid_project'], 404: ['not_found'], 409: ['conversation_busy', 'run_id_reused'], 429: ['rate_limited'] };
+const ERROR_CODES = { 400: ['invalid_request', 'invalid_project', 'bad_path', 'no_folder'], 404: ['not_found'], 409: ['conversation_busy', 'run_id_reused'], 429: ['rate_limited'] };
 
 /** Reviewed fields only. Throws on a malformed success body. */
 export function conversationResponse(path, status, body) {
@@ -118,6 +132,21 @@ export function conversationResponse(path, status, body) {
   if (p.kind === 'projects' || (p.kind === 'project' && record(body.project))) return { project: project(body.project) };
   if (p.kind === 'project') { if (body.ok !== true) throw Error('protocol'); return { ok: true }; }
   if (p.kind === 'project-git') { const g = record(body.git) ? body.git : {}; const count = x => (Number.isSafeInteger(x) && x >= 0 ? x : null); return { git: { branch: typeof g.branch === 'string' ? g.branch.slice(0, 200) : null, remote: typeof g.remote === 'string' ? g.remote.slice(0, 300) : null, dirty: typeof g.dirty === 'boolean' ? g.dirty : null, added: count(g.added), removed: count(g.removed), files: count(g.files) } }; }
+  const n = x => (Number.isSafeInteger(x) && x >= 0 ? x : null);
+  if (p.kind === 'project-changes') {
+    if (!Array.isArray(body.changes)) throw Error('protocol');
+    const statuses = ['modified', 'added', 'deleted', 'renamed', 'untracked'];
+    return { branch: typeof body.branch === 'string' ? body.branch.slice(0, 200) : null, truncated: body.truncated === true, notGit: body.notGit === true,
+      changes: body.changes.slice(0, 1000).filter(c => record(c) && typeof c.path === 'string' && statuses.includes(c.status))
+        .map(c => ({ path: c.path.slice(0, 1024), status: c.status, added: n(c.added), removed: n(c.removed), ...(typeof c.from === 'string' ? { from: c.from.slice(0, 1024) } : {}) })) };
+  }
+  if (p.kind === 'project-diff') return { path: str(body.path, 1024), diff: typeof body.diff === 'string' ? body.diff.slice(0, 400_000) : '', truncated: body.truncated === true, binary: body.binary === true, hidden: body.hidden === true };
+  if (p.kind === 'project-tree') {
+    if (!Array.isArray(body.entries)) throw Error('protocol');
+    return { path: str(body.path, 1024), truncated: body.truncated === true,
+      entries: body.entries.slice(0, 1000).filter(e => record(e) && typeof e.name === 'string' && e.name && !e.name.includes('/') && (e.kind === 'dir' || e.kind === 'file')).map(e => ({ name: e.name.slice(0, 255), kind: e.kind, size: n(e.size) })) };
+  }
+  if (p.kind === 'project-file') return { path: str(body.path, 1024), text: typeof body.text === 'string' ? body.text.slice(0, 524_288) : null, size: n(body.size) ?? 0, binary: body.binary === true, hidden: body.hidden === true, truncated: body.truncated === true };
   if (p.kind === 'list' && status === 200) {
     if (!Array.isArray(body.conversations) || body.conversations.length > 1000) throw Error('protocol');
     return { conversations: body.conversations.map(conversation) };

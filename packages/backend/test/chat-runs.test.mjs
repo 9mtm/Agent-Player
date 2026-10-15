@@ -236,3 +236,30 @@ test('projects: owner only, real folders only, a run reads the project folder an
   assert.equal((await call('r-owner', 'DELETE', `/api/chat/projects/${p.id}`)).statusCode, 200);
   assert.equal((await call('r-owner', 'GET', `/api/chat/conversations/${c.id}/messages`)).json().conversation.projectId, null, 'conversations stay, without the project');
 });
+
+test('project panes: per-file changes, a diff, the folder listing and a file, all inside the folder', async () => {
+  const { mkdirSync, writeFileSync, symlinkSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const folder = join(dir, 'proj-panes'); mkdirSync(join(folder, 'src'), { recursive: true });
+  const g = (...a) => execFileSync('git', ['-C', folder, ...a], { env: { PATH: process.env.PATH, HOME: dir, GIT_CONFIG_NOSYSTEM: '1' } });
+  writeFileSync(join(folder, 'src', 'a.ts'), 'one\ntwo\n'); writeFileSync(join(folder, '.env'), 'SECRET=x\n');
+  g('init', '-q'); g('-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'add', 'src/a.ts'); g('-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'init');
+  writeFileSync(join(folder, 'src', 'a.ts'), 'one\nTWO\nthree\n'); writeFileSync(join(folder, 'new.md'), 'hello\nworld\n');
+  symlinkSync('/etc/hosts', join(folder, 'escape'));
+  const p = (await call('r-owner', 'POST', '/api/chat/projects', { name: 'Panes', folder })).json().project;
+  const base = `/api/chat/projects/${p.id}`;
+  assert.equal((await call('r-other', 'GET', `${base}/changes`)).statusCode, 403, 'owner only');
+  const ch = (await call('r-owner', 'GET', `${base}/changes`)).json();
+  const a = ch.changes.find((c) => c.path === 'src/a.ts'); const n = ch.changes.find((c) => c.path === 'new.md');
+  assert.deepEqual([a.status, a.added, a.removed], ['modified', 2, 1]);
+  assert.deepEqual([n.status, n.added, n.removed], ['untracked', 2, 0]);
+  assert.match((await call('r-owner', 'GET', `${base}/diff?path=src%2Fa.ts`)).json().diff, /^\+TWO$/m);
+  assert.match((await call('r-owner', 'GET', `${base}/diff?path=new.md`)).json().diff, /^\+world$/m);
+  assert.equal((await call('r-owner', 'GET', `${base}/diff?path=.env`)).json().hidden, true, 'secret files are never shown');
+  const tree = (await call('r-owner', 'GET', `${base}/tree`)).json();
+  assert.deepEqual(tree.entries.map((e) => e.name), ['src', '.env', 'new.md'], 'folders first; .git and links outside are left out');
+  assert.equal((await call('r-owner', 'GET', `${base}/file?path=src%2Fa.ts`)).json().text, 'one\nTWO\nthree\n');
+  assert.equal((await call('r-owner', 'GET', `${base}/file?path=.env`)).json().text, null);
+  for (const bad of ['..%2F..%2Fetc%2Fhosts', '%2Fetc%2Fhosts', 'escape']) assert.equal((await call('r-owner', 'GET', `${base}/file?path=${bad}`)).statusCode, 400, bad);
+  assert.equal((await call('r-owner', 'GET', `${base}/file?path=missing.txt`)).statusCode, 400);
+});

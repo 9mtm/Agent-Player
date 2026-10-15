@@ -189,3 +189,38 @@ test('side panel shows environment, size, outputs and changes; the list groups b
   assert.match(html, /\+12/);
   assert.match(html, /in 2 files not committed/);
 });
+
+test('panes: changes with an inline diff, the folder tree and a file; paths are checked on both sides', async t => {
+  const { PanesController, diffLines } = require('../src/panes.ts');
+  const { ChangesPane, FilesPane } = require('../src/ProjectPanes.tsx');
+  const { conversationPath, conversationResponse, panePath } = require('../src/conversation-contract.js');
+  assert.equal(panePath('00000000-0000-4000-8000-000000000001', 'file', 'src/a b.ts'), '/api/chat/projects/00000000-0000-4000-8000-000000000001/file?path=src%2Fa%20b.ts');
+  assert.equal(conversationPath(panePath('00000000-0000-4000-8000-000000000001', 'file', 'src/a b.ts')).rel, 'src/a b.ts');
+  for (const bad of ['..%2Fx', '%2Fetc%2Fhosts', 'a%00b']) assert.equal(conversationPath(`/api/chat/projects/00000000-0000-4000-8000-000000000001/file?path=${bad}`), null, bad);
+  assert.equal(conversationPath('/api/chat/projects/00000000-0000-4000-8000-000000000001/file'), null, 'a file needs a path');
+  const changes = { branch: 'main', truncated: false, changes: [{ path: 'a.ts', status: 'modified', added: 1, removed: 0 }, { path: 'x', status: 'weird' }] };
+  const once = conversationResponse('/api/chat/projects/00000000-0000-4000-8000-000000000001/changes', 200, changes);
+  assert.equal(once.changes.length, 1);
+  assert.deepEqual(conversationResponse('/api/chat/projects/00000000-0000-4000-8000-000000000001/changes', 200, once), once, 'projection is stable when applied twice');
+  assert.deepEqual(diffLines('@@ -1,2 +1,2 @@\n a\n-b\n+c\n').map(l => [l.kind, l.old ?? null, l.new ?? null]), [['hunk', null, null], ['ctx', 1, 1], ['del', 2, null], ['add', null, 2]]);
+
+  const { c, client } = await fixture(t);
+  await c.load(); await new Promise(r => setTimeout(r, 30));
+  await c.createProject({ name: 'App', folder: '/fiction/app', repoUrl: '' });
+  const project = c.getSnapshot().projects[0];
+  const panes = new PanesController(client); t.after(() => panes.dispose());
+  panes.setProject(project.id);
+  await panes.loadChanges();
+  await panes.toggleDiff('src/app.ts');
+  await panes.toggleDiff('.env');
+  let html = renderToStaticMarkup(React.createElement(ChangesPane, { panes }));
+  assert.match(html, /app\.ts/); assert.match(html, /\+3/); assert.match(html, /const c = 4;/); assert.match(html, /Hidden: this file may hold secrets/);
+  await panes.loadFolder(''); await panes.toggleFolder('src');
+  html = renderToStaticMarkup(React.createElement(FilesPane, { panes }));
+  assert.match(html, /README\.md/); assert.match(html, /app\.ts/);
+  await panes.openFile('README.md');
+  html = renderToStaticMarkup(React.createElement(FilesPane, { panes }));
+  assert.match(html, /Fictional project/);
+  panes.setProject(null);
+  assert.equal(panes.getSnapshot().changes, undefined, 'switching project drops what was loaded');
+});

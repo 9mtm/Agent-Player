@@ -193,3 +193,12 @@ test('chat agent panel shows tool groups, permissions and memory, and saves a gr
   assert.ok(c.getSnapshot().grants.granted.length >= before);
   assert.equal(require('../src/agent-card.ts').toolGroup('mcp:files:read'), 'Connectors');
 });
+
+test('the model list survives both projections on the live path (bridge, then browser)', () => {
+  const { agentCardResponse } = require('../src/agent-card-contract.js');
+  const raw = { models: [{ id: 'qwen3.8:27b', name: '🏠 qwen3.8:27b', provider: 'local', size: '16.9GB' }, { id: 'claude-x-1', name: '🧠 Claude X', provider: 'claude', size: 'API' }, { id: 'gpt-4', provider: 'openai' }] };
+  const once = agentCardResponse('/api/models', 200, raw);
+  const twice = agentCardResponse('/api/models', 200, once);
+  assert.deepEqual(twice, once);
+  assert.deepEqual(once.models.map(m => [m.id, m.provider, m.label]), [['qwen3.8:27b', 'ollama', 'qwen3.8:27b'], ['claude-x-1', 'claude', 'Claude X']]);
+});

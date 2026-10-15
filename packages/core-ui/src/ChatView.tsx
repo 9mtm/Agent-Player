@@ -2,6 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { ConversationsController } from './conversations';
 import { AgentPanel } from './AgentPanel';
+import { ChangesPane, FilesPane } from './ProjectPanes';
+import { PanesController } from './panes';
+import type { PaneName } from './panes';
 import type { SessionClient } from './session';
 import { Markdown } from './markdown';
 import { UiIcon } from './ui-icons';
@@ -88,12 +91,22 @@ export function ChatView({ controller, mode, productName = 'Dpro', client }: { c
   const empty = s.turns.length === 0 && s.threadPhase !== 'loading';
 
   const project = controller.activeProject();
-  const [panel, setPanel] = useState(() => typeof window === 'undefined' || window.innerWidth >= 1100);
-  return <div className="chat-layout" data-panel={panel || undefined}>
+  const [pane, setPane] = useState<PaneName | null>(() => typeof window === 'undefined' || window.innerWidth >= 1100 ? 'details' : null);
+  const [panes, setPanes] = useState<PanesController | null>(null);
+  useEffect(() => { if (!client) return; const p = new PanesController(client); setPanes(p); return () => p.dispose(); }, [client]);
+  const folderProject = project?.folder ? project.id : null;
+  useEffect(() => { panes?.setProject(folderProject); }, [panes, folderProject]);
+  const paneButtons: { name: PaneName; icon: UiIconName; label: string }[] = [
+    { name: 'details', icon: 'sidebar', label: 'Details' },
+    ...(panes ? [{ name: 'changes' as const, icon: 'diff' as const, label: 'Changes' }, { name: 'files' as const, icon: 'folder' as const, label: 'Files' }] : []),
+  ];
+  return <div className="chat-layout" data-panel={pane ?? undefined}>
   <div className="chat-screen">
     <div className="chat-topbar">
       {project ? <ProjectBar name={project.name} folder={project.folder} repoUrl={project.repoUrl} git={s.git}/> : <span className="chat-topbar-spacer"/>}
-      <button type="button" className="tool chat-panel-toggle" aria-pressed={panel} aria-label={panel ? 'Hide details' : 'Show details'} title={panel ? 'Hide details' : 'Show details'} onClick={() => setPanel(v => !v)}><UiIcon name="sidebar" size={14}/></button>
+      <span className="pane-bar" role="toolbar" aria-label="Side panes">{paneButtons.map(b =>
+        <button key={b.name} type="button" className="tool" aria-pressed={pane === b.name} aria-label={b.label} title={pane === b.name ? `Hide ${b.label.toLowerCase()}` : b.label}
+          onClick={() => setPane(p => p === b.name ? null : b.name)}><UiIcon name={b.icon} size={14}/></button>)}</span>
     </div>
     <div className="chat-thread" ref={thread} onScroll={onScroll} aria-label="Conversation">
       {s.threadPhase === 'loading' && <p className="chat-loading" role="status"><span className="pulse" aria-hidden="true"/>Opening the conversation</p>}
@@ -143,8 +156,9 @@ export function ChatView({ controller, mode, productName = 'Dpro', client }: { c
           {s.agents.length > 0 && !s.activeId
             ? <label className="composer-agent"><span className="sr-only">Agent</span>
               <select value={s.agentId} onChange={e => controller.selectAgent(e.target.value)}>
-                <option value="">Main agent</option>
-                {s.agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                {/* "" is the primary agent: name it once instead of listing it twice. */}
+                <option value="">{s.agents.find(a => a.primary)?.name ?? 'Main agent'}</option>
+                {s.agents.filter(a => !a.primary).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select></label>
             : <span className="composer-hint">{agentName ? agentName : ''}</span>}
           {s.models.length > 0 && <label className="composer-agent composer-model"><span className="sr-only">Model</span>
@@ -161,7 +175,10 @@ export function ChatView({ controller, mode, productName = 'Dpro', client }: { c
       </form>
     </div>
   </div>
-  {panel && <ChatSidePanel controller={controller} client={client}/>}
+  {pane === 'details' && <ChatSidePanel controller={controller} client={client}/>}
+  {panes && (pane === 'changes' || pane === 'files') && <aside className="chat-panel chat-pane" aria-label={pane === 'changes' ? 'Changes' : 'Files'}>
+    {pane === 'changes' ? <ChangesPane panes={panes}/> : <FilesPane panes={panes}/>}
+  </aside>}
   </div>;
 }
 

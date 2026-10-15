@@ -1,0 +1,102 @@
+import { useEffect, useSyncExternalStore } from 'react';
+import { diffLines } from './panes';
+import type { PanesController } from './panes';
+import { UiIcon } from './ui-icons';
+
+const STATUS: Record<string, string> = { modified: 'M', added: 'A', deleted: 'D', renamed: 'R', untracked: 'U' };
+const size = (b: number | null) => b === null ? '' : b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(b < 10240 ? 1 : 0)} KB` : `${(b / 1048576).toFixed(1)} MB`;
+
+/** Uncommitted changes per file; a file opens its diff in place. */
+export function ChangesPane({ panes }: { panes: PanesController }) {
+  const s = useSyncExternalStore(panes.subscribe, panes.getSnapshot, panes.getSnapshot);
+  useEffect(() => { if (s.projectId && !s.changes) void panes.loadChanges(); }, [panes, s.projectId, s.changes]);
+  if (!s.projectId) return <p className="pane-empty">Pick a project with a folder to see its changes.</p>;
+  const c = s.changes;
+  const data = c?.phase === 'ready' ? c.data : null;
+  const total = data?.changes.reduce((t, x) => [t[0] + (x.added ?? 0), t[1] + (x.removed ?? 0)], [0, 0]);
+  return <div className="pane" aria-label="Changes">
+    <div className="pane-head">
+      {data?.branch && <span className="pane-branch" dir="ltr">⎇ {data.branch}</span>}
+      {data && total && <span className="pane-sum"><span className="plus">+{total[0]}</span> <span className="minus">−{total[1]}</span> · {data.changes.length} {data.changes.length === 1 ? 'file' : 'files'}</span>}
+      <button type="button" className="row-tool pane-refresh" aria-label="Reload changes" title="Reload" onClick={() => void panes.loadChanges()}><UiIcon name="refresh" size={12}/></button>
+    </div>
+    {!c || c.phase === 'loading' ? <p className="pane-empty">Loading…</p>
+      : c.phase === 'error' ? <p className="pane-empty error">{c.message}</p>
+      : c.data.notGit ? <p className="pane-empty">This folder is not a git repository.</p>
+      : !c.data.changes.length ? <p className="pane-empty">No uncommitted changes.</p>
+      : <ul className="change-list">{c.data.changes.map(f => {
+        const d = s.diffs[f.path]; const slash = f.path.lastIndexOf('/');
+        return <li key={f.path} data-open={d ? true : undefined}>
+          <button type="button" className="change-row" aria-expanded={!!d} onClick={() => void panes.toggleDiff(f.path)} title={f.from ? `${f.from} → ${f.path}` : f.path}>
+            <UiIcon name="chevron" size={11}/>
+            <span className="change-status" data-status={f.status} aria-label={f.status}>{STATUS[f.status]}</span>
+            <span className="change-name" dir="ltr">{f.path.slice(slash + 1)}</span>
+            <span className="change-dir" dir="ltr">{slash > 0 ? f.path.slice(0, slash) : ''}</span>
+            <span className="change-count">{f.added !== null && <span className="plus">+{f.added}</span>}{f.removed !== null && <span className="minus">−{f.removed}</span>}</span>
+          </button>
+          {d && <DiffView load={d}/>}
+        </li>;
+      })}</ul>}
+    {data?.truncated && <p className="pane-empty">Only the first 1000 files are listed.</p>}
+  </div>;
+}
+
+function DiffView({ load }: { load: NonNullable<ReturnType<PanesController['getSnapshot']>['diffs'][string]> }) {
+  if (load.phase === 'loading') return <p className="pane-empty">Loading diff…</p>;
+  if (load.phase === 'error') return <p className="pane-empty error">{load.message}</p>;
+  const d = load.data;
+  if (d.hidden) return <p className="pane-empty">Hidden: this file may hold secrets.</p>;
+  if (d.binary) return <p className="pane-empty">Binary file.</p>;
+  if (!d.diff) return <p className="pane-empty">{d.truncated ? 'Too big to show.' : 'No text changes.'}</p>;
+  return <div className="diff" dir="ltr" role="table" aria-label={`Diff of ${d.path}`}>
+    {diffLines(d.diff).map((l, i) => <div key={i} className="diff-line" data-kind={l.kind} role="row">
+      <span className="diff-no" aria-hidden="true">{l.old ?? ''}</span><span className="diff-no" aria-hidden="true">{l.new ?? ''}</span>
+      <code>{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}{l.text}</code>
+    </div>)}
+    {d.truncated && <p className="pane-empty">The diff is cut short; it is too long to show whole.</p>}
+  </div>;
+}
+
+/** The project folder as a tree; a file opens as read-only text. */
+export function FilesPane({ panes }: { panes: PanesController }) {
+  const s = useSyncExternalStore(panes.subscribe, panes.getSnapshot, panes.getSnapshot);
+  useEffect(() => { if (s.projectId && !s.tree['']) void panes.loadFolder(''); }, [panes, s.projectId, s.tree]);
+  if (!s.projectId) return <p className="pane-empty">Pick a project with a folder to browse its files.</p>;
+  if (s.file) {
+    const f = s.file.load;
+    return <div className="pane" aria-label="File">
+      <div className="pane-head"><button type="button" className="row-tool" aria-label="Back to files" onClick={() => panes.closeFile()}><UiIcon name="arrow-left" size={12}/></button>
+        <span className="pane-path" dir="ltr" title={s.file.path}>{s.file.path}</span>{f.phase === 'ready' && <span className="muted">{size(f.data.size)}</span>}</div>
+      {f.phase === 'loading' ? <p className="pane-empty">Loading…</p> : f.phase === 'error' ? <p className="pane-empty error">{f.message}</p>
+        : f.data.hidden ? <p className="pane-empty">Hidden: this file may hold secrets.</p>
+        : f.data.binary || f.data.text === null ? <p className="pane-empty">Binary file; it cannot be shown as text.</p>
+        : <div className="file-view" dir="ltr">{f.data.text.split('\n').map((line, i) => <div key={i} className="file-line"><span className="diff-no" aria-hidden="true">{i + 1}</span><code>{line}</code></div>)}
+          {f.data.truncated && <p className="pane-empty">Only the first 512 KB are shown.</p>}</div>}
+    </div>;
+  }
+  return <div className="pane" aria-label="Files">
+    <div className="pane-head"><span className="pane-path">Files</span>
+      <button type="button" className="row-tool pane-refresh" aria-label="Reload files" title="Reload" onClick={() => void panes.refresh()}><UiIcon name="refresh" size={12}/></button></div>
+    <Folder panes={panes} rel="" depth={0}/>
+  </div>;
+}
+
+function Folder({ panes, rel, depth }: { panes: PanesController; rel: string; depth: number }) {
+  const s = useSyncExternalStore(panes.subscribe, panes.getSnapshot, panes.getSnapshot);
+  const t = s.tree[rel];
+  if (!t || t.phase === 'loading') return <p className="pane-empty" style={{ paddingInlineStart: 8 + depth * 12 }}>Loading…</p>;
+  if (t.phase === 'error') return <p className="pane-empty error" style={{ paddingInlineStart: 8 + depth * 12 }}>{t.message}</p>;
+  if (!t.data.entries.length) return <p className="pane-empty" style={{ paddingInlineStart: 8 + depth * 12 }}>Empty folder.</p>;
+  return <ul className="tree" role={depth ? 'group' : 'tree'}>{t.data.entries.map(e => {
+    const path = rel ? `${rel}/${e.name}` : e.name; const open = s.expanded.includes(path);
+    return <li key={e.name} role="treeitem" aria-expanded={e.kind === 'dir' ? open : undefined}>
+      <button type="button" className="tree-row" style={{ paddingInlineStart: 6 + depth * 12 }} dir="ltr"
+        onClick={() => void (e.kind === 'dir' ? panes.toggleFolder(path) : panes.openFile(path))}>
+        {e.kind === 'dir' ? <span className="tree-chevron" data-open={open || undefined}><UiIcon name="chevron" size={10}/></span> : <span className="tree-chevron"/>}
+        <UiIcon name={e.kind === 'dir' ? 'folder' : 'file'} size={12}/><span className="tree-name">{e.name}</span>
+        {e.kind === 'file' && <span className="tree-size">{size(e.size)}</span>}
+      </button>
+      {e.kind === 'dir' && open && <Folder panes={panes} rel={path} depth={depth + 1}/>}
+    </li>;
+  })}{t.data.truncated && <li className="pane-empty">Only the first 1000 entries are listed.</li>}</ul>;
+}

@@ -1017,3 +1017,45 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .panel-group-name > .muted { margin-inline-start:auto; }
 .app-shell .panel-group > .muted { font-size:11px; }
 .app-shell .panel-modes li > span { min-inline-size:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* Side panes: changes (diff), files */
+.app-shell .pane-bar { display:inline-flex; gap:2px; margin-inline-start:auto; }
+.app-shell .pane-bar .tool[aria-pressed="true"] { background:var(--row-hover); color:var(--text); }
+.app-shell .chat-layout[data-panel="changes"], .app-shell .chat-layout[data-panel="files"], .app-shell .chat-layout[data-panel="terminal"] { grid-template-columns:minmax(0,1fr) minmax(22rem,44%); }
+.app-shell .chat-pane { padding:0; gap:0; align-content:stretch; display:flex; flex-direction:column; }
+.app-shell .pane { display:flex; flex-direction:column; min-block-size:0; flex:1; }
+.app-shell .pane-head { display:flex; align-items:center; gap:8px; padding:8px 10px; border-block-end:1px solid var(--stroke-3); font-size:12px; position:sticky; inset-block-start:0; background:inherit; z-index:1; }
+.app-shell .pane-branch, .app-shell .pane-path { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-inline-size:0; }
+.app-shell .pane-sum { color:var(--text-3); font-size:11.5px; }
+.app-shell .pane-refresh { margin-inline-start:auto; }
+.app-shell .pane-empty { font-size:12px; color:var(--text-3); padding:10px; margin:0; }
+.app-shell .pane-empty.error { color:var(--danger); }
+.app-shell .plus { color:#3fb950; } .app-shell .minus { color:#f85149; }
+.shell[data-theme="light"] .app-shell .plus { color:#1a7f37; } .shell[data-theme="light"] .app-shell .minus { color:#cf222e; }
+.app-shell .change-list, .app-shell .tree { list-style:none; margin:0; padding:0; }
+.app-shell .change-row, .app-shell .tree-row { display:flex; align-items:center; gap:6px; inline-size:100%; padding:5px 10px; border:0; background:none; color:inherit; font:inherit; font-size:12px; text-align:start; cursor:pointer; min-inline-size:0; }
+.app-shell .change-row:hover, .app-shell .tree-row:hover { background:var(--row-hover); }
+.app-shell .change-row > svg { flex:none; transition:transform .12s; color:var(--text-3); }
+.app-shell li[data-open] > .change-row > svg { transform:rotate(90deg); }
+.app-shell .change-status { flex:none; inline-size:14px; font-size:10.5px; font-weight:600; text-align:center; color:var(--text-3); }
+.app-shell .change-status[data-status="untracked"], .app-shell .change-status[data-status="added"] { color:#3fb950; }
+.app-shell .change-status[data-status="deleted"] { color:#f85149; }
+.app-shell .change-name { flex:none; max-inline-size:55%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.app-shell .change-dir { flex:1; min-inline-size:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-3); font-size:11px; direction:rtl; text-align:start; }
+.app-shell .change-count { flex:none; display:inline-flex; gap:5px; font-size:11px; font-variant-numeric:tabular-nums; }
+.app-shell .diff, .app-shell .file-view { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; line-height:1.55; overflow:auto; border-block:1px solid var(--stroke-3); background:color-mix(in srgb,var(--text) 2.5%,var(--canvas)); }
+.app-shell .file-view { border:0; flex:1; }
+.app-shell .diff-line, .app-shell .file-line { display:grid; grid-template-columns:auto auto 1fr; min-inline-size:max-content; }
+.app-shell .file-line { grid-template-columns:auto 1fr; }
+.app-shell .diff-no { min-inline-size:3.2em; padding-inline:6px; text-align:end; color:var(--text-3); user-select:none; opacity:.7; }
+.app-shell .diff-line code, .app-shell .file-line code { white-space:pre; padding-inline:6px 12px; font:inherit; background:none; }
+.app-shell .diff-line[data-kind="add"] { background:color-mix(in srgb,#2ea043 16%,transparent); }
+.app-shell .diff-line[data-kind="del"] { background:color-mix(in srgb,#f85149 15%,transparent); }
+.app-shell .diff-line[data-kind="hunk"] { color:var(--text-3); background:color-mix(in srgb,var(--accent) 8%,transparent); }
+.app-shell .diff-line[data-kind="hunk"] .diff-no { display:none; }
+.app-shell .diff-line[data-kind="hunk"] code, .app-shell .diff-line[data-kind="meta"] code { grid-column:1 / -1; }
+.app-shell .tree-chevron { inline-size:10px; flex:none; display:inline-flex; color:var(--text-3); transition:transform .12s; }
+.app-shell .tree-chevron[data-open] { transform:rotate(90deg); }
+.app-shell .tree-row > svg { flex:none; color:var(--text-3); }
+.app-shell .tree-name { flex:1; min-inline-size:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.app-shell .tree-size { flex:none; font-size:10.5px; color:var(--text-3); }
+@media (max-width: 900px) { .app-shell .chat-layout[data-panel] { grid-template-columns:minmax(0,1fr); } .app-shell .chat-panel.chat-pane { display:flex; position:fixed; inset:48px 0 28px auto; inline-size:min(100%,32rem); z-index:5; box-shadow:0 0 0 1px var(--stroke-3); background:var(--canvas); } }

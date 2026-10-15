@@ -2,6 +2,13 @@ export const CONVERSATIONS_PATH: '/api/chat/conversations';
 export const PROJECTS_PATH: '/api/chat/projects';
 export type WireProject = { id: string; name: string; slug: string; folder: string | null; repoUrl: string | null };
 export type WireGit = { branch: string | null; remote: string | null; dirty: boolean | null; added?: number | null; removed?: number | null; files?: number | null };
+export type WireChange = { path: string; status: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked'; added: number | null; removed: number | null; from?: string };
+export type WireChanges = { branch: string | null; truncated: boolean; notGit: boolean; changes: WireChange[] };
+export type WireDiff = { path: string; diff: string; truncated: boolean; binary: boolean; hidden: boolean };
+export type WireEntry = { name: string; kind: 'dir' | 'file'; size: number | null };
+export type WireTree = { path: string; truncated: boolean; entries: WireEntry[] };
+export type WireFile = { path: string; text: string | null; size: number; binary: boolean; hidden: boolean; truncated: boolean };
+export function panePath(id: string, kind: 'diff' | 'tree' | 'file', rel?: string): string;
 export const MAX_MESSAGE: number;
 export const MAX_TITLE: number;
 export const RUN_STREAM_MS: number;
@@ -10,7 +17,8 @@ export const RUN_FRAME_BYTES: number;
 export function validRunId(x: unknown): x is string;
 export type ConversationPath =
   | { kind: 'list' | 'projects' } | { kind: 'one' | 'messages' | 'runs' | 'project' | 'project-git'; id: string }
-  | { kind: 'events'; run: string; after: number } | { kind: 'stop'; run: string };
+  | { kind: 'events'; run: string; after: number } | { kind: 'stop'; run: string }
+  | { kind: 'project-changes'; id: string } | { kind: 'project-diff' | 'project-tree' | 'project-file'; id: string; rel: string };
 export function conversationPath(path: string): ConversationPath | null;
 export function conversationRoute(path: string): boolean;
 export function allowedConversation(method: string, path: string, body?: unknown): boolean;

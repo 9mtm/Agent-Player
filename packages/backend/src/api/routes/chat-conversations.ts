@@ -23,6 +23,7 @@ import {
   addUserMessage, createConversation, createProject, deleteConversation, deleteProject, findConversation, findProject, gitInfo,
   listConversationMessages, listConversations, listProjects, patchConversation, patchProject, ProjectInputError, type ConversationMessage,
 } from '../../repositories/chat-conversations.js';
+import { ProjectPathError, gitChanges, gitFileDiff, listFolder, readFolderFile } from '../../repositories/project-files.js';
 import { chatRuns, MAX_RUNNING_PER_USER, type RunEvent } from '../../services/chat-runs.js';
 import { openSseStream } from '../../services/chat-sse.js';
 import { executeChatTurn } from './chat.js';
@@ -169,6 +170,30 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     if (!p) return notFound(reply);
     return { git: p.folder ? await gitInfo(p.folder) : { branch: null, remote: null, dirty: null } };
   });
+
+  // ---- project panes (CHAT-PANES-01): read-only changes, diff, folder and file ----
+  const folderOf = async (request: Req, reply: FastifyReply) => {
+    const p = await findProject(caller(request), request.params.id!);
+    if (!p) { notFound(reply); return null; }
+    if (!p.folder) { reply.code(400).send({ error: 'This project has no folder', code: 'no_folder' }); return null; }
+    return p.folder;
+  };
+  const paneError = (reply: FastifyReply, err: unknown) => {
+    if (err instanceof ProjectPathError) return reply.code(400).send({ error: err.message, code: 'bad_path' });
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return reply.code(404).send({ error: 'Not found', code: 'not_found' });
+    throw err;
+  };
+  fastify.get('/api/chat/projects/:id/changes', { config: { access: 'owner' } }, async (request: Req, reply) => {
+    const folder = await folderOf(request, reply); if (!folder) return reply;
+    const c = await gitChanges(folder);
+    return c ?? { branch: null, changes: [], truncated: false, notGit: true };
+  });
+  for (const [route, fn] of [['diff', gitFileDiff], ['tree', listFolder], ['file', readFolderFile]] as const) {
+    fastify.get(`/api/chat/projects/:id/${route}`, { config: { access: 'owner' } }, async (request: Req, reply) => {
+      const folder = await folderOf(request, reply); if (!folder) return reply;
+      try { return await fn(folder, (request.query as Record<string, unknown>).path); } catch (err) { return paneError(reply, err); }
+    });
+  }
 
   fastify.get('/api/chat/runs/:runId/events', async (request: Req, reply) => {
     const run = chatRuns.get(request.params.runId!);
