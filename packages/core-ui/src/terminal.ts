@@ -62,13 +62,17 @@ export class TerminalController {
     let last = 0;
     const ac = new AbortController(); this.#stream = ac;
     for (let tries = 0; !ac.signal.aborted && this.#state.id === id && tries < 6;) {
+      const began = Date.now();
       try {
         const r = await this.client.terminalStream(id, last, (f: TerminalFrame) => {
           if (f.type === 'output') this.emit(f.data);
           else { this.emit(`\r\n[process exited with code ${f.exitCode}]\r\n`); this.publish({ phase: 'exited' }); }
         }, ac.signal);
-        last = r.last; tries = 0;
+        const progressed = r.last > last;
+        last = r.last;
         if (r.ended) { if (this.#state.phase === 'open') this.publish({ phase: 'exited' }); return; }
+        // A stream that closed with nothing new waits before re-attaching (never a tight loop).
+        if (progressed || Date.now() - began >= 2000) tries = 0; else { tries++; await new Promise(res => setTimeout(res, 400 * tries)); }
       } catch {
         if (ac.signal.aborted) return;
         tries++; await new Promise(r => setTimeout(r, 500 * tries));

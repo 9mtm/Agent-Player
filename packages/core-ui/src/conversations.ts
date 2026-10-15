@@ -314,13 +314,17 @@ export class ConversationsController {
     let failures = 0;
     const current = () => !controller.signal.aborted && this.live() && openSeq === this.#openSeq;
     while (current()) {
+      const began = Date.now();
       try {
         const { last, ended } = await this.client.runEvents(runId, after, e => this.onEvent(runId, e), controller.signal);
         if (!current()) return;
-        if (last > after) failures = 0;
+        const progressed = last > after;
+        if (progressed) failures = 0;
         after = last;
         if (this.#state.reconnecting) this.publish({ reconnecting: false });
         if (ended) { this.finished(); return; }
+        // A reader that closed with nothing new waits a moment before re-attaching (never a tight loop).
+        if (!progressed && Date.now() - began < 2000) { if (++failures > RETRY_MS.length * 4) throw new SessionFailure('unavailable'); await new Promise(r => setTimeout(r, 400)); }
       } catch (error) {
         if (!current()) return;
         if (error instanceof SessionFailure && error.code === 'cancelled') return;
