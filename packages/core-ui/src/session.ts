@@ -1,5 +1,6 @@
 import { allowedPersonality, personalityRoute, personalityResponse } from './personality-contract.js';
 import { allowedBoard, boardRoute, boardResponse, BOARDS_PATH } from './board-contract.js';
+import { allowedAgentCard, cardRoute, agentCardResponse } from './agent-card-contract.js';
 import { allowedConversation, conversationPath, conversationRoute, conversationResponse, RunEventParser, RUN_IDLE_MS, RUN_STREAM_MS } from './conversation-contract.js';
 import type { RunEvent } from './conversation-contract.js';
 import { allowedHire, batchPath, grantsAgentId, permissionsAgentId, hireResponse, hireRoute, BATCHES_PATH, CATALOGUE_PATH, DISTRIBUTION_PATH, PLAN_PATH } from './hire-contract.js';
@@ -40,7 +41,7 @@ function user(value: unknown): User {
 }
 // Reject before URL normalization. No generic URL, header, key or mutation escape hatch.
 export function allowedRequest(method: string, path: string, body?: unknown): boolean {
-  if (allowedPersonality(method, path, body) || allowedHire(method, path, body) || allowedBoard(method, path, body) || allowedConversation(method, path, body)) return true;
+  if (allowedPersonality(method, path, body) || allowedHire(method, path, body) || allowedBoard(method, path, body) || allowedConversation(method, path, body) || allowedAgentCard(method, path, body)) return true;
   const agentId = /^\/api\/agents\/([^/?#]+)$/.exec(path)?.[1];
   if (method === 'PUT') return validAgentId(agentId) && record(body) && Object.keys(body).length === 2 && Object.keys(body).every(k => k === 'name' || k === 'expectedVersion') && typeof body.name === 'string' && validatedDisplayName(body.name) === body.name && validVersion(body.expectedVersion);
   if (method === 'GET' && body === undefined && (path === '/api/agents' || validAgentId(agentId))) return true;
@@ -91,6 +92,7 @@ function projectResponse(path: string, response: WireResponse): WireResponse {
   if (hireRoute(path, response.status)) return { status: response.status, body: hireResponse(path, response.status, response.body) };
   if (boardRoute(path)) return { status: response.status, body: boardResponse(path, response.status, response.body) };
   if (conversationRoute(path)) return { status: response.status, body: conversationResponse(path, response.status, response.body) };
+  if (cardRoute(path)) return { status: response.status, body: agentCardResponse(path, response.status, response.body) };
   if (path === '/api/agents' || (path.startsWith('/api/agents/') && path !== '/api/agents/name-suggestion')) return agentResponse(path, response);
   if (response.status === 200 && (path === '/api/auth/login' || path === '/api/auth/me')) {
     if (!record(response.body)) throw new SessionFailure('unavailable');
@@ -274,7 +276,7 @@ export class SessionClient {
     if (conversationRoute(request.path) && this.#state.user?.role === 'guest') throw new SessionFailure('blocked');
     if (request.method === 'PUT' && !conversationRoute(request.path) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     if (request.method === 'POST' && request.path.startsWith('/api/memory/') && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
-    if (personalityRoute(request.path) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
+    if ((personalityRoute(request.path) || cardRoute(request.path) || (request.method === 'DELETE' && !conversationRoute(request.path))) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     if (((request.method === 'POST' && request.path === '/api/agents') || grantsAgentId(request.path) || request.path === CATALOGUE_PATH || request.path === PLAN_PATH || request.path === DISTRIBUTION_PATH || request.path === BATCHES_PATH || batchPath(request.path) || permissionsAgentId(request.path) || request.path === BOARDS_PATH || request.path.startsWith(`${BOARDS_PATH}/`)) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     const epoch = this.#state.epoch;
     const result = await this.#send(request.method, request.path, 'body' in request ? request.body : undefined, this.#token, epoch, signal);

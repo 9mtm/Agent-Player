@@ -147,8 +147,12 @@ test('admin reads but conservative UI/controller/client refuse Save', async t =>
   await assert.rejects(s.client.request({ method: 'PUT', path: '/api/agents/sample-main', body: { name: 'No', expectedVersion: 1 } }));
 });
 test('projection validates stable IDs/versions and drops every unlisted property; SSR escapes names', async t => {
-  const a = publicAgent({ id: 'a', name: '<img src=x>', version: 1, api_key: 'private', description: 'private', arbitrary: { secret: true } });
+  const a = publicAgent({ id: 'a', name: '<img src=x>', version: 1, api_key: 'private', system_prompt: 'private', model: 'private', arbitrary: { secret: true } });
   assert.deepEqual(a, { id: 'a', name: '<img src=x>', version: 1 });
+  // AGENT-CARD-01: the reviewed profile fields pass; invalid ones are dropped.
+  assert.deepEqual(publicAgent({ id: 'a', name: 'A', version: 1, role: 'manager', department: 'sales', description: 'Leads sales.', isPrimary: false, emoji: '🤖' }),
+    { id: 'a', name: 'A', version: 1, role: 'manager', department: 'sales', description: 'Leads sales.', isPrimary: false, emoji: '🤖' });
+  assert.deepEqual(publicAgent({ id: 'a', name: 'A', version: 1, role: 'boss', department: 'Sales!', isPrimary: 'yes' }), { id: 'a', name: 'A', version: 1 });
   for (const version of [0, -1, 1.1, '1', Number.MAX_SAFE_INTEGER + 1, null]) assert.throws(() => publicAgent({ ...a, version }));
   for (const id of ['..', 'a/b', '%61', 'name-suggestion', '', 'a?b']) assert.throws(() => publicAgent({ ...a, id }));
   assert.throws(() => agentResponse('/api/agents', { status: 200, body: { agents: [a, a] } }));

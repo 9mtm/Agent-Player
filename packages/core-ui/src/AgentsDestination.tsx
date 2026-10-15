@@ -1,5 +1,5 @@
 import { PersonalityController } from './personality';
-import { PersonalityReview } from './PersonalityReview';
+import { AgentCard } from './AgentCard';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { AgentsController } from './agents';
 import { HireController } from './hire';
@@ -10,7 +10,8 @@ import { namingLanguages, validatedDisplayName } from './naming';
 import type { NamingLanguage } from './naming';
 import type { SessionClient } from './session';
 
-export function AgentsDestination({ client, active = false }: { client: SessionClient; active?: boolean }) {
+export function AgentsDestination({ client, active = false, onOpenMemory }: { client: SessionClient; active?: boolean; onOpenMemory?: () => void }) {
+  const [open, setOpen] = useState<string | null>(null);
   // The effect owns subscription cleanup; construction also supports offline SSR without reads.
   const [controller, setController] = useState<AgentsController>();
   const [personality, setPersonality] = useState<PersonalityController>();
@@ -30,18 +31,57 @@ export function AgentsDestination({ client, active = false }: { client: SessionC
   }, [client]);
   // Opening the page shows the team at once (one read the first time the page is shown).
   useEffect(() => { if (active && owner && controller && controller.getSnapshot().phase === 'idle' && !controller.getSnapshot().agents.length) void controller.list(); }, [active, owner, controller]);
+  if (open && controller && personality) return <section aria-label="Agents">
+    <AgentCard client={client} agentId={open} agents={controller} personality={personality} onBack={() => { setOpen(null); void controller.list(); }} onOpenMemory={onOpenMemory}/>
+  </section>;
   return <section aria-label="Agents"><h2>Your team</h2>
-    <p>Each agent is a member of your staff with its own name, role, persona, memory and permissions. Hire a new one, or load the team to rename an agent and review its personality changes.{client.getSnapshot().mode === 'mock' ? ' Offline practice: fictional agents only.' : ''}</p>
-    <p className="fine-print">Only Save changes a name; stable IDs never change. Editing is owner-only here; the server enforces permissions separately.</p>
+    <p>Each agent is a member of your staff with its own role, persona, memory and permissions. Open an agent to change any of them.{client.getSnapshot().mode === 'mock' ? ' Offline practice: fictional agents only.' : ''}</p>
     {owner && hire && company && !hiring && !building && <div className="hire-actions">
       <button type="button" className="primary" onClick={() => { hire.restart(); setHiring(true); }}>Hire an agent</button>
       <button type="button" onClick={() => { company.restart(); setBuilding(true); }}>Build your company</button>
     </div>}
     {owner && company && building && <CompanyWizard controller={company} onClose={() => { setBuilding(false); if (company.getSnapshot().hires.some(x => x.status === 'created')) void controller?.list(); }}/>}
     {owner && hire && hiring && !building && <HireAgent controller={hire} onClose={() => { setHiring(false); if (hire.getSnapshot().step === 'done') void controller?.list(); }}/>}
-    {!hiring && !building && (controller ? <AgentsReview controller={controller}/> : <p>Agents are not loaded.</p>)}
-    {!hiring && !building && personality && <PersonalityReview controller={personality}/>}
+    {!hiring && !building && (controller ? <TeamGrid controller={controller} onOpen={setOpen}/> : <p>Agents are not loaded.</p>)}
   </section>;
+}
+
+const ROLE: Record<string, string> = { main: 'Main agent', manager: 'Manager', specialist: 'Specialist', evaluator: 'Evaluator' };
+/** The team as cards, grouped by department; a card opens the agent. */
+export function TeamGrid({ controller, onOpen }: { controller: AgentsController; onOpen: (id: string) => void }) {
+  const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const [query, setQuery] = useState('');
+  if (s.phase === 'listing' && !s.agents.length) return <p className="empty-note" role="status">Loading the team…</p>;
+  if (s.phase === 'denied') return <p className="empty-note">Only the owner can manage the team here.</p>;
+  if (!s.agents.length) return <div className="empty-note"><p>No agents loaded.</p><button type="button" onClick={() => void controller.list()}>Load the team</button></div>;
+  const q = query.trim().toLowerCase();
+  const shown = s.agents.filter(a => !q || [a.name, a.role, a.department, a.description].some(x => (x ?? '').toLowerCase().includes(q)));
+  const groups = new Map<string, typeof shown>();
+  for (const a of [...shown].sort((x, y) => Number(!!y.isPrimary) - Number(!!x.isPrimary) || (x.name ?? '').localeCompare(y.name ?? ''))) {
+    const k = a.isPrimary ? '' : a.department ?? 'other';
+    groups.set(k, [...(groups.get(k) ?? []), a]);
+  }
+  const order = [...groups.keys()].sort((a, b) => (a === '' ? -1 : b === '' ? 1 : a === 'other' ? 1 : b === 'other' ? -1 : a.localeCompare(b)));
+  return <div className="team">
+    <div className="team-tools">
+      <span className="fine-print">{s.agents.length} {s.agents.length === 1 ? 'agent' : 'agents'}</span>
+      {s.agents.length > 6 && <input type="search" className="team-filter" placeholder="Filter by name, role or department" aria-label="Filter the team" value={query} onChange={e => setQuery(e.target.value)}/>}
+      <button type="button" className="ghost" onClick={() => void controller.list()} disabled={s.phase === 'listing'}>Reload</button>
+    </div>
+    {order.map(k => <section key={k || 'main'} className="team-group" aria-label={k ? `Department ${k}` : 'Main agent'}>
+      {k && <h3 className="team-group-title">{k === 'other' ? 'No department' : k[0].toUpperCase() + k.slice(1)}</h3>}
+      <ul className="team-grid">{groups.get(k)!.map(a => <li key={a.id}>
+        <button type="button" className="team-card" onClick={() => onOpen(a.id)}>
+          <span className="team-avatar" aria-hidden="true">{(a.name ?? '?').trim().slice(0, 1).toUpperCase() || '?'}</span>
+          <span className="team-text">
+            <span className="team-name"><bdi>{a.name ?? 'Name unavailable'}</bdi>{a.isPrimary && <span className="chip accent">Main</span>}</span>
+            <span className="team-role">{[a.role ? ROLE[a.role] : null, a.department].filter(Boolean).join(' · ') || 'No role yet'}</span>
+            {a.description && <span className="team-desc" dir="auto">{a.description}</span>}
+          </span>
+        </button></li>)}</ul>
+    </section>)}
+    {shown.length === 0 && <p className="empty-note">No agent matches.</p>}
+  </div>;
 }
 /** Readable status for each controller phase (the controller keeps its own words). */
 const phaseLabel: Record<string, string> = {

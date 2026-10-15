@@ -1,0 +1,147 @@
+// MEMORY-PAGE-02: the owner's memory items. Drawers with counts, the items
+// of the open drawer, search, add, edit, history and forget, and which
+// agents may read each drawer (from their permissions).
+import type { SessionClient } from './session';
+import type { Drawer, MemoryItem, MemoryType, MemoryVersion } from './agent-card-contract.js';
+
+export type DrawerCount = Drawer & { count: number };
+export type NewMemory = { type: MemoryType; content: string; importance: number; drawer: Drawer };
+export type MemoryState = Readonly<{
+  phase: 'idle' | 'loading' | 'ready' | 'error'; busy: boolean;
+  items: readonly MemoryItem[]; drawers: readonly DrawerCount[];
+  open: string; query: string; found: readonly string[] | null;
+  editing: string | null; draft: string; draftImportance: number;
+  adding: NewMemory | null;
+  history: Readonly<Record<string, readonly MemoryVersion[]>>;
+  readers: Readonly<Record<string, readonly string[]>>;
+  notice?: string;
+}>;
+
+const record = (x: unknown): x is Record<string, any> => !!x && typeof x === 'object' && !Array.isArray(x);
+/** A drawer's stable key: "owner", "project:launch", … ("all" lists every item). */
+export const drawerId = (d: Drawer) => (d.key ? `${d.kind}:${d.key}` : d.kind);
+
+export class MemoryItemsController {
+  #state: MemoryState = Object.freeze({ phase: 'idle', busy: false, items: [], drawers: [], open: 'all', query: '', found: null, editing: null, draft: '', draftImportance: 5, adding: null, history: {}, readers: {} });
+  #listeners = new Set<() => void>();
+  #disposed = false;
+  constructor(private readonly client: SessionClient) {}
+  getSnapshot = () => this.#state;
+  subscribe = (fn: () => void) => { this.#listeners.add(fn); return () => { this.#listeners.delete(fn); }; };
+  private publish(p: Partial<MemoryState>) { if (this.#disposed) return; this.#state = Object.freeze({ ...this.#state, ...p }); this.#listeners.forEach(fn => fn()); }
+  dispose() { this.#disposed = true; this.#listeners.clear(); }
+  private req(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown) { return this.client.request((body === undefined ? { method, path } : { method, path, body }) as never); }
+
+  /** The items shown: the open drawer, narrowed by the search. */
+  visible(): MemoryItem[] {
+    const s = this.#state;
+    let items = s.open === 'all' ? [...s.items] : s.items.filter(m => drawerId(m.drawer) === s.open);
+    if (s.found) items = items.filter(m => s.found!.includes(m.id));
+    else if (s.query.trim()) { const q = s.query.trim().toLowerCase(); items = items.filter(m => m.content.toLowerCase().includes(q) || m.type.includes(q)); }
+    return items.sort((a, b) => b.importance - a.importance || b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async load() {
+    if (this.#state.phase === 'loading') return;
+    this.publish({ phase: 'loading', notice: undefined });
+    try {
+      const [m, d] = await Promise.all([this.req('GET', '/api/memory'), this.req('GET', '/api/memory/drawers')]);
+      if (m.status !== 200 || !record(m.body)) { this.publish({ phase: 'error', notice: m.status === 401 || m.status === 403 ? 'Only the owner can open the memory here.' : 'Memory could not be loaded.' }); return; }
+      this.publish({ phase: 'ready', items: m.body.memories as MemoryItem[], drawers: d.status === 200 && record(d.body) ? d.body.drawers as DrawerCount[] : [] });
+      void this.loadReaders();
+    } catch { this.publish({ phase: 'error', notice: 'Memory could not be loaded.' }); }
+  }
+
+  /** Which agents may read each drawer kind (owner view of the team's permissions). */
+  async loadReaders() {
+    try {
+      const a = await this.req('GET', '/api/agents');
+      if (a.status !== 200 || !record(a.body) || !Array.isArray(a.body.agents)) return;
+      const agents = (a.body.agents as { id: string; name?: string }[]).slice(0, 60);
+      const readers: Record<string, string[]> = {};
+      await Promise.all(agents.map(async ag => {
+        try {
+          const p = await this.req('GET', `/api/agents/${ag.id}/permissions`);
+          if (p.status === 200 && record(p.body)) for (const k of p.body.memoryRead as string[]) (readers[k] ??= []).push(ag.name ?? ag.id);
+        } catch { /* that agent is skipped */ }
+      }));
+      for (const k of Object.keys(readers)) readers[k].sort((x, y) => x.localeCompare(y));
+      this.publish({ readers });
+    } catch { /* readers stay unknown */ }
+  }
+
+  openDrawer(id: string) { this.publish({ open: id, editing: null }); }
+  setQuery(query: string) { this.publish({ query, found: null }); }
+  /** Searches by meaning on the server (the box filters by words as you type). */
+  async searchServer() {
+    const q = this.#state.query.trim();
+    if (q.length < 2) return;
+    this.publish({ busy: true });
+    try {
+      const r = await this.req('POST', '/api/memory/search', { query: q.slice(0, 500), limit: 50 });
+      this.publish({ busy: false, found: r.status === 200 && record(r.body) ? (r.body.memories as MemoryItem[]).map(m => m.id) : null });
+    } catch { this.publish({ busy: false }); }
+  }
+
+  startAdd() {
+    const open = this.#state.open;
+    const [kind, key] = open === 'all' ? ['owner', undefined] : open.split(/:(.*)/s);
+    this.publish({ adding: { type: 'fact', content: '', importance: 6, drawer: key ? { kind: kind as Drawer['kind'], key } : { kind: kind as Drawer['kind'] } }, editing: null });
+  }
+  editAdd(p: Partial<NewMemory>) { const a = this.#state.adding; if (a) this.publish({ adding: { ...a, ...p } }); }
+  cancelAdd() { this.publish({ adding: null }); }
+  async saveAdd() {
+    const a = this.#state.adding;
+    if (!a || !a.content.trim()) return;
+    const keyed = a.drawer.kind === 'project' || a.drawer.kind === 'task' || a.drawer.kind === 'people';
+    const key = a.drawer.kind === 'project' ? a.drawer.key?.trim().toLowerCase().replace(/\s+/g, '-') : a.drawer.key?.trim().replace(/\s+/g, '-');
+    if (keyed && !key) { this.publish({ notice: 'Give the project, task or person a short name.' }); return; }
+    this.publish({ busy: true, notice: undefined });
+    try {
+      const r = await this.req('POST', '/api/memory', { type: a.type, content: a.content.trim(), importance: a.importance, drawer: keyed ? { kind: a.drawer.kind, key } : { kind: a.drawer.kind } });
+      if (r.status !== 200 || !record(r.body)) { this.publish({ busy: false, notice: r.status === 400 ? 'Check the drawer name: letters, numbers, - or _ only.' : 'The memory was not saved.' }); return; }
+      this.publish({ busy: false, adding: null });
+      await this.load();
+    } catch { this.publish({ busy: false, notice: 'The memory was not saved (no connection).' }); }
+  }
+
+  startEdit(id: string) { const m = this.#state.items.find(x => x.id === id); if (m) this.publish({ editing: id, draft: m.content, draftImportance: m.importance, adding: null }); }
+  editDraft(draft: string) { this.publish({ draft }); }
+  editImportance(n: number) { this.publish({ draftImportance: Math.max(1, Math.min(10, n)) }); }
+  cancelEdit() { this.publish({ editing: null }); }
+  async saveEdit() {
+    const id = this.#state.editing; const m = this.#state.items.find(x => x.id === id);
+    if (!id || !m) return;
+    const body: Record<string, unknown> = {};
+    if (this.#state.draft.trim() && this.#state.draft !== m.content) body.content = this.#state.draft;
+    if (this.#state.draftImportance !== m.importance) body.importance = this.#state.draftImportance;
+    if (!Object.keys(body).length) { this.publish({ editing: null }); return; }
+    this.publish({ busy: true });
+    try {
+      const r = await this.req('PUT', `/api/memory/${id}`, body);
+      if (r.status !== 200 || !record(r.body)) { this.publish({ busy: false, notice: 'The change was not saved.' }); return; }
+      const updated = r.body.memory as MemoryItem;
+      const history = { ...this.#state.history }; delete history[id];
+      this.publish({ busy: false, editing: null, items: this.#state.items.map(x => (x.id === id ? updated : x)), history });
+    } catch { this.publish({ busy: false, notice: 'The change was not saved (no connection).' }); }
+  }
+
+  async toggleHistory(id: string) {
+    if (this.#state.history[id]) { const h = { ...this.#state.history }; delete h[id]; this.publish({ history: h }); return; }
+    try {
+      const r = await this.req('GET', `/api/memory/${id}/versions`);
+      if (r.status === 200 && record(r.body)) this.publish({ history: { ...this.#state.history, [id]: r.body.versions as MemoryVersion[] } });
+    } catch { /* history stays closed */ }
+  }
+
+  /** Forgets one memory completely (its text and history); cannot be undone. */
+  async forget(id: string) {
+    this.publish({ busy: true });
+    try {
+      const r = await this.req('POST', `/api/memory/${id}/forget`);
+      if (r.status !== 200) { this.publish({ busy: false, notice: 'The memory was not forgotten.' }); return; }
+      this.publish({ busy: false, editing: null });
+      await this.load();
+    } catch { this.publish({ busy: false, notice: 'The memory was not forgotten (no connection).' }); }
+  }
+}

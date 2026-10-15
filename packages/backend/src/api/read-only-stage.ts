@@ -110,6 +110,13 @@ export const STAGE3_ROUTES: ReadonlySet<string> = new Set([
   // CHAT-REBUILD-01: saved conversations and resumable runs (the turn itself runs on the local model only)
   'GET /api/chat/conversations', 'POST /api/chat/conversations', 'PUT /api/chat/conversations/:id', 'DELETE /api/chat/conversations/:id',
   'GET /api/chat/conversations/:id/messages', 'POST /api/chat/conversations/:id/runs', 'POST /api/chat/runs/:runId/stop',
+  // AGENT-CARD-01: the agent card edits role/department/description and the versioned persona (owner)
+  'PUT /api/agents/:id', 'GET /api/agents/:id/personality/current', 'GET /api/agents/:id/personality/versions',
+  'POST /api/agents/:id/personality/versions', 'POST /api/agents/:id/personality/lock', 'POST /api/agents/:id/personality/unlock',
+  'POST /api/agents/:id/personality/rollback',
+  // MEMORY-PAGE-02: the memory page works on memory items (the owner's own memories, by drawer)
+  'GET /api/memory', 'GET /api/memory/drawers', 'GET /api/memory/summary', 'POST /api/memory', 'PUT /api/memory/:id',
+  'DELETE /api/memory/:id', 'POST /api/memory/:id/forget', 'GET /api/memory/:id/versions', 'POST /api/memory/search',
 ]);
 /** The one stage-3 event stream: a run's events, with nothing but an optional numeric `after` in the query. */
 const RUN_EVENTS_ROUTE = '/api/chat/runs/:runId/events';

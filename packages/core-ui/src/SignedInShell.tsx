@@ -7,7 +7,8 @@ import { ConversationList } from './ConversationList';
 import { AgentsDestination } from './AgentsDestination';
 import { BoardController } from './board';
 import { TaskBoard } from './TaskBoard';
-import { AccountPanel, MemoryPanel } from './SessionPanels';
+import { AccountPanel } from './SessionPanels';
+import { MemoryPage } from './MemoryViews';
 import { Icon } from './icons';
 import type { IconName } from './icons';
 import { UiIcon } from './ui-icons';
@@ -102,9 +103,9 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
       <section className="page page-chat" aria-label="Chat" hidden={page !== 'chat'}>
         {chat ? <ChatView controller={chat} mode={mode}/> : <p>Chat is not connected.</p>}
       </section>
-      <section className="page page-scroll" hidden={page !== 'agents'}><div className="page-column"><AgentsDestination client={client} active={page === 'agents'}/></div></section>
+      <section className="page page-scroll" hidden={page !== 'agents'}><div className="page-column"><AgentsDestination client={client} active={page === 'agents'} onOpenMemory={() => setPage('memory')}/></div></section>
       <section className="page page-scroll page-board page-ui" hidden={page !== 'board'}>{board && <TaskBoard controller={board} active={page === 'board'}/>}</section>
-      <section className="page page-scroll page-wide page-ui" hidden={page !== 'memory'}><MemoryPanel client={client} active={page === 'memory'}/></section>
+      <section className="page page-scroll page-wide page-ui" hidden={page !== 'memory'}><MemoryPage client={client} active={page === 'memory'}/></section>
       <section className="page page-scroll" hidden={page !== 'account'}><div className="page-column"><AccountPanel client={client}/></div></section>
     </main>
     <footer className="statusbar">
