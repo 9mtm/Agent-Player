@@ -175,7 +175,7 @@ export class CompanyController {
     const s = this.#state;
     if (!s.owner || this.#busy() || s.step !== 'review') return;
     const chosen = s.hires.filter(h => h.include && h.status !== 'created');
-    if (!chosen.length) return this.#publish({ notice: 'Choose at least one person to hire.' });
+    if (!chosen.length) return this.#publish({ notice: 'Choose at least one agent to hire.' });
     const invalid = chosen.find(h => !hireBody(h) || (h.name.trim() && !displayName(h.name.normalize('NFKC').replace(/\s+/g, ' ').trim())));
     if (invalid) return this.#publish({ notice: `Check the name of ${invalid.title}: up to 60 characters, no hidden characters.` });
     const ticket = this.#begin('hiring');
@@ -208,7 +208,7 @@ export class CompanyController {
   async distribute() {
     const s = this.#state;
     if (!s.owner || this.#busy() || s.total === undefined || !s.departments.length) return;
-    if (s.total < s.departments.length) return this.#publish({ notice: `${s.total} ${s.total === 1 ? 'person is' : 'people are'} too few for ${s.departments.length} departments; each needs at least one.` });
+    if (s.total < s.departments.length) return this.#publish({ notice: `${s.total} ${s.total === 1 ? 'agent is' : 'agents are'} too few for ${s.departments.length} departments; each needs at least one.` });
     const ticket = this.#begin('planning');
     try {
       const r = await this.client.request({ method: 'POST', path: DISTRIBUTION_PATH, body: { departments: [...s.departments], total: s.total } }, this.#abort!.signal);
@@ -228,7 +228,7 @@ export class CompanyController {
   editShare(department: string, patch: { count?: number; role?: TeamRole; preset?: Preset }) {
     const s = this.#state; if (!s.owner || this.#busy() || s.step !== 'review' || !s.shares.length) return;
     const max = s.catalogue?.maxTotal ?? MAX_TOTAL;
-    if (patch.count !== undefined && (!Number.isSafeInteger(patch.count) || patch.count < 1 || patch.count > max)) return this.#publish({ notice: `Each department needs 1 to ${max} people.` });
+    if (patch.count !== undefined && (!Number.isSafeInteger(patch.count) || patch.count < 1 || patch.count > max)) return this.#publish({ notice: `Each department needs 1 to ${max} agents.` });
     this.#publish({ notice: undefined, shares: Object.freeze(s.shares.map(x => x.department !== department ? x : Object.freeze({
       ...x,
       ...(patch.count !== undefined ? { count: patch.count } : {}),
@@ -242,7 +242,7 @@ export class CompanyController {
     if (!s.owner || this.#busy() || s.step !== 'review' || !s.shares.length) return;
     const total = s.shares.reduce((a, x) => a + x.count, 0);
     const max = s.catalogue?.maxTotal ?? MAX_TOTAL;
-    if (total > max) return this.#publish({ notice: `At most ${max} people in total; you have ${total}.` });
+    if (total > max) return this.#publish({ notice: `At most ${max} agents in total; you have ${total}.` });
     this.#batchBody = { id: newBatchId(), departments: s.shares.map(x => ({ department: x.department, count: x.count, presets: { ...x.presets } })) };
     this.#batchStored = false;
     await this.#store();
@@ -264,7 +264,7 @@ export class CompanyController {
     await this.#run(id, found.pending === 0 && found.failed > 0);
   }
 
-  /** Try the failed people of the current batch again. */
+  /** Try the failed agents of the current batch again. */
   async retryFailed() {
     const s = this.#state; if (!s.owner || this.#busy() || !s.batch || !s.batch.failed) return;
     await this.#run(s.batch.id, true);

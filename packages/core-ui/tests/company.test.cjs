@@ -62,7 +62,7 @@ test('full offline flow: start → size → departments (+ custom) → reviewed 
   assert.equal(s.step, 'review'); assert.equal(s.hires.length, 4);
   assert.equal(creates(calls).length, 0, 'nothing hired before confirm');
   w.edit('h0', { name: 'Layla Finance' }); w.edit('h1', { include: false }); w.edit('h2', { preset: 'strict-evaluator', role: 'evaluator' });
-  assert.match(markup(w), /Hire 3 people/);
+  assert.match(markup(w), /Hire 3 agents/);
   await w.hireAll();
   s = w.getSnapshot();
   assert.equal(s.step, 'done'); assert.equal(s.phase, 'done');
@@ -71,8 +71,8 @@ test('full offline flow: start → size → departments (+ custom) → reviewed 
   assert.deepEqual(bodies[0], { name: 'Layla Finance', role: 'manager', department: 'finance', description: 'Offline manager in finance.', personality: { preset: 'careful-auditor' } });
   assert.equal(bodies[1].role, 'evaluator'); assert.equal(bodies[1].personality.preset, 'strict-evaluator'); assert.equal(bodies[1].department, 'podcast studio');
   assert.deepEqual(s.hires.map(h => h.status), ['created', 'planned', 'created', 'created']);
-  assert.match(markup(w), /3 new people have joined your team/);
-  w.edit('h0', { name: 'Changed' }); assert.equal(w.getSnapshot().hires[0].name, 'Layla Finance', 'a hired person cannot be edited');
+  assert.match(markup(w), /3 new agents have joined your team/);
+  w.edit('h0', { name: 'Changed' }); assert.equal(w.getSnapshot().hires[0].name, 'Layla Finance', 'a hired agent cannot be edited');
 });
 
 test('a refused hire is marked and the others continue; retrying sends only the failed one', async t => {

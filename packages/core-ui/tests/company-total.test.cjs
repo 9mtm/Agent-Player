@@ -85,7 +85,7 @@ test('responses are projected to the reviewed fields; inconsistent ones are refu
   assert.deepEqual(hireResponse('/api/onboarding/team-batches/abcdefgh-1', 404, { code: 'batch_not_found' }), { code: 'batch_not_found' });
 });
 
-test('offline: 400 people → departments → editable split → one batch, hired in chunks with progress', async t => {
+test('offline: 400 agents → departments → editable split → one batch, hired in chunks with progress', async t => {
   const { client, w, calls } = await fixture(t);
   const before = await agentCount(client);
   await w.loadCatalogue();
@@ -93,7 +93,7 @@ test('offline: 400 people → departments → editable split → one batch, hire
   assert.equal(w.chooseTotal(400), true);
   assert.equal(w.getSnapshot().step, 'departments');
   w.toggleDepartment('marketing'); w.toggleDepartment('finance'); w.toggleDepartment('support');
-  assert.match(markup(w), /Split 400 people over 3 departments/);
+  assert.match(markup(w), /Split 400 agents over 3 departments/);
   await w.propose();
   let s = w.getSnapshot();
   assert.equal(s.step, 'review'); assert.equal(sharesTotal(s.shares), 400);
@@ -106,8 +106,8 @@ test('offline: 400 people → departments → editable split → one batch, hire
   const total = sharesTotal(s.shares);
   assert.equal(total, 400 - 133 + 10);
   const html = markup(w);
-  assert.match(html, new RegExp(`Hire ${total} people`));
-  assert.match(html, /Show the 10 people/);
+  assert.match(html, new RegExp(`Hire ${total} agents`));
+  assert.match(html, /Show the 10 agents/);
   assert.match(html, /1 lead · 8 specialists · 1 reviewer/);
   await w.hireBatch();
   s = w.getSnapshot();
@@ -119,7 +119,7 @@ test('offline: 400 people → departments → editable split → one batch, hire
   assert.equal(create.body.departments[0].presets.specialist, 'precise-developer');
   assert.equal(runs(calls).length, Math.ceil(total / 25));
   assert.equal(await agentCount(client) - before, total, 'exactly the reviewed number of agents');
-  assert.match(markup(w), new RegExp(`${total} new people have joined your team`));
+  assert.match(markup(w), new RegExp(`${total} new agents have joined your team`));
 });
 
 test('a lost answer stops the run; Continue and a reload resume it without duplicates', async t => {
@@ -147,7 +147,7 @@ test('a lost answer stops the run; Continue and a reload resume it without dupli
   await again.loadCatalogue();
   assert.equal(again.getSnapshot().open.length, 1);
   const open = again.getSnapshot().open[0];
-  assert.equal(open.created, 75, 'the lost run had created its people');
+  assert.equal(open.created, 75, 'the lost run had created its agents');
   assert.match(markup(again), /75 of 120 hired/);
   await again.resume(open.id);
   s = again.getSnapshot();
@@ -156,7 +156,7 @@ test('a lost answer stops the run; Continue and a reload resume it without dupli
   void base;
 });
 
-test('busy elsewhere and failed people: clear notices, retry only the failed', async t => {
+test('busy elsewhere and failed agents: clear notices, retry only the failed', async t => {
   let busy = true; let fail = 2;
   const { w, calls } = await fixture(t, b => async r => {
     if (r.method === 'POST' && r.path.endsWith('/run') && busy) { busy = false; return { status: 409, body: { code: 'batch_running' } }; }

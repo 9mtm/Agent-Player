@@ -75,7 +75,7 @@ export function createAgentsMock() {
       }
       if (request.method === 'POST' && request.path === '/api/agents') return create(request.body as CreateBody);
       if (request.method === 'GET' && request.path === '/api/onboarding/team-catalogue') return { status: 200, body: {
-        sizes: [{ id: 'solo', label: 'Just me' }, { id: 'small', label: '2–10 people' }, { id: 'medium', label: '11–50 people' }, { id: 'large', label: 'More than 50 people' }],
+        sizes: [{ id: 'solo', label: 'Just me' }, { id: 'small', label: '2–10 agents' }, { id: 'medium', label: '11–50 agents' }, { id: 'large', label: 'More than 50 agents' }],
         departments: [{ id: 'marketing', label: 'Marketing', summary: 'Fictional campaigns.' }, { id: 'finance', label: 'Finance', summary: 'Fictional invoices.' }, { id: 'support', label: 'Customer support', summary: 'Fictional customers.' }],
         maxDepartments: 12, maxCustomDepartments: 4 } };
       if (request.method === 'POST' && request.path === '/api/onboarding/team-plan') {
