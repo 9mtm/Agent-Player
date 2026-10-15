@@ -353,3 +353,21 @@ test('BUG-04: the heartbeat checks the configured host and port', async () => {
     delete process.env.AGENT_PLAYER_BACKGROUND;
   }
 });
+
+test('stage 3 with local tools: only 1 and only in stage 3; exec stays off', () => {
+  const r = iso.checkLauncherEnv({ ...good, AGENT_PLAYER_ISOLATED_STAGE: '3', AGENT_PLAYER_LOCAL_MODEL_TOOLS: '1' }, ctx);
+  assert.equal(r.ok, true, r.ok ? '' : r.errors.join('; '));
+  const env = iso.buildIsolatedChildEnv(r.config, {}, '/n');
+  assert.equal(env.AGENT_PLAYER_LOCAL_MODEL_TOOLS, '1');
+  assert.equal(env.AGENT_EXEC_TOOLS, undefined);
+  assert.equal(iso.checkIsolatedServerEnv(env, ctx, join(dataDir, 'run')).join('\n'), '');
+  assert.match(iso.checkIsolatedServerEnv({ ...env, AGENT_PLAYER_ISOLATED_STAGE: '2' }, ctx, join(dataDir, 'run')).join('\n'), /LOCAL_MODEL_TOOLS must be unset, or 1 in stage 3/);
+  for (const bad of [{ AGENT_PLAYER_ISOLATED_STAGE: '2', AGENT_PLAYER_LOCAL_MODEL_TOOLS: '1' }, { AGENT_PLAYER_ISOLATED_STAGE: '3', AGENT_PLAYER_LOCAL_MODEL_TOOLS: 'yes' }]) {
+    const x = iso.checkLauncherEnv({ ...good, ...bad }, ctx);
+    assert.equal(x.ok, false);
+    assert.match(x.errors.join('\n'), /LOCAL_MODEL_TOOLS must be unset, or 1 with stage 3/);
+  }
+  // Without the switch the child never gets it.
+  const plain = iso.checkLauncherEnv({ ...good, AGENT_PLAYER_ISOLATED_STAGE: '3' }, ctx);
+  assert.equal(iso.buildIsolatedChildEnv(plain.config, { AGENT_PLAYER_LOCAL_MODEL_TOOLS: '1' }, '/n').AGENT_PLAYER_LOCAL_MODEL_TOOLS, undefined);
+});
