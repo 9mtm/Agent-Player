@@ -268,7 +268,7 @@ function CardPanel({ card, controller, busy }: { card: Card; controller: BoardCo
     <fieldset className="board-panel-agents" disabled={busy}><legend>Agents working on it ({d.agents.length})</legend>
       {s.agents.length > 8 && <input aria-label="Find an agent" placeholder="Find an agent" value={agentQuery} onChange={e => setAgentQuery(e.target.value)}/>}
       <ul>{shownAgents.map(a => <li key={a.id}><label className="check"><input type="checkbox" checked={d.agents.includes(a.id)} onChange={() => controller.toggleAgent(a.id)}/>{a.name}</label></li>)}</ul>
-      {s.agents.length === 0 && <p className="fine-print">No agents loaded.</p>}
+      {s.agents.length === 0 && <p className="fine-print">No agents yet. Hire them on the Agents page.</p>}
     </fieldset>
     <div className="board-panel-deps">
       <span>Departments taking part</span>
