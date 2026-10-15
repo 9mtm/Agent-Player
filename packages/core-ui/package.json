@@ -14,6 +14,8 @@
     "serve:isolated": "node scripts/application-server.cjs"
   },
   "dependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },

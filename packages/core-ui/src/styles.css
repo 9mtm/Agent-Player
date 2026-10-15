@@ -1059,3 +1059,11 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .tree-name { flex:1; min-inline-size:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .app-shell .tree-size { flex:none; font-size:10.5px; color:var(--text-3); }
 @media (max-width: 900px) { .app-shell .chat-layout[data-panel] { grid-template-columns:minmax(0,1fr); } .app-shell .chat-panel.chat-pane { display:flex; position:fixed; inset:48px 0 28px auto; inline-size:min(100%,32rem); z-index:5; box-shadow:0 0 0 1px var(--stroke-3); background:var(--canvas); } }
+
+/* Terminal pane */
+.app-shell { --terminal-bg:#141414; }
+.shell[data-theme="light"] .app-shell { --terminal-bg:#fbfbfa; }
+.app-shell .terminal-pane { background:var(--terminal-bg); }
+.app-shell .terminal-screen { flex:1; min-block-size:0; padding:6px 0 0 8px; }
+.app-shell .terminal-screen .xterm { block-size:100%; }
+.app-shell .terminal-screen .xterm-viewport { background:var(--terminal-bg) !important; }

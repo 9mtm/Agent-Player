@@ -4,6 +4,8 @@ import type { ConversationsController } from './conversations';
 import { AgentPanel } from './AgentPanel';
 import { ChangesPane, FilesPane } from './ProjectPanes';
 import { PanesController } from './panes';
+import { TerminalController } from './terminal';
+import { TerminalPane } from './TerminalPane';
 import type { PaneName } from './panes';
 import type { SessionClient } from './session';
 import { Markdown } from './markdown';
@@ -93,12 +95,15 @@ export function ChatView({ controller, mode, productName = 'Dpro', client }: { c
   const project = controller.activeProject();
   const [pane, setPane] = useState<PaneName | null>(() => typeof window === 'undefined' || window.innerWidth >= 1100 ? 'details' : null);
   const [panes, setPanes] = useState<PanesController | null>(null);
-  useEffect(() => { if (!client) return; const p = new PanesController(client); setPanes(p); return () => p.dispose(); }, [client]);
+  const [terminal, setTerminal] = useState<TerminalController | null>(null);
+  useEffect(() => { if (!client) return; const p = new PanesController(client); setPanes(p); const t = new TerminalController(client); setTerminal(t); return () => { p.dispose(); t.dispose(); }; }, [client]);
+  const owner = client?.getSnapshot().user?.role === 'owner';
   const folderProject = project?.folder ? project.id : null;
   useEffect(() => { panes?.setProject(folderProject); }, [panes, folderProject]);
   const paneButtons: { name: PaneName; icon: UiIconName; label: string }[] = [
     { name: 'details', icon: 'sidebar', label: 'Details' },
     ...(panes ? [{ name: 'changes' as const, icon: 'diff' as const, label: 'Changes' }, { name: 'files' as const, icon: 'folder' as const, label: 'Files' }] : []),
+    ...(terminal && owner ? [{ name: 'terminal' as const, icon: 'terminal' as const, label: 'Terminal' }] : []),
   ];
   return <div className="chat-layout" data-panel={pane ?? undefined}>
   <div className="chat-screen">
@@ -179,6 +184,7 @@ export function ChatView({ controller, mode, productName = 'Dpro', client }: { c
   {panes && (pane === 'changes' || pane === 'files') && <aside className="chat-panel chat-pane" aria-label={pane === 'changes' ? 'Changes' : 'Files'}>
     {pane === 'changes' ? <ChangesPane panes={panes}/> : <FilesPane panes={panes}/>}
   </aside>}
+  {terminal && pane === 'terminal' && <aside className="chat-panel chat-pane" aria-label="Terminal"><TerminalPane terminal={terminal} projectId={folderProject}/></aside>}
   </div>;
 }
 

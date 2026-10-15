@@ -1,0 +1,105 @@
+import type { SessionClient } from './session';
+import type { TerminalFrame } from './terminal-contract.js';
+
+export type TerminalPhase = 'idle' | 'starting' | 'open' | 'exited' | 'off' | 'error';
+export type TerminalState = Readonly<{ phase: TerminalPhase; id: string | null; cwd: string; shell: string; message?: string; projectId: string | null }>;
+
+const record = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
+/** Output kept for redrawing the screen when the pane opens again. */
+export const REPLAY_CHARS = 200_000;
+
+/**
+ * One shell for the chat's terminal pane. It outlives the pane (switching
+ * panes keeps the shell running); keystrokes are sent in order, coalesced
+ * while a send is in flight; output is replayed to a newly mounted screen.
+ */
+export class TerminalController {
+  #state: TerminalState = Object.freeze({ phase: 'idle', id: null, cwd: '', shell: '', projectId: null });
+  #listeners = new Set<() => void>();
+  #output = new Set<(data: string) => void>();
+  #replay = '';
+  #pending = '';
+  #sending = false;
+  #stream: AbortController | null = null;
+  #resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  #disposed = false;
+  constructor(private readonly client: SessionClient) {}
+  getSnapshot = () => this.#state;
+  subscribe = (fn: () => void) => { this.#listeners.add(fn); return () => { this.#listeners.delete(fn); }; };
+  /** Receives output; the buffered screen is replayed first. */
+  onOutput(fn: (data: string) => void) { if (this.#replay) fn(this.#replay); this.#output.add(fn); return () => { this.#output.delete(fn); }; }
+  private publish(p: Partial<TerminalState>) { if (this.#disposed) return; this.#state = Object.freeze({ ...this.#state, ...p }); this.#listeners.forEach(fn => fn()); }
+  private emit(data: string) {
+    this.#replay = (this.#replay + data).slice(-REPLAY_CHARS);
+    this.#output.forEach(fn => fn(data));
+  }
+
+  /** Opens a shell in the project folder (or home without a project). */
+  async open(projectId: string | null, size: { cols: number; rows: number }) {
+    if (this.#state.phase === 'starting' || this.#state.phase === 'open') return;
+    this.#replay = ''; this.#pending = '';
+    this.publish({ phase: 'starting', message: undefined, projectId, id: null });
+    try {
+      const r = await this.client.request({ method: 'POST', path: '/api/terminal/sessions', body: { cols: size.cols, rows: size.rows, ...(projectId ? { projectId } : {}) } } as never);
+      if (r.status !== 201 || !record(r.body) || typeof r.body.id !== 'string') {
+        const code = record(r.body) ? r.body.code : undefined;
+        this.publish(code === 'disabled' ? { phase: 'off', message: 'The terminal is turned off on this server.' }
+          : { phase: 'error', message: code === 'limit' ? 'Too many terminals are open. Close one first.' : code === 'not_loopback' ? 'The terminal works only on this computer.' : code === 'not_found' ? 'The project folder was not found.' : 'The terminal could not start.' });
+        return;
+      }
+      this.publish({ phase: 'open', id: r.body.id, cwd: String(r.body.cwd ?? ''), shell: String(r.body.shell ?? '') });
+      void this.follow(r.body.id);
+    } catch { this.publish({ phase: 'error', message: 'The terminal could not start (no connection).' }); }
+  }
+
+  private async follow(id: string) {
+    let last = 0;
+    const ac = new AbortController(); this.#stream = ac;
+    for (let tries = 0; !ac.signal.aborted && this.#state.id === id && tries < 6;) {
+      try {
+        const r = await this.client.terminalStream(id, last, (f: TerminalFrame) => {
+          if (f.type === 'output') this.emit(f.data);
+          else { this.emit(`\r\n[process exited with code ${f.exitCode}]\r\n`); this.publish({ phase: 'exited' }); }
+        }, ac.signal);
+        last = r.last; tries = 0;
+        if (r.ended) { if (this.#state.phase === 'open') this.publish({ phase: 'exited' }); return; }
+      } catch {
+        if (ac.signal.aborted) return;
+        tries++; await new Promise(r => setTimeout(r, 500 * tries));
+      }
+    }
+    if (!ac.signal.aborted && this.#state.id === id && this.#state.phase === 'open') this.publish({ phase: 'error', message: 'Lost the connection to the terminal.' });
+  }
+
+  /** Keystrokes from the screen, sent in order. */
+  write(data: string) {
+    if (this.#state.phase !== 'open' || !data) return;
+    this.#pending += data;
+    if (!this.#sending) void this.flush();
+  }
+  private async flush() {
+    this.#sending = true;
+    try {
+      while (this.#pending && this.#state.phase === 'open' && this.#state.id) {
+        const chunk = this.#pending.slice(0, 32_000); this.#pending = this.#pending.slice(chunk.length);
+        const r = await this.client.request({ method: 'POST', path: `/api/terminal/sessions/${this.#state.id}/input`, body: { data: chunk } } as never).catch(() => null);
+        if (r && r.status === 409) { this.publish({ phase: 'exited' }); break; }
+      }
+    } finally { this.#sending = false; }
+  }
+  resize(cols: number, rows: number) {
+    clearTimeout(this.#resizeTimer);
+    this.#resizeTimer = setTimeout(() => {
+      const id = this.#state.id;
+      if (this.#state.phase === 'open' && id && cols >= 10 && rows >= 2) void this.client.request({ method: 'POST', path: `/api/terminal/sessions/${id}/resize`, body: { cols: Math.min(500, cols), rows: Math.min(200, rows) } } as never).catch(() => null);
+    }, 120);
+  }
+  /** Closes the shell on the server. */
+  async close() {
+    const id = this.#state.id;
+    this.#stream?.abort(); this.#stream = null;
+    this.publish({ phase: 'idle', id: null });
+    if (id) await this.client.request({ method: 'DELETE', path: `/api/terminal/sessions/${id}` } as never).catch(() => null);
+  }
+  dispose() { void this.close(); clearTimeout(this.#resizeTimer); this.#disposed = true; this.#listeners.clear(); this.#output.clear(); }
+}
