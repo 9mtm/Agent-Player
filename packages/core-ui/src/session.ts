@@ -1,5 +1,5 @@
 import { allowedPersonality, personalityRoute, personalityResponse } from './personality-contract.js';
-import { allowedHire, grantsAgentId, hireResponse, hireRoute, CATALOGUE_PATH, PLAN_PATH } from './hire-contract.js';
+import { allowedHire, batchPath, grantsAgentId, hireResponse, hireRoute, BATCHES_PATH, CATALOGUE_PATH, DISTRIBUTION_PATH, PLAN_PATH } from './hire-contract.js';
 import type { HireRequest } from './hire';
 import { validDeviceToken, validLoginBody } from './login-contract.js';
 import { setupStatus } from './setup-status.js';
@@ -262,7 +262,7 @@ export class SessionClient {
     if (request.method === 'PUT' && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     if (request.method === 'POST' && request.path.startsWith('/api/memory/') && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     if (personalityRoute(request.path) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
-    if (((request.method === 'POST' && request.path === '/api/agents') || grantsAgentId(request.path) || request.path === CATALOGUE_PATH || request.path === PLAN_PATH) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
+    if (((request.method === 'POST' && request.path === '/api/agents') || grantsAgentId(request.path) || request.path === CATALOGUE_PATH || request.path === PLAN_PATH || request.path === DISTRIBUTION_PATH || request.path === BATCHES_PATH || batchPath(request.path)) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     const epoch = this.#state.epoch;
     const result = await this.#send(request.method, request.path, 'body' in request ? request.body : undefined, this.#token, epoch, signal);
     if (epoch !== this.#state.epoch) return safeResponse(request.path, result);
