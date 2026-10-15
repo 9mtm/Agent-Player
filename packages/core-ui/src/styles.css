@@ -627,3 +627,40 @@ form > label { display:block; margin-block-end:8px; }
 .wl-detail li { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 .wl-free p { margin:4px 0 0; font-size:12.5px; color:var(--muted); }
 @media (prefers-reduced-motion: no-preference) { .wl-heat { transition:outline-color .1s; } }
+/* UI-DESIGN-PASS-01: Memory page as a reader */
+.page-wide { padding:20px 24px; }
+.memory-page { display:grid; gap:16px; max-inline-size:1180px; margin:0 auto; }
+.memory-head h2 { margin:0 0 4px; }
+.memory-head p { margin:0; color:var(--muted); font-size:13px; max-inline-size:62ch; }
+.memory-start { display:grid; gap:8px; justify-items:start; }
+.memory-layout { display:grid; grid-template-columns:240px minmax(0,1fr); gap:0; min-block-size:60vh; border-radius:8px; box-shadow:inset 0 0 0 1px var(--stroke-3); overflow:hidden; }
+.memory-team { display:grid; align-content:start; gap:6px; padding:10px; border-inline-end:1px solid var(--stroke-3); background:color-mix(in srgb,var(--canvas) 60%,transparent); max-block-size:75vh; overflow-y:auto; }
+.memory-team ul, .app-shell .memory-team ul { list-style:none; margin:0; padding:0; display:grid; gap:2px; }
+.memory-agent { all:unset; box-sizing:border-box; display:flex; align-items:center; gap:10px; inline-size:100%; padding:7px 8px; border-radius:6px; cursor:pointer; font-size:13px; color:var(--text); }
+.memory-agent:hover { background:var(--row-hover); }
+.memory-agent[aria-current="true"] { background:var(--row-active); font-weight:600; }
+.memory-agent:focus-visible { outline:2px solid var(--accent); }
+.memory-agent bdi { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.memory-main { display:grid; align-content:start; gap:14px; padding:18px 22px; min-inline-size:0; }
+.memory-agent-head { display:flex; gap:12px; align-items:center; }
+.memory-agent-head h3 { margin:0; font-size:17px; }
+.memory-agent-head p { margin:2px 0 0; }
+.board-avatar.large { inline-size:40px; block-size:40px; font-size:15px; }
+.memory-key { display:flex; gap:8px; align-items:flex-end; }
+.memory-key label { display:grid; gap:4px; font-size:12px; }
+.memory-status { margin:0; font-size:12.5px; color:var(--muted); }
+.memory-pending { padding:10px 12px; border-radius:6px; background:color-mix(in srgb,#f08c00 10%,transparent); box-shadow:inset 0 0 0 1px color-mix(in srgb,#f08c00 40%,transparent); display:grid; gap:6px; }
+.memory-pending h4 { margin:0; font-size:13px; }
+.memory-pending ul, .app-shell .memory-pending ul { list-style:none; margin:0; padding:0; display:grid; gap:4px; }
+.memory-pending li { display:flex; align-items:center; gap:10px; font-size:12.5px; }
+.memory-pending li button { margin-inline-start:auto; }
+.memory-body { display:grid; gap:6px; }
+.memory-text { font-size:13.5px; line-height:1.6; max-inline-size:72ch; }
+.memory-text h1, .memory-text h2 { font-size:15px; margin:16px 0 6px; }
+.memory-text h3 { font-size:13.5px; margin:14px 0 4px; }
+.memory-text ul { padding-inline-start:18px; }
+.memory-empty { margin:0; padding:28px 0; color:var(--muted); font-size:13px; }
+@media (max-width: 760px) { .memory-layout { grid-template-columns:1fr; } .memory-team { border-inline-end:0; border-bottom:1px solid var(--stroke-3); max-block-size:none; } }
+.memory-page .memory-tabs { display:inline-flex; gap:2px; padding:2px; border-radius:7px; box-shadow:inset 0 0 0 1px var(--stroke-3); justify-self:start; flex-wrap:wrap; }
+.memory-page .memory-tabs button { border:0; background:transparent; box-shadow:none; padding:4px 12px; border-radius:5px; font-size:12.5px; color:var(--muted); }
+.memory-page .memory-tabs button[aria-selected="true"] { background:var(--row-active); color:var(--text); font-weight:600; }
