@@ -10,7 +10,7 @@ import { namingLanguages, validatedDisplayName } from './naming';
 import type { NamingLanguage } from './naming';
 import type { SessionClient } from './session';
 
-export function AgentsDestination({ client }: { client: SessionClient }) {
+export function AgentsDestination({ client, active = false }: { client: SessionClient; active?: boolean }) {
   // The effect owns subscription cleanup; construction also supports offline SSR without reads.
   const [controller, setController] = useState<AgentsController>();
   const [personality, setPersonality] = useState<PersonalityController>();
@@ -28,6 +28,8 @@ export function AgentsDestination({ client }: { client: SessionClient }) {
     setController(c); setPersonality(p); setHire(h); setCompany(w);
     return () => { unsubscribe(); c.dispose(); p.dispose(); h.dispose(); w.dispose(); };
   }, [client]);
+  // Opening the page shows the team at once (one read the first time the page is shown).
+  useEffect(() => { if (active && owner && controller && controller.getSnapshot().phase === 'idle' && !controller.getSnapshot().agents.length) void controller.list(); }, [active, owner, controller]);
   return <section aria-label="Agents"><h2>Your team</h2>
     <p>Each agent is a member of your staff with its own name, role, persona, memory and permissions. Hire a new one, or load the team to rename an agent and review its personality changes.{client.getSnapshot().mode === 'mock' ? ' Offline practice: fictional agents only.' : ''}</p>
     <p className="fine-print">Only Save changes a name; stable IDs never change. Editing is owner-only here; the server enforces permissions separately.</p>

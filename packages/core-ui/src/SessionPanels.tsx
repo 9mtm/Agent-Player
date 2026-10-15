@@ -65,7 +65,7 @@ export function drawerId(kind: DrawerKind, key: string): string {
   const id = `${kind}:${key.trim()}`;
   return key.trim() && validDrawer(id) ? id : '';
 }
-export function MemoryPanel({ client }: { client: SessionClient }) {
+export function MemoryPanel({ client, active = false }: { client: SessionClient; active?: boolean }) {
   const state = client.getSnapshot();
   const [agent, setAgent] = useState('');
   const [kind, setKind] = useState<DrawerKind>('owner'); const [key, setKey] = useState('');
@@ -87,6 +87,8 @@ export function MemoryPanel({ client }: { client: SessionClient }) {
   /** Read one drawer of one agent (each click is an explicit read). */
   const read = (agentId: string, drawer: string) => { if (!owner || !agentId || !drawer) return; controller.setContext({ ...memory.context, agentId, drawerId: drawer }); void controller.load(); };
   const keyed = kind === 'project' || kind === 'task' || kind === 'people';
+  // Opening the page shows the team at once (one read the first time the page is shown).
+  useEffect(() => { if (active && owner && team && teamState?.phase === 'idle' && !agents.length) void team.list(); }, [active, owner, team, teamState?.phase, agents.length]);
 
   return <section className="memory-page" aria-label="Memory review">
     <header className="memory-head">

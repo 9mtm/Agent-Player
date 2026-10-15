@@ -74,9 +74,9 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
       <section className="page page-chat" aria-label="Chat" hidden={page !== 'chat'}>
         {chat ? <ChatScreen key={chatKey} controller={chat} mode={mode}/> : <p>Chat is not connected.</p>}
       </section>
-      <section className="page page-scroll" hidden={page !== 'agents'}><div className="page-column"><AgentsDestination client={client}/></div></section>
-      <section className="page page-scroll page-board" hidden={page !== 'board'}>{board && <TaskBoard controller={board}/>}</section>
-      <section className="page page-scroll page-wide" hidden={page !== 'memory'}><MemoryPanel client={client}/></section>
+      <section className="page page-scroll" hidden={page !== 'agents'}><div className="page-column"><AgentsDestination client={client} active={page === 'agents'}/></div></section>
+      <section className="page page-scroll page-board" hidden={page !== 'board'}>{board && <TaskBoard controller={board} active={page === 'board'}/>}</section>
+      <section className="page page-scroll page-wide" hidden={page !== 'memory'}><MemoryPanel client={client} active={page === 'memory'}/></section>
       <section className="page page-scroll" hidden={page !== 'account'}><div className="page-column"><AccountPanel client={client}/></div></section>
     </main>
     <footer className="statusbar">
