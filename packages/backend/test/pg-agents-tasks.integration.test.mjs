@@ -359,17 +359,19 @@ test('task-run lifecycle: create, claim, steps, verification, review (PostgreSQL
   assert.match(done.finished_at, TEXT_TS);
   assert.equal(done.cost_cents, 0.5);
 
-  // Review once; a concurrent second review is refused.
+  // Review once; a concurrent second review is refused. Either review may win the race.
   const reviews = await Promise.allSettled([
     R.reviewRun(run.id, 'accept', ids.owner, 'owner', null),
     R.reviewRun(run.id, 'reject', ids.owner, 'owner', 'no'),
   ]);
   assert.deepEqual(reviews.map((r) => r.status).sort(), ['fulfilled', 'rejected']);
   assert.equal(reviews.find((r) => r.status === 'rejected').reason.status, 409);
+  const winner = reviews[0].status === 'fulfilled' ? 'accepted' : 'rejected';
+  assert.equal(reviews.find((r) => r.status === 'fulfilled').value.review_decision, winner);
   assert.ok((await R.listRuns({ userId: ids.owner })).some((r) => r.id === run.id));
   assert.ok((await R.listRuns({ userId: null })).every((r) => r.user_id === null), 'user_id IS NOT DISTINCT FROM NULL');
   const detail = await R.runDetailView(await R.getRun(run.id));
-  assert.equal(detail.verification.review.decision, 'accepted');
+  assert.equal(detail.verification.review.decision, winner);
   assert.match(detail.createdAt, ISO_Z);
 });
 
