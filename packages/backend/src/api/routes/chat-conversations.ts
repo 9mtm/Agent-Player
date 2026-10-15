@@ -24,6 +24,7 @@ import {
   listConversationMessages, listConversations, listProjects, patchConversation, patchProject, ProjectInputError, type ConversationMessage,
 } from '../../repositories/chat-conversations.js';
 import { ProjectPathError, gitChanges, gitFileDiff, listFolder, readFolderFile } from '../../repositories/project-files.js';
+import { MAX_AUDIO_BYTES, STT_LANGUAGES, SttError, sttSetup, transcribe } from '../../services/local-stt.js';
 import { chatRuns, MAX_RUNNING_PER_USER, type RunEvent } from '../../services/chat-runs.js';
 import { openSseStream } from '../../services/chat-sse.js';
 import { executeChatTurn } from './chat.js';
@@ -169,6 +170,18 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     const p = await findProject(caller(request), request.params.id!);
     if (!p) return notFound(reply);
     return { git: p.folder ? await gitInfo(p.folder) : { branch: null, remote: null, dirty: null } };
+  });
+
+  // ---- microphone (CHAT-PRO-02 C): a recorded clip → text, on this computer only (owner) ----
+  fastify.get('/api/chat/transcribe', { config: { access: 'owner' } }, async () => { const s = sttSetup(); return { available: s.available, missing: s.missing }; });
+  fastify.post('/api/chat/transcribe', { config: { access: 'owner' }, bodyLimit: Math.ceil(MAX_AUDIO_BYTES * 1.4) + 1024 }, async (request: Req, reply) => {
+    const b: any = request.body ?? {};
+    if (typeof b.audio !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(b.audio) || (b.language !== undefined && !(STT_LANGUAGES as readonly string[]).includes(b.language))) return bad(reply, 'audio must be base64 text; language must be auto, ar, en or de');
+    try { return await transcribe(Buffer.from(b.audio, 'base64'), b.language ?? 'auto'); }
+    catch (err) {
+      if (err instanceof SttError) return reply.code(err.code === 'unavailable' ? 503 : err.code === 'busy' ? 429 : err.code === 'invalid' ? 400 : 500).send({ error: err.message, code: `stt_${err.code}` });
+      throw err;
+    }
   });
 
   // ---- project panes (CHAT-PANES-01): read-only changes, diff, folder and file ----

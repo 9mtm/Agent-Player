@@ -263,3 +263,17 @@ test('project panes: per-file changes, a diff, the folder listing and a file, al
   for (const bad of ['..%2F..%2Fetc%2Fhosts', '%2Fetc%2Fhosts', 'escape']) assert.equal((await call('r-owner', 'GET', `${base}/file?path=${bad}`)).statusCode, 400, bad);
   assert.equal((await call('r-owner', 'GET', `${base}/file?path=missing.txt`)).statusCode, 400);
 });
+
+test('microphone: owner only, base64 audio only, unknown containers refused before any program runs', async () => {
+  assert.equal((await call('r-other', 'POST', '/api/chat/transcribe', { audio: 'AAAA' })).statusCode, 403);
+  const st = (await call('r-owner', 'GET', '/api/chat/transcribe')).json();
+  assert.equal(typeof st.available, 'boolean');
+  assert.equal((await call('r-owner', 'POST', '/api/chat/transcribe', { audio: 'not base64!' })).statusCode, 400);
+  assert.equal((await call('r-owner', 'POST', '/api/chat/transcribe', { audio: 'AAAA', language: 'xx' })).statusCode, 400);
+  const r = await call('r-owner', 'POST', '/api/chat/transcribe', { audio: Buffer.from('plain text, not audio at all').toString('base64') });
+  assert.ok([400, 503].includes(r.statusCode), `got ${r.statusCode}`);
+  const { audioKind } = await import(new URL('../src/services/local-stt.ts', import.meta.url).href);
+  assert.equal(audioKind(Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0, 0, 0, 0, 0, 0, 0, 0])), 'webm');
+  assert.equal(audioKind(Buffer.from('OggS________')), 'ogg');
+  assert.equal(audioKind(Buffer.from('#!/bin/sh echo')), null);
+});

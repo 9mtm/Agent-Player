@@ -15,6 +15,9 @@ const { root, readCurrent } = require('./build-artifacts.cjs');
 const { HEADERS, requestPath } = require('./preview.cjs');
 const HOST = '127.0.0.1';
 const LIMIT = 128 * 1024;
+/** A microphone clip (base64 JSON) may be larger than an ordinary request; it also takes longer. */
+const AUDIO_LIMIT = 9 * 1024 * 1024;
+const AUDIO_TIMEOUT_MS = 200_000;
 const RESPONSE_LIMIT = 4 * 1024 * 1024;
 const languages = ['en', 'ar', 'de', 'fr', 'es', 'zh', 'ja', 'ko', 'pt-BR', 'ru', 'tr', 'hi'];
 const record = x => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -177,11 +180,13 @@ function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly =
     const auth = req.headers.authorization;
     if ((login || discovery) ? auth !== undefined : typeof auth !== 'string' || auth.length > 8200 || !/^Bearer [A-Za-z0-9._~-]+$/.test(auth)) return send(401);
     const length = Number(req.headers['content-length'] || 0);
-    if (!Number.isSafeInteger(length) || length < 0 || length > LIMIT) return send(413);
+    const audio = req.method === 'POST' && raw === '/api/chat/transcribe';
+    const limit = audio ? AUDIO_LIMIT : LIMIT;
+    if (!Number.isSafeInteger(length) || length < 0 || length > limit) return send(413);
     if (req.headers['content-type'] && !/^application\/json(?:;\s*charset=utf-8)?$/i.test(req.headers['content-type'])) return send(415);
     try {
       const chunks = []; let size = 0;
-      for await (const chunk of req) { size += chunk.length; if (size > LIMIT) return send(413); chunks.push(chunk); }
+      for await (const chunk of req) { size += chunk.length; if (size > limit) return send(413); chunks.push(chunk); }
       const bytes = Buffer.concat(chunks);
       if (bytes.length && req.headers['content-type'] === undefined) return send(415);
       const body = bytes.length ? JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) : undefined;
@@ -197,6 +202,7 @@ function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly =
       }
       // A run reader ends cleanly after RUN_STREAM_MS; the page re-attaches with after=<seq>.
       if (runEvents || termStream) clearTimeout(timer);
+      if (audio) { clearTimeout(timer); timer = setTimeout(() => { send(504); upstream?.destroy(); }, AUDIO_TIMEOUT_MS); }
       upstream = http.request({ hostname: HOST, port: upstreamPort, path: raw, method: req.method, headers, agent: false, maxHeaderSize: 16384 }, response => {
         const fail = () => { response.destroy(); send(502); };
         const status = response.statusCode;

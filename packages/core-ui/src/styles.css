@@ -1067,3 +1067,13 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .terminal-screen { flex:1; min-block-size:0; padding:6px 0 0 8px; }
 .app-shell .terminal-screen .xterm { block-size:100%; }
 .app-shell .terminal-screen .xterm-viewport { background:var(--terminal-bg) !important; }
+
+/* Microphone (dictation) */
+.app-shell .composer-mic { display:inline-flex; align-items:center; gap:4px; margin-inline-start:auto; }
+.app-shell .composer-mic + .composer-keys { margin-inline-start:8px; }
+.app-shell .mic-button[data-phase="recording"] { color:#fff; background:#e5484d; border-radius:50%; }
+.app-shell .mic-clock { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-variant-numeric:tabular-nums; color:var(--text-2, var(--text)); }
+.app-shell .mic-dot { inline-size:7px; block-size:7px; border-radius:50%; background:#e5484d; animation:mic-blink 1.2s ease-in-out infinite; }
+.app-shell .mic-error { font-size:11px; color:var(--danger); max-inline-size:22ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+@keyframes mic-blink { 50% { opacity:.25; } }
+@media (prefers-reduced-motion: reduce) { .app-shell .mic-dot { animation:none; } }

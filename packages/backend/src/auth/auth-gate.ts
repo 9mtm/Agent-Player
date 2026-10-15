@@ -176,6 +176,7 @@ export const TIER_RULES: readonly Rule[] = [
   { methods: '*', exact: '/api/agents/:id/permissions', access: 'owner' }, // memory scope + off/ask/allow (CORE-PERMS-01)
   { methods: '*', prefix: '/api/boards', access: 'owner' },        // company task board (BOARD-01)
   { methods: '*', prefix: '/api/chat/projects', access: 'owner' }, // chat projects name host folders the agent may read (CHAT-PRO-02 A)
+  { methods: '*', prefix: '/api/chat/transcribe', access: 'owner' }, // microphone: runs local speech-to-text programs (CHAT-PRO-02 C)
   { methods: '*', pattern: /^\/api\/agents\/:id\/personality\/(current|versions|lock|unlock|rollback)$/, access: 'owner' }, // versioned personality (CORE-01)
   { methods: ['GET'], pattern: /^\/api\/agents\/:id\/personality\/proposals(\/:pid)?$/, access: 'owner' }, // review drift proposals (CORE-01c)
   { methods: ['POST'], pattern: /^\/api\/agents\/:id\/personality\/proposals\/:pid\/(approve|reject)$/, access: 'owner' }, // decide drift (CORE-01c)

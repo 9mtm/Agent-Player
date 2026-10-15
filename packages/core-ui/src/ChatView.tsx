@@ -6,6 +6,7 @@ import { ChangesPane, FilesPane } from './ProjectPanes';
 import { PanesController } from './panes';
 import { TerminalController } from './terminal';
 import { TerminalPane } from './TerminalPane';
+import { MicController } from './mic';
 import type { PaneName } from './panes';
 import type { SessionClient } from './session';
 import { Markdown } from './markdown';
@@ -72,6 +73,13 @@ export function ChatView({ controller, mode, productName = 'Dpro', client }: { c
 
   const submit = () => { if (s.draft.trim() || s.attachments.length) { setFollowing(true); void controller.send(); } };
   const picker = useRef<HTMLInputElement>(null);
+  const [mic, setMic] = useState<MicController | null>(null);
+  useEffect(() => {
+    if (!client) return;
+    const m = new MicController(client, text => { const d = controller.getSnapshot().draft; controller.edit(d.trim() ? `${d.replace(/\s+$/, '')} ${text}` : text); input.current?.focus(); });
+    setMic(m); void m.check();
+    return () => m.dispose();
+  }, [client, controller]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const onFiles = async (list: FileList | null) => {
     if (!list?.length) return;
@@ -172,6 +180,7 @@ export function ChatView({ controller, mode, productName = 'Dpro', client }: { c
               {s.models.some(m => m.provider === 'ollama') && <optgroup label="On this computer">{s.models.filter(m => m.provider === 'ollama').map(m => <option key={m.id} value={m.id}>{m.label}{m.size ? ` · ${m.size}` : ''}</option>)}</optgroup>}
               {s.models.some(m => m.provider === 'claude') && <optgroup label="Claude (paid)">{s.models.filter(m => m.provider === 'claude').map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</optgroup>}
             </select></label>}
+          {mic && <MicButton mic={mic}/>}
           <span className="composer-keys" aria-hidden="true">{running ? 'Esc stops' : 'Enter sends · Shift+Enter new line'}</span>
           {running && !s.draft.trim()
             ? <button type="button" className="round-button stop" onClick={() => void controller.stop()} disabled={s.stopping} aria-label={s.stopping ? 'Stopping' : 'Stop the reply'}><UiIcon name="stop" size={10}/></button>
@@ -234,6 +243,24 @@ function ChatSidePanel({ controller, client }: { controller: ConversationsContro
     </section>}
     {client && <AgentPanel client={client} agentId={conv?.agentId || s.agentId || s.agents[0]?.id || ''}/>}
   </aside>;
+}
+
+/** Dictation: record, then the words land in the composer (transcribed on this computer). */
+function MicButton({ mic }: { mic: MicController }) {
+  const m = useSyncExternalStore(mic.subscribe, mic.getSnapshot, mic.getSnapshot);
+  if (m.phase === 'unknown' || (m.phase === 'off' && !m.missing?.length)) return null;
+  const clock = `${Math.floor(m.seconds / 60)}:${String(m.seconds % 60).padStart(2, '0')}`;
+  return <span className="composer-mic">
+    {m.error && <span className="mic-error" role="alert">{m.error}</span>}
+    {m.phase === 'recording' && <><span className="mic-clock" aria-live="polite"><i className="mic-dot" aria-hidden="true"/>{clock}</span>
+      <button type="button" className="row-tool" aria-label="Discard the recording" title="Discard" onClick={() => void mic.cancel()}><UiIcon name="close" size={11}/></button></>}
+    <button type="button" className="tool mic-button" data-phase={m.phase} disabled={m.phase === 'off' || m.phase === 'transcribing'}
+      aria-label={m.phase === 'recording' ? 'Stop and turn into text' : m.phase === 'transcribing' ? 'Turning speech into text' : 'Dictate'}
+      title={m.phase === 'off' ? `Speech-to-text is not set up (missing ${m.missing?.join(', ')})` : m.phase === 'recording' ? 'Stop and turn into text' : m.phase === 'transcribing' ? 'Turning speech into text…' : 'Dictate (speech to text on this computer)'}
+      onClick={() => void (m.phase === 'recording' ? mic.stop() : mic.start())}>
+      {m.phase === 'recording' ? <UiIcon name="stop" size={11}/> : m.phase === 'transcribing' ? <span className="pulse" aria-hidden="true"/> : <UiIcon name="mic" size={14}/>}
+    </button>
+  </span>;
 }
 
 /** Where this conversation works: project, folder, git branch and repository. */

@@ -27,6 +27,7 @@ const shapes = {
   diff: <><path d="M6 3v12"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M18 8.5V12a3 3 0 0 1-3 3H9"/><path d="M11 13l-2 2 2 2"/></>,
   folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>,
   'arrow-left': <><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></>,
+  mic: <><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></>,
   close: <><path d="M6 6l12 12"/><path d="M18 6L6 18"/></>,
   refresh: <><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></>,
 } as const;
