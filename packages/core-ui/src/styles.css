@@ -304,6 +304,26 @@ form > label { display:block; margin-block-end:8px; }
 .hire-tool-text code { font:12px Menlo,Monaco,"SF Mono",monospace; }
 .hire-tool-text small { flex-basis:100%; color:var(--text-3); font-size:11.5px; line-height:1.45; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
 
+/* Memory page: agent and drawer pickers, queue and stored memory side by side. */
+.memory-pick { display:grid; gap:8px; background:var(--surface); border-radius:4.8px; padding:16px; box-shadow:inset 0 0 0 1px var(--stroke-3); }
+.app-shell .page-column .memory-pick h3 { margin:0; font-size:11.5px; font-weight:500; color:var(--text-3); }
+.app-shell .page-column .memory-pick h3 + * { margin-block-end:6px; }
+.app-shell .page-column .memory-manual { padding:6px 10px; box-shadow:none; }
+.app-shell .page-column .memory-manual summary { font-size:11.5px; color:var(--text-3); font-weight:400; }
+.memory-tabs { display:flex; flex-wrap:wrap; gap:4px; padding:3px; border-radius:4px; background:var(--canvas); box-shadow:inset 0 0 0 1px var(--border); justify-self:start; }
+.app-shell .page-column .memory-tabs button { box-shadow:none; background:transparent; color:var(--text-2); min-block-size:26px; border-radius:2.4px; }
+.app-shell .page-column .memory-tabs button[aria-selected="true"] { background:var(--row-active); color:var(--text); box-shadow:inset 0 0 0 1px var(--accent); }
+.memory-columns { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.4fr); gap:12px; align-items:start; }
+.app-shell .page-column .memory-card { background:var(--surface); border-radius:4.8px; padding:14px 16px; box-shadow:inset 0 0 0 1px var(--stroke-3); display:grid; gap:8px; margin:0; min-inline-size:0; }
+.app-shell .page-column .memory-card h3 { margin:0; }
+.app-shell .page-column .memory-card pre { max-block-size:22rem; overflow:auto; }
+.app-shell .page-column .memory-list { list-style:none; padding-inline-start:0; display:grid; gap:6px; }
+.app-shell .page-column .memory-list button { inline-size:100%; display:grid; gap:2px; justify-items:start; text-align:start; padding:8px 10px; min-block-size:44px; background:var(--canvas); }
+.app-shell .page-column .memory-list button[aria-pressed="true"] { box-shadow:inset 0 0 0 1px var(--accent); background:var(--row-active); }
+.memory-list-main { display:flex; align-items:center; gap:8px; font-size:12.5px; }
+.memory-list-id { font:11px Menlo,Monaco,"SF Mono",monospace; color:var(--text-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-inline-size:100%; }
+@media (max-width:900px) { .memory-columns { grid-template-columns:minmax(0,1fr); } }
+
 /* Before sign-in: the session band and the fixture workspace in the same look. */
 :root, .shell { --text-2:color-mix(in srgb,var(--text) 74%,transparent); --text-3:color-mix(in srgb,var(--text) 54%,transparent); --text-4:color-mix(in srgb,var(--text) 36%,transparent);
   --row-hover:color-mix(in srgb,var(--accent) 6%,transparent); --row-active:color-mix(in srgb,var(--accent) 10%,transparent); --stroke-3:color-mix(in srgb,var(--accent) 16%,var(--border)); }
