@@ -2,12 +2,12 @@ import { useState, useSyncExternalStore } from 'react';
 import { allPresets, allRoles, presetLabel, roleLabel } from './hire';
 import type { Preset, Role } from './hire';
 import { shareRoles, sharesTotal } from './company';
-import type { BatchProgress, CompanyController, CompanySize, PlannedHire, Share } from './company';
+import type { BatchProgress, CompanyController, PlannedHire, Share } from './company';
 import { rolesSummary } from './team-split';
 import type { TeamRole } from './team-split';
 
 const steps = [
-  { key: 'size', label: 'Company size' }, { key: 'departments', label: 'Departments' },
+  { key: 'size', label: 'Number of agents' }, { key: 'departments', label: 'Departments' },
   { key: 'review', label: 'Your team' }, { key: 'hiring', label: 'Hire' },
 ] as const;
 const statusLabel: Record<PlannedHire['status'], string> = { planned: '', creating: 'Hiring…', created: 'Hired', failed: 'Not hired', unknown: 'Unknown' };
@@ -37,19 +37,20 @@ export function CompanyWizard({ controller, onClose }: { controller: CompanyCont
     {(s.notice || busy) && <p role="status">{s.notice ?? (s.phase === 'loading' ? 'Reading the departments…' : s.phase === 'planning' ? (bulk ? 'Splitting your team…' : 'Proposing a team…') : 'Hiring your team…')}</p>}
 
     {s.step === 'size' && <div className="hire-form">
-      <p>Tell Dpro how big your company is. It proposes a team for each department you choose; you review every agent before any is hired.</p>
+      <p>How many agents do you want in your company? Pick a number or type your own. Dpro splits them over the departments you choose, and you review the split before any agent is hired.</p>
       {!s.catalogue
         ? <div className="hire-actions"><button type="button" className="primary" disabled={busy || !s.owner} onClick={() => void controller.loadCatalogue()}>Start</button></div>
-        : <fieldset className="hire-choices" disabled={busy}><legend>Company size</legend>
-          {s.catalogue.sizes.map(z => <label key={z.id} className="hire-choice">
-            <input type="radio" name="company-size" aria-label={z.label} checked={s.size === z.id} onChange={() => controller.chooseSize(z.id as CompanySize)}/>
-            <span><strong>{z.label}</strong><small>{sizeHelp[z.id] ?? ''}</small></span>
-          </label>)}
-        </fieldset>}
-      {s.catalogue && <form className="company-add company-total" onSubmit={e => { e.preventDefault(); controller.chooseTotal(Number(total)); }}>
-        <label>Or enter how many agents you want in total<input type="number" inputMode="numeric" min={1} max={s.catalogue.maxTotal ?? 1000} step={1} value={total} placeholder="e.g. 400" disabled={busy} onChange={e => setTotal(e.target.value)}/></label>
-        <button type="submit" disabled={busy || !total.trim()}>Use this total</button>
-      </form>}
+        : <>
+          <ul className="company-counts" aria-label="Number of agents">{agentCounts.map(n =>
+            <li key={n}><button type="button" className="company-count-choice" aria-pressed={s.total === n} disabled={busy} onClick={() => { setTotal(''); controller.chooseTotal(n); }}>
+              <strong>{n}</strong><small>agents</small>
+            </button></li>)}
+          </ul>
+          <form className="company-add company-total" onSubmit={e => { e.preventDefault(); controller.chooseTotal(Number(total)); }}>
+            <label>Custom number of agents<input type="number" inputMode="numeric" min={1} max={s.catalogue.maxTotal ?? 1000} step={1} value={total} placeholder={`1 to ${s.catalogue.maxTotal ?? 1000}`} disabled={busy} onChange={e => setTotal(e.target.value)}/></label>
+            <button type="submit" disabled={busy || !total.trim()}>Use this number</button>
+          </form>
+        </>}
       {s.open.length > 0 && <section className="company-open" aria-label="Unfinished hiring">
         <h4>Unfinished hiring</h4>
         <ul>{s.open.map(b => <li key={b.id}>
@@ -102,12 +103,8 @@ export function CompanyWizard({ controller, onClose }: { controller: CompanyCont
   </section>;
 }
 
-const sizeHelp: Record<string, string> = {
-  solo: 'One helper per department.',
-  small: 'A lead and a specialist per department.',
-  medium: 'A lead, two specialists and a reviewer per department.',
-  large: 'A lead, three specialists and a reviewer per department.',
-};
+/** Ready-made company sizes, in agents (any other number is typed in). */
+const agentCounts = [5, 10, 25, 50, 100, 250, 500] as const;
 
 function HireRow({ hire, locked, controller }: { hire: PlannedHire; locked: boolean; controller: CompanyController }) {
   return <li className="company-hire" data-status={hire.status}>

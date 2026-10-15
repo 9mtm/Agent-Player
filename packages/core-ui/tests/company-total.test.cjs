@@ -218,3 +218,16 @@ test('ephemeral fictional HTTP bridge: distribution and batch hire end to end wi
   const paths = upstream.filter(u => u.path.startsWith('/api/onboarding')).map(u => `${u.method} ${u.path.replace(/team-batches\/[^/]+/, 'team-batches/:id')}`);
   assert.deepEqual(paths, ['GET /api/onboarding/team-catalogue', 'GET /api/onboarding/team-batches', 'POST /api/onboarding/team-distribution', 'POST /api/onboarding/team-batches', 'POST /api/onboarding/team-batches/:id/run', 'POST /api/onboarding/team-batches/:id/run']);
 });
+
+test('the first step offers agent numbers up to 500 or a custom number, never "people"', async t => {
+  const { w } = await fixture(t);
+  await w.loadCatalogue();
+  const html = markup(w);
+  for (const n of [5, 10, 25, 50, 100, 250, 500]) assert.match(html, new RegExp(`<strong>${n}</strong><small>agents</small>`));
+  assert.match(html, /Custom number of agents/);
+  assert.match(html, /Number of agents/);
+  assert.doesNotMatch(html, /people|person|Company size|Just me/i);
+  assert.equal(w.chooseTotal(500), true);
+  assert.equal(w.getSnapshot().step, 'departments');
+  assert.doesNotMatch(markup(w), /people|person/i);
+});
