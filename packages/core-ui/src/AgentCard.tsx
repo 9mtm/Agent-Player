@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { AgentCardController, readable } from './agent-card';
+import { AgentCardController, readable, TOOL_GROUPS, toolGroup } from './agent-card';
 import type { CardTab } from './agent-card';
 import type { AgentsController } from './agents';
 import type { PersonalityController } from './personality';
@@ -168,13 +168,25 @@ function PermissionsTab({ card, busy }: { card: AgentCardController; busy: boole
     </section>
     <section className="card-sub" aria-label="Tools">
       <h4>Tools <small className="fine-print">{gd.length} of {g.available.length} on</small></h4>
-      <ul className="tool-grid">{g.available.map(t => {
-        const off = !t.allowedByServer;
-        return <li key={t.name}><label className="tool-check" data-off={off || undefined}>
-          <input type="checkbox" checked={gd.includes(t.name)} disabled={busy || (off && !gd.includes(t.name))} onChange={() => card.toggleTool(t.name)}/>
-          <span><code>{t.name}</code>{t.requiresApproval && <span className="chip">asks first</span>}{off && <span className="chip">off on this server</span>}<small>{t.description}</small></span>
-        </label></li>;
-      })}</ul>
+      {TOOL_GROUPS.map(group => {
+        const tools = g.available.filter(t => toolGroup(t.name) === group);
+        if (!tools.length) return null;
+        const on = tools.filter(t => gd.includes(t.name)).length;
+        return <div key={group} className="tool-group">
+          <div className="tool-group-head">
+            <span className="tool-group-name">{group}</span>
+            <span className="fine-print">{on} of {tools.length} on</span>
+            <button type="button" className="ghost-action" disabled={busy} onClick={() => card.setTools(tools.map(t => t.name), on < tools.length)}>{on < tools.length ? 'Turn all on' : 'Turn all off'}</button>
+          </div>
+          <ul className="tool-grid">{tools.map(t => {
+            const off = !t.allowedByServer;
+            return <li key={t.name}><label className="tool-check" data-off={off || undefined}>
+              <input type="checkbox" checked={gd.includes(t.name)} disabled={busy || (off && !gd.includes(t.name))} onChange={() => card.toggleTool(t.name)}/>
+              <span><code>{t.name}</code>{t.requiresApproval && <span className="chip">asks first</span>}{off && <span className="chip">off on this server</span>}<small>{t.description}</small></span>
+            </label></li>;
+          })}</ul>
+        </div>;
+      })}
     </section>
     {confirm && <p className="card-notice" role="alert">You allowed a risky action (spend money, install software or delete). Press Save again to confirm.</p>}
     <div className="card-actions sticky">

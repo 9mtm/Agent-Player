@@ -942,3 +942,9 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell :is(.page-column,.page-ui) .memory-actions button:hover:not(:disabled) { color:var(--text); background:var(--row-hover); }
 .shell[data-theme="light"] { color-scheme:light; }
 .app-shell .card-section > .card-sub:first-child { border-block-start:0; padding-block-start:0; }
+
+.app-shell .tool-group { display:grid; gap:4px; padding-block:6px; border-block-start:1px dashed var(--stroke-3); }
+.app-shell .tool-group:first-of-type { border-block-start:0; }
+.app-shell .tool-group-head { display:flex; align-items:center; gap:8px; }
+.app-shell .tool-group-name { font-size:12px; font-weight:600; color:var(--text); }
+.app-shell .tool-group-head .ghost-action { margin-inline-start:auto; }
