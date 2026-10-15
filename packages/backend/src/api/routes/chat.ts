@@ -295,6 +295,8 @@ export interface ChatTurnInput {
   channelTurn?: ReturnType<typeof channelTurnFromHeaders>;
   /** The model's provider when the turn picks a model itself (chat model picker). */
   provider?: 'ollama' | 'claude';
+  /** CHAT-PRO-02 A: the project folder the read tool reads from (writes stay in the agent's workspace). */
+  fileReadRoot?: string;
 }
 
 /**
@@ -414,7 +416,7 @@ export async function executeChatTurn(reply: FastifyReply, input: ChatTurnInput)
 
     try {
       if (stream) {
-        return await streamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id, memoryDrawers);
+        return await streamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id, memoryDrawers, input.fileReadRoot);
       } else {
         const out = await nonStreamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id, memoryDrawers);
         // A plain result object goes through reply.send so it gets the turn ids.
@@ -466,7 +468,8 @@ async function streamChat(
   chatContext?: any,
   toolPolicy?: ChannelToolPolicy,
   agentId?: string,
-  memoryDrawers?: DrawerRef[]
+  memoryDrawers?: DrawerRef[],
+  fileReadRoot?: string
 ) {
   console.log('[Chat] 🚀 Starting stream chat');
   console.log('[Chat]   📦 Model:', model);
@@ -534,7 +537,7 @@ async function streamChat(
   });
 
   // Get real tools from the tools registry (11 tools: exec, read, write, browser×4, memory×2, desktop)
-  const toolsRegistry = await createAgentToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers });
+  const toolsRegistry = await createAgentToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers, ...(fileReadRoot ? { fileReadRoot } : {}) });
   const tools = localModelOnly() && !localModelTools() ? [] : toolsRegistry.getToolsForAPI();
 
   console.log('[Chat] 🔧 Available tools:', tools.length);
@@ -629,7 +632,8 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       toolPolicy,
       agentId,
       maxTokens,
-      memoryDrawers
+      memoryDrawers,
+      fileReadRoot
     );
   }
 

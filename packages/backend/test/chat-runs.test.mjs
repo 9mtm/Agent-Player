@@ -71,7 +71,7 @@ tools.registerExtensionTool({ name: 'x_echo', description: 'echo', extensionId: 
   input_schema: { type: 'object', properties: { text: { type: 'string' } } },
   execute: async (p) => { echoed.push(p.text); return { content: [{ type: 'text', text: `echo: ${p.text}` }] }; } });
 const avail = tools.createToolsRegistry({ workspaceDir: dir }).listRegistered();
-await grants.setAgentGrants('r-agent', { grants: ['x_echo'] }, 'r-owner', avail);
+await grants.setAgentGrants('r-agent', { grants: ['x_echo', 'read'] }, 'r-owner', avail);
 
 const { generateToken } = await import(join(backendDir, 'src/auth/jwt.ts'));
 const { buildServer } = await import(join(backendDir, 'src/api/app.ts'));
@@ -205,4 +205,34 @@ test('a run can pick a local model; a bad model id is refused', async () => {
   await ended(runId);
   assert.equal(bodies[0].model, 'llama3.2:3b', 'the picked local model is used even for an agent set to Claude');
   assert.equal((await call('r-owner', 'POST', `/api/chat/conversations/${c.id}/runs`, { runId: rid(), message: 'x', model: '../x' })).statusCode, 400);
+});
+
+test('projects: owner only, real folders only, a run reads the project folder and gets the project note', async () => {
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const folder = join(dir, 'proj-app'); mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'README.md'), 'Project readme: build with care.');
+  assert.equal((await call('r-other', 'POST', '/api/chat/projects', { name: 'X' })).statusCode, 403, 'projects are owner only');
+  for (const bad of [{ name: 'A', folder: 'relative/path' }, { name: 'A', folder: join(dir, 'missing') }, { name: 'A', folder: '/' }, { name: '  ' }, { name: 'A', repoUrl: 'file:///etc' }]) {
+    const r = await call('r-owner', 'POST', '/api/chat/projects', bad);
+    assert.equal(r.statusCode, 400, JSON.stringify(bad));
+    assert.equal(r.json().code, 'invalid_project');
+  }
+  const p = (await call('r-owner', 'POST', '/api/chat/projects', { name: 'My App', folder, repoUrl: 'https://github.com/example/app' })).json().project;
+  assert.equal(p.slug, 'my-app');
+  assert.equal((await call('r-owner', 'GET', `/api/chat/projects/${p.id}/git`)).json().git.branch, null, 'not a git folder');
+  const c = (await call('r-owner', 'POST', '/api/chat/conversations', { projectId: p.id })).json().conversation;
+  assert.equal(c.projectId, p.id);
+  script.push(
+    [{ message: { tool_calls: [{ function: { name: 'read', arguments: { path: 'README.md' } } }] } }, { done: true }],
+    [{ message: { content: 'Read it.' } }, { done: true }],
+  );
+  bodies.length = 0;
+  const runId = rid();
+  await call('r-owner', 'POST', `/api/chat/conversations/${c.id}/runs`, { runId, message: 'read the readme' });
+  await ended(runId);
+  const ev = frames((await call('r-owner', 'GET', `/api/chat/runs/${runId}/events`)).body);
+  assert.match(ev.find((f) => f.type === 'tool_result').results[0].output, /Project readme: build with care/);
+  assert.match(bodies[0].messages[0].content, /You are working in the project "My App"/);
+  assert.equal((await call('r-owner', 'DELETE', `/api/chat/projects/${p.id}`)).statusCode, 200);
+  assert.equal((await call('r-owner', 'GET', `/api/chat/conversations/${c.id}/messages`)).json().conversation.projectId, null, 'conversations stay, without the project');
 });

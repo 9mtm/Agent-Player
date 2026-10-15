@@ -8,6 +8,9 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { orderedId } from './ordered-id.js';
 import { q, sql, one, run, type Step } from './sql-steps.js';
 
@@ -25,6 +28,7 @@ export interface Conversation {
   id: string;
   title: string | null;
   agentId: string | null;
+  projectId: string | null;
   pinned: boolean;
   preview: string;
   createdAt: string;
@@ -42,14 +46,14 @@ export interface ConversationMessage {
   createdAt: string;
 }
 
-interface SessionRow { id: string; user_id: string; title: string | null; agent_id: string | null; pinned: number; created_at: string; updated_at: string; preview?: string | null }
+interface SessionRow { id: string; user_id: string; title: string | null; agent_id: string | null; project_id?: string | null; pinned: number; created_at: string; updated_at: string; preview?: string | null }
 interface MessageRow { id: string; role: ConversationMessage['role']; content: string; parts: string | null; status: TurnStatus | null; run_id: string | null; duration_ms: number | null; created_at: string }
 
 const PREVIEW_CHARS = 140;
 
 function toConversation(r: SessionRow): Conversation {
   return {
-    id: r.id, title: r.title, agentId: r.agent_id, pinned: !!r.pinned,
+    id: r.id, title: r.title, agentId: r.agent_id, projectId: r.project_id ?? null, pinned: !!r.pinned,
     preview: (r.preview ?? '').replace(/\s+/g, ' ').trim().slice(0, PREVIEW_CHARS),
     createdAt: r.created_at, updatedAt: r.updated_at,
   };
@@ -83,19 +87,20 @@ export async function findConversation(userId: string, id: string): Promise<Conv
   return r ? toConversation(r) : undefined;
 }
 
-export async function createConversation(userId: string, input: { title?: string | null; agentId?: string | null }): Promise<Conversation> {
+export async function createConversation(userId: string, input: { title?: string | null; agentId?: string | null; projectId?: string | null }): Promise<Conversation> {
   const id = randomUUID();
-  await q.run('INSERT INTO chat_sessions (id, user_id, title, model, agent_id) VALUES (?, ?, ?, ?, ?)',
-    id, userId, input.title?.trim() || null, 'default', input.agentId || null);
+  await q.run('INSERT INTO chat_sessions (id, user_id, title, model, agent_id, project_id) VALUES (?, ?, ?, ?, ?, ?)',
+    id, userId, input.title?.trim() || null, 'default', input.agentId || null, input.projectId || null);
   return (await findConversation(userId, id))!;
 }
 
 /** Rename and/or pin. Renaming bumps nothing else; pinning does not reorder by time. */
-export async function patchConversation(userId: string, id: string, patch: { title?: string | null; pinned?: boolean }): Promise<Conversation | undefined> {
+export async function patchConversation(userId: string, id: string, patch: { title?: string | null; pinned?: boolean; projectId?: string | null }): Promise<Conversation | undefined> {
   const fields: string[] = [];
   const params: Array<string | number | null> = [];
   if (patch.title !== undefined) { fields.push('title = ?'); params.push(patch.title?.trim() || null); }
   if (patch.pinned !== undefined) { fields.push('pinned = ?'); params.push(patch.pinned ? 1 : 0); }
+  if (patch.projectId !== undefined) { fields.push('project_id = ?'); params.push(patch.projectId); }
   if (fields.length) await q.run(`UPDATE chat_sessions SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, ...params, id, userId);
   return findConversation(userId, id);
 }
@@ -145,4 +150,85 @@ export async function addAssistantMessage(sessionId: string, input: { runId: str
     yield* run('UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?', sessionId);
     return toMessage((yield* one<MessageRow>('SELECT * FROM chat_messages WHERE id = ?', id))!);
   });
+}
+
+// ---- projects (CHAT-PRO-02 A) ----------------------------------------------
+
+export interface Project { id: string; name: string; slug: string; folder: string | null; repoUrl: string | null; createdAt: string; updatedAt: string }
+interface ProjectRow { id: string; user_id: string; name: string; slug: string; folder: string | null; repo_url: string | null; created_at: string; updated_at: string }
+const toProject = (r: ProjectRow): Project => ({ id: r.id, name: r.name, slug: r.slug, folder: r.folder, repoUrl: r.repo_url, createdAt: r.created_at, updatedAt: r.updated_at });
+
+export class ProjectInputError extends Error {}
+
+/** A memory-drawer key from a project name: lowercase letters, digits, - and _. */
+export function projectSlug(name: string): string {
+  const s = name.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+  return s || `project-${randomUUID().slice(0, 8)}`;
+}
+
+/**
+ * A project folder: an absolute path to an existing directory, never the
+ * filesystem root or the home folder itself (the agent may read under it).
+ */
+export function checkFolder(raw: string, home = process.env.HOME ?? ''): string {
+  const p = raw.trim().replace(/^~(?=$|\/)/, home);
+  if (!path.isAbsolute(p)) throw new ProjectInputError('The folder must be a full path, like /Users/you/Projects/app');
+  let real: string;
+  try { real = fs.realpathSync.native(p); } catch { throw new ProjectInputError('That folder does not exist on this computer'); }
+  if (!fs.statSync(real).isDirectory()) throw new ProjectInputError('That path is a file, not a folder');
+  if (real === path.parse(real).root || (home && real === fs.realpathSync.native(home))) throw new ProjectInputError('Pick a project folder, not the whole disk or home folder');
+  return real;
+}
+
+const repoOk = (u: string) => /^(https:\/\/|git@)[A-Za-z0-9.@:/_~%+-]{3,300}$/.test(u);
+
+export async function listProjects(userId: string): Promise<Project[]> {
+  return (await q.all<ProjectRow>('SELECT * FROM chat_projects WHERE user_id = ? ORDER BY name COLLATE NOCASE, id', userId)).map(toProject);
+}
+
+export async function findProject(userId: string, id: string): Promise<Project | undefined> {
+  const r = await q.one<ProjectRow>('SELECT * FROM chat_projects WHERE id = ? AND user_id = ?', id, userId);
+  return r ? toProject(r) : undefined;
+}
+
+export async function createProject(userId: string, input: { name: string; folder?: string | null; repoUrl?: string | null }): Promise<Project> {
+  const name = input.name.trim().slice(0, 80);
+  if (!name) throw new ProjectInputError('Give the project a name');
+  const folder = input.folder?.trim() ? checkFolder(input.folder) : null;
+  const repo = input.repoUrl?.trim() || null;
+  if (repo && !repoOk(repo)) throw new ProjectInputError('The repo must be an https:// or git@ address');
+  let slug = projectSlug(name);
+  for (let n = 2; await q.one('SELECT 1 AS x FROM chat_projects WHERE user_id = ? AND slug = ?', userId, slug); n++) slug = `${projectSlug(name)}-${n}`;
+  const id = randomUUID();
+  await q.run('INSERT INTO chat_projects (id, user_id, name, slug, folder, repo_url) VALUES (?, ?, ?, ?, ?, ?)', id, userId, name, slug, folder, repo);
+  return (await findProject(userId, id))!;
+}
+
+export async function patchProject(userId: string, id: string, patch: { name?: string; folder?: string | null; repoUrl?: string | null }): Promise<Project | undefined> {
+  const fields: string[] = []; const params: Array<string | null> = [];
+  if (patch.name !== undefined) { const n = patch.name.trim().slice(0, 80); if (!n) throw new ProjectInputError('Give the project a name'); fields.push('name = ?'); params.push(n); }
+  if (patch.folder !== undefined) { fields.push('folder = ?'); params.push(patch.folder?.trim() ? checkFolder(patch.folder) : null); }
+  if (patch.repoUrl !== undefined) { const r = patch.repoUrl?.trim() || null; if (r && !repoOk(r)) throw new ProjectInputError('The repo must be an https:// or git@ address'); fields.push('repo_url = ?'); params.push(r); }
+  if (fields.length) await q.run(`UPDATE chat_projects SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`, ...params, id, userId);
+  return findProject(userId, id);
+}
+
+/** Deletes the project; its conversations stay, without a project. */
+export async function deleteProject(userId: string, id: string): Promise<boolean> {
+  return sql().tx(function* (): Step<boolean> {
+    const r = yield* run('DELETE FROM chat_projects WHERE id = ? AND user_id = ?', id, userId);
+    if (!r.changes) return false;
+    yield* run('UPDATE chat_sessions SET project_id = NULL WHERE project_id = ? AND user_id = ?', id, userId);
+    return true;
+  });
+}
+
+/** The folder's git branch and origin URL (local commands only, no network). */
+export function gitInfo(folder: string): Promise<{ branch: string | null; remote: string | null; dirty: boolean | null }> {
+  const git = (args: string[]) => new Promise<string | null>((resolve) => {
+    execFile('git', ['-C', folder, ...args], { timeout: 3000, env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '', GIT_TERMINAL_PROMPT: '0' } },
+      (err, out) => resolve(err ? null : String(out).trim()));
+  });
+  return Promise.all([git(['rev-parse', '--abbrev-ref', 'HEAD']), git(['remote', 'get-url', 'origin']), git(['status', '--porcelain'])])
+    .then(([branch, remote, status]) => ({ branch: branch || null, remote: remote ? remote.replace(/\/\/[^/@]+@/, '//') : null, dirty: status === null ? null : status.length > 0 }));
 }

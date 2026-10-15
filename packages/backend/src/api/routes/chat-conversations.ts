@@ -20,8 +20,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { authenticateActiveUser } from '../../auth/route-guards.js';
 import {
-  addUserMessage, createConversation, deleteConversation, findConversation, listConversationMessages, listConversations,
-  patchConversation, type ConversationMessage,
+  addUserMessage, createConversation, createProject, deleteConversation, deleteProject, findConversation, findProject, gitInfo,
+  listConversationMessages, listConversations, listProjects, patchConversation, patchProject, ProjectInputError, type ConversationMessage,
 } from '../../repositories/chat-conversations.js';
 import { chatRuns, MAX_RUNNING_PER_USER, type RunEvent } from '../../services/chat-runs.js';
 import { openSseStream } from '../../services/chat-sse.js';
@@ -63,6 +63,13 @@ export function historyFor(messages: readonly ConversationMessage[], budget = HI
   return merged;
 }
 
+/** A short system note so the agent knows which project it works in. */
+export function projectNote(name: string, folder: string | null, repo: string | null): string {
+  return [`## Current project\nYou are working in the project "${name}".`,
+    folder ? `Its folder on this computer is ${folder}; the read tool reads files from that folder (paths relative to it).` : '',
+    repo ? `Its git repository: ${repo}.` : ''].filter(Boolean).join(' ');
+}
+
 export async function chatConversationRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', async (request, reply) => {
     const user = authenticateActiveUser(request);
@@ -78,14 +85,16 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     const b: any = request.body ?? {};
     if (b.title !== undefined && (typeof b.title !== 'string' || b.title.length > TITLE_CHARS)) return bad(reply, 'title must be text of at most 120 characters');
     if (b.agentId !== undefined && b.agentId !== null && (typeof b.agentId !== 'string' || !AGENT_ID.test(b.agentId))) return bad(reply, 'invalid agentId');
-    return reply.code(201).send({ conversation: await createConversation(caller(request), { title: b.title, agentId: b.agentId }) });
+    if (b.projectId !== undefined && b.projectId !== null && (typeof b.projectId !== 'string' || !(await findProject(caller(request), b.projectId)))) return bad(reply, 'unknown project');
+    return reply.code(201).send({ conversation: await createConversation(caller(request), { title: b.title, agentId: b.agentId, projectId: b.projectId }) });
   });
 
   fastify.put('/api/chat/conversations/:id', async (request: Req, reply) => {
     const b: any = request.body ?? {};
     if (b.title !== undefined && b.title !== null && (typeof b.title !== 'string' || b.title.length > TITLE_CHARS)) return bad(reply, 'title must be text of at most 120 characters');
     if (b.pinned !== undefined && typeof b.pinned !== 'boolean') return bad(reply, 'pinned must be true or false');
-    const c = await patchConversation(caller(request), request.params.id!, { title: b.title, pinned: b.pinned });
+    if (b.projectId !== undefined && b.projectId !== null && (typeof b.projectId !== 'string' || !(await findProject(caller(request), b.projectId)))) return bad(reply, 'unknown project');
+    const c = await patchConversation(caller(request), request.params.id!, { title: b.title, pinned: b.pinned, projectId: b.projectId });
     return c ? { conversation: c } : notFound(reply);
   });
 
@@ -119,6 +128,8 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
       reply.header('Retry-After', '10');
       return reply.code(429).send({ error: 'Too many chat turns are running', code: 'rate_limited' });
     }
+    // CHAT-PRO-02 A: a project conversation reads the project folder and opens its memory drawer.
+    const project = c.projectId ? await findProject(userId, c.projectId) : undefined;
     const prior = await listConversationMessages(c.id);
     if (prior.some((m) => m.runId === b.runId)) return reply.code(409).send({ error: 'runId already used', code: 'run_id_reused' });
     const userMessage = await addUserMessage(c.id, b.message, b.runId);
@@ -127,11 +138,36 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
       runId: b.runId, userId, sessionId: c.id,
       execute: (runReply) => executeChatTurn(runReply, {
         agentId: c.agentId ?? undefined, messages, stream: true, sessionId: c.id, userId,
+        ...(project ? { memoryScope: { project: project.slug }, ...(project.folder ? { fileReadRoot: project.folder } : {}),
+          systemPromptAppend: projectNote(project.name, project.folder, project.repoUrl) } : {}),
         ...(b.model ? { model: b.model, provider: /^claude-/.test(b.model) ? 'claude' as const : 'ollama' as const } : {}),
       }),
     });
     console.log('[ChatRuns] Run started', { runId: b.runId, history: messages.length });
     return reply.code(202).send({ runId: b.runId, userMessage });
+  });
+
+  // ---- projects (CHAT-PRO-02 A): owner only (a project names a folder the agent may read) ----
+  const projectError = (reply: FastifyReply, err: unknown) => {
+    if (err instanceof ProjectInputError) return reply.code(400).send({ error: err.message, code: 'invalid_project' });
+    throw err;
+  };
+  fastify.get('/api/chat/projects', { config: { access: 'owner' } }, async (request) => ({ projects: await listProjects(caller(request)) }));
+  fastify.post('/api/chat/projects', { config: { access: 'owner' } }, async (request: Req, reply) => {
+    const b: any = request.body ?? {};
+    if (typeof b.name !== 'string' || (b.folder !== undefined && b.folder !== null && typeof b.folder !== 'string') || (b.repoUrl !== undefined && b.repoUrl !== null && typeof b.repoUrl !== 'string')) return bad(reply, 'name, folder and repoUrl must be text');
+    try { return reply.code(201).send({ project: await createProject(caller(request), { name: b.name, folder: b.folder, repoUrl: b.repoUrl }) }); } catch (err) { return projectError(reply, err); }
+  });
+  fastify.put('/api/chat/projects/:id', { config: { access: 'owner' } }, async (request: Req, reply) => {
+    const b: any = request.body ?? {};
+    for (const k of ['name', 'folder', 'repoUrl']) if (b[k] !== undefined && b[k] !== null && typeof b[k] !== 'string') return bad(reply, `${k} must be text`);
+    try { const p = await patchProject(caller(request), request.params.id!, { name: b.name, folder: b.folder, repoUrl: b.repoUrl }); return p ? { project: p } : notFound(reply); } catch (err) { return projectError(reply, err); }
+  });
+  fastify.delete('/api/chat/projects/:id', { config: { access: 'owner' } }, async (request: Req, reply) => ((await deleteProject(caller(request), request.params.id!)) ? { ok: true } : notFound(reply)));
+  fastify.get('/api/chat/projects/:id/git', { config: { access: 'owner' } }, async (request: Req, reply) => {
+    const p = await findProject(caller(request), request.params.id!);
+    if (!p) return notFound(reply);
+    return { git: p.folder ? await gitInfo(p.folder) : { branch: null, remote: null, dirty: null } };
   });
 
   fastify.get('/api/chat/runs/:runId/events', async (request: Req, reply) => {
