@@ -71,6 +71,15 @@ test('board, cards, moves, conflict and comments on PostgreSQL', { skip }, async
   assert.equal(archived.archived, true);
   assert.ok(!(await board.listBoards(owner)).some((x) => x.id === shared.id));
   await assert.rejects(board.updateBoard(owner, shared.id, { expectedVersion: 1, name: 'x' }), (e) => e.code === 'version_conflict');
+  // BOARD-03 step B: labels, card type, dates, cover and checklist on PostgreSQL.
+  const rich = await board.createBoard(owner, { name: 'Rich', template: 'simple' });
+  assert.equal(rich.labels.length, 4);
+  const rc = await board.createCard(owner, rich.id, { columnId: rich.columns[0].id, title: 'Bug', type: 'bug', startDate: '2026-10-20', dueDate: '2026-10-21', cover: 'red', labels: [rich.labels[0].id] });
+  assert.deepEqual([rc.type, rc.cover, rc.labels.length], ['bug', 'red', 1]);
+  await board.addChecklistItem(owner, rich.id, rc.id, { text: 'One' });
+  const items = await board.addChecklistItem(owner, rich.id, rc.id, { text: 'Two' });
+  await board.updateChecklistItem(owner, rich.id, rc.id, items[0].id, { done: true });
+  assert.deepEqual((await board.getBoard(owner, rich.id)).cards[0].checklist, { done: 1, total: 2 });
 });
 
 test('no board statement reached SQLite', { skip }, () => { assert.deepEqual(sqliteHits, []); });

@@ -20,6 +20,15 @@ import { normalizeDepartment } from './personality.js';
 import { BOARD_COLORS, BOARD_TEMPLATES, DEFAULT_TEMPLATE, boardTemplate } from './board-templates.js';
 
 export const PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
+export const CARD_TYPES = ['task', 'idea', 'bug', 'milestone', 'request'] as const;
+export type CardType = (typeof CARD_TYPES)[number];
+export const MAX_LABELS = 30;
+export const MAX_CARD_LABELS = 10;
+export const MAX_CHECKLIST = 50;
+/** Labels a new board starts with (the owner renames, recolours or adds more). */
+export const DEFAULT_LABELS: ReadonlyArray<{ name: string; color: string }> = [
+  { name: 'Important', color: 'red' }, { name: 'Waiting', color: 'orange' }, { name: 'Quick win', color: 'green' }, { name: 'Needs owner', color: 'purple' },
+];
 export type Priority = (typeof PRIORITIES)[number];
 export const MAX_COLUMNS = 20;
 export const MAX_CARDS_PER_BOARD = 5000;
@@ -40,13 +49,17 @@ export interface BoardCard {
   id: string; columnId: string; title: string; description: string; priority: Priority; position: number;
   dueDate: string | null; taskId: string | null; archived: boolean; version: number;
   agents: string[]; departments: string[]; comments: number; createdAt: string; updatedAt: string;
+  /** BOARD-03 step B */
+  type: CardType; startDate: string | null; cover: string | null; labels: string[]; checklist: { done: number; total: number };
 }
+export interface BoardLabel { id: string; name: string; color: string; position: number }
+export interface ChecklistItem { id: string; text: string; done: boolean; position: number }
 export interface BoardMeta {
   id: string; name: string; description: string; template: string; color: string; departments: string[];
   /** company: no departments; department: one; shared: several. */
   kind: 'company' | 'department' | 'shared'; archived: boolean; version: number;
 }
-export interface Board extends BoardMeta { columns: BoardColumn[]; cards: BoardCard[] }
+export interface Board extends BoardMeta { columns: BoardColumn[]; cards: BoardCard[]; labels: BoardLabel[] }
 export interface BoardComment { id: string; authorKind: 'user' | 'agent'; authorId: string; body: string; createdAt: string }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +92,15 @@ function dueDate(v: unknown): string | null {
   if (v === null) return null;
   if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(`${v}T00:00:00Z`))) throw bad('dueDate must be YYYY-MM-DD or null');
   return v;
+}
+function cardType(v: unknown): CardType {
+  if (!(CARD_TYPES as readonly unknown[]).includes(v)) throw bad(`type must be one of ${CARD_TYPES.join(', ')}`);
+  return v as CardType;
+}
+function cover(v: unknown): string | null {
+  if (v === null) return null;
+  if (!(BOARD_COLORS as readonly unknown[]).includes(v)) throw bad(`cover must be a board colour or null`);
+  return v as string;
 }
 function idList(v: unknown, field: string, max: number): string[] {
   if (!Array.isArray(v) || v.length > max || !v.every((x) => typeof x === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(x))) throw bad(`${field} must be a list of at most ${max} ids`);
@@ -126,7 +148,8 @@ function* cardsOf(boardId: string, includeArchived: boolean, onlyCard?: string):
   const rows = yield* all<{
     id: string; column_id: string; title: string; description: string; priority: Priority; position: number; due_date: string | null;
     task_id: string | null; archived: number; version: number; created_at: string; updated_at: string;
-  }>(`SELECT id, column_id, title, description, priority, position, due_date, task_id, archived, version, created_at, updated_at
+    card_type: CardType; start_date: string | null; cover: string | null;
+  }>(`SELECT id, column_id, title, description, priority, position, due_date, task_id, archived, version, created_at, updated_at, card_type, start_date, cover
       FROM board_cards WHERE board_id = ?${includeArchived ? '' : ' AND archived = 0'}${onlyCard ? ' AND id = ?' : ''} ORDER BY position, created_at`,
   ...(onlyCard ? [boardId, onlyCard] : [boardId]));
   if (rows.length === 0) return [];
@@ -136,6 +159,10 @@ function* cardsOf(boardId: string, includeArchived: boolean, onlyCard?: string):
     'SELECT d.card_id, d.department FROM board_card_departments d JOIN board_cards c ON c.id = d.card_id WHERE c.board_id = ? ORDER BY d.department', boardId);
   const counts = yield* all<{ card_id: string; n: number }>(
     'SELECT m.card_id, COUNT(*) AS n FROM board_card_comments m JOIN board_cards c ON c.id = m.card_id WHERE c.board_id = ? GROUP BY m.card_id', boardId);
+  const labels = yield* all<{ card_id: string; label_id: string }>(
+    'SELECT l.card_id, l.label_id FROM board_card_labels l JOIN board_cards c ON c.id = l.card_id JOIN board_labels b ON b.id = l.label_id WHERE c.board_id = ? ORDER BY b.position', boardId);
+  const checks = yield* all<{ card_id: string; total: number; done: number }>(
+    'SELECT k.card_id, COUNT(*) AS total, SUM(k.done) AS done FROM board_card_checklist k JOIN board_cards c ON c.id = k.card_id WHERE c.board_id = ? GROUP BY k.card_id', boardId);
   const group = <T extends { card_id: string }>(list: T[], pick: (x: T) => string) => {
     const m = new Map<string, string[]>();
     for (const x of list) m.set(x.card_id, [...(m.get(x.card_id) ?? []), pick(x)]);
@@ -144,12 +171,20 @@ function* cardsOf(boardId: string, includeArchived: boolean, onlyCard?: string):
   const byAgents = group(agents, (x) => x.agent_id);
   const byDeps = group(deps, (x) => x.department);
   const byCount = new Map(counts.map((x) => [x.card_id, Number(x.n)]));
+  const byLabels = group(labels, (x) => x.label_id);
+  const byCheck = new Map(checks.map((x) => [x.card_id, { done: Number(x.done ?? 0), total: Number(x.total) }]));
   return rows.map((r) => ({
     id: r.id, columnId: r.column_id, title: r.title, description: r.description, priority: r.priority, position: Number(r.position),
     dueDate: r.due_date, taskId: r.task_id, archived: Number(r.archived) === 1, version: Number(r.version),
     agents: byAgents.get(r.id) ?? [], departments: byDeps.get(r.id) ?? [], comments: byCount.get(r.id) ?? 0,
     createdAt: r.created_at, updatedAt: r.updated_at,
+    type: r.card_type, startDate: r.start_date, cover: r.cover, labels: byLabels.get(r.id) ?? [], checklist: byCheck.get(r.id) ?? { done: 0, total: 0 },
   }));
+}
+
+function* labelsOf(boardId: string): Step<BoardLabel[]> {
+  return (yield* all<BoardLabel>('SELECT id, name, color, position FROM board_labels WHERE board_id = ? ORDER BY position', boardId))
+    .map((l) => ({ id: l.id, name: l.name, color: l.color, position: Number(l.position) }));
 }
 
 function* boardStep(ownerId: string, boardId: string, includeArchived = false): Step<Board> {
@@ -157,7 +192,7 @@ function* boardStep(ownerId: string, boardId: string, includeArchived = false): 
   const meta = yield* boardMeta(boardId);
   const columns = (yield* all<BoardColumn>('SELECT id, name, position FROM board_columns WHERE board_id = ? ORDER BY position', boardId))
     .map((c) => ({ id: c.id, name: c.name, position: Number(c.position) }));
-  return { ...meta, columns, cards: yield* cardsOf(boardId, includeArchived) };
+  return { ...meta, columns, cards: yield* cardsOf(boardId, includeArchived), labels: yield* labelsOf(boardId) };
 }
 
 function* insertBoard(ownerId: string, input: { name: string; description: string; template: string; color: string; departments: string[] }): Step<string> {
@@ -170,6 +205,7 @@ function* insertBoard(ownerId: string, input: { name: string; description: strin
     yield* run('INSERT INTO board_columns (id, board_id, name, position) VALUES (?, ?, ?, ?)', randomUUID(), id, name, (i + 1) * 1000);
   }
   for (const dep of input.departments) yield* run('INSERT INTO board_departments (board_id, department) VALUES (?, ?)', id, dep);
+  for (const [i, l] of DEFAULT_LABELS.entries()) yield* run('INSERT INTO board_labels (id, board_id, name, color, position) VALUES (?, ?, ?, ?, ?)', randomUUID(), id, l.name, l.color, (i + 1) * 1000);
   return id;
 }
 
@@ -283,6 +319,19 @@ function* nextPosition(columnId: string): Step<number> {
   return (r?.p === null || r?.p === undefined ? 0 : Number(r.p)) + 1000;
 }
 
+function* setLabels(boardId: string, cardId: string, labels: string[] | undefined): Step<void> {
+  if (!labels) return;
+  for (const id of labels) {
+    if (!(yield* one('SELECT id FROM board_labels WHERE id = ? AND board_id = ?', id, boardId))) throw bad('Unknown label');
+  }
+  yield* run('DELETE FROM board_card_labels WHERE card_id = ?', cardId);
+  for (const id of labels) yield* run('INSERT INTO board_card_labels (card_id, label_id) VALUES (?, ?)', cardId, id);
+}
+
+function datesOk(start: string | null, due: string | null) {
+  if (start && due && start > due) throw bad('The start date cannot be after the due date');
+}
+
 function* setLinks(cardId: string, agents: string[] | undefined, deps: string[] | undefined): Step<void> {
   if (agents) {
     yield* knownAgents(agents);
@@ -319,13 +368,18 @@ export function renameColumn(ownerId: string, boardId: string, columnId: string,
 }
 
 export function createCard(ownerId: string, boardId: string, body: Record<string, unknown>): Promise<BoardCard> {
-  onlyKeys(body, ['columnId', 'title', 'description', 'priority', 'dueDate', 'agents', 'departments']);
+  onlyKeys(body, ['columnId', 'title', 'description', 'priority', 'dueDate', 'agents', 'departments', 'type', 'startDate', 'cover', 'labels']);
   const title = line(body.title, 'title', MAX_TITLE);
+  const type = body.type === undefined ? 'task' : cardType(body.type);
+  const start = body.startDate === undefined ? null : dueDate(body.startDate);
+  const cov = body.cover === undefined ? null : cover(body.cover);
+  const labels = body.labels === undefined ? [] : idList(body.labels, 'labels', MAX_CARD_LABELS);
   const description = body.description === undefined ? '' : text(body.description, 'description', MAX_DESCRIPTION);
   const prio = body.priority === undefined ? 'normal' : priority(body.priority);
   const due = body.dueDate === undefined ? null : dueDate(body.dueDate);
   const agents = body.agents === undefined ? [] : idList(body.agents, 'agents', MAX_CARD_AGENTS);
   const deps = body.departments === undefined ? [] : departments(body.departments);
+  datesOk(start, due);
   return sql().tx(function* () {
     const d = yield* dialect();
     yield* boardRow(ownerId, boardId);
@@ -333,9 +387,10 @@ export function createCard(ownerId: string, boardId: string, body: Record<string
     const total = yield* one<{ n: number }>('SELECT COUNT(*) AS n FROM board_cards WHERE board_id = ?', boardId);
     if (Number(total?.n ?? 0) >= MAX_CARDS_PER_BOARD) throw bad(`A board can hold at most ${MAX_CARDS_PER_BOARD} cards`);
     const id = randomUUID();
-    yield* run(`INSERT INTO board_cards (id, board_id, column_id, title, description, priority, position, due_date, created_by, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowText(d)}, ${nowText(d)})`, id, boardId, col.id, title, description, prio, yield* nextPosition(col.id), due, ownerId);
+    yield* run(`INSERT INTO board_cards (id, board_id, column_id, title, description, priority, position, due_date, created_by, card_type, start_date, cover, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowText(d)}, ${nowText(d)})`, id, boardId, col.id, title, description, prio, yield* nextPosition(col.id), due, ownerId, type, start, cov);
     yield* setLinks(id, agents, deps);
+    yield* setLabels(boardId, id, labels);
     return (yield* cardsOf(boardId, true, id))[0];
   }, { immediate: true });
 }
@@ -346,14 +401,20 @@ export function createCard(ownerId: string, boardId: string, body: Record<string
  * (null or absent = end of the column).
  */
 export function updateCard(ownerId: string, boardId: string, cardId: string, body: Record<string, unknown>): Promise<BoardCard> {
-  onlyKeys(body, ['expectedVersion', 'title', 'description', 'priority', 'dueDate', 'agents', 'departments', 'columnId', 'beforeCardId', 'archived']);
+  onlyKeys(body, ['expectedVersion', 'title', 'description', 'priority', 'dueDate', 'agents', 'departments', 'columnId', 'beforeCardId', 'archived', 'type', 'startDate', 'cover', 'labels']);
   const expected = body.expectedVersion;
   if (typeof expected !== 'number' || !Number.isInteger(expected) || expected < 1) throw new BoardError(400, 'invalid_version', 'expectedVersion is required');
   const sets: string[] = []; const args: Array<string | number | null> = [];
   if (body.title !== undefined) { sets.push('title = ?'); args.push(line(body.title, 'title', MAX_TITLE)); }
   if (body.description !== undefined) { sets.push('description = ?'); args.push(text(body.description, 'description', MAX_DESCRIPTION)); }
   if (body.priority !== undefined) { sets.push('priority = ?'); args.push(priority(body.priority)); }
-  if (body.dueDate !== undefined) { sets.push('due_date = ?'); args.push(dueDate(body.dueDate)); }
+  const newDue = body.dueDate === undefined ? undefined : dueDate(body.dueDate);
+  const newStart = body.startDate === undefined ? undefined : dueDate(body.startDate);
+  if (newDue !== undefined) { sets.push('due_date = ?'); args.push(newDue); }
+  if (newStart !== undefined) { sets.push('start_date = ?'); args.push(newStart); }
+  if (body.type !== undefined) { sets.push('card_type = ?'); args.push(cardType(body.type)); }
+  if (body.cover !== undefined) { sets.push('cover = ?'); args.push(cover(body.cover)); }
+  const labelIds = body.labels === undefined ? undefined : idList(body.labels, 'labels', MAX_CARD_LABELS);
   if (body.archived !== undefined) {
     if (typeof body.archived !== 'boolean') throw bad('archived must be true or false');
     sets.push('archived = ?'); args.push(body.archived ? 1 : 0);
@@ -364,8 +425,9 @@ export function updateCard(ownerId: string, boardId: string, cardId: string, bod
   return sql().tx(function* () {
     const d = yield* dialect();
     yield* boardRow(ownerId, boardId);
-    const card = yield* one<{ version: number; column_id: string }>('SELECT version, column_id FROM board_cards WHERE id = ? AND board_id = ?', cardId, boardId);
+    const card = yield* one<{ version: number; column_id: string; start_date: string | null; due_date: string | null }>('SELECT version, column_id, start_date, due_date FROM board_cards WHERE id = ? AND board_id = ?', cardId, boardId);
     if (!card) throw notFound('Card');
+    datesOk(newStart === undefined ? card.start_date : newStart, newDue === undefined ? card.due_date : newDue);
     if (Number(card.version) !== expected) {
       const current = (yield* cardsOf(boardId, true, cardId))[0];
       throw Object.assign(new BoardError(409, 'version_conflict', 'This card was changed meanwhile. Review it and try again.'), { current });
@@ -396,6 +458,7 @@ export function updateCard(ownerId: string, boardId: string, cardId: string, bod
       sets.push('column_id = ?', 'position = ?'); args.push(col.id, pos);
     }
     yield* setLinks(cardId, agents, deps);
+    yield* setLabels(boardId, cardId, labelIds);
     const r = yield* run(`UPDATE board_cards SET ${[...sets, 'version = version + 1', `updated_at = ${nowText(d)}`].join(', ')} WHERE id = ? AND version = ?`, ...args, cardId, expected);
     if (r.changes !== 1) throw new BoardError(409, 'version_conflict', 'This card was changed meanwhile. Review it and try again.');
     return (yield* cardsOf(boardId, true, cardId))[0];
@@ -496,5 +559,101 @@ export function agentMove(ownerId: string, agentId: string, cardId: unknown, col
       col.id, pos, card.id, card.version);
     if (r.changes !== 1) throw new BoardError(409, 'version_conflict', 'The card was changed meanwhile; try again.');
     return { column: col.name };
+  }, { immediate: true });
+}
+
+// ---------------------------------------------------------------------------
+// Labels and checklists (BOARD-03 step B)
+// ---------------------------------------------------------------------------
+
+export function addLabel(ownerId: string, boardId: string, body: Record<string, unknown>): Promise<Board> {
+  onlyKeys(body, ['name', 'color']);
+  const name = line(body.name, 'name', 40);
+  const color = cover(body.color);
+  if (!color) throw bad('color is required');
+  return sql().tx(function* () {
+    yield* boardRow(ownerId, boardId);
+    const r = yield* one<{ n: number; p: number | null }>('SELECT COUNT(*) AS n, MAX(position) AS p FROM board_labels WHERE board_id = ?', boardId);
+    if (Number(r?.n ?? 0) >= MAX_LABELS) throw bad(`A board can have at most ${MAX_LABELS} labels`);
+    yield* run('INSERT INTO board_labels (id, board_id, name, color, position) VALUES (?, ?, ?, ?, ?)', randomUUID(), boardId, name, color, (r?.p === null || r?.p === undefined ? 0 : Number(r.p)) + 1000);
+    return yield* boardStep(ownerId, boardId);
+  }, { immediate: true });
+}
+
+export function updateLabel(ownerId: string, boardId: string, labelId: string, body: Record<string, unknown>): Promise<Board> {
+  onlyKeys(body, ['name', 'color']);
+  const sets: string[] = []; const args: string[] = [];
+  if (body.name !== undefined) { sets.push('name = ?'); args.push(line(body.name, 'name', 40)); }
+  if (body.color !== undefined) { const c = cover(body.color); if (!c) throw bad('color is required'); sets.push('color = ?'); args.push(c); }
+  if (sets.length === 0) throw bad('Nothing to change');
+  return sql().tx(function* () {
+    yield* boardRow(ownerId, boardId);
+    const r = yield* run(`UPDATE board_labels SET ${sets.join(', ')} WHERE id = ? AND board_id = ?`, ...args, labelId, boardId);
+    if (r.changes !== 1) throw notFound('Label');
+    return yield* boardStep(ownerId, boardId);
+  }, { immediate: true });
+}
+
+function* checklistOf(cardId: string): Step<ChecklistItem[]> {
+  return (yield* all<{ id: string; text: string; done: number; position: number }>('SELECT id, text, done, position FROM board_card_checklist WHERE card_id = ? ORDER BY position', cardId))
+    .map((i) => ({ id: i.id, text: i.text, done: Number(i.done) === 1, position: Number(i.position) }));
+}
+
+function* cardOfBoard(ownerId: string, boardId: string, cardId: string): Step<void> {
+  yield* boardRow(ownerId, boardId);
+  if (!(yield* one('SELECT id FROM board_cards WHERE id = ? AND board_id = ?', cardId, boardId))) throw notFound('Card');
+}
+
+export function listChecklist(ownerId: string, boardId: string, cardId: string): Promise<ChecklistItem[]> {
+  return sql().read((function* () { yield* cardOfBoard(ownerId, boardId, cardId); return yield* checklistOf(cardId); })());
+}
+
+export function addChecklistItem(ownerId: string, boardId: string, cardId: string, body: Record<string, unknown>): Promise<ChecklistItem[]> {
+  onlyKeys(body, ['text']);
+  const t = line(body.text, 'text', 300);
+  return sql().tx(function* () {
+    yield* cardOfBoard(ownerId, boardId, cardId);
+    const r = yield* one<{ n: number; p: number | null }>('SELECT COUNT(*) AS n, MAX(position) AS p FROM board_card_checklist WHERE card_id = ?', cardId);
+    if (Number(r?.n ?? 0) >= MAX_CHECKLIST) throw bad(`A card can have at most ${MAX_CHECKLIST} checklist items`);
+    yield* run('INSERT INTO board_card_checklist (id, card_id, text, done, position) VALUES (?, ?, ?, 0, ?)', randomUUID(), cardId, t, (r?.p === null || r?.p === undefined ? 0 : Number(r.p)) + 1000);
+    return yield* checklistOf(cardId);
+  }, { immediate: true });
+}
+
+/** Tick, untick, reword or remove (remove: true) one checklist item. */
+export function updateChecklistItem(ownerId: string, boardId: string, cardId: string, itemId: string, body: Record<string, unknown>): Promise<ChecklistItem[]> {
+  onlyKeys(body, ['text', 'done', 'remove']);
+  if (body.remove !== undefined && body.remove !== true) throw bad('remove must be true');
+  if (body.done !== undefined && typeof body.done !== 'boolean') throw bad('done must be true or false');
+  const t = body.text === undefined ? undefined : line(body.text, 'text', 300);
+  if (body.remove === undefined && body.done === undefined && t === undefined) throw bad('Nothing to change');
+  return sql().tx(function* () {
+    yield* cardOfBoard(ownerId, boardId, cardId);
+    const item = yield* one('SELECT id FROM board_card_checklist WHERE id = ? AND card_id = ?', itemId, cardId);
+    if (!item) throw notFound('Checklist item');
+    if (body.remove === true) {
+      yield* run('DELETE FROM board_card_checklist WHERE id = ?', itemId);
+    } else {
+      if (t !== undefined) yield* run('UPDATE board_card_checklist SET text = ? WHERE id = ?', t, itemId);
+      if (body.done !== undefined) yield* run('UPDATE board_card_checklist SET done = ? WHERE id = ?', body.done ? 1 : 0, itemId);
+    }
+    return yield* checklistOf(cardId);
+  }, { immediate: true });
+}
+
+/** The checklist of a card the agent is assigned to. */
+export function agentChecklist(ownerId: string, agentId: string, cardId: unknown): Promise<ChecklistItem[]> {
+  return sql().read((function* () { const card = yield* assignedCard(ownerId, agentId, cardId); return yield* checklistOf(card.id); })());
+}
+
+/** The agent ticks (or unticks) a checklist item on a card it is assigned to. */
+export function agentCheck(ownerId: string, agentId: string, cardId: unknown, itemId: unknown, done: unknown): Promise<ChecklistItem[]> {
+  if (typeof itemId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(itemId)) return Promise.reject(bad('item_id is required'));
+  if (typeof done !== 'boolean') return Promise.reject(bad('done must be true or false'));
+  return sql().tx(function* () {
+    const card = yield* assignedCard(ownerId, agentId, cardId);
+    const r = yield* run('UPDATE board_card_checklist SET done = ? WHERE id = ? AND card_id = ?', done ? 1 : 0, itemId, card.id);
+    if (r.changes !== 1) throw notFound('Checklist item');
+    return yield* checklistOf(card.id);
   }, { immediate: true });
 }
