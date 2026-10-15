@@ -156,6 +156,8 @@ export const TIER_RULES: readonly Rule[] = [
   { methods: '*', prefix: '/api/database', access: 'owner' },        // raw SQL, restore, wipe, backups
   { methods: '*', prefix: '/api/sandbox', access: 'owner' },         // command execution (native fallback)
   { methods: '*', prefix: '/api/terminal', access: 'owner' },        // interactive shell on the host (TERM-01)
+  { methods: ['GET'], exact: '/api/onboarding/team-catalogue', access: 'owner' }, // company setup catalogue (ONBOARD-TEAM-01)
+  { methods: ['POST'], exact: '/api/onboarding/team-plan', access: 'owner' },     // proposed team; reads only (ONBOARD-TEAM-01)
   { methods: '*', prefix: '/api/system', access: 'owner' },          // restart / shutdown
   { methods: '*', prefix: '/api/browser', access: 'owner' },         // headless browser: JS eval, file:// and SSRF
   { methods: '*', prefix: '/api/claude-local', access: 'owner' },    // reads the OS user's ~/.claude

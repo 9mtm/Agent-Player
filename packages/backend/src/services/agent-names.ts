@@ -251,6 +251,25 @@ function* suggestAgentNameStep(language: NameLanguage, exclude: readonly string[
   return pickName(language, used, exclude);
 }
 
+/**
+ * `count` different unused names in `language` (none reserved), for a team
+ * proposal. One read of the used names; each pick is excluded from the next.
+ */
+export function suggestAgentNames(language: NameLanguage, count: number, exclude: readonly string[] = []): Promise<NameSuggestion[]> {
+  return sql().read((function* () {
+    yield* syncExistingAgentNamesStep();
+    const used = new Set((yield* all<{ name_key: string }>('SELECT name_key FROM used_agent_names')).map((r) => r.name_key));
+    const taken = [...exclude];
+    const out: NameSuggestion[] = [];
+    for (let i = 0; i < count; i++) {
+      const next = pickName(language, used, taken);
+      taken.push(next.name);
+      out.push(next);
+    }
+    return out;
+  })());
+}
+
 function pickName(language: NameLanguage, used: ReadonlySet<string>, exclude: readonly string[]): NameSuggestion {
   const skip = new Set(exclude.map(normalizeAgentName));
   const list = AGENT_NAME_LISTS[language];

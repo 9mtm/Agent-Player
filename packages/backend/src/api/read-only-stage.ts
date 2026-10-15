@@ -84,9 +84,13 @@ function chatStageEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
  *   POST /api/agents                    create (role, persona)
  *   GET  /api/agents/:id/tool-grants    read grants + available tools (SELECTs; MCP tools from the DB, no spawn)
  *   PUT  /api/agents/:id/tool-grants    replace grants (versioned, audited)
+ *   GET  /api/onboarding/team-catalogue company sizes + departments (static)
+ *   POST /api/onboarding/team-plan      proposed team with unused names (reads; reserves nothing)
  */
 export const STAGE3_ROUTES: ReadonlySet<string> = new Set([
   'POST /api/agents', 'GET /api/agents/:id/tool-grants', 'PUT /api/agents/:id/tool-grants',
+  // ONBOARD-TEAM-01: the company catalogue and the proposed team (both only read; names are not reserved)
+  'GET /api/onboarding/team-catalogue', 'POST /api/onboarding/team-plan',
 ]);
 function hireStageEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return (env.AGENT_PLAYER_ISOLATED_STAGE ?? '').trim() === '3' && (env.AGENT_PLAYER_LOCAL_MODEL_ONLY ?? '').trim() === '1';
