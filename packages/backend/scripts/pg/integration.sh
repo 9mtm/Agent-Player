@@ -30,6 +30,8 @@
 # test/pg-marketplace.integration.test.mjs
 # test/pg-routes.integration.test.mjs and test/pg-boot.integration.test.mjs and (B2.2d-12)
 # test/pg-calendar.integration.test.mjs
+# test/pg-routes.integration.test.mjs and test/pg-boot.integration.test.mjs and (B2.2d-14)
+# test/pg-voice-messages.integration.test.mjs
 # against it, then always drops it.
 #
 # Usage: scripts/pg/integration.sh [report-dir]
@@ -99,5 +101,6 @@ AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-claude-import.i
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-worlds.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-worlds-output.txt"
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-marketplace.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-marketplace-output.txt"
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-calendar.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-calendar-output.txt"
+AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-voice-messages.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-voice-messages-output.txt"
 test "${PIPESTATUS[0]}" -eq 0
 echo "reports in $OUT_DIR"

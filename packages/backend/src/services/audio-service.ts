@@ -3,7 +3,7 @@ import OpenAI from 'openai';
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { getDatabase } from '../db/index.js';
+import { q } from '../repositories/sql-steps.js';
 import { spawnPython, getPythonPath } from './python-env.js';
 import { getEnvProviderApiKey } from '../credentials/authority.js';
 
@@ -200,29 +200,13 @@ export class AudioService {
 
     // Store in database if session/message IDs provided
     if (sessionId && messageId) {
-      try {
-        const db = getDatabase();
-        db.prepare(`
-          INSERT INTO voice_messages (
-            session_id,
-            message_id,
-            audio_url,
-            language,
-            transcript,
-            duration_seconds
-          ) VALUES (?, ?, ?, ?, ?, ?)
-        `).run(
-          sessionId,
-          messageId,
-          `/api/audio/download/${audioId}`,
-          options.language || 'auto',
-          text,
-          null // Duration calculated later if needed
-        );
-      } catch (dbError) {
-        console.error('Failed to store voice message in DB:', dbError);
-        // Continue anyway - audio file is still saved
-      }
+      await recordVoiceMessage({
+        sessionId,
+        messageId,
+        audioUrl: `/api/audio/download/${audioId}`,
+        language: options.language || 'auto',
+        transcript: text,
+      });
     }
 
     return { audioId };
@@ -417,6 +401,42 @@ export class AudioService {
 
 // Singleton instance
 let audioServiceInstance: AudioService | null = null;
+
+/**
+ * Record a generated voice message (B2.2d-14: on the process driver).
+ * Best effort: a database error is logged and never fails the speech, whose
+ * audio file is already saved.
+ */
+export async function recordVoiceMessage(m: {
+  sessionId: string;
+  messageId: string;
+  audioUrl: string;
+  language: string;
+  transcript: string;
+}): Promise<boolean> {
+  try {
+    await q.run(`
+      INSERT INTO voice_messages (
+        session_id,
+        message_id,
+        audio_url,
+        language,
+        transcript,
+        duration_seconds
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+      m.sessionId,
+      m.messageId,
+      m.audioUrl,
+      m.language,
+      m.transcript,
+      null); // Duration calculated later if needed
+    return true;
+  } catch (dbError) {
+    console.error('Failed to store voice message in DB:', dbError);
+    // Continue anyway - audio file is still saved
+    return false;
+  }
+}
 
 export function getAudioService(): AudioService {
   if (!audioServiceInstance) {
