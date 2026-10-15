@@ -139,7 +139,7 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     chatRuns.start({
       runId: b.runId, userId, sessionId: c.id,
       execute: (runReply) => executeChatTurn(runReply, {
-        agentId: c.agentId ?? undefined, messages, stream: true, sessionId: c.id, userId,
+        agentId: c.agentId ?? undefined, messages, stream: true, sessionId: c.id, userId, uiSet: 'chat',
         ...(project ? { memoryScope: { project: project.slug }, ...(project.folder ? { fileReadRoot: project.folder } : {}) } : {}),
         systemPromptAppend: [project ? projectNote(project.name, project.folder, project.repoUrl) : '', PLAN_NOTE].filter(Boolean).join('\n\n'),
         ...(b.model ? { model: b.model, provider: /^claude-/.test(b.model) ? 'claude' as const : 'ollama' as const } : {}),

@@ -119,3 +119,41 @@ EXAMPLES:
 {"type":"approval","title":"Deploy Request","body":"Deploy v2.3.1 to production?","needsApproval":true}
 \`\`\``;
 }
+
+/**
+ * The display set for the new chat (CHAT-SPEC-01): only components the chat
+ * draws for real, all read-only (no form fields, buttons or simulated
+ * notifications, which would look like they work but do nothing there).
+ */
+export function getChatSpecPrompt(): string {
+  return `## Rich answers
+
+When an answer has numbers to compare, a table, steps over time, or a chart, you may add ONE \`\`\`spec block AFTER your text. Keep the text complete on its own; the block only shows it better. Use only real data you have; never invent figures.
+
+FORMAT (one JSON object per line):
+\`\`\`spec
+{"op":"add","path":"/root","value":"ROOT_ID"}
+{"op":"add","path":"/elements/ROOT_ID","value":{"type":"COMPONENT","props":{...},"children":["CHILD_ID"]}}
+\`\`\`
+
+COMPONENTS (display only):
+- Card: {title, description} — container
+- Stack: {gap:"sm|md|lg", direction:"vertical|horizontal"} — container
+- Grid: {columns:2|3, gap:"sm|md|lg"} — container
+- Heading: {text, level:"h2|h3|h4"}
+- Text: {content, muted:bool}
+- Metric: {label, value, detail, trend:"up|down|neutral"}
+- Badge: {text, variant:"default|success|warning|destructive"}
+- Table: {data:[{...}], columns:[{key,label}]}
+- Callout: {type:"info|tip|warning|important", title, content}
+- Timeline: {items:[{title, description, date, status:"completed|current|upcoming"}]}
+- ProgressBar: {label, value:0-100, color:"default|success|warning|destructive", showPercent:bool}
+- BarChart / LineChart / AreaChart: {title, data:[{...}], xKey, yKey}
+- PieChart: {title, data:[{...}], nameKey, valueKey}
+- Link: {text, href} — https links only`;
+}
+
+/** The UI instruction for a turn: the full set for the classic UI, the display set for the new chat. */
+export function uiSpecPrompt(set: 'full' | 'chat' = 'full'): string {
+  return set === 'chat' ? getChatSpecPrompt() : getJsonRenderPrompt();
+}

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { SpecView, parseSpec } from './spec';
 
 /**
  * A small, safe Markdown display for chat replies. Text becomes React
@@ -94,7 +95,7 @@ function blocks(source: string): ReactNode[] {
       case 'quote': return <blockquote key={k} dir="auto">{withBreaks(b.lines)}</blockquote>;
       case 'ul': return <ul key={k} dir="auto">{b.items.map((t, j) => listItem(t, j))}</ul>;
       case 'ol': return <ol key={k} start={b.start} dir="auto">{b.items.map((t, j) => <li key={j}>{inline(t)}</li>)}</ol>;
-      case 'code': return <CodeBlock key={k} lang={b.lang} text={b.text} open={b.open}/>;
+      case 'code': return b.lang === 'spec' ? (b.open ? <p key={k} className="spec-pending">Preparing a view…</p> : <SpecBlock key={k} text={b.text}/>) : <CodeBlock key={k} lang={b.lang} text={b.text} open={b.open}/>;
       case 'table': return <div key={k} className="md-table-wrap"><table className="md-table">
         <thead><tr>{b.header.map((c, j) => <th key={j} style={b.align[j] ? { textAlign: b.align[j] } : undefined} dir="auto">{inline(c)}</th>)}</tr></thead>
         <tbody>{b.rows.map((r, ri) => <tr key={ri}>{b.header.map((_, j) => <td key={j} style={b.align[j] ? { textAlign: b.align[j] } : undefined} dir="auto">{inline(r[j] ?? '')}</td>)}</tr>)}</tbody>
@@ -113,6 +114,9 @@ function listItem(t: string, j: number) {
 
 /** Code shown long lines past this are folded behind "Show N more lines". */
 export const CODE_FOLD_LINES = 14;
+
+/** A ```spec block drawn as a rich view; one that does not parse stays visible as code. */
+function SpecBlock({ text }: { text: string }) { return parseSpec(text) ? <SpecView text={text}/> : <CodeBlock lang="spec" text={text}/>; }
 
 /** A fenced code block: language, Copy, wrap for long lines, and folding for long code. */
 export function CodeBlock({ lang, text, open = false }: { lang: string; text: string; open?: boolean }) {

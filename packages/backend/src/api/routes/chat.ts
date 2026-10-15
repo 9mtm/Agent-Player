@@ -17,7 +17,7 @@ import { channelTurnFromHeaders, type ChannelToolPolicy } from '../../tools/chan
 import { authenticateActiveUser } from '../../auth/route-guards.js';
 import { geminiCliTool } from '../../tools/cli/gemini-cli.js';
 import { claudeCliTool } from '../../tools/cli/claude-cli.js';
-import { getJsonRenderPrompt } from './json-render-prompt.js';
+import { getJsonRenderPrompt, uiSpecPrompt } from './json-render-prompt.js';
 import { safeErrorFields } from '../../services/safe-error-log.js';
 import { resolveProviderApiKey } from '../../credentials/authority.js';
 import { readPersonality, readMemory } from '../../services/agent-files.js';
@@ -297,6 +297,8 @@ export interface ChatTurnInput {
   provider?: 'ollama' | 'claude';
   /** CHAT-PRO-02 A: the project folder the read tool reads from (writes stay in the agent's workspace). */
   fileReadRoot?: string;
+  /** CHAT-SPEC-01: which rich-answer components the page draws ('chat' = the new chat's display set). */
+  uiSet?: 'full' | 'chat';
 }
 
 /**
@@ -416,7 +418,7 @@ export async function executeChatTurn(reply: FastifyReply, input: ChatTurnInput)
 
     try {
       if (stream) {
-        return await streamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id, memoryDrawers, input.fileReadRoot);
+        return await streamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id, memoryDrawers, input.fileReadRoot, input.uiSet);
       } else {
         const out = await nonStreamChat(reply, resolvedModel, resolvedProvider, resolvedApiKey, messages, resolvedTemp, resolvedMaxTokens, sessionId, resolvedSystemPrompt, systemPromptAppend, userId, chatContext, toolPolicy, agentConfig?.id, memoryDrawers);
         // A plain result object goes through reply.send so it gets the turn ids.
@@ -469,7 +471,8 @@ async function streamChat(
   toolPolicy?: ChannelToolPolicy,
   agentId?: string,
   memoryDrawers?: DrawerRef[],
-  fileReadRoot?: string
+  fileReadRoot?: string,
+  uiSet: 'full' | 'chat' = 'full'
 ) {
   console.log('[Chat] 🚀 Starting stream chat');
   console.log('[Chat]   📦 Model:', model);
@@ -570,7 +573,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
 
   // Append json-render UI prompt + tool instructions to Ollama system prompt
   const finalSystemPrompt = provider !== 'claude'
-    ? [resolvedSmartPrompt, toolInstructions, getJsonRenderPrompt()].filter(Boolean).join('\n\n---\n\n')
+    ? [resolvedSmartPrompt, toolInstructions, uiSpecPrompt(uiSet)].filter(Boolean).join('\n\n---\n\n')
     : resolvedSmartPrompt;
 
   // Update ollamaMessages system prompt to include JSON render instructions (for non-Claude providers)
@@ -633,7 +636,8 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       agentId,
       maxTokens,
       memoryDrawers,
-      fileReadRoot
+      fileReadRoot,
+      uiSet
     );
   }
 

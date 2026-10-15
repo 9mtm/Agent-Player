@@ -315,6 +315,8 @@ test('task plan: every agent may call plan_steps (no grant); the steps travel in
   await ended(runId);
   assert.ok(bodies[0].tools.some((t) => t.function?.name === 'plan_steps'), 'the model is offered plan_steps');
   assert.match(bodies[0].messages[0].content, /call plan_steps/);
+  assert.match(bodies[0].messages[0].content, /## Rich answers/, 'the new chat gets the display-only set');
+  assert.doesNotMatch(bodies[0].messages[0].content, /```notify|InputField|SupportChatBlock/, 'no forms or simulated notifications');
   const ev = frames((await call('r-owner', 'GET', `/api/chat/runs/${runId}/events`)).body);
   const start = ev.find((f) => f.type === 'tool_start');
   assert.equal(start.tools[0].name, 'plan_steps');

@@ -16,7 +16,7 @@ import { createAgentToolsRegistry } from '../../tools/index.js';
 import type { ChannelToolPolicy } from '../../tools/channel-policy.js';
 import { loadClaudeProjectMemory } from './claude-local.js';
 import { buildAiToolsContext } from './ai-tools.js';
-import { getJsonRenderPrompt } from './json-render-prompt.js';
+import { uiSpecPrompt } from './json-render-prompt.js';
 import { buildDynamicSystemPrompt, detectChatContext, type ChatContext } from './system-prompts.js';
 import { chunkText, openSseStream } from '../../services/chat-sse.js';
 import { safeErrorFields } from '../../services/safe-error-log.js';
@@ -99,7 +99,8 @@ export async function streamChatClaude(
   agentId?: string,
   maxTokens?: number,
   memoryDrawers?: import('../../memory/drawers.js').DrawerRef[],
-  fileReadRoot?: string
+  fileReadRoot?: string,
+  uiSet: 'full' | 'chat' = 'full'
 ): Promise<FastifyReply> {
   console.log('[Chat] 🚀 Starting Claude agentic stream');
   const startedAt = Date.now();
@@ -174,7 +175,7 @@ export async function streamChatClaude(
       true,  // includeJsonRender
       tools.length > 0,  // includeAiTools
       aiToolsContext,
-      getJsonRenderPrompt()
+      uiSpecPrompt(uiSet)
     );
 
     // Strip image data from older tool_result messages to control token usage.
