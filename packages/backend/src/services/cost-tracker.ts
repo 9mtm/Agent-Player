@@ -7,7 +7,7 @@
  * - Usage patterns over time
  */
 
-import { getDatabase } from '../db/index.js';
+import { q } from '../repositories/sql-steps.js';
 import type { ModelTier, TaskComplexity } from './model-router.js';
 
 export interface CostEntry {
@@ -44,10 +44,8 @@ export class CostTracker {
    * Log a model usage event
    */
   static async logUsage(entry: CostEntry): Promise<void> {
-    const db = getDatabase();
-
     try {
-      db.prepare(
+      await q.run(
         `INSERT INTO cost_analytics (
           user_id,
           session_id,
@@ -57,8 +55,7 @@ export class CostTracker {
           message_length,
           tools_used,
           estimated_savings_percent
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         entry.user_id,
         entry.session_id,
         entry.timestamp,
@@ -84,18 +81,15 @@ export class CostTracker {
     userId: string,
     daysBack: number = 30
   ): Promise<CostStats> {
-    const db = getDatabase();
     const timestampLimit = Date.now() - daysBack * 24 * 60 * 60 * 1000;
 
     try {
       // Get all entries for user in time range
-      const entries = db
-        .prepare(
-          `SELECT * FROM cost_analytics
-           WHERE user_id = ? AND timestamp >= ?
-           ORDER BY timestamp DESC`
-        )
-        .all(userId, timestampLimit) as CostEntry[];
+      const entries = await q.all<CostEntry>(
+        `SELECT * FROM cost_analytics
+         WHERE user_id = ? AND timestamp >= ?
+         ORDER BY timestamp DESC`,
+        userId, timestampLimit);
 
       if (entries.length === 0) {
         return this.getEmptyStats();
@@ -142,17 +136,13 @@ export class CostTracker {
     userId: string,
     limit: number = 50
   ): Promise<CostEntry[]> {
-    const db = getDatabase();
-
     try {
-      return db
-        .prepare(
-          `SELECT * FROM cost_analytics
-           WHERE user_id = ?
-           ORDER BY timestamp DESC
-           LIMIT ?`
-        )
-        .all(userId, limit) as CostEntry[];
+      return await q.all<CostEntry>(
+        `SELECT * FROM cost_analytics
+         WHERE user_id = ?
+         ORDER BY timestamp DESC
+         LIMIT ?`,
+        userId, limit);
     } catch (error: any) {
       console.error('[CostTracker] Failed to get entries:', error.message);
       return [];
@@ -163,13 +153,10 @@ export class CostTracker {
    * Clean up old entries (keep last 90 days)
    */
   static async cleanup(daysToKeep: number = 90): Promise<number> {
-    const db = getDatabase();
     const timestampLimit = Date.now() - daysToKeep * 24 * 60 * 60 * 1000;
 
     try {
-      const result = db
-        .prepare('DELETE FROM cost_analytics WHERE timestamp < ?')
-        .run(timestampLimit);
+      const result = await q.run('DELETE FROM cost_analytics WHERE timestamp < ?', timestampLimit);
 
       console.log(
         `[CostTracker] 🧹 Cleaned up ${result.changes} old entries`

@@ -8,7 +8,11 @@
  * - Execution success: Tool executed without errors
  */
 
-import { getDatabase } from '../db/index.js';
+import { tsParam } from '../db/pg/dialect.js';
+import { q } from '../repositories/sql-steps.js';
+
+// FIX-ACT-01: tool calls are logged as action_type 'tool_called' (logActivity,
+// task-run-executor); the queries below also count the old 'tool_call' name.
 import { v4 as uuidv4 } from 'uuid';
 
 interface ToolUsageStats {
@@ -31,10 +35,10 @@ export async function analyzeToolAccuracy(
     startDate: Date,
     endDate: Date
 ): Promise<number> {
-    const db = getDatabase();
+    const ts = tsParam(q.dialect);
 
     // Get tool usage from agent_activity
-    const toolUsage = db.prepare(`
+    const toolUsage = await q.all(`
         SELECT
             tool_name,
             COUNT(*) as total_uses,
@@ -42,12 +46,12 @@ export async function analyzeToolAccuracy(
             0 as avg_duration
         FROM agent_activity
         WHERE agent_id = ?
-        AND action_type = 'tool_call'
-        AND created_at >= ?
-        AND created_at <= ?
+        AND action_type IN ('tool_called', 'tool_call')
+        AND created_at >= ${ts}
+        AND created_at <= ${ts}
         AND tool_name IS NOT NULL
-        GROUP BY tool_name
-    `).all(agentId, startDate.toISOString(), endDate.toISOString()) as any[];
+        GROUP BY tool_name`,
+        agentId, startDate.toISOString(), endDate.toISOString());
 
     if (toolUsage.length === 0) {
         // No tool usage data
@@ -73,15 +77,14 @@ export async function analyzeToolAccuracy(
             : 0;
 
         // Save to database
-        db.prepare(`
+        await q.run(`
             INSERT INTO tool_accuracy_metrics (
                 id, session_id, agent_id, tool_name,
                 total_uses, correct_uses, incorrect_uses, missed_opportunities,
                 accuracy_rate, precision, recall,
                 avg_execution_time_ms, success_rate,
                 period_start, period_end
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             uuidv4(),
             sessionId,
             agentId,
@@ -148,10 +151,9 @@ function analyzeToolUsage(toolData: any): ToolUsageStats {
  * Get tool usage summary for display
  */
 export function getToolUsageSummary(agentId: string, periodDays: number = 7) {
-    const db = getDatabase();
     const startDate = new Date(Date.now() - (periodDays * 24 * 60 * 60 * 1000));
 
-    return db.prepare(`
+    return q.all(`
         SELECT
             tool_name,
             COUNT(*) as total_calls,
@@ -161,10 +163,10 @@ export function getToolUsageSummary(agentId: string, periodDays: number = 7) {
             MAX(created_at) as last_use
         FROM agent_activity
         WHERE agent_id = ?
-        AND action_type = 'tool_call'
-        AND created_at >= ?
+        AND action_type IN ('tool_called', 'tool_call')
+        AND created_at >= ${tsParam(q.dialect)}
         AND tool_name IS NOT NULL
         GROUP BY tool_name
-        ORDER BY total_calls DESC
-    `).all(agentId, startDate.toISOString());
+        ORDER BY total_calls DESC`,
+        agentId, startDate.toISOString());
 }

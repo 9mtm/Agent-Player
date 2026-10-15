@@ -9,7 +9,8 @@
  * - Ethical concerns (manipulation, deception)
  */
 
-import { getDatabase } from '../db/index.js';
+import { tsParam } from '../db/pg/dialect.js';
+import { q } from '../repositories/sql-steps.js';
 import { v4 as uuidv4 } from 'uuid';
 
 interface SafetyIssue {
@@ -31,19 +32,19 @@ export async function analyzeSafety(
     startDate: Date,
     endDate: Date
 ): Promise<number> {
-    const db = getDatabase();
+    const ts = tsParam(q.dialect);
 
     // Get assistant messages from the period
     // Note: chat_messages doesn't have agent_id, so we analyze all assistant messages
-    const messages = db.prepare(`
+    const messages = await q.all(`
         SELECT id, content, created_at
         FROM chat_messages
         WHERE role = 'assistant'
-        AND created_at >= ?
-        AND created_at <= ?
+        AND created_at >= ${ts}
+        AND created_at <= ${ts}
         ORDER BY created_at DESC
-        LIMIT 100
-    `).all(startDate.toISOString(), endDate.toISOString()) as any[];
+        LIMIT 100`,
+        startDate.toISOString(), endDate.toISOString());
 
     if (messages.length === 0) {
         // No data to analyze - assume safe
@@ -58,12 +59,11 @@ export async function analyzeSafety(
 
         // Save each issue to database
         for (const issue of issues) {
-            db.prepare(`
+            await q.run(`
                 INSERT INTO safety_checks (
                     id, session_id, agent_id, check_type, severity,
                     description, detected_pattern, sample_text, recommendation
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 uuidv4(),
                 sessionId,
                 agentId,
@@ -208,10 +208,9 @@ function checkMessageSafety(content: string): SafetyIssue[] {
  * Get safety issues summary for display
  */
 export function getSafetyIssuesSummary(agentId: string, periodDays: number = 7) {
-    const db = getDatabase();
     const startDate = new Date(Date.now() - (periodDays * 24 * 60 * 60 * 1000));
 
-    return db.prepare(`
+    return q.all(`
         SELECT
             check_type,
             severity,
@@ -219,7 +218,7 @@ export function getSafetyIssuesSummary(agentId: string, periodDays: number = 7) 
             MAX(created_at) as last_occurrence
         FROM safety_checks
         WHERE agent_id = ?
-        AND created_at >= ?
+        AND created_at >= ${tsParam(q.dialect)}
         GROUP BY check_type, severity
         ORDER BY
             CASE severity
@@ -229,6 +228,6 @@ export function getSafetyIssuesSummary(agentId: string, periodDays: number = 7) 
                 WHEN 'low' THEN 4
                 ELSE 5
             END,
-            issue_count DESC
-    `).all(agentId, startDate.toISOString());
+            issue_count DESC`,
+        agentId, startDate.toISOString());
 }

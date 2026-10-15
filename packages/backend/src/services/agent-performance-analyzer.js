@@ -85,11 +85,14 @@ function computeTaskSuccessRate(activities) {
   };
 }
 
+// FIX-ACT-01: logActivity writes 'tool_called'; 'tool_call' is kept for old rows.
+const TOOL_CALL_ACTIONS = new Set(['tool_called', 'tool_call']);
+
 /**
  * Compute tool efficiency (successful tool calls / total tool calls)
  */
 function computeToolEfficiency(activities) {
-  const toolCalls = activities.filter(a => a.action_type === 'tool_call');
+  const toolCalls = activities.filter(a => TOOL_CALL_ACTIONS.has(a.action_type));
 
   if (toolCalls.length === 0) return null;
 
@@ -164,7 +167,7 @@ function computeResponseQuality(activities) {
  * Compute tool usage patterns
  */
 function computeToolUsagePatterns(activities) {
-  const toolCalls = activities.filter(a => a.action_type === 'tool_call');
+  const toolCalls = activities.filter(a => TOOL_CALL_ACTIONS.has(a.action_type));
 
   const patterns = {};
   toolCalls.forEach(call => {

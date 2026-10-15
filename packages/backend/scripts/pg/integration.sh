@@ -10,6 +10,8 @@
 # test/pg-platform.integration.test.mjs and (B2.2c part 2)
 # test/pg-routes.integration.test.mjs and test/pg-boot.integration.test.mjs and (B2.2d-1)
 # test/pg-storage.integration.test.mjs
+# test/pg-routes.integration.test.mjs and test/pg-boot.integration.test.mjs and (B2.2d-2)
+# test/pg-evaluation.integration.test.mjs
 # against it, then always drops it.
 #
 # Usage: scripts/pg/integration.sh [report-dir]
@@ -69,5 +71,6 @@ test "${PIPESTATUS[0]}" -eq 0
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-boot.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-boot-output.txt"
 test "${PIPESTATUS[0]}" -eq 0
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-storage.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-storage-output.txt"
+AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-evaluation.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-evaluation-output.txt"
 test "${PIPESTATUS[0]}" -eq 0
 echo "reports in $OUT_DIR"

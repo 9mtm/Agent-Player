@@ -5,7 +5,7 @@
  * Computes 6 key metrics and generates overall quality scores
  */
 
-import { getDatabase } from '../db/index.js';
+import { q } from '../repositories/sql-steps.js';
 import { v4 as uuidv4 } from 'uuid';
 import { analyzeReasoning } from './reasoning-analyzer.js';
 import { analyzeToolAccuracy } from './tool-accuracy-analyzer.js';
@@ -45,7 +45,6 @@ export async function evaluateAgent(
     agentId: string,
     config: EvaluationConfig = {}
 ): Promise<EvaluationResult> {
-    const db = getDatabase();
     const sessionId = uuidv4();
 
     // Default config
@@ -61,10 +60,10 @@ export async function evaluateAgent(
     const startDate = new Date(endDate.getTime() - (periodDays * 24 * 60 * 60 * 1000));
 
     // Create evaluation session
-    db.prepare(`
+    await q.run(`
         INSERT INTO evaluation_sessions (id, agent_id, evaluator_type, start_time, period_start, period_end, status)
-        VALUES (?, ?, 'manual', CURRENT_TIMESTAMP, ?, ?, 'running')
-    `).run(sessionId, agentId, startDate.toISOString(), endDate.toISOString());
+        VALUES (?, ?, 'manual', CURRENT_TIMESTAMP, ?, ?, 'running')`,
+        sessionId, agentId, startDate.toISOString(), endDate.toISOString());
 
     try {
         const metrics: any = {};
@@ -102,13 +101,12 @@ export async function evaluateAgent(
         const analysis = analyzeMetrics(metrics);
 
         // Save composite evaluation score
-        db.prepare(`
+        await q.run(`
             INSERT INTO evaluation_scores (
                 id, session_id, agent_id, overall_score, reasoning_score, tool_accuracy_score,
                 performance_score, cost_efficiency_score, safety_score, success_rate,
                 grade, strengths, weaknesses, recommendations, period_start, period_end
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             uuidv4(),
             sessionId,
             agentId,
@@ -128,11 +126,11 @@ export async function evaluateAgent(
         );
 
         // Mark session as completed
-        db.prepare(`
+        await q.run(`
             UPDATE evaluation_sessions
             SET status = 'completed', end_time = CURRENT_TIMESTAMP, overall_score = ?
-            WHERE id = ?
-        `).run(overallScore, sessionId);
+            WHERE id = ?`,
+            overallScore, sessionId);
 
         return {
             sessionId,
@@ -145,11 +143,11 @@ export async function evaluateAgent(
 
     } catch (error: any) {
         // Mark session as failed
-        db.prepare(`
+        await q.run(`
             UPDATE evaluation_sessions
             SET status = 'failed', end_time = CURRENT_TIMESTAMP, metadata = ?
-            WHERE id = ?
-        `).run(JSON.stringify({ error: error.message }), sessionId);
+            WHERE id = ?`,
+            JSON.stringify({ error: error.message }), sessionId);
 
         throw error;
     }
@@ -159,43 +157,43 @@ export async function evaluateAgent(
  * Get evaluation history for an agent
  */
 export function getEvaluationHistory(agentId: string, limit: number = 10) {
-    const db = getDatabase();
-    return db.prepare(`
+    return q.all(`
         SELECT es.*, ev.*
         FROM evaluation_sessions es
         LEFT JOIN evaluation_scores ev ON es.id = ev.session_id
         WHERE es.agent_id = ?
         ORDER BY es.created_at DESC
-        LIMIT ?
-    `).all(agentId, limit);
+        LIMIT ?`,
+        agentId, limit);
 }
 
 /**
  * Get latest evaluation for an agent
  */
 export function getLatestEvaluation(agentId: string) {
-    const db = getDatabase();
-    return db.prepare(`
+    return q.one(`
         SELECT es.*, ev.*
         FROM evaluation_sessions es
         LEFT JOIN evaluation_scores ev ON es.id = ev.session_id
         WHERE es.agent_id = ? AND es.status = 'completed'
         ORDER BY es.created_at DESC
-        LIMIT 1
-    `).get(agentId);
+        LIMIT 1`,
+        agentId);
 }
 
 // Helper functions
 
 async function getSuccessRate(agentId: string, startDate: Date, endDate: Date): Promise<number> {
-    const db = getDatabase();
-    const result = db.prepare(`
+    // period_* hold the ISO text they were written with on SQLite (compared
+    // as text, as before); timestamptz on PostgreSQL.
+    const bound = q.dialect === 'postgres' ? '(?)::timestamptz' : '?';
+    const result = await q.one<{ value: number }>(`
         SELECT value FROM agent_performance_metrics
         WHERE agent_id = ? AND metric_type = 'task_success_rate'
-        AND period_start >= ? AND period_end <= ?
+        AND period_start >= ${bound} AND period_end <= ${bound}
         ORDER BY created_at DESC
-        LIMIT 1
-    `).get(agentId, startDate.toISOString(), endDate.toISOString()) as any;
+        LIMIT 1`,
+        agentId, startDate.toISOString(), endDate.toISOString());
 
     return result ? result.value * 100 : 0;
 }

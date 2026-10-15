@@ -5,7 +5,7 @@
  * Used by agentic-chat.ts (agentic loop) and agent-cron.ts (scheduled tasks).
  */
 
-import { getDatabase } from '../db/index.js';
+import { q } from '../repositories/sql-steps.js';
 
 export type ActivityActionType =
   | 'task_started'
@@ -25,13 +25,11 @@ export interface ActivityEntry {
 
 export async function logActivity(entry: ActivityEntry): Promise<void> {
   try {
-    const db = getDatabase();
     const id = `act-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    db.prepare(`
+    await q.run(`
       INSERT INTO agent_activity (id, agent_id, task_id, session_id, action_type, tool_name, summary, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       entry.agentId ?? null,
       entry.taskId ?? null,
@@ -55,11 +53,10 @@ export interface ActivityQueryOptions {
 }
 
 export function getActivityLog(options: ActivityQueryOptions = {}) {
-  const db = getDatabase();
   const { agentId, taskId, limit = 50, offset = 0 } = options;
 
   const conditions: string[] = [];
-  const params: unknown[] = [];
+  const params: Array<string | number> = [];
 
   if (agentId) {
     conditions.push('agent_id = ?');
@@ -74,10 +71,10 @@ export function getActivityLog(options: ActivityQueryOptions = {}) {
 
   params.push(limit, offset);
 
-  return db.prepare(`
+  return q.all(`
     SELECT * FROM agent_activity
     ${where}
     ORDER BY created_at DESC
-    LIMIT ? OFFSET ?
-  `).all(...params);
+    LIMIT ? OFFSET ?`,
+    ...params);
 }
