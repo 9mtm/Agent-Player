@@ -65,3 +65,34 @@ export async function orchestratorScenario(open) {
   second.close();
   return { doneId: done.id, openId: open1.id };
 }
+
+// B2.2d-15c: a parent task completes after a restart. One subtask finishes
+// before the restart, the other after it; the parent's subtasks list is
+// saved and the finished subtask is loaded back, so the parent completes
+// with both outputs.
+export async function subtaskRestartScenario(open) {
+  const first = await open();
+  const parent = first.createTask({ title: 'parent', description: 'p' });
+  const a = first.createTask({ title: 'sub a', description: 'a', parentId: parent.id });
+  const b = first.createTask({ title: 'sub b', description: 'b', parentId: parent.id });
+  assert.equal(first.completeTask(a.id, { part: 'a' }), true);
+  assert.equal(first.getTask(parent.id).status, 'pending', 'parent waits for sub b');
+  await first.flush();
+  first.close();
+
+  const second = await open();
+  assert.deepEqual(second.getTask(parent.id).subtasks, [a.id, b.id], 'subtasks list saved');
+  assert.equal(second.getTask(a.id)?.status, 'completed', 'finished subtask of an open parent is loaded');
+  assert.equal(second.completeTask(b.id, { part: 'b' }), true);
+  const p = second.getTask(parent.id);
+  assert.equal(p.status, 'completed', 'parent completes after the restart');
+  assert.deepEqual(p.output, { subtaskResults: { [a.id]: { part: 'a' }, [b.id]: { part: 'b' } } });
+  await second.flush();
+  second.close();
+
+  // A third start: the parent is finished, so neither it nor its subtasks load.
+  const third = await open();
+  assert.equal(third.getTask(parent.id), undefined);
+  assert.equal(third.getTask(a.id), undefined);
+  third.close();
+}

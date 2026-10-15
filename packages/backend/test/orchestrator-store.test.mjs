@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { orchestratorScenario } from './fixtures/orchestrator-scenario.mjs';
+import { orchestratorScenario, subtaskRestartScenario } from './fixtures/orchestrator-scenario.mjs';
 
 const backendDir = process.cwd();
 const dir = mkdtempSync(join(tmpdir(), 'ap-orchestrator-'));
@@ -66,4 +66,12 @@ test('an old file without the origin column gets it (S1.2 upgrade kept)', async 
   const check = new Database(old, { readonly: true });
   assert.equal(check.prepare('SELECT origin FROM tasks WHERE id = ?').get(t.id).origin, 'owner');
   check.close();
+});
+
+test('a parent task completes after a restart (subtasks saved and loaded back)', async () => {
+  await subtaskRestartScenario(async () => {
+    const o = new AgentOrchestrator();
+    await o.initialize(join(dir, 'sub', 'orchestrator.db'));
+    return o;
+  });
 });

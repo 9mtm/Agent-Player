@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { orchestratorScenario } from './fixtures/orchestrator-scenario.mjs';
+import { orchestratorScenario, subtaskRestartScenario } from './fixtures/orchestrator-scenario.mjs';
 
 const URL_ = process.env.AGENT_PLAYER_PG_TEST_URL;
 const skip = URL_ ? false : 'AGENT_PLAYER_PG_TEST_URL is not set (PostgreSQL integration test)';
@@ -95,6 +95,14 @@ test('a failed write is logged and does not stop later writes', { skip }, async 
 test('no orchestrator SQLite file was created', { skip }, () => {
   assert.equal(existsSync(join(dir, '.data', 'multi-agent', 'orchestrator.db')), false);
   assert.equal(existsSync(join(dir, '.data', 'multi-agent')), false);
+});
+
+test('a parent task completes after a restart (subtasks saved and loaded back)', { skip }, async () => {
+  await subtaskRestartScenario(async () => {
+    const o = new ctx.orchestrator.AgentOrchestrator();
+    await o.initialize();
+    return o;
+  });
 });
 
 test.after(async () => {

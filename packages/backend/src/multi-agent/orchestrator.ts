@@ -106,6 +106,17 @@ export function orchestratorSchemaSql(t: OrchestratorTables = orchestratorTables
     `;
 }
 
+/**
+ * The tasks loaded at start: every open task, plus the finished subtasks of
+ * an open parent (B2.2d-15c), so the parent can still complete (and
+ * aggregate their outputs) when its last subtask finishes after a restart.
+ */
+function loadTasksSql(table: string): string {
+  const open = `status NOT IN ('completed', 'failed', 'cancelled')`;
+  return `SELECT * FROM ${table} WHERE ${open}
+          OR parent_id IN (SELECT id FROM ${table} WHERE ${open})`;
+}
+
 /** INSERT that replaces the row with the same id (same SQL on both drivers). */
 function upsertSql(table: string, columns: string[]): string {
   const updates = columns.filter((c) => c !== 'id').map((c) => `${c} = excluded.${c}`).join(', ');
@@ -156,7 +167,7 @@ export class AgentOrchestrator {
       this.load(
         await pgSteps.read(all(`SELECT * FROM ${this.tables.agents}`)),
         await pgSteps.read(all(`SELECT * FROM ${this.tables.teams}`)),
-        await pgSteps.read(all(`SELECT * FROM ${this.tables.tasks} WHERE status NOT IN ('completed', 'failed', 'cancelled')`))
+        await pgSteps.read(all(loadTasksSql(this.tables.tasks)))
       );
       console.log('[Orchestrator] Initialized in the main PostgreSQL database');
       return;
@@ -196,7 +207,7 @@ export class AgentOrchestrator {
     this.load(
       this.db!.prepare('SELECT * FROM agents').all() as any[],
       this.db!.prepare('SELECT * FROM teams').all() as any[],
-      this.db!.prepare("SELECT * FROM tasks WHERE status NOT IN ('completed', 'failed', 'cancelled')").all() as any[]
+      this.db!.prepare(loadTasksSql(this.tables.tasks)).all() as any[]
     );
   }
 
@@ -509,8 +520,12 @@ export class AgentOrchestrator {
       }
     }
 
-    // Persist
+    // Persist (the parent too: its subtasks list changed)
     this.persistTask(task);
+    if (input.parentId) {
+      const parent = this.tasks.get(input.parentId);
+      if (parent) this.persistTask(parent);
+    }
 
     console.log(`[Orchestrator] Created task: ${task.title} (${id})`);
     return task;
