@@ -94,7 +94,6 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
         filters?: WebhookConfig['filters'];
         transform?: string;
         timeout?: number;
-        ownerId?: string;
         tags?: string[];
       };
 
@@ -104,8 +103,12 @@ export async function webhooksRoutes(fastify: FastifyInstance) {
         });
       }
 
+      // S0-A.6: the owner is the signed-in account, never an `ownerId` from the body.
+      const actor = actorOf(request);
+      if (!actor?.userId) return reply.status(401).send({ error: 'Unauthorized', code: 'unauthenticated' });
+
       const manager = getWebhookManager();
-      const webhook = await manager.create(body);
+      const webhook = await manager.create({ ...body, ownerId: actor.userId });
 
       // Audit log
       const audit = getAuditLogger();

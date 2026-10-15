@@ -91,3 +91,24 @@ test('workflows: rows belong to the token user, not the first user in the DB', a
   assert.equal(adminList.statusCode, 200);
   assert.ok(!adminList.body.includes('wf1'), 'admin sees only own workflows');
 });
+
+test('webhooks: the owner is the token user, not an ownerId in the body', async () => {
+  // Started by api/startup.ts in the real server, not by buildServer.
+  const { initializeWebhooks } = await import(join(backendDir, 'src/webhooks/index.ts'));
+  const { manager } = await initializeWebhooks();
+  for (const [who, name] of [['t-owner', 'wh-owner'], ['t-admin', 'wh-admin']]) {
+    const created = await app.inject({
+      method: 'POST', url: '/api/webhooks', headers: as(who),
+      payload: { name, url: 'https://hooks.example.test/in', events: ['agent.started'], ownerId: 't-bob' },
+    });
+    assert.equal(created.statusCode, 200, created.body);
+    const stored = await manager.getById(JSON.parse(created.body).webhook.id);
+    assert.equal(stored.ownerId, who, `${name} stored under the token user, not the body ownerId`);
+  }
+  const anon = await app.inject({
+    method: 'POST', url: '/api/webhooks',
+    payload: { name: 'wh-anon', url: 'https://hooks.example.test/in', events: ['agent.started'], ownerId: 't-owner' },
+  });
+  assert.ok(anon.statusCode === 401 || anon.statusCode === 403, `anonymous -> ${anon.statusCode}`);
+  assert.ok(!(await manager.list({})).some((w) => w.name === 'wh-anon'), 'anonymous create stored nothing');
+});
