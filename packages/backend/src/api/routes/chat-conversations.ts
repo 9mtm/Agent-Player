@@ -28,6 +28,8 @@ import { openSseStream } from '../../services/chat-sse.js';
 import { executeChatTurn } from './chat.js';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/;
+/** A model id the chat may pick (local model names like qwen3.8:27b, or claude-…). */
+const MODEL = /^[A-Za-z0-9][A-Za-z0-9_.:\/-]{0,99}$/;
 const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 export const MESSAGE_CHARS = 100_000;
 /** Characters of earlier turns given to the model (the newest are kept). */
@@ -108,6 +110,7 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     const b: any = request.body ?? {};
     if (typeof b.runId !== 'string' || !ID.test(b.runId)) return bad(reply, 'runId must be 8-128 characters (A-Z, a-z, 0-9, _ . : -)');
     if (typeof b.message !== 'string' || !b.message.trim() || b.message.length > MESSAGE_CHARS) return bad(reply, 'message must be 1-100000 characters');
+    if (b.model !== undefined && (typeof b.model !== 'string' || !MODEL.test(b.model))) return bad(reply, 'invalid model');
     const existing = chatRuns.get(b.runId);
     if (existing) return existing.userId === userId && existing.sessionId === c.id ? reply.code(202).send({ runId: existing.id, replayed: true }) : reply.code(409).send({ error: 'runId already used', code: 'run_id_reused' });
     const busy = chatRuns.activeFor(c.id);
@@ -124,6 +127,7 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
       runId: b.runId, userId, sessionId: c.id,
       execute: (runReply) => executeChatTurn(runReply, {
         agentId: c.agentId ?? undefined, messages, stream: true, sessionId: c.id, userId,
+        ...(b.model ? { model: b.model, provider: /^claude-/.test(b.model) ? 'claude' as const : 'ollama' as const } : {}),
       }),
     });
     console.log('[ChatRuns] Run started', { runId: b.runId, history: messages.length });

@@ -49,7 +49,8 @@ export function allowedConversation(method, path, body) {
   if (method === 'GET') return body === undefined && ['list', 'messages', 'events'].includes(p.kind);
   if (method === 'DELETE') return body === undefined && p.kind === 'one';
   if (method === 'POST' && p.kind === 'list') return record(body) && onlyKeys(body, ['title', 'agentId']) && (body.title === undefined || title(body.title)) && (body.agentId === undefined || agentId(body.agentId));
-  if (method === 'POST' && p.kind === 'runs') return record(body) && onlyKeys(body, ['runId', 'message']) && Object.keys(body).length === 2 && validRunId(body.runId) && text(body.message, MAX_MESSAGE) && body.message.trim().length > 0;
+  if (method === 'POST' && p.kind === 'runs') return record(body) && onlyKeys(body, ['runId', 'message', 'model']) && validRunId(body.runId) && text(body.message, MAX_MESSAGE) && body.message.trim().length > 0
+    && (body.model === undefined || (typeof body.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:\/-]{0,99}$/.test(body.model)));
   if (method === 'POST' && p.kind === 'stop') return body === undefined;
   if (method === 'PUT' && p.kind === 'one') return record(body) && Object.keys(body).length > 0 && onlyKeys(body, ['title', 'pinned']) && (body.title === undefined || body.title === null || title(body.title)) && (body.pinned === undefined || typeof body.pinned === 'boolean');
   return false;

@@ -119,6 +119,12 @@ export function ChatView({ controller, mode, productName = 'Dpro' }: { controlle
                 {s.agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select></label>
             : <span className="composer-hint">{agentName ? agentName : ''}</span>}
+          {s.models.length > 0 && <label className="composer-agent composer-model"><span className="sr-only">Model</span>
+            <select value={s.model} onChange={e => controller.selectModel(e.target.value)} title="Model for the next reply">
+              <option value="">Agent's model</option>
+              {s.models.some(m => m.provider === 'ollama') && <optgroup label="On this computer">{s.models.filter(m => m.provider === 'ollama').map(m => <option key={m.id} value={m.id}>{m.label}{m.size ? ` · ${m.size}` : ''}</option>)}</optgroup>}
+              {s.models.some(m => m.provider === 'claude') && <optgroup label="Claude (paid)">{s.models.filter(m => m.provider === 'claude').map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</optgroup>}
+            </select></label>}
           <span className="composer-keys" aria-hidden="true">{running ? 'Esc stops' : 'Enter sends · Shift+Enter new line'}</span>
           {running && !s.draft.trim()
             ? <button type="button" className="round-button stop" onClick={() => void controller.stop()} disabled={s.stopping} aria-label={s.stopping ? 'Stopping' : 'Stop the reply'}><UiIcon name="stop" size={10}/></button>

@@ -293,6 +293,8 @@ export interface ChatTurnInput {
   chatContext?: ChatRequest['chatContext'];
   userId: string;
   channelTurn?: ReturnType<typeof channelTurnFromHeaders>;
+  /** The model's provider when the turn picks a model itself (chat model picker). */
+  provider?: 'ollama' | 'claude';
 }
 
 /**
@@ -381,7 +383,7 @@ export async function executeChatTurn(reply: FastifyReply, input: ChatTurnInput)
       resolvedSystemPrompt += `\n\n## Recent Context\nThe following information was recalled from previous interactions with this user:\n${memoryContext}`;
     }
     // An agent's explicit provider wins; without one, follow the global settings provider.
-    let resolvedProvider = localModelOnly() ? 'ollama' : (agentConfig?.provider
+    let resolvedProvider = localModelOnly() ? 'ollama' : (input.provider || agentConfig?.provider
       || ((await getSettingsManager().getSettings()).provider === 'claude' ? 'claude' : 'ollama'));
     // SECURITY (S1.1): keys come from the credential authority only: the
     // agent's own encrypted key, else the global Settings key.
@@ -395,6 +397,8 @@ export async function executeChatTurn(reply: FastifyReply, input: ChatTurnInput)
       resolvedModel = DEFAULT_MODEL;
       console.log('[Chat] No Claude key set; using the local model', { model: resolvedModel });
     }
+    // A Claude model name never goes to the local model server.
+    if (resolvedProvider === 'ollama' && /^claude-/.test(resolvedModel)) resolvedModel = DEFAULT_MODEL;
 
     console.log('[Chat] Agent:', agentConfig?.name || 'none (fallback)', '| Provider:', resolvedProvider, '| Model:', resolvedModel);
     if (memoryContext) console.log('[Chat] Memory context injected', { chars: String(memoryContext).length });

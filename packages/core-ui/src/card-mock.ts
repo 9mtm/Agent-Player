@@ -49,6 +49,10 @@ export function createCardMock() {
         case 'persona-rollback': { const old = list.find(v => v.version === body!.version); return old ? push({ traits: old.traits, preset: old.preset, dialect: old.dialect }) : { status: 404, body: null }; }
       }
     }
+    if (p.kind === 'models') return { status: 200, body: { models: [
+      { id: 'qwen-fiction:7b', name: '🏠 qwen-fiction:7b', provider: 'local', size: '4.1GB', available: true },
+      { id: 'llama-fiction:3b', name: '🏠 llama-fiction:3b', provider: 'local', size: '2.0GB', available: true },
+    ], activeProvider: 'local' } };
     if (p.kind === 'memories') {
       if (request.method === 'GET') return { status: 200, body: { success: true, memories: [...mem.values()].map(view) } };
       const m: Mem = { id: uuid(), type: body!.type, content: body!.content, importance: body!.importance ?? 5, drawer: body!.drawer ?? { kind: 'owner' }, memoryLayer: 'working', createdAt: now(), tags: [], history: [] };

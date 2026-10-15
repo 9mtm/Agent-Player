@@ -10,10 +10,11 @@ import { permissionCategories, permissionModes, riskyCategories } from './hire-c
 export type CardTab = 'profile' | 'persona' | 'permissions' | 'memory';
 export type Grants = { version: number; granted: readonly string[]; available: readonly { name: string; description: string; requiresApproval: boolean; allowedByServer: boolean; execClass: boolean }[] };
 export type Permissions = { memoryRead: string[]; memoryWrite: string[]; sharedMemory: boolean; modes: Record<string, string>; version: number };
-export type ProfileDraft = { role: string; department: string; description: string };
+export type ProfileDraft = { role: string; department: string; description: string; model: string };
+export type ModelOption = { id: string; provider: 'ollama' | 'claude'; label: string; size: string };
 export type CardState = Readonly<{
   agentId: string; tab: CardTab; phase: 'loading' | 'ready' | 'saving' | 'error';
-  agent?: PublicAgent; profile: ProfileDraft;
+  agent?: PublicAgent; profile: ProfileDraft; models?: readonly ModelOption[];
   persona?: PersonaCurrent; personaDraft?: { traits: Traits; preset: string | null; dialect: string }; versions?: readonly Persona[];
   grants?: Grants; grantDraft?: readonly string[]; permissions?: Permissions; permissionDraft?: Permissions;
   memories?: readonly MemoryItem[];
@@ -21,7 +22,7 @@ export type CardState = Readonly<{
 }>;
 
 const record = (x: unknown): x is Record<string, any> => !!x && typeof x === 'object' && !Array.isArray(x);
-const profileOf = (a?: PublicAgent): ProfileDraft => ({ role: a?.role ?? '', department: a?.department ?? '', description: a?.description ?? '' });
+const profileOf = (a?: PublicAgent): ProfileDraft => ({ role: a?.role ?? '', department: a?.department ?? '', description: a?.description ?? '', model: a?.model ?? '' });
 const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every(x => b.includes(x));
 
 /** Tool groups on the card, in display order. */
@@ -66,6 +67,7 @@ export class AgentCardController {
       const agent = a.body.agent as PublicAgent;
       const persona = p.status === 200 ? (p.body as PersonaCurrent) : undefined;
       this.publish({ phase: 'ready', agent, profile: profileOf(agent), persona, personaDraft: persona && { traits: { ...persona.traits }, preset: persona.preset, dialect: persona.dialect } });
+      void this.loadModels();
       await this.openTab(this.#state.tab);
     } catch { this.publish({ phase: 'error', notice: 'The agent could not be loaded.' }); }
   }
@@ -77,9 +79,16 @@ export class AgentCardController {
     if (tab === 'persona' && !this.#state.versions) await this.loadVersions();
   }
 
+  private async loadModels() {
+    try {
+      const r = await this.get('/api/models');
+      if (r.status === 200 && record(r.body) && Array.isArray(r.body.models)) this.publish({ models: r.body.models as ModelOption[] });
+    } catch { /* the model stays as it is */ }
+  }
+
   // ---- profile ----
   editProfile(p: Partial<ProfileDraft>) { this.publish({ profile: { ...this.#state.profile, ...p }, saved: undefined }); }
-  profileChanged() { const a = profileOf(this.#state.agent), d = this.#state.profile; return a.role !== d.role || a.department !== d.department.trim().toLowerCase() || a.description !== d.description; }
+  profileChanged() { const a = profileOf(this.#state.agent), d = this.#state.profile; return a.role !== d.role || a.department !== d.department.trim().toLowerCase() || a.description !== d.description || a.model !== d.model; }
   async saveProfile() {
     const a = this.#state.agent; if (!a || !this.profileChanged()) return;
     const d = this.#state.profile; const before = profileOf(a);
@@ -88,6 +97,10 @@ export class AgentCardController {
     if (d.role !== before.role) body.role = d.role || null;
     if (dept !== before.department) body.department = dept || null;
     if (d.description !== before.description) body.description = d.description;
+    if (d.model !== before.model && d.model) {
+      const m = this.#state.models?.find(x => x.id === d.model);
+      body.model = d.model; body.provider = m?.provider ?? (/^claude-/.test(d.model) ? 'claude' : 'ollama');
+    }
     this.publish({ phase: 'saving' });
     try {
       const r = await this.send('PUT', `/api/agents/${this.id}`, body);

@@ -194,3 +194,15 @@ test('an agent set to Claude with no key answers with the local model', async ()
   const m = (await call('r-owner', 'GET', `/api/chat/conversations/${c.id}/messages`)).json();
   assert.equal(m.messages.at(-1).content, 'Local answer.');
 });
+
+test('a run can pick a local model; a bad model id is refused', async () => {
+  const c = (await call('r-owner', 'POST', '/api/chat/conversations', { agentId: 'r-claude' })).json().conversation;
+  script.push([{ message: { content: 'From the picked model.' } }, { done: true }]);
+  bodies.length = 0;
+  const runId = rid();
+  const r = await call('r-owner', 'POST', `/api/chat/conversations/${c.id}/runs`, { runId, message: 'hi', model: 'llama3.2:3b' });
+  assert.equal(r.statusCode, 202);
+  await ended(runId);
+  assert.equal(bodies[0].model, 'llama3.2:3b', 'the picked local model is used even for an agent set to Claude');
+  assert.equal((await call('r-owner', 'POST', `/api/chat/conversations/${c.id}/runs`, { runId: rid(), message: 'x', model: '../x' })).statusCode, 400);
+});

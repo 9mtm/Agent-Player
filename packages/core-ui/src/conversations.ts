@@ -11,6 +11,7 @@ import type { Turn } from './turns';
 
 export type Conversation = WireConversation;
 export type AgentChoice = Readonly<{ id: string; name: string }>;
+export type ModelOption = Readonly<{ id: string; provider: 'ollama' | 'claude'; label: string; size: string }>;
 export type ConversationsState = Readonly<{
   access: 'ready' | 'denied';
   listPhase: 'idle' | 'loading' | 'ready' | 'error';
@@ -21,6 +22,9 @@ export type ConversationsState = Readonly<{
   draft: string;
   agentId: string;
   agents: readonly AgentChoice[];
+  /** Models the owner can pick for the next reply ('' = the agent's own model). */
+  models: readonly ModelOption[];
+  model: string;
   runId: string | null;
   starting: boolean;
   stopping: boolean;
@@ -36,7 +40,7 @@ const RETRY_MS = [500, 1000, 2000, 4000, 8000];
 
 export class ConversationsController {
   #state: ConversationsState = Object.freeze({
-    access: 'ready', listPhase: 'idle', conversations: [], activeId: null, threadPhase: 'empty', turns: [], draft: '', agentId: '', agents: [],
+    access: 'ready', listPhase: 'idle', conversations: [], activeId: null, threadPhase: 'empty', turns: [], draft: '', agentId: '', agents: [], models: [], model: '',
     runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false,
   });
   #listeners = new Set<() => void>();
@@ -83,9 +87,20 @@ export class ConversationsController {
       this.publish({ listPhase: 'ready', conversations: r.body.conversations as Conversation[] });
     } catch { if (this.live()) this.publish({ listPhase: 'error' }); }
     void this.loadAgents();
+    void this.loadModels();
   }
 
   /** The team for the agent picker (owner only; others talk to the primary agent). */
+  /** Installed models for the picker (owner only; others use the agent's model). */
+  async loadModels() {
+    if (this.client.getSnapshot().user?.role !== 'owner' || this.#state.models.length) return;
+    try {
+      const r = await this.client.request({ method: 'GET', path: '/api/models' } as never);
+      if (this.live() && r.status === 200 && record(r.body) && Array.isArray(r.body.models)) this.publish({ models: r.body.models as ModelOption[] });
+    } catch { /* the picker stays on the agent's model */ }
+  }
+  selectModel(model: string) { if (model === '' || this.#state.models.some(m => m.id === model)) this.publish({ model }); }
+
   async loadAgents() {
     if (this.client.getSnapshot().user?.role !== 'owner' || this.#state.agents.length) return;
     try {
@@ -147,7 +162,7 @@ export class ConversationsController {
         id = conv.id;
         this.publish({ activeId: id, conversations: [conv, ...this.#state.conversations.filter(x => x.id !== id)] });
       }
-      const r = await this.call('POST', `/api/chat/conversations/${id}/runs`, { runId, message });
+      const r = await this.call('POST', `/api/chat/conversations/${id}/runs`, this.#state.model ? { runId, message, model: this.#state.model } : { runId, message });
       if (!this.live() || seq !== this.#openSeq) return;
       if (r.status === 409 && record(r.body) && r.body.code === 'conversation_busy' && typeof r.body.runId === 'string') {
         // Another tab is still answering here: wait in the queue and follow that run.

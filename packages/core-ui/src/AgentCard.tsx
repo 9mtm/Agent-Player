@@ -86,6 +86,7 @@ function ProfileTab({ card, agents, busy }: { card: AgentCardController; agents?
       <label className="field"><span>Department</span>
         <input value={s.profile.department} placeholder="e.g. marketing" maxLength={64} disabled={busy} onChange={e => card.editProfile({ department: e.target.value })}/></label>
     </div>
+    <ModelField card={card} busy={busy}/>
     <label className="field"><span>What this agent does</span>
       <textarea rows={3} value={s.profile.description} maxLength={1000} disabled={busy} dir="auto" onChange={e => card.editProfile({ description: e.target.value })}/></label>
     <p className="fine-print">A role change never changes the persona or the permissions; those are set in their own tabs.</p>
@@ -211,6 +212,23 @@ function MemoryTab({ card, onOpenMemory }: { card: AgentCardController; onOpenMe
     <div className="card-actions">{onOpenMemory && <button type="button" onClick={onOpenMemory}>Open the Memory page</button>}
       <span className="fine-print">Memories belong to you; this agent reads them through its permissions.</span></div>
   </div>;
+}
+
+/** The agent's default model: installed local models, and Claude only when a key exists. */
+function ModelField({ card, busy }: { card: AgentCardController; busy: boolean }) {
+  const s = useSyncExternalStore(card.subscribe, card.getSnapshot, card.getSnapshot);
+  const models = s.models ?? [];
+  const current = s.profile.model;
+  const known = models.some(m => m.id === current);
+  const claudeWithoutKey = s.agent?.provider === 'claude' && !models.some(m => m.provider === 'claude');
+  return <label className="field"><span>Model</span>
+    <select value={current} disabled={busy || !models.length} onChange={e => card.editProfile({ model: e.target.value })}>
+      {!known && <option value={current}>{current || 'Not set'}{claudeWithoutKey ? ' (no Claude key: answers use the local model)' : ''}</option>}
+      {models.some(m => m.provider === 'ollama') && <optgroup label="On this computer">{models.filter(m => m.provider === 'ollama').map(m => <option key={m.id} value={m.id}>{m.label}{m.size ? ` · ${m.size}` : ''}</option>)}</optgroup>}
+      {models.some(m => m.provider === 'claude') && <optgroup label="Claude (paid)">{models.filter(m => m.provider === 'claude').map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</optgroup>}
+    </select>
+    {claudeWithoutKey && <small className="fine-print">This agent is set to Claude but no Claude key is saved, so it answers with the local model. Pick a local model here to make that explicit.</small>}
+  </label>;
 }
 
 const noop = () => () => {};

@@ -3,7 +3,7 @@ import { createSuggestionAdapter, validatedDisplayName } from './naming';
 import type { NamingLanguage } from './naming';
 import type { SessionClient, WireResponse } from './session';
 
-export type AgentProfile = { role?: 'main' | 'manager' | 'specialist' | 'evaluator' | null; department?: string | null; description?: string; emoji?: string; isPrimary?: boolean };
+export type AgentProfile = { role?: 'main' | 'manager' | 'specialist' | 'evaluator' | null; department?: string | null; description?: string; emoji?: string; isPrimary?: boolean; model?: string; provider?: string };
 export type PublicAgent = Readonly<{ id: string; version: number } & AgentProfile & ({ name: string; nameUnavailable?: never } | { name?: never; nameUnavailable: true })>;
 const ROLES = ['main', 'manager', 'specialist', 'evaluator'];
 /** Profile fields shown on the team page and the agent card (all optional, bounded). */
@@ -14,6 +14,8 @@ export function agentProfile(x: Record<string, unknown>): AgentProfile {
     ...(typeof x.description === 'string' ? { description: x.description.slice(0, 1000) } : {}),
     ...(typeof x.emoji === 'string' && [...x.emoji].length <= 4 ? { emoji: x.emoji } : {}),
     ...(typeof x.isPrimary === 'boolean' ? { isPrimary: x.isPrimary } : {}),
+    ...(typeof x.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:\/-]{0,99}$/.test(x.model) ? { model: x.model } : {}),
+    ...(typeof x.provider === 'string' && /^[a-z][a-z-]{0,19}$/.test(x.provider) ? { provider: x.provider } : {}),
   };
 }
 export type AgentRequest = { method: 'GET'; path: string } | { method: 'PUT'; path: string; body: { name: string; expectedVersion: number } | { expectedVersion: number; role?: string | null; department?: string | null; description?: string } };

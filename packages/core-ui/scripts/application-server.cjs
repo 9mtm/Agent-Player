@@ -28,6 +28,8 @@ const profile = x => ({
   ...(typeof x.description === 'string' ? { description: x.description.slice(0, 1000) } : {}),
   ...(typeof x.emoji === 'string' && [...x.emoji].length <= 4 ? { emoji: x.emoji } : {}),
   ...(typeof x.isPrimary === 'boolean' ? { isPrimary: x.isPrimary } : {}),
+  ...(typeof x.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:\/-]{0,99}$/.test(x.model) ? { model: x.model } : {}),
+  ...(typeof x.provider === 'string' && /^[a-z][a-z-]{0,19}$/.test(x.provider) ? { provider: x.provider } : {}),
 });
 const agent = x => {
   if (!record(x) || !agentId(x.id) || !version(x.version)) throw Error();

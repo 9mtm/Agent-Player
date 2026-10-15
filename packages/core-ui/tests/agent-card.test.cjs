@@ -147,3 +147,32 @@ test('tools are grouped by kind; a group turns on or off together (server-off to
   assert.match(html, /<span class="tool-group-name">Memory<\/span>/);
   assert.match(html, /Turn all/);
 });
+
+test('model choice: chat picks a model for the next reply; the card saves a default model', async t => {
+  const { ConversationsController } = require('../src/conversations.ts');
+  const cl = await client();
+  const calls = [];
+  const conv = new ConversationsController(cl); t.after(() => conv.dispose());
+  await conv.load();
+  await new Promise(r => setTimeout(r, 50));
+  assert.deepEqual(conv.getSnapshot().models.map(m => [m.id, m.provider]), [['qwen-fiction:7b', 'ollama'], ['llama-fiction:3b', 'ollama']]);
+  conv.selectModel('not-installed'); assert.equal(conv.getSnapshot().model, '', 'only listed models can be picked');
+  conv.selectModel('llama-fiction:3b'); assert.equal(conv.getSnapshot().model, 'llama-fiction:3b');
+  for (const allow of [allowedRequest, allowed]) {
+    assert.equal(allow('POST', '/api/chat/conversations/3f0c2b6e-1d2a-4f4e-9b1a-6c7d8e9f0a1b/runs', { runId: 'run-0123456789ab', message: 'hi', model: 'qwen3.8:27b' }), true);
+    assert.equal(allow('POST', '/api/chat/conversations/3f0c2b6e-1d2a-4f4e-9b1a-6c7d8e9f0a1b/runs', { runId: 'run-0123456789ab', message: 'hi', model: '../x' }), false);
+    assert.equal(allow('PUT', '/api/agents/sample-main', { expectedVersion: 1, model: 'qwen3.8:27b', provider: 'ollama' }), true);
+    assert.equal(allow('PUT', '/api/agents/sample-main', { expectedVersion: 1, model: 'qwen3.8:27b' }), false, 'model and provider go together');
+    assert.equal(allow('PUT', '/api/agents/sample-main', { expectedVersion: 1, model: 'x', provider: 'openai' }), false);
+    assert.equal(allow('GET', '/api/models'), true);
+  }
+  const c = new AgentCardController(cl, 'sample-main'); t.after(() => c.dispose());
+  await c.load(); await new Promise(r => setTimeout(r, 50));
+  assert.equal(c.getSnapshot().models.length, 2);
+  c.editProfile({ model: 'qwen-fiction:7b' });
+  await c.saveProfile();
+  assert.equal(c.getSnapshot().agent.model, 'qwen-fiction:7b');
+  assert.equal(c.getSnapshot().agent.provider, 'ollama');
+  const html = renderToStaticMarkup(React.createElement(CardView, { card: c, onBack: () => {} }));
+  assert.match(html, /On this computer/);
+});

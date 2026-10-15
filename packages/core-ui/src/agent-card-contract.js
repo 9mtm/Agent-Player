@@ -6,6 +6,9 @@
 import { validAgentId } from './agent-id.js';
 
 export const roles = ['main', 'manager', 'specialist', 'evaluator'];
+export const providers = ['ollama', 'claude'];
+export const MODELS_PATH = '/api/models';
+const modelId = x => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:\/-]{0,99}$/.test(x);
 export const memoryTypes = ['fact', 'event', 'context', 'insight', 'preference', 'skill', 'relationship', 'task'];
 export const drawerKinds = ['owner', 'experience', 'project', 'task', 'people'];
 export const traitNames = ['doubt', 'caution', 'creativity', 'thoroughness', 'independence', 'verbosity', 'warmth', 'curiosity', 'persistence'];
@@ -33,6 +36,7 @@ const traits = x => record(x) && Object.keys(x).length === traitNames.length && 
 export function cardPath(path) {
   let m = /^\/api\/agents\/([^/?#]+)\/personality\/(current|versions|lock|unlock|rollback)$/.exec(path);
   if (m) return validAgentId(m[1]) ? { kind: `persona-${m[2]}`, agent: m[1] } : null;
+  if (path === MODELS_PATH) return { kind: 'models' };
   if (path === '/api/memory') return { kind: 'memories' };
   if (path === '/api/memory/drawers') return { kind: 'drawers' };
   if (path === '/api/memory/search') return { kind: 'search' };
@@ -46,8 +50,10 @@ export function cardRoute(path) { return cardPath(path) !== null; }
 
 /** PUT /api/agents/:id from the card: the version plus at least one profile field. */
 export function validProfileEdit(b) {
-  if (!record(b) || !onlyKeys(b, ['expectedVersion', 'role', 'department', 'description']) || !version(b.expectedVersion) || Object.keys(b).length < 2) return false;
+  if (!record(b) || !onlyKeys(b, ['expectedVersion', 'role', 'department', 'description', 'model', 'provider']) || !version(b.expectedVersion) || Object.keys(b).length < 2) return false;
+  if ((b.model === undefined) !== (b.provider === undefined)) return false;
   return (b.role === undefined || b.role === null || roles.includes(b.role))
+    && (b.model === undefined || modelId(b.model)) && (b.provider === undefined || providers.includes(b.provider))
     && (b.department === undefined || b.department === null || department(b.department))
     && (b.description === undefined || text(b.description, 1000));
 }
@@ -58,6 +64,7 @@ export function allowedAgentCard(method, path, body) {
   const p = cardPath(path);
   if (!p) return false;
   switch (p.kind) {
+    case 'models': return method === 'GET' && body === undefined;
     case 'persona-current': return method === 'GET' && body === undefined;
     case 'persona-versions':
       if (method === 'GET') return body === undefined;
@@ -112,6 +119,12 @@ export function agentCardResponse(path, status, body) {
   }
   if (!record(body)) fail();
   switch (p.kind) {
+    case 'models': {
+      if (!Array.isArray(body.models)) fail();
+      const list = body.models.filter(m => record(m) && modelId(m.id) && ['local', 'claude'].includes(m.provider)).slice(0, 200)
+        .map(m => ({ id: m.id, provider: m.provider === 'local' ? 'ollama' : 'claude', label: str(String(m.name ?? m.id).replace(/^[^A-Za-z0-9]+/u, ''), 80), size: str(m.size, 20) }));
+      return { models: list };
+    }
     case 'persona-current': {
       const v = persona(body);
       return { ...v, traitNames: [...traitNames],
