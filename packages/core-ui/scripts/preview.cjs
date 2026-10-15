@@ -2,7 +2,9 @@ const http = require('node:http');
 const { root, readCurrent } = require('./build-artifacts.cjs');
 const HOST = '127.0.0.1';
 const PORT = 42522;
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+// style-src-elem: the terminal screen (xterm) measures characters with its own <style> blocks.
+// style= attributes and scripts stay same-origin only.
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 const HEADERS = Object.freeze({
   'Content-Security-Policy': CSP,
   'X-Content-Type-Options': 'nosniff',
