@@ -51,7 +51,7 @@ export function ChatScreen({ controller, productName = 'Dpro', mode }: { control
     <div className="chat-dock">
       {/* A normal completed reply needs no notice; problems and uncertain outcomes do. */}
       {((s.notice && s.phase !== 'complete') || s.phase === 'denied') && <p className="chat-notice" role="status">{s.notice ?? 'Chat needs an active, non-guest account.'}</p>}
-      <form className={`composer${multiline ? ' stacked' : ''}`} method="post" onSubmit={e => { e.preventDefault(); submit(); }}>
+      <form className={`chat-composer${multiline ? ' stacked' : ''}`} method="post" onSubmit={e => { e.preventDefault(); submit(); }}>
         <label className="composer-agent" title="Agent for this conversation. Blank uses the server's primary agent.">
           <span className="sr-only">Agent ID (optional)</span>
           <input value={s.agentId} placeholder="Agent: default" disabled={!!s.turns.length || s.phase !== 'ready'}

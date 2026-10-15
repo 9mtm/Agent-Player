@@ -197,13 +197,13 @@ form > label { display:block; margin-block-end:8px; }
 @keyframes caret { 50% { opacity:0; } }
 .chat-dock { position:absolute; inset-inline:0; inset-block-end:0; padding:16px 1rem 10px; display:grid; gap:6px; justify-items:center; background:linear-gradient(to bottom,transparent,var(--canvas) 16px); }
 .chat-notice { margin:0; max-inline-size:min(48rem,100%); font-size:11.5px; color:var(--text-3); text-align:center; }
-.composer { inline-size:min(48rem,100%); max-inline-size:none; display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:end; gap:4px; padding:5px 5px 5px 8px; border-radius:4.8px; background:var(--composer-fill); -webkit-backdrop-filter:blur(12px) saturate(1.12); backdrop-filter:blur(12px) saturate(1.12); box-shadow:inset 0 0 0 1px var(--composer-ring),0 1px 2px rgba(17,24,39,.04),0 6px 20px rgba(17,24,39,.06); transition:box-shadow .2s ease; }
-.composer:focus-within { box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 45%,transparent),0 6px 20px rgba(17,24,39,.08); }
-.composer.stacked { grid-template-columns:auto minmax(0,1fr) auto; grid-template-areas:"input input input" "agent . send"; }
-.composer.stacked textarea { grid-area:input; } .composer.stacked .composer-agent { grid-area:agent; } .composer.stacked .round-button { grid-area:send; }
-.composer textarea { border:0; outline:0; background:transparent; resize:none; inline-size:100%; min-block-size:26px; max-block-size:150px; font-size:13px; line-height:1.45; padding:4px 2px; color:var(--text); }
-.composer textarea::placeholder { color:var(--text-3); }
-.composer textarea:focus-visible { outline:0; box-shadow:none; }
+.chat-composer { inline-size:min(48rem,100%); max-inline-size:none; display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:end; gap:4px; padding:5px 5px 5px 8px; border-radius:4.8px; background:var(--composer-fill); -webkit-backdrop-filter:blur(12px) saturate(1.12); backdrop-filter:blur(12px) saturate(1.12); box-shadow:inset 0 0 0 1px var(--composer-ring),0 1px 2px rgba(17,24,39,.04),0 6px 20px rgba(17,24,39,.06); transition:box-shadow .2s ease; }
+.chat-composer:focus-within { box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 45%,transparent),0 6px 20px rgba(17,24,39,.08); }
+.chat-composer.stacked { grid-template-columns:auto minmax(0,1fr) auto; grid-template-areas:"input input input" "agent . send"; }
+.chat-composer.stacked textarea { grid-area:input; } .chat-composer.stacked .composer-agent { grid-area:agent; } .chat-composer.stacked .round-button { grid-area:send; }
+.chat-composer textarea { border:0; outline:0; background:transparent; resize:none; inline-size:100%; min-block-size:26px; max-block-size:150px; font-size:13px; line-height:1.45; padding:4px 2px; color:var(--text); }
+.chat-composer textarea::placeholder { color:var(--text-3); }
+.chat-composer textarea:focus-visible { outline:0; box-shadow:none; }
 .composer-agent { display:flex !important; margin:0 !important; align-self:center; }
 .composer-agent input { inline-size:7.5rem; block-size:24px; border:0; border-radius:2px; background:transparent; padding:0 6px; font-size:11.5px; color:var(--text-3); }
 .composer-agent input:hover:not(:disabled), .composer-agent input:focus { background:var(--row-hover); color:var(--text); }
@@ -256,6 +256,33 @@ form > label { display:block; margin-block-end:8px; }
 .team-text { display:grid; min-inline-size:0; line-height:1.3; }
 .team-name { font-size:13px; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .team-id { font-size:11px; color:var(--text-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:Menlo,Monaco,"SF Mono",monospace; }
+
+/* Before sign-in: the session band and the fixture workspace in the same look. */
+:root, .shell { --text-2:color-mix(in srgb,var(--text) 74%,transparent); --text-3:color-mix(in srgb,var(--text) 54%,transparent); --text-4:color-mix(in srgb,var(--text) 36%,transparent);
+  --row-hover:color-mix(in srgb,var(--accent) 6%,transparent); --row-active:color-mix(in srgb,var(--accent) 10%,transparent); --stroke-3:color-mix(in srgb,var(--accent) 16%,var(--border)); }
+.auth-controls { min-block-size:34px; padding:0 12px; gap:8px; background:var(--sidebar); border-block-end:1px solid color-mix(in srgb,var(--text) 7.5%,transparent); }
+.auth-controls strong { font-size:12px; font-weight:600; margin-inline-end:4px; }
+.auth-controls button { min-block-size:24px; padding:0 10px; border-radius:2.4px; font-size:11.5px; font-weight:500; background:var(--surface); box-shadow:inset 0 0 0 1px var(--border); }
+.auth-controls button:hover { background:var(--row-hover); }
+.auth-controls span { font-size:11px; color:var(--text-3); margin-inline-start:auto; }
+.shell:not(.app-shell) .titlebar { min-block-size:34px; background:var(--sidebar); border-block-end:1px solid color-mix(in srgb,var(--text) 7.5%,transparent); }
+.shell:not(.app-shell) .titlebar .brand { font-size:13px; }
+.shell:not(.app-shell) .toolbar button, .shell:not(.app-shell) .toolbar select { min-block-size:24px; font-size:11.5px; border-radius:4px; }
+.shell:not(.app-shell) .sidebar { border-inline-end:1px solid color-mix(in srgb,var(--text) 7.5%,transparent); }
+.shell:not(.app-shell) .nav-item { inline-size:100%; gap:8px; padding-inline:8px; min-block-size:28px; border-radius:2px; color:var(--text-2); font-weight:500; box-shadow:inset 0 0 0 1px transparent; }
+.shell:not(.app-shell) .nav-item:hover { background:var(--row-hover); color:var(--text); }
+.shell:not(.app-shell) .nav-item[aria-current="page"] { color:var(--text); background:var(--row-active); box-shadow:inset 0 0 0 1px var(--stroke-3); }
+.shell:not(.app-shell) .section-label { font-size:10.2px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--accent); margin:4px 8px 8px; }
+.shell:not(.app-shell) .sidebar-note { margin:24px 8px 0; font-size:11.5px; color:var(--text-3); }
+.shell:not(.app-shell) .pane-heading { min-block-size:44px; padding:8px 24px; background:transparent; border-block-end:1px solid color-mix(in srgb,var(--text) 7.5%,transparent); }
+.shell:not(.app-shell) .pane-heading h1 { font-size:15px; }
+.shell:not(.app-shell) .pane-content { padding:28px 24px 48px; max-inline-size:52rem; margin:0 auto; }
+.shell:not(.app-shell) .state-panel { margin-block:20px; padding:16px; border:0; border-radius:4.8px; background:var(--surface); box-shadow:inset 0 0 0 1px var(--stroke-3); }
+.shell:not(.app-shell) .state-panel h2 { margin:0 0 4px; font-size:14px; }
+.shell:not(.app-shell) .composer { border:0; border-radius:4.8px; background:var(--surface); box-shadow:inset 0 0 0 1px var(--stroke-3),0 6px 20px rgba(17,24,39,.06); padding:10px 12px; }
+.shell:not(.app-shell) .composer textarea { border:0; background:transparent; min-block-size:56px; resize:none; }
+.shell:not(.app-shell) input:not([type="checkbox"]), .shell:not(.app-shell) select:not(#locale) { min-block-size:30px; padding:0 8px; border:1px solid var(--border); border-radius:2.4px; background:var(--canvas); color:var(--text); }
+.shell:not(.app-shell) .statusbar { min-block-size:20px; border:0; background:var(--sidebar); color:var(--text-3); align-items:center; }
 
 /* Sign-in card */
 .auth-workspace { max-inline-size:380px; margin:clamp(24px,10vh,96px) auto; padding:28px; background:var(--surface); border-radius:4.8px; box-shadow:inset 0 0 0 1px var(--border),0 6px 20px rgba(17,24,39,.06); }
