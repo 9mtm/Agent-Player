@@ -49,7 +49,10 @@ export type AuditEventType =
     | 'extension.storage.accessed'
     // MCP client (M1)
     | 'mcp.server.change'
-    | 'mcp.tool.call';
+    | 'mcp.tool.call'
+    // Built-in terminal (TERM-01)
+    | 'terminal.session.open'
+    | 'terminal.session.close';
 
 export type AuditCategory =
     | 'authentication'

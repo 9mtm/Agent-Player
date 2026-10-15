@@ -56,6 +56,7 @@ import { budgetRoutes } from './routes/budget.js';
 import { mcpServersRoutes } from './routes/mcp-servers.js';
 import { instanceRoutes } from './routes/instance.js';
 import { agentGrantsRoutes } from './routes/agent-grants.js';
+import { terminalRoutes } from './routes/terminal.js';
 import { agentPersonalityRoutes } from './routes/agent-personality.js';
 import { storageRoutes } from './routes/storage.js';
 import { uploadsRoutes } from './routes/uploads.js';
@@ -319,6 +320,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   await fastify.register(mcpServersRoutes); // M1: owner-only MCP client server registry, discovery, tool settings
   await fastify.register(instanceRoutes); // MCP-01b: public instance proof for local clients (no secret returned)
   await fastify.register(agentGrantsRoutes); // S1.4: owner view/edit of agent tool grants
+  await fastify.register(terminalRoutes); // TERM-01: owner-only, loopback-only shell (off unless AGENT_TERMINAL=true)
   await fastify.register(agentPersonalityRoutes); // CORE-01: owner-only versioned personality
   await fastify.register(storageRoutes);       // 📦 Local Storage (Cache + CDN)
   await fastify.register(uploadsRoutes);       // 🔒 Runtime uploads in .data/uploads (CL-05)

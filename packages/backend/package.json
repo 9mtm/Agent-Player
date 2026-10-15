@@ -7,6 +7,7 @@
     "onlyBuiltDependencies": [
       "better-sqlite3",
       "esbuild",
+      "node-pty",
       "protobufjs",
       "sharp"
     ],
@@ -66,6 +67,7 @@
     "mailparser": "^3.9.3",
     "multer": "^2.1.1",
     "node-cron": "^4.2.1",
+    "node-pty": "1.0.0",
     "nodemailer": "^8.0.1",
     "openai": "^6.22.0",
     "ora": "^8.0.1",
