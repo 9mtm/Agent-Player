@@ -1,5 +1,5 @@
 import { SessionFailure } from './session-failure';
-import { BOARDS_PATH, MAX_COMMENT, MAX_DESCRIPTION, MAX_TITLE, validCardEdit, validNewCard } from './board-contract.js';
+import { BOARDS_PATH, MAX_COMMENT, MAX_DESCRIPTION, MAX_TITLE, validBoardEdit, validCardEdit, validNewBoard, validNewCard } from './board-contract.js';
 import type { SessionClient } from './session';
 
 export type Priority = 'low' | 'normal' | 'high' | 'urgent';
@@ -12,11 +12,18 @@ export type Card = Readonly<{
 }>;
 export type Comment = Readonly<{ id: string; authorKind: 'user' | 'agent'; authorId: string; body: string; createdAt: string }>;
 export type AgentOption = Readonly<{ id: string; name: string }>;
+export type BoardColor = 'blue' | 'green' | 'orange' | 'red' | 'purple' | 'pink' | 'teal' | 'gray';
+export type BoardMeta = Readonly<{ id: string; name: string; description: string; template: string; color: BoardColor; departments: readonly string[]; kind: 'company' | 'department' | 'shared'; archived: boolean; version: number }>;
+export type BoardSummary = BoardMeta & Readonly<{ cards: number; open: number }>;
+export type Template = Readonly<{ id: string; name: string; description: string; columns: readonly string[] }>;
+export type NewBoard = { name: string; description?: string; template: string; color: BoardColor; departments: string[] };
 export type CardDraft = Readonly<{ title: string; description: string; priority: Priority; dueDate: string; agents: readonly string[]; departments: readonly string[] }>;
 export type BoardState = Readonly<{
   owner: boolean;
   phase: 'idle' | 'loading' | 'ready' | 'saving' | 'error' | 'denied';
   boardId?: string; name?: string; columns: readonly Column[]; cards: readonly Card[]; agents: readonly AgentOption[];
+  /** BOARD-03: every board, the open board's header, the templates and colours to create new ones. */
+  boards: readonly BoardSummary[]; meta?: BoardMeta; templates: readonly Template[]; colors: readonly BoardColor[];
   /** The open card (detail panel) and its editable copy and comments. */
   open?: string; draft?: CardDraft; comments: readonly Comment[]; commentsPhase: 'idle' | 'loading' | 'ready' | 'error';
   /** Filters: text search, one agent, one department. */
@@ -48,7 +55,7 @@ const draftOf = (c: Card): CardDraft => Object.freeze({ title: c.title, descript
  * edits carry the card version; a conflict shows the current card.
  */
 export class BoardController {
-  #state: BoardState = Object.freeze({ owner: false, phase: 'denied', columns: [], cards: [], agents: [], comments: [], commentsPhase: 'idle', filter: { text: '', agent: '', department: '' } });
+  #state: BoardState = Object.freeze({ owner: false, phase: 'denied', columns: [], cards: [], agents: [], boards: [], templates: [], colors: [], comments: [], commentsPhase: 'idle', filter: { text: '', agent: '', department: '' } });
   #listeners = new Set<() => void>();
   #ticket = 0; #identity = ''; #disposed = false; #unsubscribe: () => void;
   constructor(readonly client: SessionClient) { this.#unsubscribe = client.subscribe(this.#sync); this.#sync(); }
@@ -60,7 +67,7 @@ export class BoardController {
     if (identity === this.#identity) return;
     this.#identity = identity; this.#ticket++;
     const owner = s.phase === 'authenticated' && s.user?.role === 'owner';
-    this.#publish({ owner, phase: owner ? 'idle' : 'denied', boardId: undefined, name: undefined, columns: [], cards: [], agents: [], open: undefined, draft: undefined, comments: [], commentsPhase: 'idle',
+    this.#publish({ owner, phase: owner ? 'idle' : 'denied', boardId: undefined, name: undefined, columns: [], cards: [], agents: [], boards: [], meta: undefined, templates: [], colors: [], open: undefined, draft: undefined, comments: [], commentsPhase: 'idle',
       notice: s.phase === 'authenticated' && !owner ? 'Only the owner can use the company board.' : undefined });
   };
   dispose() { this.#disposed = true; this.#ticket++; this.#unsubscribe(); this.#publish({ owner: false, phase: 'denied', cards: [], columns: [], comments: [] }); }
@@ -70,9 +77,10 @@ export class BoardController {
     if (status === 401 || status === 403) { this.#publish({ phase: 'denied', notice: 'Access denied. Sign in again as the owner.' }); return true; }
     return false;
   }
-  #applyBoard(b: { id: string; name: string; columns: Column[]; cards: Card[] }) {
+  #applyBoard(b: BoardMeta & { columns: Column[]; cards: Card[] }) {
     const open = this.#state.open && b.cards.some(c => c.id === this.#state.open) ? this.#state.open : undefined;
-    this.#publish({ boardId: b.id, name: b.name, columns: Object.freeze(b.columns.map(c => Object.freeze(c))), cards: Object.freeze(b.cards.map(c => Object.freeze(c))),
+    const { columns: _c, cards: _k, ...meta } = b;
+    this.#publish({ boardId: b.id, name: b.name, meta: Object.freeze({ ...meta }), columns: Object.freeze(b.columns.map(c => Object.freeze(c))), cards: Object.freeze(b.cards.map(c => Object.freeze(c))),
       ...(open ? {} : { open: undefined, draft: undefined, comments: [], commentsPhase: 'idle' as const }) });
   }
   #replaceCard(card: Card) {
@@ -81,8 +89,8 @@ export class BoardController {
     this.#publish({ cards: Object.freeze(cards) });
   }
 
-  /** Explicit read: the board (created on first use) and the team for assignees. */
-  async load() {
+  /** Explicit read: every board (the company board is created on first use), the open board, and the team for assignees. */
+  async load(boardId?: string) {
     if (!this.#state.owner || this.#busy() || this.#disposed) return;
     const ticket = ++this.#ticket;
     this.#publish({ phase: 'loading', notice: undefined });
@@ -90,26 +98,71 @@ export class BoardController {
       const list = await this.client.request({ method: 'GET', path: BOARDS_PATH });
       if (ticket !== this.#ticket) return;
       if (this.#refused(list.status, list.body)) return;
-      const boards = (list.body as { boards?: { id: string }[] } | null)?.boards;
-      if (list.status !== 200 || !boards?.length) throw Error();
-      const r = await this.client.request({ method: 'GET', path: `${BOARDS_PATH}/${boards[0].id}` });
+      const lb = list.body as { boards?: BoardSummary[]; templates?: Template[]; colors?: BoardColor[] } | null;
+      if (list.status !== 200 || !lb?.boards?.length) throw Error();
+      this.#publish({ boards: Object.freeze(lb.boards.map(x => Object.freeze(x))), templates: Object.freeze(lb.templates ?? []), colors: Object.freeze(lb.colors ?? []) });
+      const want = boardId ?? this.#state.boardId;
+      const target = lb.boards.find(x => x.id === want)?.id ?? lb.boards[0].id;
+      const r = await this.client.request({ method: 'GET', path: `${BOARDS_PATH}/${target}` });
       if (ticket !== this.#ticket) return;
       if (this.#refused(r.status, r.body)) return;
       if (r.status !== 200 || !record(r.body)) throw Error();
       this.#applyBoard(r.body as never);
-      const team = await this.client.request({ method: 'GET', path: '/api/agents' });
-      if (ticket !== this.#ticket) return;
-      const agents = team.status === 200 && record(team.body) && Array.isArray(team.body.agents)
-        ? (team.body.agents as { id: string; name?: string }[]).map(a => Object.freeze({ id: a.id, name: a.name ?? a.id })) : [];
-      this.#publish({ agents: Object.freeze(agents), phase: 'ready' });
+      if (!this.#state.agents.length) {
+        const team = await this.client.request({ method: 'GET', path: '/api/agents' });
+        if (ticket !== this.#ticket) return;
+        const agents = team.status === 200 && record(team.body) && Array.isArray(team.body.agents)
+          ? (team.body.agents as { id: string; name?: string }[]).map(a => Object.freeze({ id: a.id, name: a.name ?? a.id })) : [];
+        this.#publish({ agents: Object.freeze(agents) });
+      }
+      this.#publish({ phase: 'ready' });
     } catch { if (ticket === this.#ticket) this.#publish({ phase: 'error', notice: 'The board could not be read. Try again.' }); }
+  }
+
+  /** Switch to another board. */
+  async openBoard(id: string) {
+    if (!this.#state.boards.some(b => b.id === id) || id === this.#state.boardId) return;
+    this.closeCard();
+    this.#publish({ filter: Object.freeze({ text: '', agent: '', department: '' }) });
+    await this.load(id);
+  }
+
+  /** A new board from a template; opens it. */
+  async createBoard(input: NewBoard) {
+    const body: Record<string, unknown> = { name: input.name.normalize('NFKC').replace(/\s+/g, ' ').trim(), template: input.template, color: input.color, departments: input.departments.map(normDep).filter(Boolean) };
+    const description = input.description?.trim(); if (description) body.description = description;
+    if (!body.name || !validNewBoard(body)) { this.#publish({ notice: 'A board needs a name (1–80 characters); departments use letters, numbers, spaces, - or _.' }); return false; }
+    let created: string | undefined;
+    const ok = await this.#write<BoardMeta & { columns: Column[]; cards: Card[] }>(() => this.client.request({ method: 'POST', path: BOARDS_PATH, body }), b => { created = b.id; this.#applyBoard(b); }, 'The board', true);
+    if (ok && created) await this.load(created);
+    return ok;
+  }
+
+  /** Rename, describe, recolour, change departments or archive the open board. */
+  async updateBoard(patch: { name?: string; description?: string; color?: BoardColor; departments?: string[]; archived?: boolean }) {
+    const m = this.#state.meta; if (!m) return false;
+    const body: Record<string, unknown> = { expectedVersion: m.version };
+    if (patch.name !== undefined) { const n = patch.name.normalize('NFKC').replace(/\s+/g, ' ').trim(); if (n !== m.name) body.name = n; }
+    if (patch.description !== undefined && patch.description.trim() !== m.description) body.description = patch.description.trim();
+    if (patch.color !== undefined && patch.color !== m.color) body.color = patch.color;
+    if (patch.departments !== undefined) {
+      const deps = [...new Set(patch.departments.map(normDep).filter(Boolean))];
+      if ([...deps].sort().join() !== [...m.departments].sort().join()) body.departments = deps;
+    }
+    if (patch.archived !== undefined && patch.archived !== m.archived) body.archived = patch.archived;
+    if (Object.keys(body).length === 1) { this.#publish({ notice: 'Nothing changed.' }); return false; }
+    if (!validBoardEdit(body)) { this.#publish({ notice: 'Check the board name (1–80 characters) and the departments.' }); return false; }
+    const ok = await this.#write<BoardMeta & { columns: Column[]; cards: Card[] }>(() => this.client.request({ method: 'PUT', path: `${BOARDS_PATH}/${m.id}`, body }), b => this.#applyBoard(b), 'The board', true);
+    if (ok) await this.load(patch.archived ? undefined : m.id);
+    if (ok && patch.archived) this.#publish({ notice: `“${m.name}” was archived.` });
+    return ok;
   }
 
   setFilter(patch: Partial<BoardState['filter']>) { this.#publish({ filter: Object.freeze({ ...this.#state.filter, ...patch }) }); }
   agentName = (id: string) => this.#state.agents.find(a => a.id === id)?.name ?? 'Former agent';
 
-  async #write<T>(run: () => Promise<{ status: number; body: unknown }>, onOk: (body: T) => void, what: string): Promise<boolean> {
-    if (!this.#state.owner || this.#busy() || !this.#state.boardId) return false;
+  async #write<T>(run: () => Promise<{ status: number; body: unknown }>, onOk: (body: T) => void, what: string, boardLevel = false): Promise<boolean> {
+    if (!this.#state.owner || this.#busy() || (!boardLevel && !this.#state.boardId)) return false;
     const ticket = this.#ticket;
     this.#publish({ phase: 'saving', notice: undefined });
     try {
@@ -118,6 +171,11 @@ export class BoardController {
       if (this.#refused(r.status, r.body)) return false;
       const b = r.body as (Record<string, unknown> & { code?: string; card?: Card }) | null;
       if ((r.status === 200 || r.status === 201) && b) { onOk(b as T); this.#publish({ phase: 'ready' }); return true; }
+      if (r.status === 409 && b?.code === 'version_conflict' && !b.card) {
+        this.#publish({ phase: 'ready', notice: 'This board was changed meanwhile. It was read again; try once more.' });
+        void this.load(this.#state.boardId);
+        return false;
+      }
       if (r.status === 409 && b?.card) {
         this.#replaceCard(b.card);
         if (this.#state.open === b.card.id) this.#publish({ draft: draftOf(b.card) });
@@ -148,13 +206,13 @@ export class BoardController {
   async addColumn(name: string) {
     const n = name.normalize('NFKC').replace(/\s+/g, ' ').trim();
     if (!n || [...n].length > 60) { this.#publish({ notice: 'A column needs a name of 1 to 60 characters.' }); return false; }
-    return this.#write<{ id: string; name: string; columns: Column[]; cards: Card[] }>(() => this.client.request({ method: 'POST', path: `${BOARDS_PATH}/${this.#state.boardId}/columns`, body: { name: n } }), b => this.#applyBoard(b), 'The column');
+    return this.#write<BoardMeta & { columns: Column[]; cards: Card[] }>(() => this.client.request({ method: 'POST', path: `${BOARDS_PATH}/${this.#state.boardId}/columns`, body: { name: n } }), b => this.#applyBoard(b), 'The column');
   }
 
   async renameColumn(columnId: string, name: string) {
     const n = name.normalize('NFKC').replace(/\s+/g, ' ').trim();
     if (!n || [...n].length > 60) { this.#publish({ notice: 'A column needs a name of 1 to 60 characters.' }); return false; }
-    return this.#write<{ id: string; name: string; columns: Column[]; cards: Card[] }>(() => this.client.request({ method: 'PUT', path: `${BOARDS_PATH}/${this.#state.boardId}/columns/${columnId}`, body: { name: n } }), b => this.#applyBoard(b), 'The column');
+    return this.#write<BoardMeta & { columns: Column[]; cards: Card[] }>(() => this.client.request({ method: 'PUT', path: `${BOARDS_PATH}/${this.#state.boardId}/columns/${columnId}`, body: { name: n } }), b => this.#applyBoard(b), 'The column');
   }
 
   /** Move a card to a column, before another card (or to the end). Optimistic in the view, confirmed by the server. */

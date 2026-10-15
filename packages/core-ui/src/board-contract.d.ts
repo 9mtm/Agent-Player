@@ -9,3 +9,6 @@ export function validCardEdit(x: unknown): boolean;
 export function allowedBoard(method: string, path: string, body?: unknown): boolean;
 export function boardRoute(path: string): boolean;
 export function boardResponse(path: string, status: number, body: unknown): unknown;
+export const boardColors: readonly ['blue', 'green', 'orange', 'red', 'purple', 'pink', 'teal', 'gray'];
+export function validNewBoard(x: unknown): boolean;
+export function validBoardEdit(x: unknown): boolean;
