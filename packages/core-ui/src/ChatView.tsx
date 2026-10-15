@@ -255,7 +255,7 @@ function GitHubCard({ git, onRefresh }: { git: NonNullable<ReturnType<Conversati
     <dl className="panel-list">
       {gh && <div><dt><UiIcon name="globe" size={12}/></dt><dd dir="ltr"><a href={gh.repoUrl} target="_blank" rel="noopener noreferrer">{gh.owner}/{gh.repo}</a></dd></div>}
       <div><dt aria-label="Branch">⎇</dt><dd dir="ltr">{git.branch}</dd></div>
-      <div><dt aria-label="Upstream">↕</dt><dd>{git.upstream
+      <div><dt aria-label="Upstream">↕</dt><dd className="panel-wrap">{git.upstream
         ? <><span dir="ltr">{git.upstream}</span>{git.ahead !== null && git.ahead !== undefined && <span className="git-sync"> · ↑{git.ahead} ↓{git.behind ?? 0}</span>}</>
         : <span className="muted">Not on GitHub yet (never pushed)</span>}</dd></div>
       {git.lastCommit && <div><dt aria-label="Last commit"><UiIcon name="check" size={12}/></dt><dd title={`${git.lastCommit.author}${when ? ` · ${when.toLocaleString()}` : ''}`}><code dir="ltr">{git.lastCommit.hash}</code> <span dir="auto">{git.lastCommit.subject}</span></dd></div>}
