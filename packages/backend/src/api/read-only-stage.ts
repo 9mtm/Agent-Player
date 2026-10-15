@@ -66,6 +66,15 @@ const SAFE_READ_KEYS: ReadonlySet<string> = new Set(READ_ONLY_SAFE_READS.map((e)
 
 /** POST routes that stay open in stage 1 (exact raw URL = dispatched route). */
 const ALWAYS_ALLOWED_POSTS = new Set(['/api/auth/login', '/api/auth/logout']);
+/**
+ * Isolated stage 2 (chat test with the local model only): exactly this one
+ * more POST, streaming allowed for it alone. The chat route itself then
+ * forces the local Ollama, no tools (AGENT_PLAYER_LOCAL_MODEL_ONLY).
+ */
+const STAGE2_CHAT_ROUTE = '/api/chat';
+function chatStageEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (env.AGENT_PLAYER_ISOLATED_STAGE ?? '').trim() === '2' && (env.AGENT_PLAYER_LOCAL_MODEL_ONLY ?? '').trim() === '1';
+}
 const SETUP_POSTS = new Set(['/api/setup/admin', '/api/setup/complete']);
 
 export interface SetupState {
@@ -156,6 +165,8 @@ export async function readOnlyAllows(request: FastifyRequest, opts: ReadOnlyStag
   const route = request.routeOptions?.url;
   const headers = request.headers;
   if (headers.upgrade !== undefined || String(headers.connection ?? '').toLowerCase().includes('upgrade')) return false;
+  const stageChat = chatStageEnabled() && method === 'POST' && !!route && rawUrl === route && route === STAGE2_CHAT_ROUTE;
+  if (stageChat) return true;
   if (String(headers.accept ?? '').toLowerCase().includes('text/event-stream')) return false;
 
   if (method === 'GET' || method === 'HEAD') {
@@ -169,7 +180,7 @@ export async function readOnlyAllows(request: FastifyRequest, opts: ReadOnlyStag
     const path = cleanPath(rawUrl);
     if (path === null) return false;
     if (wanted === 'GET' || wanted === 'HEAD') return preflightTargetsSafeRead(request.server, path);
-    if (wanted === 'POST') return rawUrl === path && (ALWAYS_ALLOWED_POSTS.has(path) || SETUP_POSTS.has(path));
+    if (wanted === 'POST') return rawUrl === path && (ALWAYS_ALLOWED_POSTS.has(path) || SETUP_POSTS.has(path) || (chatStageEnabled() && path === STAGE2_CHAT_ROUTE));
     return false;
   }
 

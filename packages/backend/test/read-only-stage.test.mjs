@@ -295,6 +295,32 @@ test('websocket upgrades and event streams are refused even on GET', async () =>
   assertReadOnly(await req('GET', '/api/auth/me', { headers: { accept: 'text/event-stream' } }), 'event stream');
 });
 
+test('stage 2 (chat test): exactly POST /api/chat passes the gate (also streaming); every other write stays refused', async () => {
+  const saved = { stage: process.env.AGENT_PLAYER_ISOLATED_STAGE, only: process.env.AGENT_PLAYER_LOCAL_MODEL_ONLY };
+  try {
+    // The switch alone (without the stage) changes nothing.
+    process.env.AGENT_PLAYER_LOCAL_MODEL_ONLY = '1';
+    assertReadOnly(await req('POST', '/api/chat', { payload: {} }), 'flag without stage 2');
+    process.env.AGENT_PLAYER_ISOLATED_STAGE = '2';
+    // An invalid body reaches the route (400 from the chat validation), so no model is called here.
+    for (const headers of [{}, { accept: 'text/event-stream' }]) {
+      const res = await req('POST', '/api/chat', { payload: {}, headers });
+      assert.notEqual(res.statusCode, 403, `chat passes the gate: ${res.statusCode} ${res.body}`);
+      assert.equal(res.statusCode, 400, res.body);
+    }
+    assertReadOnly(await req('POST', '/api/chat?x=1', { payload: {} }), 'query trick');
+    assertReadOnly(await req('POST', '/api/chat/agentic', { payload: { message: 'hi' } }), 'agentic chat');
+    assertReadOnly(await req('POST', `/api/memory/proposals/${ids.memoryProposal}/approve`, { payload: {} }), 'memory approve');
+    assertReadOnly(await req('PUT', '/api/agents/a1', { payload: { name: 'x' } }), 'agents PUT');
+    assertReadOnly(await req('PUT', '/api/settings', { payload: { provider: 'local' } }), 'settings PUT');
+    assertReadOnly(await req('GET', '/api/auth/me', { headers: { accept: 'text/event-stream' } }), 'event stream on other routes');
+  } finally {
+    if (saved.stage === undefined) delete process.env.AGENT_PLAYER_ISOLATED_STAGE; else process.env.AGENT_PLAYER_ISOLATED_STAGE = saved.stage;
+    if (saved.only === undefined) delete process.env.AGENT_PLAYER_LOCAL_MODEL_ONLY; else process.env.AGENT_PLAYER_LOCAL_MODEL_ONLY = saved.only;
+  }
+  assertReadOnly(await req('POST', '/api/chat', { payload: {} }), 'back in stage 1');
+});
+
 test('logout works', async () => {
   const res = await req('POST', '/api/auth/logout', { payload: {} });
   assert.notEqual(res.statusCode, 403, res.body);
