@@ -106,3 +106,12 @@ test('routes: owner only; at most 20 opaque ids; one import at a time', async ()
   assert.equal((await call('POST', '/api/memory/import/local', { sessionIds: Array.from({ length: 21 }, (_, i) => i.toString(16).padStart(32, '0')) })).statusCode, 400);
   assert.equal((await call('GET', '/api/memory/import/local/jobs/nope')).statusCode, 404);
 });
+
+test('wrappers and interruption notes are not human text', async () => {
+  const { humanText } = await import(join(backendDir, 'src/memory/import/local-agents.ts'));
+  assert.equal(humanText('<external_codex_apps_x>{"a":1}</external_codex_apps_x>'), null);
+  assert.equal(humanText('[Request interrupted by user for tool use]'), null);
+  assert.equal(humanText('<command-name>/clear</command-name>\n<command-args></command-args>'), null);
+  assert.equal(humanText('Please keep it short <b>bold</b> ok'), 'Please keep it short <b>bold</b> ok', 'short inline tags a person typed stay');
+  assert.equal(humanText('مرحبا'), 'مرحبا');
+});

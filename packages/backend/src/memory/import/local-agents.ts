@@ -45,12 +45,14 @@ async function sessionFiles(source: LocalSource, home?: string): Promise<string[
 }
 
 /** Text a person typed or an agent wrote; not injected tool, command or system text. */
-function humanText(raw: string): string | null {
-  const t = raw.trim();
+export function humanText(raw: string): string | null {
+  // Tool and system wrappers (<tag>…</tag>) and interruption notes are not something a person said.
+  const t = raw.replace(/<([a-z][a-z0-9_-]{1,60})(\s[^>]*)?>[\s\S]*?<\/\1>/gi, '')
+    .replace(/^\[Request interrupted by user[^\]]*\]\s*/gm, '').trim();
   if (!t) return null;
-  if (/^<(system-reminder|command-|local-command|environment_context|user_instructions|user-prompt-submit-hook|task-notification|ide_)/.test(t)) return null;
-  if (/^(Caveat: The messages below|# AGENTS\.md instructions|<permissions instructions>)/.test(t)) return null;
-  return t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim() || null;
+  if (/^<[a-z][a-z0-9_-]*[\s>]/i.test(t)) return null;
+  if (/^(Caveat: The messages below|# AGENTS\.md instructions)/.test(t)) return null;
+  return t;
 }
 
 /** The human and agent text turns of one parsed log line, if any. */
