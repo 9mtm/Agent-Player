@@ -6,8 +6,10 @@
  * the departments taking part, and a comment thread. Cards are archived,
  * never deleted. Card edits and moves are versioned (expectedVersion).
  *
- * The owner's first read creates a default board ("Company board") with
- * Backlog / To do / In progress / Review / Done. Step 1 is owner-only;
+ * The owner's first read creates the company board from the default
+ * template (Ideas / Backlog / To do / In progress / Review / Done). BOARD-03:
+ * more boards per company, per department, or shared by departments, each
+ * from a template (services/board-templates.ts) with a colour. Step 1 is owner-only;
  * agents commenting and moving cards through a tool come in a later step.
  */
 
@@ -15,10 +17,10 @@ import { randomUUID } from 'node:crypto';
 import { all, dialect, one, run, sql, type Step } from '../repositories/sql-steps.js';
 import { nowText } from '../db/pg/dialect.js';
 import { normalizeDepartment } from './personality.js';
+import { BOARD_COLORS, BOARD_TEMPLATES, DEFAULT_TEMPLATE, boardTemplate } from './board-templates.js';
 
 export const PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
 export type Priority = (typeof PRIORITIES)[number];
-export const DEFAULT_COLUMNS = ['Backlog', 'To do', 'In progress', 'Review', 'Done'] as const;
 export const MAX_COLUMNS = 20;
 export const MAX_CARDS_PER_BOARD = 5000;
 export const MAX_TITLE = 200;
@@ -39,7 +41,12 @@ export interface BoardCard {
   dueDate: string | null; taskId: string | null; archived: boolean; version: number;
   agents: string[]; departments: string[]; comments: number; createdAt: string; updatedAt: string;
 }
-export interface Board { id: string; name: string; columns: BoardColumn[]; cards: BoardCard[] }
+export interface BoardMeta {
+  id: string; name: string; description: string; template: string; color: string; departments: string[];
+  /** company: no departments; department: one; shared: several. */
+  kind: 'company' | 'department' | 'shared'; archived: boolean; version: number;
+}
+export interface Board extends BoardMeta { columns: BoardColumn[]; cards: BoardCard[] }
 export interface BoardComment { id: string; authorKind: 'user' | 'agent'; authorId: string; body: string; createdAt: string }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +110,18 @@ function* boardRow(ownerId: string, boardId: string): Step<{ id: string; name: s
   return b;
 }
 
+/** Board header: name, description, template, colour, departments, kind, archived, version. */
+function* boardMeta(boardId: string): Step<BoardMeta> {
+  const b = yield* one<{ id: string; name: string; description: string; template: string; color: string; archived: number; version: number }>(
+    'SELECT id, name, description, template, color, archived, version FROM boards WHERE id = ?', boardId);
+  const departments = (yield* all<{ department: string }>('SELECT department FROM board_departments WHERE board_id = ? ORDER BY department', boardId)).map((d) => d.department);
+  return {
+    id: b!.id, name: b!.name, description: b!.description, template: b!.template, color: b!.color, departments,
+    kind: departments.length === 0 ? 'company' : departments.length === 1 ? 'department' : 'shared',
+    archived: Number(b!.archived) === 1, version: Number(b!.version),
+  };
+}
+
 function* cardsOf(boardId: string, includeArchived: boolean, onlyCard?: string): Step<BoardCard[]> {
   const rows = yield* all<{
     id: string; column_id: string; title: string; description: string; priority: Priority; position: number; due_date: string | null;
@@ -134,26 +153,107 @@ function* cardsOf(boardId: string, includeArchived: boolean, onlyCard?: string):
 }
 
 function* boardStep(ownerId: string, boardId: string, includeArchived = false): Step<Board> {
-  const b = yield* boardRow(ownerId, boardId);
+  yield* boardRow(ownerId, boardId);
+  const meta = yield* boardMeta(boardId);
   const columns = (yield* all<BoardColumn>('SELECT id, name, position FROM board_columns WHERE board_id = ? ORDER BY position', boardId))
     .map((c) => ({ id: c.id, name: c.name, position: Number(c.position) }));
-  return { id: b.id, name: b.name, columns, cards: yield* cardsOf(boardId, includeArchived) };
+  return { ...meta, columns, cards: yield* cardsOf(boardId, includeArchived) };
 }
 
-/** The owner's boards; the first call creates the default company board. */
-export function listBoards(ownerId: string): Promise<Array<{ id: string; name: string }>> {
+function* insertBoard(ownerId: string, input: { name: string; description: string; template: string; color: string; departments: string[] }): Step<string> {
+  const d = yield* dialect();
+  const id = randomUUID();
+  const tpl = boardTemplate(input.template) ?? boardTemplate(DEFAULT_TEMPLATE)!;
+  yield* run(`INSERT INTO boards (id, owner_id, name, description, template, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ${nowText(d)}, ${nowText(d)})`,
+    id, ownerId, input.name, input.description, tpl.id, input.color);
+  for (const [i, name] of tpl.columns.entries()) {
+    yield* run('INSERT INTO board_columns (id, board_id, name, position) VALUES (?, ?, ?, ?)', randomUUID(), id, name, (i + 1) * 1000);
+  }
+  for (const dep of input.departments) yield* run('INSERT INTO board_departments (board_id, department) VALUES (?, ?)', id, dep);
+  return id;
+}
+
+export interface BoardSummary extends BoardMeta { cards: number; open: number }
+
+/**
+ * The owner's boards with card counts (archived boards only when asked).
+ * The first call creates the company board from the default template.
+ */
+export function listBoards(ownerId: string, includeArchived = false): Promise<BoardSummary[]> {
   return sql().tx(function* () {
-    let rows = yield* all<{ id: string; name: string }>('SELECT id, name FROM boards WHERE owner_id = ? ORDER BY created_at, id', ownerId);
-    if (rows.length === 0) {
-      const d = yield* dialect();
-      const id = randomUUID();
-      yield* run(`INSERT INTO boards (id, owner_id, name, created_at, updated_at) VALUES (?, ?, ?, ${nowText(d)}, ${nowText(d)})`, id, ownerId, 'Company board');
-      for (const [i, name] of DEFAULT_COLUMNS.entries()) {
-        yield* run('INSERT INTO board_columns (id, board_id, name, position) VALUES (?, ?, ?, ?)', randomUUID(), id, name, (i + 1) * 1000);
-      }
-      rows = [{ id, name: 'Company board' }];
+    const any = yield* one('SELECT id FROM boards WHERE owner_id = ? LIMIT 1', ownerId);
+    if (!any) yield* insertBoard(ownerId, { name: 'Company board', description: 'Work for the whole company.', template: DEFAULT_TEMPLATE, color: 'blue', departments: [] });
+    const rows = yield* all<{ id: string }>(`SELECT id FROM boards WHERE owner_id = ?${includeArchived ? '' : ' AND archived = 0'} ORDER BY created_at, id`, ownerId);
+    const out: BoardSummary[] = [];
+    for (const r of rows) {
+      const meta = yield* boardMeta(r.id);
+      const c = yield* one<{ n: number; open: number }>(`
+        SELECT COUNT(*) AS n, SUM(CASE WHEN col.position < (SELECT MAX(position) FROM board_columns WHERE board_id = ?) THEN 1 ELSE 0 END) AS open
+        FROM board_cards c JOIN board_columns col ON col.id = c.column_id WHERE c.board_id = ? AND c.archived = 0`, r.id, r.id);
+      out.push({ ...meta, cards: Number(c?.n ?? 0), open: Number(c?.open ?? 0) });
     }
-    return rows;
+    // Company boards first, then department boards, then shared ones; each by name.
+    const rank = { company: 0, department: 1, shared: 2 } as const;
+    return out.sort((a, b) => rank[a.kind] - rank[b.kind] || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  }, { immediate: true });
+}
+
+function boardInput(body: Record<string, unknown>, partial: boolean) {
+  const out: { name?: string; description?: string; template?: string; color?: string; departments?: string[] } = {};
+  if (body.name !== undefined || !partial) out.name = line(body.name, 'name', 80);
+  if (body.description !== undefined) out.description = text(body.description, 'description', 500);
+  if (body.template !== undefined) {
+    if (typeof body.template !== 'string' || !boardTemplate(body.template)) throw bad(`template must be one of ${BOARD_TEMPLATES.map((t) => t.id).join(', ')}`);
+    out.template = body.template;
+  }
+  if (body.color !== undefined) {
+    if (!(BOARD_COLORS as readonly unknown[]).includes(body.color)) throw bad(`color must be one of ${BOARD_COLORS.join(', ')}`);
+    out.color = body.color as string;
+  }
+  if (body.departments !== undefined) out.departments = departments(body.departments);
+  return out;
+}
+
+export const MAX_BOARDS = 200;
+
+/** A new board from a template: company (no departments), one department, or shared by several. */
+export function createBoard(ownerId: string, body: Record<string, unknown>): Promise<Board> {
+  onlyKeys(body, ['name', 'description', 'template', 'color', 'departments']);
+  const input = boardInput(body, false);
+  return sql().tx(function* () {
+    const n = yield* one<{ n: number }>('SELECT COUNT(*) AS n FROM boards WHERE owner_id = ?', ownerId);
+    if (Number(n?.n ?? 0) >= MAX_BOARDS) throw bad(`At most ${MAX_BOARDS} boards`);
+    const id = yield* insertBoard(ownerId, { name: input.name!, description: input.description ?? '', template: input.template ?? DEFAULT_TEMPLATE, color: input.color ?? 'blue', departments: input.departments ?? [] });
+    return yield* boardStep(ownerId, id);
+  }, { immediate: true });
+}
+
+/** Rename, describe, recolour, change departments or archive a board (versioned). */
+export function updateBoard(ownerId: string, boardId: string, body: Record<string, unknown>): Promise<Board> {
+  onlyKeys(body, ['expectedVersion', 'name', 'description', 'color', 'departments', 'archived']);
+  const expected = body.expectedVersion;
+  if (typeof expected !== 'number' || !Number.isInteger(expected) || expected < 1) throw new BoardError(400, 'invalid_version', 'expectedVersion is required');
+  const input = boardInput(body, true);
+  if (body.archived !== undefined && typeof body.archived !== 'boolean') throw bad('archived must be true or false');
+  return sql().tx(function* () {
+    const d = yield* dialect();
+    yield* boardRow(ownerId, boardId);
+    const meta = yield* boardMeta(boardId);
+    if (meta.version !== expected) {
+      throw Object.assign(new BoardError(409, 'version_conflict', 'This board was changed meanwhile. Review it and try again.'), { currentBoard: meta });
+    }
+    const sets: string[] = []; const args: Array<string | number> = [];
+    if (input.name !== undefined) { sets.push('name = ?'); args.push(input.name); }
+    if (input.description !== undefined) { sets.push('description = ?'); args.push(input.description); }
+    if (input.color !== undefined) { sets.push('color = ?'); args.push(input.color); }
+    if (body.archived !== undefined) { sets.push('archived = ?'); args.push(body.archived ? 1 : 0); }
+    if (input.departments) {
+      yield* run('DELETE FROM board_departments WHERE board_id = ?', boardId);
+      for (const dep of input.departments) yield* run('INSERT INTO board_departments (board_id, department) VALUES (?, ?)', boardId, dep);
+    }
+    const r = yield* run(`UPDATE boards SET ${[...sets, 'version = version + 1', `updated_at = ${nowText(d)}`].join(', ')} WHERE id = ? AND version = ?`, ...args, boardId, expected);
+    if (r.changes !== 1) throw new BoardError(409, 'version_conflict', 'This board was changed meanwhile. Review it and try again.');
+    return yield* boardStep(ownerId, boardId, false);
   }, { immediate: true });
 }
 
@@ -343,7 +443,7 @@ export function agentCards(ownerId: string, agentId: string): Promise<AgentCard[
       JOIN board_card_agents a ON a.card_id = c.id
       JOIN boards b ON b.id = c.board_id
       JOIN board_columns col ON col.id = c.column_id
-      WHERE a.agent_id = ? AND b.owner_id = ? AND c.archived = 0
+      WHERE a.agent_id = ? AND b.owner_id = ? AND b.archived = 0 AND c.archived = 0
       ORDER BY CASE c.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, c.due_date IS NULL, c.due_date, c.created_at
       LIMIT 50`, agentId, ownerId);
     const out: AgentCard[] = [];

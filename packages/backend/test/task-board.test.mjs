@@ -53,12 +53,13 @@ test('only the owner may use the board', async () => {
   }
 });
 
-test('first read creates the company board with five columns; reading again does not duplicate it', async () => {
+test('first read creates the company board from the default template (with Ideas); reading again does not duplicate it', async () => {
   const first = (await call('GET', '/api/boards')).json().boards;
   const again = (await call('GET', '/api/boards')).json().boards;
   assert.equal(first.length, 1); assert.deepEqual(again, first);
   board = (await call('GET', `/api/boards/${first[0].id}`)).json();
-  assert.deepEqual(board.columns.map((c) => c.name), ['Backlog', 'To do', 'In progress', 'Review', 'Done']);
+  assert.deepEqual(board.columns.map((c) => c.name), ['Ideas', 'Backlog', 'To do', 'In progress', 'Review', 'Done']);
+  assert.deepEqual([board.kind, board.template, board.color, board.version], ['company', 'kanban', 'blue', 1]);
   assert.equal((await call('GET', '/api/boards/nope')).statusCode, 404);
 });
 
@@ -159,4 +160,39 @@ test('agents: list, comment on and move only their own cards; others look missin
   const foreign = await tools.createAgentToolsRegistry({ workspaceDir: dir, agentId: 'ag-1', userId: 'bd-admin', sessionId: 's-x' });
   const s = { ...console }; console.log = () => {};
   try { assert.match(text(await foreign.execute('board_my_cards', {})), /no board cards/); } finally { Object.assign(console, s); }
+});
+
+test('many boards: templates, departments (company / department / shared), colours, archive, versions', async () => {
+  const list = (await call('GET', '/api/boards')).json();
+  assert.ok(list.templates.some((t) => t.id === 'content' && t.columns[0] === 'Ideas'));
+  assert.ok(list.colors.includes('purple'));
+  const mk = async (payload) => { const r = await call('POST', '/api/boards', payload); assert.equal(r.statusCode, 201, r.body); return r.json(); };
+  const mkt = await mk({ name: 'Marketing content', template: 'content', color: 'pink', departments: ['Marketing'] });
+  assert.deepEqual([mkt.kind, mkt.departments, mkt.columns.map((c) => c.name)], ['department', ['marketing'], ['Ideas', 'Writing', 'Editing', 'Scheduled', 'Published']]);
+  const launch = await mk({ name: 'Product launch', template: 'kanban', departments: ['marketing', 'development', 'sales'], description: 'Shared launch work.' });
+  assert.equal(launch.kind, 'shared');
+  const plain = await mk({ name: 'Owner notes' });
+  assert.deepEqual([plain.kind, plain.template, plain.columns.length], ['company', 'kanban', 6]);
+  for (const [payload, why] of [[{ name: '' }, 'name'], [{ name: 'x', template: 'nope' }, 'template'], [{ name: 'x', color: 'gold' }, 'colour'],
+    [{ name: 'x', departments: ['a<b>'] }, 'department'], [{ name: 'x', extra: 1 }, 'extra']]) {
+    assert.equal((await call('POST', '/api/boards', payload)).statusCode, 400, why);
+  }
+  const summaries = (await call('GET', '/api/boards')).json().boards;
+  assert.deepEqual(summaries.map((b) => [b.kind, b.name]), [['company', 'Company board'], ['company', 'Owner notes'], ['department', 'Marketing content'], ['shared', 'Product launch']]);
+  assert.ok(summaries.every((b) => typeof b.cards === 'number' && typeof b.open === 'number'));
+  // Edit: rename, recolour, departments, archive; stale version refused.
+  const upd = await call('PUT', `/api/boards/${launch.id}`, { expectedVersion: 1, name: 'Launch 2027', color: 'orange', departments: ['marketing'] });
+  assert.equal(upd.statusCode, 200, upd.body);
+  assert.deepEqual([upd.json().name, upd.json().color, upd.json().kind, upd.json().version], ['Launch 2027', 'orange', 'department', 2]);
+  const stale = await call('PUT', `/api/boards/${launch.id}`, { expectedVersion: 1, name: 'Old' });
+  assert.equal(stale.statusCode, 409); assert.equal(stale.json().board.version, 2);
+  assert.equal((await call('PUT', `/api/boards/${plain.id}`, { expectedVersion: 1, archived: true })).statusCode, 200);
+  assert.ok(!(await call('GET', '/api/boards')).json().boards.some((b) => b.id === plain.id), 'archived boards are hidden');
+  assert.ok((await call('GET', '/api/boards?archived=1')).json().boards.some((b) => b.id === plain.id && b.archived));
+  // Agents never see cards on an archived board.
+  const card = (await call('POST', `/api/boards/${plain.id}/cards`, { columnId: plain.columns[0].id, title: 'Hidden work', agents: ['ag-2'] })).json();
+  const { agentCards } = await import(join(backendDir, 'src/services/task-board.ts'));
+  assert.ok(!(await agentCards('bd-owner', 'ag-2')).some((c) => c.id === card.id));
+  // Other accounts cannot see these boards.
+  assert.equal((await call('GET', `/api/boards/${mkt.id}`, undefined, 'bd-admin')).statusCode, 403);
 });

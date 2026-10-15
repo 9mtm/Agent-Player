@@ -51,8 +51,8 @@ test('board, cards, moves, conflict and comments on PostgreSQL', { skip }, async
   const [b] = await board.listBoards(owner);
   assert.equal((await board.listBoards(owner)).length, 1);
   let view = await board.getBoard(owner, b.id);
-  assert.equal(view.columns.length, 5);
-  const todo = view.columns[1].id; const doing = view.columns[2].id;
+  assert.deepEqual(view.columns.map((c) => c.name), ['Ideas', 'Backlog', 'To do', 'In progress', 'Review', 'Done']);
+  const todo = view.columns.find((c) => c.name === 'To do').id; const doing = view.columns.find((c) => c.name === 'In progress').id;
   const c1 = await board.createCard(owner, b.id, { columnId: todo, title: 'One', agents: [`pg-ag-${tag}`], departments: ['Sales'] });
   const c2 = await board.createCard(owner, b.id, { columnId: doing, title: 'Two' });
   const moved = await board.updateCard(owner, b.id, c1.id, { expectedVersion: 1, columnId: doing, beforeCardId: c2.id });
@@ -64,6 +64,13 @@ test('board, cards, moves, conflict and comments on PostgreSQL', { skip }, async
   assert.equal(comments.length, 1);
   assert.deepEqual((await board.getBoard(owner, b.id)).cards.find((c) => c.id === c1.id).departments, ['sales']);
   await assert.rejects(board.getBoard('someone-else', b.id), (e) => e.code === 'not_found');
+  // BOARD-03 step A: a shared board from a template, then archived.
+  const shared = await board.createBoard(owner, { name: 'Shared launch', template: 'content', color: 'teal', departments: ['Sales', 'marketing'] });
+  assert.deepEqual([shared.kind, shared.departments, shared.columns[0].name], ['shared', ['marketing', 'sales'], 'Ideas']);
+  const archived = await board.updateBoard(owner, shared.id, { expectedVersion: 1, archived: true });
+  assert.equal(archived.archived, true);
+  assert.ok(!(await board.listBoards(owner)).some((x) => x.id === shared.id));
+  await assert.rejects(board.updateBoard(owner, shared.id, { expectedVersion: 1, name: 'x' }), (e) => e.code === 'version_conflict');
 });
 
 test('no board statement reached SQLite', { skip }, () => { assert.deepEqual(sqliteHits, []); });
