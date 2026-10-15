@@ -97,7 +97,7 @@ export interface ExtensionApi {
     /**
      * Get public URL for a file
      */
-    getUrl(fileId: string): string;
+    getUrl(fileId: string): Promise<string>;
   };
 
   // Notifications API — send notifications to users through Core system
@@ -526,7 +526,7 @@ export function createExtensionApi(
 
         return {
           id: file.id,
-          url: storageManager.getPublicUrl(file.id),
+          url: await storageManager.getPublicUrl(file.id),
         };
       },
 
@@ -541,26 +541,29 @@ export function createExtensionApi(
           ? `extensions/${extensionId}/${category}`
           : `extensions/${extensionId}`;
 
-        const files = storageManager.search({ zone: 'cdn', category: cat, limit: 1000 });
+        // FIX-STO-01: files saved with a sub-category live below `cat`.
+        const files = await storageManager.search({ zone: 'cdn', category: cat, categoryTree: true, limit: 1000 });
 
-        return files.map(f => ({
+        return Promise.all(files.map(async f => ({
           id: f.id,
           filename: f.filename,
-          url: storageManager.getPublicUrl(f.id),
-          size: f.size || 0,
-        }));
+          url: await storageManager.getPublicUrl(f.id),
+          size: f.sizeBytes || 0,
+        })));
       },
 
       /**
        * Delete file from extension's storage
        */
       async delete(fileId: string): Promise<boolean> {
-        const { getStorageManager } = await import('../services/storage-manager.js');
+        const { getStorageManager, inCategoryTree } = await import('../services/storage-manager.js');
         const storageManager = getStorageManager();
 
-        // Verify file belongs to this extension before deletion
-        const file = storageManager.getById(fileId);
-        if (!file || !file.category.startsWith(`extensions/${extensionId}`)) {
+        // Verify file belongs to this extension before deletion (FIX-STO-01:
+        // `extensions/<id>` or below it — a bare prefix let extension "ab"
+        // delete the files of extension "abc")
+        const file = await storageManager.getById(fileId);
+        if (!file || !inCategoryTree(file.category, `extensions/${extensionId}`)) {
           throw new Error('Access denied: file does not belong to this extension');
         }
 
@@ -570,12 +573,9 @@ export function createExtensionApi(
       /**
        * Get public URL for a file
        */
-      getUrl(fileId: string): string {
-        // This is synchronous, so we can't use await here
-        // StorageManager's getPublicUrl is synchronous anyway
-        const { getStorageManager } = require('../services/storage-manager.js');
-        const storageManager = getStorageManager();
-        return storageManager.getPublicUrl(fileId);
+      async getUrl(fileId: string): Promise<string> {
+        const { getStorageManager } = await import('../services/storage-manager.js');
+        return getStorageManager().getPublicUrl(fileId);
       },
     },
 

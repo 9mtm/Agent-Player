@@ -32,7 +32,7 @@ export const storageDeleteTool: Tool = {
       const mgr = getStorageManager();
 
       // Get info before deleting for the confirmation message
-      const file = mgr.getById(params.id);
+      const file = await mgr.getById(params.id);
       if (!file) {
         return {
           content: [{ type: 'text', text: `File not found: ${params.id}` }],
@@ -40,7 +40,7 @@ export const storageDeleteTool: Tool = {
         };
       }
 
-      const deleted = mgr.delete(params.id);
+      const deleted = await mgr.delete(params.id);
       if (!deleted) {
         return {
           content: [{ type: 'text', text: `Failed to delete file: ${params.id}` }],

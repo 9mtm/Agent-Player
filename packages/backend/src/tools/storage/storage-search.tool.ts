@@ -72,7 +72,7 @@ export const storageSearchTool: Tool = {
       const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(Boolean) : undefined;
 
       const mgr = getStorageManager();
-      const files = mgr.search({
+      const files = await mgr.search({
         q: query,
         zone: zone as StorageZone | undefined,
         category,
@@ -86,12 +86,12 @@ export const storageSearchTool: Tool = {
         };
       }
 
-      const lines = files.map(f => {
+      const lines = await Promise.all(files.map(async f => {
         const size = f.sizeBytes > 1024 * 1024
           ? `${(f.sizeBytes / 1024 / 1024).toFixed(1)} MB`
           : `${(f.sizeBytes / 1024).toFixed(1)} KB`;
         const date = new Date(f.createdAt).toLocaleDateString();
-        const url = mgr.getPublicUrl(f.id);
+        const url = await mgr.getPublicUrl(f.id);
         return [
           `[${f.zone}/${f.category}] ${f.filename} — ${size} — ${date}`,
           `  ID: ${f.id}`,
@@ -99,7 +99,7 @@ export const storageSearchTool: Tool = {
           f.description ? `  Desc: ${f.description}` : null,
           f.tags.length ? `  Tags: ${f.tags.join(', ')}` : null,
         ].filter(Boolean).join('\n');
-      });
+      }));
 
       return {
         content: [{

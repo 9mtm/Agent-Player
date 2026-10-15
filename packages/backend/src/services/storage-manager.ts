@@ -10,13 +10,15 @@
  *   s3              → AWS S3 + optional CloudFront
  *   r2              → Cloudflare R2
  *
- * All files are indexed in the `storage_files` SQLite table regardless of provider.
+ * All files are indexed in the `storage_files` table regardless of provider,
+ * on the process database driver (SQLite or PostgreSQL, B2.2d-1).
  */
 
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { getDatabase } from '../db/index.js';
+import { insertOrIgnore } from '../db/pg/dialect.js';
+import { num, q } from '../repositories/sql-steps.js';
 import { getStorageProvider, LocalStorageProvider } from './storage-providers/index.js';
 
 export type StorageZone = 'cache' | 'cdn';
@@ -58,6 +60,8 @@ export interface StorageSaveOptions {
 export interface StorageQuery {
   zone?: StorageZone;
   category?: string;
+  /** FIX-STO-01: also match sub-categories (`<category>/…`), e.g. an extension's folders. */
+  categoryTree?: boolean;
   q?: string;
   tags?: string[];
   limit?: number;
@@ -76,6 +80,23 @@ function calcExpiresAt(ttl: StorageTTL): string | null {
   if (ms === null) return null;
   if (ms === 0) return new Date(Date.now() + 60 * 1000).toISOString();
   return new Date(Date.now() + ms).toISOString();
+}
+
+/**
+ * FIX-STO-01: SQL for "this category or any `<category>/…` below it", with
+ * LIKE wildcards in the name escaped (an extension id may contain `_`), so
+ * `extensions/ab` never matches `extensions/abc` or `extensions/a_`.
+ * The same text works on SQLite and PostgreSQL.
+ */
+export function categorySubtreeSql(column = 'category'): string {
+  return `(${column} = ? OR ${column} LIKE ? ESCAPE '\\')`;
+}
+export function categorySubtreeParams(category: string): [string, string] {
+  return [category, `${category.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`];
+}
+/** True when `category` is `base` or below it (`base/…`). */
+export function inCategoryTree(category: string, base: string): boolean {
+  return category === base || category.startsWith(`${base}/`);
 }
 
 function rowToFile(row: Record<string, unknown>): StorageFile {
@@ -118,7 +139,7 @@ export class StorageManager {
     }
 
     // Sync on-disk files that aren't yet indexed
-    this.syncDiskFiles();
+    await this.syncDiskFiles();
 
     console.log(`[StorageManager] ✅ Ready (provider: ${provider.name})`);
   }
@@ -127,15 +148,14 @@ export class StorageManager {
    * Scan the local storage root (.data/uploads, CL-05) and index any files missing from storage_files table.
    * Covers cache/, cdn/, avatars/, and backgrounds/ directories.
    */
-  private syncDiskFiles(): void {
+  private async syncDiskFiles(): Promise<void> {
     const provider = getStorageProvider();
     if (!(provider instanceof LocalStorageProvider)) return;
     const storageRoot = provider.absolutePath('');
     if (!fs.existsSync(storageRoot)) return;
 
-    const db = getDatabase();
     const existing = new Set(
-      (db.prepare('SELECT filepath FROM storage_files').all() as { filepath: string }[])
+      (await q.all<{ filepath: string }>('SELECT filepath FROM storage_files'))
         .map(r => r.filepath)
     );
 
@@ -156,7 +176,7 @@ export class StorageManager {
       { dir: 'backgrounds', zone: 'cdn', defaultCategory: 'images' },
     ];
 
-    let indexed = 0;
+    const found: Array<{ id: string; zone: StorageZone; category: string; filename: string; key: string; mime: string | null; size: number; mtime: string }> = [];
 
     for (const { dir, zone, defaultCategory } of scanDirs) {
       const dirPath = path.join(storageRoot, dir);
@@ -186,25 +206,32 @@ export class StorageManager {
             const parts = relPath.split('/');
             const category = defaultCategory ?? (parts.length > 1 ? parts[0] : 'files');
 
-            const id = randomUUID();
-            db.prepare(`
-              INSERT OR IGNORE INTO storage_files
-                (id, zone, category, filename, filepath, mime_type, size_bytes, description,
-                 tags, ttl, expires_at, source_url, created_by, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
-              id, zone, category, entry.name,
-              storageKey,
-              mime, stat.size,
-              null, '[]', 'persistent', null, null, 'disk-sync',
-              stat.mtime.toISOString()
-            );
-            indexed++;
+            found.push({
+              id: randomUUID(), zone, category, filename: entry.name, key: storageKey,
+              mime, size: stat.size, mtime: stat.mtime.toISOString(),
+            });
           }
         }
       };
 
       walkDir(dirPath, '');
+    }
+
+    const insert = insertOrIgnore(q.dialect, `
+      INSERT INTO storage_files
+        (id, zone, category, filename, filepath, mime_type, size_bytes, description,
+         tags, ttl, expires_at, source_url, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    let indexed = 0;
+    for (const f of found) {
+      const { changes } = await q.run(
+        insert,
+        f.id, f.zone, f.category, f.filename, f.key,
+        f.mime, f.size,
+        null, '[]', 'persistent', null, null, 'disk-sync',
+        f.mtime,
+      );
+      indexed += changes;
     }
 
     if (indexed > 0) {
@@ -246,13 +273,11 @@ export class StorageManager {
     const id = randomUUID();
     const expiresAt = calcExpiresAt(ttl);
 
-    const db = getDatabase();
-    db.prepare(`
+    await q.run(`
       INSERT INTO storage_files
         (id, zone, category, filename, filepath, mime_type, size_bytes, description,
          tags, ttl, expires_at, source_url, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id, zone, category, filename, key,
       mimeType ?? null, buffer.length,
       description ?? null,
@@ -260,7 +285,7 @@ export class StorageManager {
       sourceUrl ?? null, createdBy
     );
 
-    return this.getById(id) as StorageFile;
+    return (await this.getById(id)) as StorageFile;
   }
 
   /**
@@ -295,13 +320,11 @@ export class StorageManager {
     const id = randomUUID();
     const expiresAt = calcExpiresAt(ttl);
 
-    const db = getDatabase();
-    db.prepare(`
-      INSERT OR IGNORE INTO storage_files
+    await q.run(insertOrIgnore(q.dialect, `
+      INSERT INTO storage_files
         (id, zone, category, filename, filepath, mime_type, size_bytes, description,
          tags, ttl, expires_at, source_url, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
       id, zone, category, filename,
       filepath,   // store absolute path for externally-managed files
       mimeType ?? null, sizeBytes,
@@ -310,15 +333,14 @@ export class StorageManager {
       sourceUrl ?? null, createdBy
     );
 
-    return this.getById(id) as StorageFile;
+    return (await this.getById(id)) as StorageFile;
   }
 
-  getById(id: string): StorageFile | null {
-    const db = getDatabase();
-    const row = db.prepare('SELECT * FROM storage_files WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+  async getById(id: string): Promise<StorageFile | null> {
+    const row = await q.one<Record<string, unknown>>('SELECT * FROM storage_files WHERE id = ?', id);
     if (!row) return null;
-    db.prepare('UPDATE storage_files SET last_accessed = ?, access_count = access_count + 1 WHERE id = ?')
-      .run(new Date().toISOString(), id);
+    await q.run('UPDATE storage_files SET last_accessed = ?, access_count = access_count + 1 WHERE id = ?',
+      new Date().toISOString(), id);
     return rowToFile(row);
   }
 
@@ -326,8 +348,8 @@ export class StorageManager {
    * Get a readable stream for serving via backend.
    * Returns null if the provider serves the file directly (cloud).
    */
-  getStream(id: string): { stream: NodeJS.ReadableStream; file: StorageFile } | null {
-    const file = this.getById(id);
+  async getStream(id: string): Promise<{ stream: NodeJS.ReadableStream; file: StorageFile } | null> {
+    const file = await this.getById(id);
     if (!file) return null;
 
     const provider = getStorageProvider();
@@ -349,8 +371,8 @@ export class StorageManager {
    * - Cloud providers return a direct URL (S3/R2/CloudFront)
    * - Local provider returns /api/storage/:id (served by backend)
    */
-  getPublicUrl(id: string): string {
-    const file = this.getById(id);
+  async getPublicUrl(id: string): Promise<string> {
+    const file = await this.getById(id);
     if (!file) return `/api/storage/${id}`;
 
     const provider = getStorageProvider();
@@ -363,19 +385,23 @@ export class StorageManager {
     return `/api/storage/${id}`;
   }
 
-  search(query: StorageQuery): StorageFile[] {
-    const db = getDatabase();
+  async search(query: StorageQuery): Promise<StorageFile[]> {
     const conditions: string[] = [];
-    const params: unknown[] = [];
+    const params: Array<string | number> = [];
+    // SQLite LIKE ignores ASCII case; ILIKE gives the same match on PostgreSQL.
+    const like = q.dialect === 'postgres' ? 'ILIKE' : 'LIKE';
 
     if (query.zone) { conditions.push('zone = ?'); params.push(query.zone); }
-    if (query.category) { conditions.push('category = ?'); params.push(query.category); }
+    if (query.category) {
+      if (query.categoryTree) { conditions.push(categorySubtreeSql()); params.push(...categorySubtreeParams(query.category)); }
+      else { conditions.push('category = ?'); params.push(query.category); }
+    }
     if (query.q) {
-      conditions.push('(description LIKE ? OR filename LIKE ?)');
+      conditions.push(`(description ${like} ? OR filename ${like} ?)`);
       params.push(`%${query.q}%`, `%${query.q}%`);
     }
     if (query.tags?.length) {
-      conditions.push(`(${query.tags.map(() => 'tags LIKE ?').join(' OR ')})`);
+      conditions.push(`(${query.tags.map(() => `tags ${like} ?`).join(' OR ')})`);
       for (const t of query.tags) params.push(`%"${t}"%`);
     }
 
@@ -383,16 +409,16 @@ export class StorageManager {
     const limit = query.limit ?? 20;
     const offset = query.offset ?? 0;
 
-    const rows = db.prepare(`
+    const rows = await q.all<Record<string, unknown>>(`
       SELECT * FROM storage_files ${where}
-      ORDER BY created_at DESC LIMIT ? OFFSET ?
-    `).all(...params, limit, offset) as Record<string, unknown>[];
+      ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      ...params, limit, offset);
 
     return rows.map(rowToFile);
   }
 
-  delete(id: string): boolean {
-    const file = this.getById(id);
+  async delete(id: string): Promise<boolean> {
+    const file = await this.getById(id);
     if (!file) return false;
 
     const provider = getStorageProvider();
@@ -403,16 +429,17 @@ export class StorageManager {
       try { if (fs.existsSync(file.filepath)) fs.unlinkSync(file.filepath); } catch { /* ignore */ }
     }
 
-    getDatabase().prepare('DELETE FROM storage_files WHERE id = ?').run(id);
+    await q.run('DELETE FROM storage_files WHERE id = ?', id);
     return true;
   }
 
-  cleanup(): { deleted: number; freedBytes: number } {
-    const db = getDatabase();
+  async cleanup(): Promise<{ deleted: number; freedBytes: number }> {
     const now = new Date().toISOString();
-    const expired = db.prepare(
-      'SELECT * FROM storage_files WHERE expires_at IS NOT NULL AND expires_at < ?'
-    ).all(now) as Record<string, unknown>[];
+    // SQLite keeps expires_at as the ISO text written by calcExpiresAt, so the
+    // ISO bound compares as text; PostgreSQL compares timestamptz values.
+    const bound = q.dialect === 'postgres' ? '(?)::timestamptz' : '?';
+    const expired = await q.all<Record<string, unknown>>(
+      `SELECT * FROM storage_files WHERE expires_at IS NOT NULL AND expires_at < ${bound}`, now);
 
     let deleted = 0, freedBytes = 0;
     const provider = getStorageProvider();
@@ -423,7 +450,7 @@ export class StorageManager {
       if (path.isAbsolute(file.filepath)) {
         try { if (fs.existsSync(file.filepath)) fs.unlinkSync(file.filepath); } catch { /* ignore */ }
       }
-      db.prepare('DELETE FROM storage_files WHERE id = ?').run(file.id);
+      await q.run('DELETE FROM storage_files WHERE id = ?', file.id);
       deleted++;
       freedBytes += file.sizeBytes;
     }
@@ -434,15 +461,15 @@ export class StorageManager {
     return { deleted, freedBytes };
   }
 
-  stats(): { totalFiles: number; totalBytes: number; byZone: Record<string, number>; byCategory: Record<string, number> } {
-    const db = getDatabase();
-    const total = db.prepare('SELECT COUNT(*) as count, SUM(size_bytes) as bytes FROM storage_files').get() as { count: number; bytes: number };
-    const byZone = db.prepare('SELECT zone, COUNT(*) as count FROM storage_files GROUP BY zone').all() as { zone: string; count: number }[];
-    const byCat = db.prepare('SELECT category, COUNT(*) as count FROM storage_files GROUP BY category ORDER BY count DESC').all() as { category: string; count: number }[];
+  async stats(): Promise<{ totalFiles: number; totalBytes: number; byZone: Record<string, number>; byCategory: Record<string, number> }> {
+    const total = await q.one<{ count: number; bytes: unknown }>('SELECT COUNT(*) as count, SUM(size_bytes) as bytes FROM storage_files');
+    const byZone = await q.all<{ zone: string; count: number }>('SELECT zone, COUNT(*) as count FROM storage_files GROUP BY zone');
+    const byCat = await q.all<{ category: string; count: number }>('SELECT category, COUNT(*) as count FROM storage_files GROUP BY category ORDER BY count DESC');
 
     return {
-      totalFiles: total.count ?? 0,
-      totalBytes: total.bytes ?? 0,
+      totalFiles: total?.count ?? 0,
+      // SUM is numeric (text) on PostgreSQL, null on an empty table.
+      totalBytes: num<number | null>(total?.bytes) ?? 0,
       byZone: Object.fromEntries(byZone.map(r => [r.zone, r.count])),
       byCategory: Object.fromEntries(byCat.map(r => [r.category, r.count])),
     };

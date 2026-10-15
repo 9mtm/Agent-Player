@@ -113,7 +113,7 @@ export const storageSaveTool: Tool = {
         createdBy: 'agent',
       });
 
-      const url = mgr.getPublicUrl(file.id);
+      const url = await mgr.getPublicUrl(file.id);
 
       return {
         content: [{
