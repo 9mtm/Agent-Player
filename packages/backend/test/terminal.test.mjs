@@ -192,3 +192,20 @@ test('idle sessions are closed', async () => {
   assert.equal(killed, true);
   assert.deepEqual(m.list('o1'), []);
 });
+
+test('a chat project terminal opens in the project folder; unknown or foreign projects are refused', { skip: !posix }, async () => {
+  const folder = join(dir, 'term-project'); mkdirSync(folder, { recursive: true });
+  const { createProject } = await import(join(backendDir, 'src/repositories/chat-conversations.ts'));
+  const p = await createProject('tm-owner', { name: 'Term', folder });
+  const r = await call('POST', '/api/terminal/sessions', 'tm-owner', { projectId: p.id });
+  assert.equal(r.statusCode, 201);
+  const { realpathSync } = await import('node:fs');
+  assert.equal(r.json().cwd, realpathSync(folder));
+  const id = r.json().id;
+  assert.equal((await call('POST', `/api/terminal/sessions/${id}/input`, 'tm-owner', { data: 'pwd\r' })).statusCode, 204);
+  const out = await readStream(id, 'tm-owner', t => outputOf(t).includes('term-project'));
+  assert.match(outputOf(out.text), /term-project/);
+  await call('DELETE', `/api/terminal/sessions/${id}`, 'tm-owner');
+  assert.equal((await call('POST', '/api/terminal/sessions', 'tm-owner', { projectId: '00000000-0000-4000-8000-000000000000' })).statusCode, 404);
+  assert.equal((await call('POST', '/api/terminal/sessions', 'tm-owner', { projectId: '../etc' })).statusCode, 404);
+});

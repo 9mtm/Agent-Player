@@ -19,6 +19,7 @@ import { actorOrReply, requireOwner } from '../../repositories/scope.js';
 import { logAudit } from '../../services/audit-logger.js';
 import { openSseStream } from '../../services/chat-sse.js';
 import { TerminalError, TerminalManager, terminalEnabled } from '../../terminal/manager.js';
+import { checkFolder, findProject } from '../../repositories/chat-conversations.js';
 
 const SESSION_ID = /^[0-9a-f-]{36}$/;
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
@@ -80,12 +81,19 @@ export function terminalRoutesWith(manager: TerminalManager) {
       return { enabled: terminalEnabled(), sessions: manager.list(owner) };
     });
 
-    fastify.post<{ Body: { cols?: unknown; rows?: unknown } }>('/api/terminal/sessions', { config }, async (request, reply) => {
+    fastify.post<{ Body: { cols?: unknown; rows?: unknown; projectId?: unknown } }>('/api/terminal/sessions', { config }, async (request, reply) => {
       const owner = ownerOf(request, reply);
       if (!owner) return reply;
       try {
         const body = request.body && typeof request.body === 'object' ? request.body : {};
-        const created = await manager.create(owner, { cols: body.cols, rows: body.rows });
+        // A chat project's terminal opens in the project folder (re-checked: it must still exist).
+        let cwd: string | undefined;
+        if (body.projectId !== undefined) {
+          const project = typeof body.projectId === 'string' && SESSION_ID.test(body.projectId) ? await findProject(owner, body.projectId) : undefined;
+          if (!project?.folder) return reply.code(404).send({ error: 'No such project folder', code: 'not_found' });
+          try { cwd = checkFolder(project.folder); } catch { return reply.code(404).send({ error: 'The project folder is gone', code: 'not_found' }); }
+        }
+        const created = await manager.create(owner, { cols: body.cols, rows: body.rows, cwd });
         audit(request, owner, 'terminal.session.open', created.id);
         return reply.code(201).send(created);
       } catch (err) {

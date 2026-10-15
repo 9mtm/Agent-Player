@@ -1,6 +1,8 @@
 import { allowedPersonality, personalityRoute, personalityResponse } from './personality-contract.js';
 import { allowedBoard, boardRoute, boardResponse, BOARDS_PATH } from './board-contract.js';
 import { allowedAgentCard, cardRoute, agentCardResponse } from './agent-card-contract.js';
+import { allowedTerminal, terminalPath, terminalRoute, terminalResponse, TerminalEventParser, TERMINAL_STREAM_MS } from './terminal-contract.js';
+import type { TerminalFrame } from './terminal-contract.js';
 import { allowedConversation, conversationPath, conversationRoute, conversationResponse, RunEventParser, RUN_IDLE_MS, RUN_STREAM_MS } from './conversation-contract.js';
 import type { RunEvent } from './conversation-contract.js';
 import { allowedHire, batchPath, grantsAgentId, permissionsAgentId, hireResponse, hireRoute, BATCHES_PATH, CATALOGUE_PATH, DISTRIBUTION_PATH, PLAN_PATH } from './hire-contract.js';
@@ -41,7 +43,7 @@ function user(value: unknown): User {
 }
 // Reject before URL normalization. No generic URL, header, key or mutation escape hatch.
 export function allowedRequest(method: string, path: string, body?: unknown): boolean {
-  if (allowedPersonality(method, path, body) || allowedHire(method, path, body) || allowedBoard(method, path, body) || allowedConversation(method, path, body) || allowedAgentCard(method, path, body)) return true;
+  if (allowedPersonality(method, path, body) || allowedHire(method, path, body) || allowedBoard(method, path, body) || allowedConversation(method, path, body) || allowedAgentCard(method, path, body) || allowedTerminal(method, path, body)) return true;
   const agentId = /^\/api\/agents\/([^/?#]+)$/.exec(path)?.[1];
   if (method === 'PUT') return validAgentId(agentId) && record(body) && Object.keys(body).length === 2 && Object.keys(body).every(k => k === 'name' || k === 'expectedVersion') && typeof body.name === 'string' && validatedDisplayName(body.name) === body.name && validVersion(body.expectedVersion);
   if (method === 'GET' && body === undefined && (path === '/api/agents' || validAgentId(agentId))) return true;
@@ -93,6 +95,7 @@ function projectResponse(path: string, response: WireResponse): WireResponse {
   if (boardRoute(path)) return { status: response.status, body: boardResponse(path, response.status, response.body) };
   if (conversationRoute(path)) return { status: response.status, body: conversationResponse(path, response.status, response.body) };
   if (cardRoute(path)) return { status: response.status, body: agentCardResponse(path, response.status, response.body) };
+  if (terminalRoute(path)) return { status: response.status, body: terminalResponse(path, response.status, response.body) };
   if (path === '/api/agents' || (path.startsWith('/api/agents/') && path !== '/api/agents/name-suggestion')) return agentResponse(path, response);
   if (response.status === 200 && (path === '/api/auth/login' || path === '/api/auth/me')) {
     if (!record(response.body)) throw new SessionFailure('unavailable');
@@ -116,7 +119,7 @@ export function createSameOriginTransport(origin: string, fetcher: typeof fetch)
     if (!allowedRequest(request.method, request.path, request.body)) throw new SessionFailure('blocked');
     const keys = Object.keys(request.headers);
     const chat = request.path === '/api/chat';
-    const runEvents = request.method === 'GET' && conversationPath(request.path)?.kind === 'events';
+    const runEvents = request.method === 'GET' && (conversationPath(request.path)?.kind === 'events' || terminalPath(request.path)?.kind === 'stream');
     const expected = ['/api/auth/login', '/api/setup/status'].includes(request.path) ? [] : chat ? ['Authorization', 'Idempotency-Key'] : ['Authorization'];
     if (keys.length !== expected.length || keys.some(k => !expected.includes(k)) || expected.some(k => !Object.prototype.hasOwnProperty.call(request.headers, k))
       || (expected.includes('Authorization') && (request.headers.Authorization.length > 8200 || !/^Bearer [A-Za-z0-9._~-]+$/.test(request.headers.Authorization)))
@@ -302,6 +305,7 @@ export class SessionClient {
     // The public adapter transport cannot call login/logout or add arbitrary request fields.
     if (request.path === '/api/setup/status' || request.path === '/api/chat' || request.path === '/api/auth/login' || request.path === '/api/auth/logout' || Object.keys(request).some(k => !['method', 'path', 'body'].includes(k))) throw new SessionFailure('blocked');
     if (conversationRoute(request.path) && this.#state.user?.role === 'guest') throw new SessionFailure('blocked');
+    if (terminalRoute(request.path) && (this.#state.user?.role !== 'owner' || terminalPath(request.path)?.kind === 'stream')) throw new SessionFailure('blocked');
     if (request.method === 'PUT' && !conversationRoute(request.path) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     if (request.method === 'POST' && request.path.startsWith('/api/memory/') && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     if ((personalityRoute(request.path) || cardRoute(request.path) || (request.method === 'DELETE' && !conversationRoute(request.path))) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
@@ -395,6 +399,50 @@ export class SessionClient {
     } catch (error) {
       if (error instanceof SessionFailure && error.code !== 'unavailable') throw error;
       // A dropped or capped connection is not a failed run: report how far we got.
+      if (controller.signal.aborted && !signal.aborted && epoch === this.#state.epoch) return { last: parser.last, ended: parser.ended };
+      throw new SessionFailure(signal.aborted || epoch !== this.#state.epoch ? 'cancelled' : 'unavailable');
+    } finally {
+      clearTimeout(cap); clearTimeout(idle); await reader?.cancel().catch(() => {}); reader?.releaseLock();
+      this.#pending.delete(controller); signal.removeEventListener('abort', abort);
+    }
+  };
+  /**
+   * Reads a terminal's output after `after` until it exits, the reader's cap
+   * passes or the signal aborts (owner only). Resolves with the last sequence
+   * number and whether the shell exited; the caller re-attaches otherwise.
+   */
+  terminalStream = async (id: string, after: number, onFrame: (frame: TerminalFrame) => void, signal: AbortSignal): Promise<{ last: number; ended: boolean }> => {
+    const path = `/api/terminal/sessions/${id}/stream${after > 0 ? `?after=${after}` : ''}`;
+    if (!this.#token || this.#state.phase !== 'authenticated' || this.#state.user?.role !== 'owner' || terminalPath(path)?.kind !== 'stream') throw new SessionFailure('blocked');
+    const { mode, epoch } = this.#state;
+    const transport = mode === 'fixture' ? undefined : this.transports[mode];
+    if (!transport) throw new SessionFailure('blocked');
+    const controller = new AbortController(); this.#pending.add(controller);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const abort = () => { controller.abort(); void reader?.cancel().catch(() => {}); };
+    const cap = setTimeout(abort, TERMINAL_STREAM_MS + 5000);
+    let idle = setTimeout(abort, RUN_IDLE_MS + 5000);
+    signal.addEventListener('abort', abort, { once: true });
+    const parser = new TerminalEventParser(after);
+    try {
+      if (signal.aborted) throw new SessionFailure('cancelled');
+      const response = await transport({ method: 'GET', path, headers: { Authorization: `Bearer ${this.#token}` }, signal: controller.signal });
+      if (epoch !== this.#state.epoch) { await response.stream?.cancel(); throw new SessionFailure('cancelled'); }
+      if (response.status === 401) { this.#reset(mode, 'signed-out', 'expired'); throw new SessionFailure('cancelled'); }
+      if (response.status === 404) return { last: parser.last, ended: true };
+      if (response.status !== 200 || !response.stream) throw new SessionFailure('unavailable');
+      reader = response.stream.getReader();
+      while (true) {
+        const part = await reader.read();
+        if (epoch !== this.#state.epoch) throw new SessionFailure('cancelled');
+        clearTimeout(idle); idle = setTimeout(abort, RUN_IDLE_MS + 5000);
+        if (part.done) { parser.finish(); break; }
+        for (const frame of parser.push(part.value)) onFrame(frame);
+        if (parser.ended) break;
+      }
+      return { last: parser.last, ended: parser.ended };
+    } catch (error) {
+      if (error instanceof SessionFailure && error.code !== 'unavailable') throw error;
       if (controller.signal.aborted && !signal.aborted && epoch === this.#state.epoch) return { last: parser.last, ended: parser.ended };
       throw new SessionFailure(signal.aborted || epoch !== this.#state.epoch ? 'cancelled' : 'unavailable');
     } finally {

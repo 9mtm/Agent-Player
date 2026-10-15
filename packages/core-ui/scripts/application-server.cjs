@@ -2,6 +2,7 @@ const { allowedPersonality, personalityRoute, personalityResponse } = require('.
 const { allowedHire, hireRoute, hireResponse } = require('../src/hire-contract.js');
 const { allowedBoard, boardRoute, boardResponse } = require('../src/board-contract.js');
 const { allowedAgentCard, cardRoute, agentCardResponse } = require('../src/agent-card-contract.js');
+const { allowedTerminal, terminalPath, terminalRoute, terminalResponse, TerminalEventParser, TERMINAL_STREAM_MS } = require('../src/terminal-contract.js');
 const { allowedConversation, conversationPath, conversationRoute, conversationResponse, RunEventParser, RUN_STREAM_MS, RUN_IDLE_MS } = require('../src/conversation-contract.js');
 const { validDeviceToken, validLoginBody } = require('../src/login-contract.js');
 const { setupStatus } = require('../src/setup-status.js');
@@ -38,7 +39,7 @@ const agent = x => {
     : { id: x.id, version: x.version, nameUnavailable: true, ...profile(x) };
 };
 function allowed(method, target, body) {
-  if (allowedPersonality(method, target, body) || allowedHire(method, target, body) || allowedBoard(method, target, body) || allowedConversation(method, target, body) || allowedAgentCard(method, target, body)) return true;
+  if (allowedPersonality(method, target, body) || allowedHire(method, target, body) || allowedBoard(method, target, body) || allowedConversation(method, target, body) || allowedAgentCard(method, target, body) || allowedTerminal(method, target, body)) return true;
   const id = /^\/api\/agents\/([^/?#]+)$/.exec(target)?.[1];
   if (method === 'PUT') return agentId(id) && record(body) && Object.keys(body).length === 2 && Object.keys(body).every(k => k === 'name' || k === 'expectedVersion') && name(body.name) && version(body.expectedVersion);
   if (method === 'GET' && body === undefined && (target === '/api/agents' || agentId(id))) return true;
@@ -86,6 +87,7 @@ function project(target, status, body) {
   if (boardRoute(target)) return boardResponse(target, status, body);
   if (conversationRoute(target)) return conversationResponse(target, status, body);
   if (cardRoute(target)) return agentCardResponse(target, status, body);
+  if (terminalRoute(target)) return terminalResponse(target, status, body);
   if (target === '/api/agents' || (target.startsWith('/api/agents/') && target !== '/api/agents/name-suggestion')) {
     if (status === 200 && target === '/api/agents') {
       if (!Array.isArray(body?.agents) || body.agents.length > 10000) throw Error();
@@ -166,6 +168,7 @@ function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly =
     if (!['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) return send(405);
     const chat = raw === '/api/chat' && req.method === 'POST';
     const runEvents = req.method === 'GET' && conversationPath(raw)?.kind === 'events';
+    const termStream = req.method === 'GET' && terminalPath(raw)?.kind === 'stream';
     if (Object.keys(req.headers).some(k => !passiveHeaders.has(k) && !(chat && k === 'idempotency-key')) || (req.headers.connection && !/^(close|keep-alive)$/i.test(req.headers.connection)) || (req.headers['sec-fetch-mode'] && req.headers['sec-fetch-mode'] !== 'same-origin') || (req.headers['sec-fetch-dest'] && req.headers['sec-fetch-dest'] !== 'empty')) return send(400);
     if (['POST', 'PUT', 'DELETE'].includes(req.method) && req.headers.origin !== origin) return send(403);
     if (chat && !validKey(req.headers['idempotency-key'])) return send(400);
@@ -185,7 +188,7 @@ function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly =
       if (!allowed(req.method, raw, body)) return send(400);
       if (res.destroyed || res.writableEnded) return;
       const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
-      const headers = { Host: `${HOST}:${upstreamPort}`, Accept: chat || runEvents ? 'text/event-stream' : 'application/json', ...(chat ? { 'Idempotency-Key': req.headers['idempotency-key'] } : {}), ...(auth ? { Authorization: auth } : {}), ...(req.headers.origin ? { Origin: origin } : {}), ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {}) };
+      const headers = { Host: `${HOST}:${upstreamPort}`, Accept: chat || runEvents || termStream ? 'text/event-stream' : 'application/json', ...(chat ? { 'Idempotency-Key': req.headers['idempotency-key'] } : {}), ...(auth ? { Authorization: auth } : {}), ...(req.headers.origin ? { Origin: origin } : {}), ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {}) };
       // Request-body intake keeps its ordinary bound. Chat header wait and body
       // share one absolute stream deadline, including upstream model startup.
       if (chat) {
@@ -193,18 +196,18 @@ function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly =
         timer = setTimeout(() => { send(504); upstream?.destroy(); }, streamTimeoutMs);
       }
       // A run reader ends cleanly after RUN_STREAM_MS; the page re-attaches with after=<seq>.
-      if (runEvents) clearTimeout(timer);
+      if (runEvents || termStream) clearTimeout(timer);
       upstream = http.request({ hostname: HOST, port: upstreamPort, path: raw, method: req.method, headers, agent: false, maxHeaderSize: 16384 }, response => {
         const fail = () => { response.destroy(); send(502); };
         const status = response.statusCode;
-        if (runEvents && status === 200) {
+        if ((runEvents || termStream) && status === 200) {
           if (response.headers.location || response.headers['set-cookie'] || response.headers['content-encoding']
             || !/^text\/event-stream(?:\s*;|$)/i.test(response.headers['content-type'] || '')) return fail();
-          const parser = new RunEventParser(conversationPath(raw).after);
+          const parser = runEvents ? new RunEventParser(conversationPath(raw).after) : new TerminalEventParser(terminalPath(raw).after);
           // End our response first; its 'finish' cleanup then closes the upstream reader.
           const finish = () => { clearTimeout(idle); clearTimeout(timer); if (!res.writableEnded) res.end(); };
           const touch = () => { clearTimeout(idle); idle = setTimeout(finish, runIdleMs); };
-          timer = setTimeout(finish, runStreamMs);
+          timer = setTimeout(finish, runEvents ? runStreamMs : TERMINAL_STREAM_MS);
           touch();
           // Only projected, numbered frames and fixed heartbeats leave the bridge.
           res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -262,6 +265,8 @@ function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly =
           response.on('end', () => { try { parser.finish(); res.end(); } catch { res.destroy(); } });
           return;
         }
+        // The terminal answers input, resize and close with 204: a fixed { ok: true } leaves the bridge.
+        if (status === 204 && terminalRoute(raw) && req.method !== 'GET') { response.resume(); return send(200, { ok: true }); }
         const responseLimit = chat ? 16384 : RESPONSE_LIMIT;
         if (status >= 300 && status < 400 || response.headers.location || response.headers['set-cookie'] || response.headers['content-encoding'] || !/^application\/json(?:\s*;|$)/i.test(response.headers['content-type'] || '') || Number(response.headers['content-length'] || 0) > responseLimit) return fail();
         const parts = []; let count = 0;

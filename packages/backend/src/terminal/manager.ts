@@ -134,7 +134,8 @@ export class TerminalManager {
       .map(s => ({ id: s.id, shell: s.shell, createdAt: s.createdAt, exited: s.exitCode !== null }));
   }
 
-  async create(ownerId: string, size: { cols?: unknown; rows?: unknown } = {}) {
+  /** `size.cwd`: a folder already checked by the caller (a project folder); otherwise home. */
+  async create(ownerId: string, size: { cols?: unknown; rows?: unknown; cwd?: string } = {}) {
     if (!terminalEnabled(this.env)) throw new TerminalError('disabled', 'The terminal is turned off on this server');
     if (this.list(ownerId).length >= MAX_SESSIONS_PER_OWNER) {
       throw new TerminalError('limit', `At most ${MAX_SESSIONS_PER_OWNER} terminals per account`);
@@ -143,7 +144,7 @@ export class TerminalManager {
     const { cols, rows } = clampSize(size.cols, size.rows);
     const shell = defaultShell(this.os, this.env);
     const env = shellEnv(this.os, this.env);
-    const cwd = this.cwd ?? (env.HOME || env.USERPROFILE || homedir());
+    const cwd = size.cwd ?? this.cwd ?? (env.HOME || env.USERPROFILE || homedir());
     const pty = spawn(shell.file, shell.args, { name: 'xterm-256color', cols, rows, cwd, env });
     const session: Session = {
       id: randomUUID(), ownerId, pty, chunks: [], bufferedBytes: 0, nextSeq: 1, exitCode: null,
@@ -157,7 +158,7 @@ export class TerminalManager {
     });
     this.sessions.set(session.id, session);
     this.touch(session);
-    return { id: session.id, shell: shell.file, cols, rows };
+    return { id: session.id, shell: shell.file, cols, rows, cwd };
   }
 
   /** Owner-scoped lookup: another account's session id reads as not found. */
