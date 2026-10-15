@@ -33,7 +33,7 @@ export function HireAgent({ controller, onClose }: { controller: HireController;
         <span className="hire-step-n" aria-hidden="true">{i + 1}</span>{x.label}
       </li>)}
     </ol>
-    <p role="status">{s.notice ?? phaseLabel[s.phase] ?? s.phase}</p>
+    <p role="status">{s.notice ?? (s.agent && s.phase === 'editing' ? 'Hired — choose memory and permissions, then save' : phaseLabel[s.phase] ?? s.phase)}</p>
 
     {s.step === 'role' && <form className="hire-form" onSubmit={e => { e.preventDefault(); controller.go('persona'); }}>
       <label>Name<input value={d.name} maxLength={80} disabled={locked} placeholder="Leave empty for a generated name" onChange={e => controller.edit({ name: e.target.value })}/></label>
@@ -112,7 +112,7 @@ function ToolList({ tools, selected, disabled, onToggle, empty }: { tools: reado
     const off = !t.allowedByServer && !on;
     return <li key={t.name}>
       <label className="check hire-tool">
-        <input type="checkbox" checked={on} disabled={disabled || off} onChange={() => onToggle(t.name)}/>
+        <input type="checkbox" aria-label={t.name} checked={on} disabled={disabled || off} onChange={() => onToggle(t.name)}/>
         <span className="hire-tool-text">
           <code>{t.name}</code>
           {t.requiresApproval && <span className="badge">Asks you first</span>}
