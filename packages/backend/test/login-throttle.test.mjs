@@ -62,6 +62,16 @@ const distributed = (email) => {
 };
 const sha256 = (t) => createHash('sha256').update(t, 'utf8').digest('hex');
 const userRow = (email) => db.prepare(`SELECT locked_until, failed_attempts FROM users WHERE email = ?`).get(email);
+/** A login plus the clock (epoch seconds) just before and just after it. */
+const timedLogin = async (...args) => {
+  const lo = Date.now() / 1000;
+  const res = await login(...args);
+  return [res, lo, Date.now() / 1000];
+};
+/** Epoch seconds of the latest failure recorded for (email, IP). */
+const lastFailure = (email, ip) => Number(db.prepare(
+  `SELECT strftime('%s', MAX(attempted_at)) AS t FROM login_attempts WHERE email = ? AND ip_address = ? AND success = 0`,
+).get(email, ip).t);
 const fails = async (ip, email, count) => {
   for (let i = 0; i < count; i++) assert.equal((await login(ip, email, 'wrong-password-1')).statusCode, 401);
 };
@@ -164,14 +174,20 @@ test('a throttled reply is the same for known and unknown emails', async () => {
   addUser(known);
   await fails('10.5.0.1', known, throttle.PAIR_FREE_FAILURES);
   await fails('10.5.0.2', 'ghost2@throttle.test', throttle.PAIR_FREE_FAILURES);
-  const a = await login('10.5.0.1', known, strong); // even the right password
-  const b = await login('10.5.0.2', 'ghost2@throttle.test', strong);
+  const [a, aLo, aHi] = await timedLogin('10.5.0.1', known, strong); // even the right password
+  const [b, bLo, bHi] = await timedLogin('10.5.0.2', 'ghost2@throttle.test', strong);
   assert.equal(a.statusCode, 429);
   assert.equal(b.statusCode, 429);
   assert.equal(b.body, a.body);
   assert.equal(a.json().code, 'rate_limited');
-  // Retry-After counts down from each source's own last failure (second precision).
-  assert.ok(Math.abs(Number(b.headers['retry-after']) - Number(a.headers['retry-after'])) <= 1);
+  // Retry-After counts down from each source's own last failure. Bracket the expected
+  // value with the clock before/after each request, so slow bcrypt under load cannot
+  // make two sources' failures (and so their Retry-After) drift apart and flake.
+  for (const [res, ip, email, lo, hi] of [[a, '10.5.0.1', known, aLo, aHi], [b, '10.5.0.2', 'ghost2@throttle.test', bLo, bHi]]) {
+    const until = lastFailure(email, ip) + throttle.BASE_DELAY_SECONDS;
+    const got = Number(res.headers['retry-after']);
+    assert.ok(got >= Math.ceil(until - hi) && got <= Math.ceil(until - lo), `${email}: ${got} not in [${until - hi}, ${until - lo}]`);
+  }
   for (const word of ['locked', 'account', 'exist']) assert.ok(!a.body.toLowerCase().includes(word), a.body);
   assert.deepEqual({ ...userRow(known) }, { locked_until: null, failed_attempts: 0 });
 });
