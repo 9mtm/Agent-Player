@@ -415,3 +415,9 @@ form > label { display:block; margin-block-end:8px; }
 .company-total-line { margin:4px 0; }
 .company-progress { inline-size:100%; block-size:10px; accent-color:var(--accent); }
 .company-batch-deps li { display:flex; justify-content:space-between; gap:12px; padding:4px 0; border-bottom:1px solid var(--stroke-3); }
+.company-counts { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(auto-fill,minmax(6.5rem,1fr)); gap:8px; }
+.company-count-choice { inline-size:100%; display:grid; gap:2px; justify-items:center; padding:10px 8px; border-radius:4.8px; background:var(--canvas); box-shadow:inset 0 0 0 1px var(--stroke-3); }
+.company-count-choice strong { font-size:1.25em; }
+.company-count-choice small { color:var(--muted); }
+.company-count-choice[aria-pressed="true"] { box-shadow:inset 0 0 0 2px var(--accent); }
+.app-shell .page-column ul.company-counts, .app-shell .page-column ul.company-shares, .app-shell .page-column ul.company-batch-deps, .app-shell .page-column .company-open ul { padding-inline-start:0; }
