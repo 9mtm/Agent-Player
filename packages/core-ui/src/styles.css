@@ -562,3 +562,45 @@ form > label { display:block; margin-block-end:8px; }
 .board-checklist li { display:flex; justify-content:space-between; align-items:center; gap:6px; }
 .board-checklist li label { display:flex !important; align-items:center; gap:6px; font-size:12.5px; }
 .board-done { text-decoration:line-through; color:var(--muted); }
+/* BOARD-03 step C: views */
+.board-views { display:inline-flex; gap:2px; padding:2px; border-radius:7px; box-shadow:inset 0 0 0 1px var(--stroke-3); justify-self:start; }
+.board-view-tab { border:0; background:transparent; padding:4px 12px; border-radius:5px; font-size:12.5px; }
+.board-view-tab[aria-selected="true"] { background:var(--row-active); font-weight:600; }
+.board-link { all:unset; cursor:pointer; color:var(--text); font-weight:600; }
+.board-link:hover { text-decoration:underline; }
+.board-link:focus-visible { outline:2px solid var(--accent); }
+.board-table-wrap { overflow-x:auto; }
+.board-table { inline-size:100%; border-collapse:collapse; font-size:12.5px; }
+.board-table th, .board-table td { padding:6px 8px; border-bottom:1px solid var(--stroke-3); text-align:start; vertical-align:middle; white-space:nowrap; }
+.board-table td:first-child { white-space:normal; min-inline-size:14rem; }
+.board-table th button { all:unset; cursor:pointer; font-weight:600; color:var(--muted); font-size:11.5px; }
+.board-table th button:focus-visible { outline:2px solid var(--accent); }
+.board-table tr[data-priority="urgent"] td:first-child { box-shadow:inset 3px 0 0 #e5484d; }
+.board-table tr[data-priority="high"] td:first-child { box-shadow:inset 3px 0 0 #f08c00; }
+.board-table-deps { display:block; color:var(--muted); }
+.board-table select { inline-size:auto; }
+.board-calendar { display:grid; gap:8px; }
+.board-cal-head { display:flex; align-items:center; gap:8px; }
+.board-cal-head h3 { margin:0; min-inline-size:11rem; text-align:center; }
+.board-cal-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); border-top:1px solid var(--stroke-3); border-inline-start:1px solid var(--stroke-3); }
+.board-cal-weekday { padding:4px 6px; font-size:11px; color:var(--muted); border-inline-end:1px solid var(--stroke-3); border-bottom:1px solid var(--stroke-3); }
+.board-cal-day { min-block-size:92px; padding:4px; border-inline-end:1px solid var(--stroke-3); border-bottom:1px solid var(--stroke-3); display:grid; align-content:start; gap:3px; }
+.board-cal-day[data-out] { background:color-mix(in srgb,var(--canvas) 60%,transparent); opacity:.6; }
+.board-cal-day[data-today] .board-cal-num { background:var(--accent); color:var(--on-accent,#fff); border-radius:50%; }
+.board-cal-num { justify-self:start; inline-size:20px; block-size:20px; display:grid; place-items:center; font-size:11px; }
+.board-cal-day ul, .board-cal-undated ul, .app-shell .board-calendar ul { list-style:none; margin:0; padding:0; display:grid; gap:2px; }
+.board-cal-card { all:unset; box-sizing:border-box; display:block; inline-size:100%; padding:2px 5px; border-radius:4px; font-size:11px; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  background:color-mix(in srgb,var(--sw,var(--accent)) 22%,transparent); border-inline-start:3px solid var(--sw,var(--accent)); color:var(--text); }
+.board-cal-card[data-priority="urgent"] { border-inline-start-color:#e5484d; }
+.board-cal-card:focus-visible { outline:2px solid var(--accent); }
+.board-cal-undated h4 { margin:8px 0 4px; }
+.board-cal-undated ul { grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); }
+.board-workload { display:grid; gap:10px; }
+.board-load-list, .app-shell .board-workload ul { list-style:none; margin:0; padding:0; display:grid; gap:8px; }
+.board-load { padding:8px 10px; border-radius:6px; box-shadow:inset 0 0 0 1px var(--stroke-3); display:grid; gap:6px; }
+.board-load[data-over] { box-shadow:inset 0 0 0 1px #e5484d; }
+.board-load-head { display:flex; flex-wrap:wrap; gap:8px; align-items:baseline; }
+.board-load-bar { block-size:8px; border-radius:4px; background:var(--stroke-3); overflow:hidden; }
+.board-load-bar span { display:block; block-size:100%; background:var(--accent); }
+.board-load[data-over] .board-load-bar span { background:#e5484d; }
+.board-load details ul { margin-top:6px; gap:2px; font-size:12px; }

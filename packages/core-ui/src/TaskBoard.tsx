@@ -3,6 +3,8 @@ import type { DragEvent } from 'react';
 import { allCardTypes, allPriorities, cardTypeLabel, cardsIn, matches, priorityLabel } from './board';
 import type { BoardColor, BoardController, BoardSummary, Card, CardType, Column } from './board';
 import { Icon } from './icons';
+import { CalendarView, TableView, ViewSwitch, WorkloadView } from './BoardViews';
+import type { BoardView } from './BoardViews';
 
 const initials = (name: string) => name.trim().split(/\s+/).slice(0, 2).map(w => w.slice(0, 1).toUpperCase()).join('') || '?';
 const DRAG_TYPE = 'application/x-dpro-card';
@@ -16,6 +18,7 @@ export function TaskBoard({ controller }: { controller: BoardController }) {
   const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const [newColumn, setNewColumn] = useState('');
   const [mode, setMode] = useState<'board' | 'new' | 'settings'>('board');
+  const [view, setView] = useState<BoardView>('board');
   const busy = s.phase === 'loading' || s.phase === 'saving';
   const departments = [...new Set(s.cards.flatMap(c => c.departments))].sort();
   const openCard = s.cards.find(c => c.id === s.open);
@@ -50,6 +53,7 @@ export function TaskBoard({ controller }: { controller: BoardController }) {
             </div>
           </div>
           {(s.notice || s.phase === 'loading') && <p role="status" className="board-notice">{s.notice ?? 'Reading the board…'}</p>}
+          <ViewSwitch view={view} onChange={setView}/>
           <div className="board-filters" role="search">
             <input aria-label="Search cards" placeholder="Search cards" value={s.filter.text} onChange={e => controller.setFilter({ text: e.target.value })}/>
             <select aria-label="Filter by agent" value={s.filter.agent} onChange={e => controller.setFilter({ agent: e.target.value })}>
@@ -62,9 +66,12 @@ export function TaskBoard({ controller }: { controller: BoardController }) {
             </select>
             <span className="fine-print">{visible} of {s.cards.length} cards</span>
           </div>
-          <div className="board-columns">
+          {view === 'board' && <div className="board-columns">
             {s.columns.map(col => <BoardColumn key={col.id} col={col} controller={controller} busy={busy}/>)}
-          </div>
+          </div>}
+          {view === 'table' && <TableView controller={controller} busy={busy}/>}
+          {view === 'calendar' && <CalendarView controller={controller}/>}
+          {view === 'workload' && <WorkloadView controller={controller}/>}
         </>}
     </div>
     {mode === 'board' && openCard && s.draft && <CardPanel card={openCard} controller={controller} busy={busy}/>}
