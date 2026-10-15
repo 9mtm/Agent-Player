@@ -86,11 +86,18 @@ function chatStageEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
  *   PUT  /api/agents/:id/tool-grants    replace grants (versioned, audited)
  *   GET  /api/onboarding/team-catalogue company sizes + departments (static)
  *   POST /api/onboarding/team-plan      proposed team with unused names (reads; reserves nothing)
+ *   POST /api/onboarding/team-distribution  total headcount split (reads nothing)
+ *   POST /api/onboarding/team-batches        store a reviewed plan (owner only)
+ *   GET  /api/onboarding/team-batches(/:id)  batch progress
+ *   POST /api/onboarding/team-batches/:id/run  create the next agents of the batch (same writes as POST /api/agents)
  */
 export const STAGE3_ROUTES: ReadonlySet<string> = new Set([
   'POST /api/agents', 'GET /api/agents/:id/tool-grants', 'PUT /api/agents/:id/tool-grants',
   // ONBOARD-TEAM-01: the company catalogue and the proposed team (both only read; names are not reserved)
   'GET /api/onboarding/team-catalogue', 'POST /api/onboarding/team-plan',
+  // ONBOARD-TEAM-02: total headcount + batch hire (creates agents like POST /api/agents)
+  'POST /api/onboarding/team-distribution', 'POST /api/onboarding/team-batches', 'GET /api/onboarding/team-batches',
+  'GET /api/onboarding/team-batches/:id', 'POST /api/onboarding/team-batches/:id/run',
 ]);
 function hireStageEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return (env.AGENT_PLAYER_ISOLATED_STAGE ?? '').trim() === '3' && (env.AGENT_PLAYER_LOCAL_MODEL_ONLY ?? '').trim() === '1';
@@ -212,10 +219,12 @@ export async function readOnlyAllows(request: FastifyRequest, opts: ReadOnlyStag
   }
 
   if (method !== 'POST') return false;
-  // Exact match on the raw URL and on the dispatched route: no query, no prefix, no encoding tricks.
-  if (!route || rawUrl !== route) return false;
-  if (ALWAYS_ALLOWED_POSTS.has(route)) return true;
+  if (!route) return false;
+  // Stage 3 POSTs may have a path parameter (batch run): the template must be listed and the raw path clean, with no query.
   if (hireStageRoute(method, rawUrl, route)) return true;
+  // Exact match on the raw URL and on the dispatched route: no query, no prefix, no encoding tricks.
+  if (rawUrl !== route) return false;
+  if (ALWAYS_ALLOWED_POSTS.has(route)) return true;
   if (SETUP_POSTS.has(route)) {
     const state = await safeSetupState(opts.setupState);
     if (state.setupComplete) return false;

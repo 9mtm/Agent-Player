@@ -337,6 +337,7 @@ test('stage 3 (hire test): exactly create agent + read/replace its tool grants, 
     process.env.AGENT_PLAYER_ISOLATED_STAGE = '2';
     assertReadOnly(await req('POST', '/api/agents', { payload: { role: 'specialist' } }), 'create in stage 2');
     assertReadOnly(await req('POST', '/api/onboarding/team-plan', { payload: { size: 'small', departments: ['sales'] } }), 'team plan in stage 2');
+    assertReadOnly(await req('POST', '/api/onboarding/team-batches', { payload: { id: 'stage2-batch', language: 'en', departments: [{ department: 'sales', count: 1 }] } }), 'batch in stage 2');
     process.env.AGENT_PLAYER_ISOLATED_STAGE = '3';
     const created = await req('POST', '/api/agents', { payload: { role: 'specialist', name: 'Stage Three Hire', personality: { preset: 'bold-creative' } } });
     assert.equal(created.statusCode, 201, created.body);
@@ -353,6 +354,19 @@ test('stage 3 (hire test): exactly create agent + read/replace its tool grants, 
     assert.equal(teamPlan.statusCode, 200, teamPlan.body);
     assert.equal(teamPlan.json().hires.length, 4);
     assertReadOnly(await req('POST', '/api/onboarding/team-plan?x=1', { payload: { size: 'small', departments: ['sales'] } }), 'team plan query trick');
+    // ONBOARD-TEAM-02: distribution + batch hire.
+    const dist = await req('POST', '/api/onboarding/team-distribution', { payload: { total: 7, departments: ['sales', 'finance'] } });
+    assert.equal(dist.statusCode, 200, dist.body);
+    const batch = await req('POST', '/api/onboarding/team-batches', { payload: { id: 'stage3-batch-1', language: 'en', departments: [{ department: 'sales', count: 2 }] } });
+    assert.equal(batch.statusCode, 201, batch.body);
+    assert.equal((await req('GET', '/api/onboarding/team-batches')).statusCode, 200);
+    assert.equal((await req('GET', '/api/onboarding/team-batches/stage3-batch-1')).statusCode, 200);
+    const ran = await req('POST', '/api/onboarding/team-batches/stage3-batch-1/run', { payload: {} });
+    assert.equal(ran.statusCode, 200, ran.body);
+    assert.equal(ran.json().batch.created, 2);
+    assertReadOnly(await req('POST', '/api/onboarding/team-batches/stage3-batch-1/run?x=1', { payload: {} }), 'batch run query trick');
+    assertReadOnly(await req('POST', '/api/onboarding/team-batches/stage3%2fbatch/run', { payload: {} }), 'batch run encoding trick');
+    assertReadOnly(await req('DELETE', '/api/onboarding/team-batches/stage3-batch-1'), 'batch delete');
     assertReadOnly(await req('POST', '/api/onboarding', { payload: { step: 'profile', data: {} } }), 'other onboarding writes');
     // Still behind the auth gate.
     assert.equal((await req('POST', '/api/agents', { payload: { role: 'specialist' }, auth: false })).statusCode, 401);
