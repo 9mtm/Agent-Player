@@ -2,7 +2,8 @@ import type { WireRequest, WireResponse } from './session';
 import { conversationPath } from './conversation-contract.js';
 
 type Msg = { id: string; role: 'user' | 'assistant'; content: string; parts: unknown[] | null; status: 'complete' | 'stopped' | 'error'; runId: string | null; durationMs: number | null; createdAt: string };
-type Conv = { id: string; title: string | null; agentId: string | null; pinned: boolean; preview: string; createdAt: string; updatedAt: string; messages: Msg[]; order: number };
+type Proj = { id: string; name: string; slug: string; folder: string | null; repoUrl: string | null };
+type Conv = { id: string; title: string | null; agentId: string | null; projectId: string | null; pinned: boolean; preview: string; createdAt: string; updatedAt: string; messages: Msg[]; order: number };
 type Run = { id: string; conv: Conv; events: Record<string, unknown>[]; done: boolean; stopped: boolean; started: number };
 
 const ANSWER = [
@@ -17,9 +18,10 @@ export function createConversationsMock(options: { stepMs?: number } = {}) {
   const stepMs = options.stepMs ?? 60;
   const convs = new Map<string, Conv>();
   const runs = new Map<string, Run>();
+  const projects = new Map<string, Proj>();
   let n = 0; let clock = 0;
   const now = () => `2026-10-15 12:${String(Math.floor(clock / 60) % 60).padStart(2, '0')}:${String(clock++ % 60).padStart(2, '0')}`;
-  const view = (c: Conv) => ({ id: c.id, title: c.title, agentId: c.agentId, pinned: c.pinned, preview: c.preview, createdAt: c.createdAt, updatedAt: c.updatedAt });
+  const view = (c: Conv) => ({ id: c.id, title: c.title, agentId: c.agentId, projectId: c.projectId, pinned: c.pinned, preview: c.preview, createdAt: c.createdAt, updatedAt: c.updatedAt });
   const list = () => [...convs.values()].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.order - a.order).map(view);
   const script = (prompt: string) => {
     const ev: Record<string, unknown>[] = [
@@ -79,9 +81,23 @@ export function createConversationsMock(options: { stepMs?: number } = {}) {
     const p = conversationPath(request.path);
     const body = request.body as Record<string, any> | undefined;
     if (!p) return { status: 404, body: { code: 'not_found' } };
+    if (p.kind === 'projects') {
+      if (request.method === 'GET') return { status: 200, body: { projects: [...projects.values()] } };
+      if (body?.folder && !String(body.folder).startsWith('/')) return { status: 400, body: { code: 'invalid_project' } };
+      const pr: Proj = { id: `proj-${String(++n).padStart(8, '0')}`, name: body!.name.trim(), slug: body!.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-'), folder: body?.folder || null, repoUrl: body?.repoUrl || null };
+      projects.set(pr.id, pr); return { status: 201, body: { project: pr } };
+    }
+    if (p.kind === 'project' || p.kind === 'project-git') {
+      const pr = projects.get(p.id);
+      if (!pr) return { status: 404, body: { code: 'not_found' } };
+      if (p.kind === 'project-git') return { status: 200, body: { git: pr.folder ? { branch: 'main', remote: pr.repoUrl, dirty: false } : { branch: null, remote: null, dirty: null } } };
+      if (request.method === 'DELETE') { projects.delete(pr.id); for (const c of convs.values()) if (c.projectId === pr.id) c.projectId = null; return { status: 200, body: { ok: true } }; }
+      Object.assign(pr, Object.fromEntries(Object.entries(body ?? {}).filter(([, v]) => v !== undefined)));
+      return { status: 200, body: { project: pr } };
+    }
     if (p.kind === 'list') {
       if (request.method === 'GET') return { status: 200, body: { conversations: list() } };
-      const c: Conv = { id: `conv-${String(++n).padStart(8, '0')}`, title: body?.title ?? null, agentId: body?.agentId ?? null, pinned: false, preview: '', createdAt: now(), updatedAt: now(), messages: [], order: n };
+      const c: Conv = { id: `conv-${String(++n).padStart(8, '0')}`, title: body?.title ?? null, agentId: body?.agentId ?? null, projectId: body?.projectId ?? null, pinned: false, preview: '', createdAt: now(), updatedAt: now(), messages: [], order: n };
       convs.set(c.id, c);
       return { status: 201, body: { conversation: view(c) } };
     }
@@ -91,12 +107,13 @@ export function createConversationsMock(options: { stepMs?: number } = {}) {
       if (p.kind === 'stop') { run.stopped = true; return { status: 200, body: { ok: true, status: run.done ? 'complete' : 'stopping' } }; }
       return { status: 200, body: null, stream: eventsFor(run, p.after, request.signal) };
     }
-    const c = convs.get(p.id);
+    const c = convs.get((p as { id: string }).id);
     if (!c) return { status: 404, body: { code: 'not_found' } };
     if (p.kind === 'one') {
       if (request.method === 'DELETE') { convs.delete(c.id); return { status: 200, body: { ok: true } }; }
       if (body?.title !== undefined) c.title = body.title?.trim() || null;
       if (body?.pinned !== undefined) c.pinned = body.pinned;
+      if (body?.projectId !== undefined) c.projectId = body.projectId;
       return { status: 200, body: { conversation: view(c) } };
     }
     if (p.kind === 'messages') {

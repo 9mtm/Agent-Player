@@ -145,3 +145,29 @@ test('Stop pauses the queue; Send now sends the waiting message', async t => {
   assert.equal(c.getSnapshot().queuePaused, false);
   await until(() => !c.getSnapshot().runId);
 });
+
+test('projects: create one, chats go into it, the chat shows the project bar; moving and removing', async t => {
+  const { c } = await fixture(t);
+  await c.load(); await new Promise(r => setTimeout(r, 30));
+  assert.match(await c.createProject({ name: 'App', folder: 'relative', repoUrl: '' }), /folder/);
+  assert.equal(await c.createProject({ name: 'App', folder: '/fiction/app', repoUrl: 'https://github.com/example/app' }), null);
+  const p = c.getSnapshot().projects[0];
+  assert.equal(c.getSnapshot().projectFilter, p.id, 'the new project is selected');
+  await c.send('Work in the app');
+  await until(() => !c.getSnapshot().runId);
+  const conv = c.getSnapshot().conversations.find(x => x.id === c.getSnapshot().activeId);
+  assert.equal(conv.projectId, p.id);
+  await until(() => c.getSnapshot().git?.branch === 'main');
+  const html = view(c);
+  assert.match(html, /aria-label="Project"/);
+  assert.match(html, /\/fiction\/app/);
+  assert.match(html, /⎇ main/);
+  assert.match(html, /github\.com\/example\/app/);
+  const list = renderToStaticMarkup(React.createElement(ConversationList, { controller: c, onOpen: () => {} }));
+  assert.match(list, /\+ New project/);
+  await c.moveToProject(conv.id, '');
+  assert.equal(c.getSnapshot().conversations.find(x => x.id === conv.id).projectId, null);
+  await c.removeProject(p.id);
+  assert.equal(c.getSnapshot().projects.length, 0);
+  assert.equal(c.getSnapshot().projectFilter, '');
+});

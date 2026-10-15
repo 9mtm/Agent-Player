@@ -4,6 +4,9 @@
 // text), and the parser for a run's numbered event stream.
 
 export const CONVERSATIONS_PATH = '/api/chat/conversations';
+export const PROJECTS_PATH = '/api/chat/projects';
+const folderOk = x => typeof x === 'string' && x.length <= 1024 && !/[\u0000-\u001F]/.test(x);
+const repoOk = x => typeof x === 'string' && x.length <= 300 && (x === '' || /^(https:\/\/|git@)[A-Za-z0-9.@:/_~%+-]{3,300}$/.test(x));
 export const MAX_MESSAGE = 100000;
 export const MAX_TITLE = 120;
 /** One reader connection lasts at most this long; the client re-attaches with after=<seq>. */
@@ -28,6 +31,11 @@ const num = x => (Number.isFinite(x) && x >= 0 ? Math.round(x) : undefined);
 /** The conversation path this request names, or null. */
 export function conversationPath(path) {
   if (path === CONVERSATIONS_PATH) return { kind: 'list' };
+  if (path === PROJECTS_PATH) return { kind: 'projects' };
+  let pm = /^\/api\/chat\/projects\/([^/?#]+)$/.exec(path);
+  if (pm) return uuid(pm[1]) ? { kind: 'project', id: pm[1] } : null;
+  pm = /^\/api\/chat\/projects\/([^/?#]+)\/git$/.exec(path);
+  if (pm) return uuid(pm[1]) ? { kind: 'project-git', id: pm[1] } : null;
   let m = /^\/api\/chat\/conversations\/([^/?#]+)$/.exec(path);
   if (m) return uuid(m[1]) ? { kind: 'one', id: m[1] } : null;
   m = /^\/api\/chat\/conversations\/([^/?#]+)\/messages$/.exec(path);
@@ -46,19 +54,23 @@ export function conversationRoute(path) { return conversationPath(path) !== null
 export function allowedConversation(method, path, body) {
   const p = conversationPath(path);
   if (!p) return false;
-  if (method === 'GET') return body === undefined && ['list', 'messages', 'events'].includes(p.kind);
-  if (method === 'DELETE') return body === undefined && p.kind === 'one';
-  if (method === 'POST' && p.kind === 'list') return record(body) && onlyKeys(body, ['title', 'agentId']) && (body.title === undefined || title(body.title)) && (body.agentId === undefined || agentId(body.agentId));
+  if (method === 'GET') return body === undefined && ['list', 'messages', 'events', 'projects', 'project-git'].includes(p.kind);
+  if (method === 'DELETE') return body === undefined && (p.kind === 'one' || p.kind === 'project');
+  if (method === 'POST' && p.kind === 'projects') return record(body) && onlyKeys(body, ['name', 'folder', 'repoUrl']) && title(body.name) && body.name.trim().length > 0
+    && (body.folder === undefined || folderOk(body.folder)) && (body.repoUrl === undefined || repoOk(body.repoUrl));
+  if (method === 'PUT' && p.kind === 'project') return record(body) && Object.keys(body).length > 0 && onlyKeys(body, ['name', 'folder', 'repoUrl'])
+    && (body.name === undefined || (title(body.name) && body.name.trim().length > 0)) && (body.folder === undefined || body.folder === null || folderOk(body.folder)) && (body.repoUrl === undefined || body.repoUrl === null || repoOk(body.repoUrl));
+  if (method === 'POST' && p.kind === 'list') return record(body) && onlyKeys(body, ['title', 'agentId', 'projectId']) && (body.title === undefined || title(body.title)) && (body.agentId === undefined || agentId(body.agentId)) && (body.projectId === undefined || uuid(body.projectId));
   if (method === 'POST' && p.kind === 'runs') return record(body) && onlyKeys(body, ['runId', 'message', 'model']) && validRunId(body.runId) && text(body.message, MAX_MESSAGE) && body.message.trim().length > 0
     && (body.model === undefined || (typeof body.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:\/-]{0,99}$/.test(body.model)));
   if (method === 'POST' && p.kind === 'stop') return body === undefined;
-  if (method === 'PUT' && p.kind === 'one') return record(body) && Object.keys(body).length > 0 && onlyKeys(body, ['title', 'pinned']) && (body.title === undefined || body.title === null || title(body.title)) && (body.pinned === undefined || typeof body.pinned === 'boolean');
+  if (method === 'PUT' && p.kind === 'one') return record(body) && Object.keys(body).length > 0 && onlyKeys(body, ['title', 'pinned', 'projectId']) && (body.projectId === undefined || body.projectId === null || uuid(body.projectId)) && (body.title === undefined || body.title === null || title(body.title)) && (body.pinned === undefined || typeof body.pinned === 'boolean');
   return false;
 }
 
 function conversation(x) {
   if (!record(x) || !uuid(x.id)) throw Error('protocol');
-  return { id: x.id, title: typeof x.title === 'string' ? x.title.slice(0, MAX_TITLE) : null, agentId: agentId(x.agentId) ? x.agentId : null,
+  return { id: x.id, title: typeof x.title === 'string' ? x.title.slice(0, MAX_TITLE) : null, agentId: agentId(x.agentId) ? x.agentId : null, projectId: uuid(x.projectId) ? x.projectId : null,
     pinned: x.pinned === true, preview: str(x.preview, 200), createdAt: str(x.createdAt, 40), updatedAt: str(x.updatedAt, 40) };
 }
 
@@ -85,7 +97,12 @@ function message(x) {
     runId: validRunId(x.runId) ? x.runId : null, durationMs: num(x.durationMs) ?? null, createdAt: str(x.createdAt, 40) };
 }
 
-const ERROR_CODES = { 400: ['invalid_request'], 404: ['not_found'], 409: ['conversation_busy', 'run_id_reused'], 429: ['rate_limited'] };
+function project(x) {
+  if (!record(x) || !uuid(x.id) || typeof x.name !== 'string') throw Error('protocol');
+  return { id: x.id, name: x.name.slice(0, 80), slug: str(x.slug, 64), folder: typeof x.folder === 'string' ? x.folder.slice(0, 1024) : null, repoUrl: typeof x.repoUrl === 'string' ? x.repoUrl.slice(0, 300) : null };
+}
+
+const ERROR_CODES = { 400: ['invalid_request', 'invalid_project'], 404: ['not_found'], 409: ['conversation_busy', 'run_id_reused'], 429: ['rate_limited'] };
 
 /** Reviewed fields only. Throws on a malformed success body. */
 export function conversationResponse(path, status, body) {
@@ -97,6 +114,10 @@ export function conversationResponse(path, status, body) {
     return { code, ...(code === 'conversation_busy' && validRunId(body.runId) ? { runId: body.runId } : {}) };
   }
   if (!record(body)) throw Error('protocol');
+  if (p.kind === 'projects' && status === 200) { if (!Array.isArray(body.projects)) throw Error('protocol'); return { projects: body.projects.slice(0, 500).map(project) }; }
+  if (p.kind === 'projects' || (p.kind === 'project' && record(body.project))) return { project: project(body.project) };
+  if (p.kind === 'project') { if (body.ok !== true) throw Error('protocol'); return { ok: true }; }
+  if (p.kind === 'project-git') { const g = record(body.git) ? body.git : {}; return { git: { branch: typeof g.branch === 'string' ? g.branch.slice(0, 200) : null, remote: typeof g.remote === 'string' ? g.remote.slice(0, 300) : null, dirty: typeof g.dirty === 'boolean' ? g.dirty : null } }; }
   if (p.kind === 'list' && status === 200) {
     if (!Array.isArray(body.conversations) || body.conversations.length > 1000) throw Error('protocol');
     return { conversations: body.conversations.map(conversation) };

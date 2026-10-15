@@ -75,7 +75,9 @@ export function ChatView({ controller, mode, productName = 'Dpro' }: { controlle
   const agentName = s.agents.find(a => a.id === s.agentId)?.name;
   const empty = s.turns.length === 0 && s.threadPhase !== 'loading';
 
+  const project = controller.activeProject();
   return <div className="chat-screen">
+    {project && <ProjectBar name={project.name} folder={project.folder} repoUrl={project.repoUrl} git={s.git}/>}
     <div className="chat-thread" ref={thread} onScroll={onScroll} aria-label="Conversation">
       {s.threadPhase === 'loading' && <p className="chat-loading" role="status"><span className="pulse" aria-hidden="true"/>Opening the conversation</p>}
       {empty ? <div className="chat-empty">
@@ -132,6 +134,21 @@ export function ChatView({ controller, mode, productName = 'Dpro' }: { controlle
         </div>
       </form>
     </div>
+  </div>;
+}
+
+/** Where this conversation works: project, folder, git branch and repository. */
+function ProjectBar({ name, folder, repoUrl, git }: { name: string; folder: string | null; repoUrl: string | null; git: { branch: string | null; remote: string | null; dirty: boolean | null } | null }) {
+  const home = folder?.match(/^\/Users\/[^/]+/)?.[0];
+  const shortFolder = folder && home ? `~${folder.slice(home.length)}` : folder;
+  const repo = repoUrl ?? git?.remote ?? null;
+  const repoHref = repo && /^https:\/\//.test(repo) ? repo : null;
+  return <div className="project-bar" aria-label="Project">
+    <span className="project-bar-name"><UiIcon name="board" size={12}/>{name}</span>
+    {shortFolder && <span className="project-bar-item" dir="ltr" title={folder ?? undefined}><UiIcon name="file" size={11}/>{shortFolder}</span>}
+    {git?.branch && <span className="project-bar-item" dir="ltr" title={git.dirty ? 'Uncommitted changes' : 'Clean'}>⎇ {git.branch}{git.dirty ? <i className="project-dirty" aria-label="uncommitted changes"/> : null}</span>}
+    {repo && (repoHref ? <a className="project-bar-item" href={repoHref} target="_blank" rel="noopener noreferrer" dir="ltr"><UiIcon name="globe" size={11}/>{repo.replace(/^https:\/\//, '')}</a>
+      : <span className="project-bar-item" dir="ltr"><UiIcon name="globe" size={11}/>{repo}</span>)}
   </div>;
 }
 

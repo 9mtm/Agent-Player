@@ -41,7 +41,7 @@ test('conversation contract (browser and bridge): exact paths, strict bodies', (
 
 test('responses keep reviewed fields only; error text never passes', () => {
   const list = conversationResponse('/api/chat/conversations', 200, { conversations: [{ id: CID, title: 'T', agentId: 'a1', pinned: true, preview: 'p', createdAt: 'c', updatedAt: 'u', user_id: 'secret' }] });
-  assert.deepEqual(list, { conversations: [{ id: CID, title: 'T', agentId: 'a1', pinned: true, preview: 'p', createdAt: 'c', updatedAt: 'u' }] });
+  assert.deepEqual(list, { conversations: [{ id: CID, title: 'T', agentId: 'a1', projectId: null, pinned: true, preview: 'p', createdAt: 'c', updatedAt: 'u' }] });
   assert.deepEqual(conversationResponse(`/api/chat/conversations/${CID}/runs`, 409, { code: 'conversation_busy', runId: RID, error: 'stack trace /Users/x' }), { code: 'conversation_busy', runId: RID });
   assert.equal(conversationResponse(`/api/chat/conversations/${CID}/runs`, 500, { code: 'boom', error: 'trace' }), null);
   const msgs = conversationResponse(`/api/chat/conversations/${CID}/messages`, 200, {

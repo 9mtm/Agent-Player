@@ -5,11 +5,12 @@
 import { SessionFailure } from './session-failure';
 import type { SessionClient } from './session';
 import { MAX_MESSAGE, validRunId } from './conversation-contract.js';
-import type { RunEvent, WireConversation, WireMessage } from './conversation-contract.js';
+import type { RunEvent, WireConversation, WireGit, WireMessage, WireProject } from './conversation-contract.js';
 import { applyEvent, fromWire, liveTurn, userTurn } from './turns';
 import type { Turn } from './turns';
 
 export type Conversation = WireConversation;
+export type Project = WireProject;
 export type AgentChoice = Readonly<{ id: string; name: string }>;
 export type ModelOption = Readonly<{ id: string; provider: 'ollama' | 'claude'; label: string; size: string }>;
 export type ConversationsState = Readonly<{
@@ -25,6 +26,11 @@ export type ConversationsState = Readonly<{
   /** Models the owner can pick for the next reply ('' = the agent's own model). */
   models: readonly ModelOption[];
   model: string;
+  /** Projects (owner only) and the one the list is filtered to ('' = all chats). */
+  projects: readonly Project[];
+  projectFilter: string;
+  /** Git state of the open conversation's project folder. */
+  git: WireGit | null;
   runId: string | null;
   starting: boolean;
   stopping: boolean;
@@ -40,7 +46,7 @@ const RETRY_MS = [500, 1000, 2000, 4000, 8000];
 
 export class ConversationsController {
   #state: ConversationsState = Object.freeze({
-    access: 'ready', listPhase: 'idle', conversations: [], activeId: null, threadPhase: 'empty', turns: [], draft: '', agentId: '', agents: [], models: [], model: '',
+    access: 'ready', listPhase: 'idle', conversations: [], activeId: null, threadPhase: 'empty', turns: [], draft: '', agentId: '', agents: [], models: [], model: '', projects: [], projectFilter: '', git: null,
     runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false,
   });
   #listeners = new Set<() => void>();
@@ -88,6 +94,7 @@ export class ConversationsController {
     } catch { if (this.live()) this.publish({ listPhase: 'error' }); }
     void this.loadAgents();
     void this.loadModels();
+    void this.loadProjects();
   }
 
   /** The team for the agent picker (owner only; others talk to the primary agent). */
@@ -99,6 +106,58 @@ export class ConversationsController {
       if (this.live() && r.status === 200 && record(r.body) && Array.isArray(r.body.models)) this.publish({ models: r.body.models as ModelOption[] });
     } catch { /* the picker stays on the agent's model */ }
   }
+  async loadProjects() {
+    if (this.client.getSnapshot().user?.role !== 'owner') return;
+    try {
+      const r = await this.call('GET', '/api/chat/projects');
+      if (this.live() && r.status === 200 && record(r.body) && Array.isArray(r.body.projects)) this.publish({ projects: r.body.projects as Project[] });
+    } catch { /* projects stay hidden */ }
+  }
+  /** Shows only one project's conversations ('' = all); a new chat goes into it. */
+  filterProject(id: string) { if (id === '' || this.#state.projects.some(p => p.id === id)) this.publish({ projectFilter: id }); }
+  /** Creates a project; resolves with an error message for the form, or null on success. */
+  async createProject(input: { name: string; folder: string; repoUrl: string }): Promise<string | null> {
+    const body: Record<string, string> = { name: input.name.trim() };
+    if (input.folder.trim()) body.folder = input.folder.trim();
+    if (input.repoUrl.trim()) body.repoUrl = input.repoUrl.trim();
+    if (!body.name) return 'Give the project a name.';
+    try {
+      const r = await this.call('POST', '/api/chat/projects', body);
+      if ((r.status === 201 || r.status === 200) && record(r.body) && record(r.body.project)) {
+        const p = r.body.project as Project;
+        this.publish({ projects: [...this.#state.projects, p].sort((a, b) => a.name.localeCompare(b.name)), projectFilter: p.id });
+        this.newChat();
+        return null;
+      }
+      return r.status === 400 ? 'Check the folder: it must be a full path to an existing folder (not the whole disk or your home folder). The repo must be an https or git@ address.' : 'The project was not created.';
+    } catch { return 'The project was not created (no connection).'; }
+  }
+  async removeProject(id: string) {
+    const r = await this.call('DELETE', `/api/chat/projects/${id}`);
+    if (!this.live() || r.status !== 200) return;
+    this.publish({ projects: this.#state.projects.filter(p => p.id !== id), projectFilter: this.#state.projectFilter === id ? '' : this.#state.projectFilter,
+      conversations: this.#state.conversations.map(c => (c.projectId === id ? { ...c, projectId: null } : c)) });
+  }
+  /** Moves a conversation into a project (or out with ''). */
+  async moveToProject(conversationId: string, projectId: string) {
+    const r = await this.call('PUT', `/api/chat/conversations/${conversationId}`, { projectId: projectId || null });
+    if (this.live() && r.status === 200 && record(r.body) && record(r.body.conversation)) { this.replace(r.body.conversation as Conversation); if (conversationId === this.#state.activeId) void this.loadGit(); }
+  }
+  /** The open conversation's project (if any). */
+  activeProject(): Project | undefined {
+    const c = this.#state.conversations.find(x => x.id === this.#state.activeId);
+    const id = c?.projectId ?? (this.#state.activeId ? null : this.#state.projectFilter || null);
+    return id ? this.#state.projects.find(p => p.id === id) : undefined;
+  }
+  private async loadGit() {
+    const p = this.activeProject();
+    if (!p?.folder) { this.publish({ git: null }); return; }
+    try {
+      const r = await this.call('GET', `/api/chat/projects/${p.id}/git`);
+      if (this.live() && r.status === 200 && record(r.body)) this.publish({ git: r.body.git as WireGit });
+    } catch { this.publish({ git: null }); }
+  }
+
   selectModel(model: string) { if (model === '' || this.#state.models.some(m => m.id === model)) this.publish({ model }); }
 
   async loadAgents() {
@@ -113,7 +172,8 @@ export class ConversationsController {
   /** A blank conversation (created on the first message). */
   newChat() {
     this.#follow?.abort(); this.#openSeq++;
-    this.publish({ activeId: null, turns: [], threadPhase: 'empty', runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, notice: undefined, agentId: '' });
+    this.publish({ activeId: null, turns: [], threadPhase: 'empty', runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, notice: undefined, agentId: '', git: null });
+    void this.loadGit();
   }
 
   async open(id: string) {
@@ -133,6 +193,7 @@ export class ConversationsController {
       const turns = messages.map(fromWire);
       if (active) turns.push(liveTurn(active, this.now()));
       this.publish({ turns, threadPhase: 'ready', runId: active });
+      void this.loadGit();
       if (active) void this.follow(active, seq);
     } catch { if (this.live() && seq === this.#openSeq) this.publish({ threadPhase: 'error', notice: 'The conversation could not be loaded.' }); }
   }
@@ -155,7 +216,7 @@ export class ConversationsController {
     try {
       let id = this.#state.activeId;
       if (!id) {
-        const c = await this.call('POST', '/api/chat/conversations', this.#state.agentId ? { agentId: this.#state.agentId } : {});
+        const c = await this.call('POST', '/api/chat/conversations', { ...(this.#state.agentId ? { agentId: this.#state.agentId } : {}), ...(this.#state.projectFilter ? { projectId: this.#state.projectFilter } : {}) });
         if (!this.live() || seq !== this.#openSeq) return;
         if ((c.status !== 201 && c.status !== 200) || !record(c.body) || !record(c.body.conversation)) throw new SessionFailure('unavailable');
         const conv = c.body.conversation as Conversation;
