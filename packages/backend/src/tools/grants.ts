@@ -58,6 +58,10 @@ export const DEFAULT_AGENT_TOOLS: readonly string[] = [
   'memory_delete', // CORE-05: versioned (reversible); important memories via proposals
   'memory_forget', // CORE-07: complete removal; every call needs one-time owner approval (S1.3)
   'storage_search',
+  // BOARD-02: the agent's own board cards only (list, comment, move)
+  'board_my_cards',
+  'board_comment',
+  'board_move',
 ];
 
 /** Destination parameter of known send/call tools (for destination scopes). */

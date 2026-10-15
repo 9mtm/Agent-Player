@@ -74,6 +74,8 @@ import {
   credentialsSaveTool,
 } from './credentials/index.js';
 
+import { boardCommentTool, boardMoveTool, boardMyCardsTool } from './board/board-tools.js';
+
 import {
   skillInstallTool,
 } from './skill-install.js';
@@ -95,6 +97,7 @@ const CORE_TOOLS: Tool[] = [
   createReminderTool,
   credentialsSaveTool,
   skillInstallTool,
+  boardMyCardsTool, boardCommentTool, boardMoveTool, // BOARD-02: only the agent's own board cards
 ];
 
 /**
