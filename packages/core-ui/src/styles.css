@@ -264,7 +264,7 @@ form > label { display:block; margin-block-end:8px; }
 
 .app-shell :is(.page-column,.page-ui) p.fine-print { font-size:11.5px; color:var(--text-3); }
 
-.app-shell .team-grid { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(auto-fill,minmax(14rem,1fr)); gap:8px; color:inherit; }
+.app-shell .team-grid, .app-shell :is(.page-column,.page-ui) .team-grid { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(auto-fill,minmax(14rem,1fr)); gap:8px; color:inherit; }
 .app-shell :is(.page-column,.page-ui) .team-card { inline-size:100%; justify-content:flex-start; gap:10px; min-block-size:52px; padding:8px 10px; border-radius:4.8px; background:var(--surface); box-shadow:inset 0 0 0 1px var(--stroke-3); text-align:start; }
 .app-shell :is(.page-column,.page-ui) .team-card[aria-pressed="true"] { box-shadow:inset 0 0 0 1px var(--accent); background:var(--row-active); }
 .team-avatar { inline-size:32px; block-size:32px; border-radius:4px; display:grid; place-items:center; flex-shrink:0; font-size:14px; font-weight:600; color:var(--on-accent); background:var(--accent); }
@@ -777,7 +777,7 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .chat-queue li { display:flex; align-items:center; gap:8px; padding:2px 6px; font-size:12px; }
 .app-shell .chat-queue-n { font-size:10.5px; color:var(--text-3); flex-shrink:0; }
 .app-shell .chat-queue-text { flex:1; min-inline-size:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-2); }
-.app-shell .ghost-action { min-block-size:22px; padding:0 6px; border-radius:3px; background:transparent; color:var(--text-3); font-size:11px; font-weight:400; box-shadow:none; white-space:nowrap; flex-shrink:0; }
+.app-shell .ghost-action { inline-size:auto; min-inline-size:22px; opacity:1; min-block-size:22px; padding:0 6px; border-radius:3px; background:transparent; color:var(--text-3); font-size:11px; font-weight:400; box-shadow:none; white-space:nowrap; flex-shrink:0; }
 .app-shell .ghost-action:hover { color:var(--text); background:var(--row-hover); }
 /* Markdown additions: code card, tables, task lists. */
 .app-shell .md-codeblock { margin:.7rem 0 0; border-radius:8px; background:color-mix(in srgb,var(--text) 4.5%,var(--canvas)); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 7%,transparent); overflow:hidden; }
@@ -866,15 +866,16 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .persona-presets { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
 .app-shell :is(.page-column,.page-ui) .chip-button { min-block-size:26px; padding:0 10px; border-radius:999px; font-size:12px; font-weight:500; }
 .app-shell :is(.page-column,.page-ui) .chip-button[aria-pressed="true"] { box-shadow:inset 0 0 0 1px var(--accent); color:var(--accent); background:color-mix(in srgb,var(--accent) 8%,transparent); }
-.app-shell .traits { display:grid; gap:6px; }
-.app-shell :is(.page-column,.page-ui) .trait { display:grid; grid-template-columns:7.5rem minmax(0,1fr) 2.5rem; align-items:center; gap:10px; max-inline-size:none; font-size:12px; color:var(--text-2); }
-.app-shell .trait-name { font-weight:500; color:var(--text); }
-.app-shell .trait-scale { display:grid; grid-template-columns:6.5rem minmax(0,1fr) 6.5rem; align-items:center; gap:8px; }
-.app-shell .trait-scale small { font-size:10.5px; color:var(--text-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.app-shell .trait-scale small:last-child { text-align:end; }
-.app-shell :is(.page-column,.page-ui) .trait input[type="range"] { inline-size:100%; block-size:auto; padding:0; border:0; background:transparent; accent-color:var(--accent); }
-.app-shell .trait-value { font-size:11.5px; font-variant-numeric:tabular-nums; text-align:end; color:var(--text-3); }
+.app-shell .traits { display:grid; grid-template-columns:repeat(auto-fill,minmax(15rem,1fr)); gap:10px 22px; }
+.app-shell :is(.page-column,.page-ui) .trait { display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-areas:'n v' 'x x'; align-items:center; gap:2px 8px; max-inline-size:none; font-size:12px; color:var(--text-2); }
+.app-shell .trait-name { grid-area:n; font-weight:500; color:var(--text); }
+.app-shell .trait-value { grid-area:v; font-size:11.5px; font-variant-numeric:tabular-nums; text-align:end; color:var(--text-3); }
 .app-shell .trait-value[data-changed] { color:var(--accent); font-weight:600; }
+.app-shell .trait-scale { grid-area:x; display:grid; grid-template-columns:1fr 1fr; grid-template-areas:'s s' 'l h'; }
+.app-shell .trait-scale small { font-size:10.5px; color:var(--text-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.app-shell .trait-scale small:first-child { grid-area:l; }
+.app-shell .trait-scale small:last-child { grid-area:h; text-align:end; }
+.app-shell :is(.page-column,.page-ui) .trait input[type="range"] { grid-area:s; inline-size:100%; block-size:18px; padding:0; border:0; background:transparent; accent-color:var(--accent); }
 .app-shell :is(.page-column,.page-ui) .version-list { list-style:none; padding:0; display:grid; gap:2px; }
 .app-shell .version-list li { display:grid; grid-template-columns:2.5rem minmax(0,1fr) auto auto; align-items:center; gap:8px; padding:4px 6px; border-radius:3px; font-size:12px; }
 .app-shell .version-list li[data-current] { background:var(--row-active); }
@@ -929,4 +930,15 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .memory-history p { flex-basis:100%; margin:0; font-size:12px; color:var(--text-2); white-space:pre-wrap; }
 .app-shell .confirm-inline { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-2); }
 .app-shell :is(.page-column,.page-ui) .empty-note { padding:28px 16px; text-align:center; color:var(--text-3); font-size:12.5px; border-radius:6px; box-shadow:inset 0 0 0 1px dashed var(--stroke-3); background:color-mix(in srgb,var(--text) 2%,transparent); max-inline-size:none; display:grid; gap:4px; justify-items:center; }
-@media (max-width: 760px) { .app-shell .memory-layout { grid-template-columns:1fr; } .app-shell .drawer-nav { position:static; } .app-shell .memory-toolbar { grid-template-columns:1fr; } .app-shell :is(.page-column,.page-ui) .trait { grid-template-columns:1fr; } }
+@media (max-width: 760px) { .app-shell .memory-layout { grid-template-columns:1fr; } .app-shell .drawer-nav { position:static; } .app-shell .memory-toolbar { grid-template-columns:1fr; } }
+
+.app-shell span.fine-print, .app-shell small.fine-print { font-size:11px; font-weight:400; color:var(--text-3); }
+.app-shell .agent-card input[type="checkbox"] { inline-size:14px; block-size:14px; min-block-size:0; margin:0; accent-color:var(--accent); flex-shrink:0; }
+.app-shell :is(.page-column,.page-ui) .perm-table { inline-size:auto; max-inline-size:26rem; }
+.app-shell :is(.page-column,.page-ui) .perm-table th[scope="row"] { background:transparent; color:var(--text-2); font-weight:400; }
+.app-shell :is(.page-column,.page-ui) .perm-table td, .app-shell :is(.page-column,.page-ui) .perm-table th { padding:5px 14px; }
+.app-shell .agent-card label.check { align-items:center; font-size:12px; color:var(--text-2); }
+.app-shell :is(.page-column,.page-ui) .memory-actions button, .app-shell :is(.page-column,.page-ui) .version-list .ghost-action, .app-shell :is(.page-column,.page-ui) .confirm-inline button { inline-size:auto; min-inline-size:0; min-block-size:22px; padding:0 6px; background:transparent; box-shadow:none; font-size:11.5px; font-weight:500; color:var(--text-3); }
+.app-shell :is(.page-column,.page-ui) .memory-actions button:hover:not(:disabled) { color:var(--text); background:var(--row-hover); }
+.shell[data-theme="light"] { color-scheme:light; }
+.app-shell .card-section > .card-sub:first-child { border-block-start:0; padding-block-start:0; }

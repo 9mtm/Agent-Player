@@ -125,7 +125,7 @@ function ItemsView({ c }: { c: MemoryItemsController }) {
             <button type="button" className="ghost-action" aria-expanded={!!s.history[m.id]} onClick={() => void c.toggleHistory(m.id)}>History</button>
             <button type="button" className="ghost-action" onClick={() => setConfirm(m.id)}>Forget</button>
           </>}>
-          {s.history[m.id] && <ol className="memory-history">{s.history[m.id].map(v => <li key={v.version}>
+          {s.history[m.id] && <ol className="memory-history">{[...s.history[m.id]].sort((x, y) => y.version - x.version).map(v => <li key={v.version}>
             <span className="version-n">v{v.version}</span><span className="chip">{v.change}</span><span className="memory-date">{v.createdAt.slice(0, 16).replace('T', ' ')}</span>
             <p dir="auto">{v.content}</p></li>)}</ol>}
         </MemoryCard>)}</div>}
