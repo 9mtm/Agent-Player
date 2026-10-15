@@ -10,7 +10,7 @@
  *   { type: 'text', content }                            answer text delta
  *   { type: 'tool_start', step, tools: [{ id, name, input }] }
  *   { type: 'tool_result', step, results: [{ id, name, output, isError, ms }] }
- *   { type: 'done', steps }                              the turn ended normally
+ *   { type: 'done', done: true, steps }                  the turn ended normally
  *
  * Errors are not handled here: the caller ends the stream with its one typed
  * error frame. Tool security (exec policy, channel policy, agent grants,
@@ -33,7 +33,7 @@ export type LoopFrame =
   | { type: 'text'; content: string }
   | { type: 'tool_start'; step: number; tools: { id: string; name: string; input: string }[] }
   | { type: 'tool_result'; step: number; results: { id: string; name: string; output: string; isError: boolean; ms: number }[] }
-  | { type: 'done'; steps: number };
+  | { type: 'done'; done: true; steps: number };
 
 export interface ApiTool { name: string; description: string; input_schema: unknown }
 
@@ -121,7 +121,7 @@ export async function runOllamaAgentLoop(o: OllamaLoopOptions): Promise<{ steps:
     if (err instanceof Aborted || o.signal.aborted) return { steps: step, answer, aborted: true };
     throw err;
   }
-  o.write({ type: 'done', steps: step });
+  o.write({ type: 'done', done: true, steps: step });
   return { steps: step, answer, aborted: false };
 
   /** One model call, streamed; returns its text, thinking and tool calls. */

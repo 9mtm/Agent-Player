@@ -270,6 +270,42 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // Ids and sizes only: no chat context, prompts or message content in logs.
     console.log('[Chat] Turn accepted', { runId: turn.ids.runId, agentId: agentId ?? null, messages: messages.length, stream });
 
+    return executeChatTurn(reply, {
+      agentId, messages, stream, model, temperature, maxTokens, sessionId, systemPrompt, systemPromptAppend,
+      memoryContext: bodyMemoryContext, memoryScope, chatContext, userId, channelTurn,
+    });
+  });
+}
+
+/** One accepted chat turn, after authentication and the idempotency check. */
+export interface ChatTurnInput {
+  agentId?: string;
+  messages: ChatMessage[];
+  stream: boolean;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  sessionId: string;
+  systemPrompt?: string;
+  systemPromptAppend?: string;
+  memoryContext?: string;
+  memoryScope?: ChatRequest['memoryScope'];
+  chatContext?: ChatRequest['chatContext'];
+  userId: string;
+  channelTurn?: ReturnType<typeof channelTurnFromHeaders>;
+}
+
+/**
+ * Resolve the agent, build its prompt and run the turn on the reply
+ * (CHAT-REBUILD-01: shared by POST /api/chat and the background chat runs,
+ * which pass a reply whose raw stream feeds the run's event log).
+ */
+export async function executeChatTurn(reply: FastifyReply, input: ChatTurnInput): Promise<unknown> {
+    const {
+      agentId, messages, stream, model, temperature, maxTokens, sessionId, systemPrompt, systemPromptAppend,
+      memoryContext: bodyMemoryContext, memoryScope, chatContext, userId,
+    } = input;
+    const channelTurn = input.channelTurn || undefined;
     // SECURITY (S0-Q.8): a channel-originated turn (Telegram/Discord/Agent Connect sender)
     // gets the restricted channel tool policy. It is bound to a server-created token,
     // never to anything in the request body.
@@ -386,7 +422,6 @@ export async function chatRoutes(fastify: FastifyInstance) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
       return handleError(reply, error, 'internal', '[Chat] Chat request failed');
     }
-  });
 }
 
 /** Text per answer frame for one-shot answers (CLI bridges). */

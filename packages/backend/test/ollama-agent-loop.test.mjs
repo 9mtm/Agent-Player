@@ -26,7 +26,7 @@ test('streams reasoning and text, then done', async () => {
   const r = await runOllamaAgentLoop(base({ fetchImpl, write: (f) => frames.push(f) }));
   assert.deepEqual(frames, [
     { type: 'reasoning', content: 'let me ' }, { type: 'reasoning', content: 'think' },
-    { type: 'text', content: 'Hel' }, { type: 'text', content: 'lo' }, { type: 'done', steps: 1 },
+    { type: 'text', content: 'Hel' }, { type: 'text', content: 'lo' }, { type: 'done', done: true, steps: 1 },
   ]);
   assert.equal(r.answer, 'Hello');
 });
@@ -44,7 +44,7 @@ test('runs requested tools, feeds results back, continues to the answer', async 
   assert.deepEqual(calls, [['read_file', { path: 'a.txt' }], ['exec', { command: 'ls' }]]);
   assert.deepEqual(frames[0], { type: 'tool_start', step: 1, tools: [{ id: 'call-1', name: 'read_file', input: '{"path":"a.txt"}' }, { id: 'call-2', name: 'exec', input: '{"command":"ls"}' }] });
   assert.deepEqual(frames[1], { type: 'tool_result', step: 1, results: [{ id: 'call-1', name: 'read_file', output: 'file body', isError: false, ms: 0 }, { id: 'call-2', name: 'exec', output: 'Error: refused', isError: true, ms: 0 }] });
-  assert.deepEqual(frames.at(-1), { type: 'done', steps: 2 });
+  assert.deepEqual(frames.at(-1), { type: 'done', done: true, steps: 2 });
   assert.equal(r.answer, 'Done.');
   // Tools go in the function format; the second call carries the assistant call and both results.
   assert.deepEqual(bodies[0].tools, toOllamaTools(tools));
@@ -75,7 +75,7 @@ test('stops at the step limit with a note', async () => {
   const r = await runOllamaAgentLoop(base({ fetchImpl, maxSteps: 2, write: (f) => frames.push(f) }));
   assert.equal(r.steps, 2);
   assert.match(frames.at(-2).content, /2 steps/);
-  assert.deepEqual(frames.at(-1), { type: 'done', steps: 2 });
+  assert.deepEqual(frames.at(-1), { type: 'done', done: true, steps: 2 });
 });
 
 test('abort stops the loop without a done frame', async () => {
