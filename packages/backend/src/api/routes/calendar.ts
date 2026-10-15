@@ -5,12 +5,39 @@
 
 import type { FastifyInstance } from 'fastify';
 import { handleError, handleSmartError } from '../error-handler.js';
-import { getDatabase } from '../../db/index.js';
+import { nowText } from '../../db/pg/dialect.js';
+import { dialect, one, q, run, sql, type SqlParam } from '../../repositories/sql-steps.js';
 import { getUserIdFromRequest } from '../../auth/jwt.js';
 import { randomUUID } from 'crypto';
+import { icalFetchUrl } from '../../services/calendar-sync.js';
+
+/**
+ * Source columns the API returns. Never `*`: calendar_sources holds the
+ * Google access/refresh tokens (B2.2d-12: create and update answered them).
+ */
+const SOURCE_COLUMNS = `id, name, type, url, color, description, permission, allow_agent_access, is_enabled, is_primary,
+          sync_enabled, sync_interval, last_synced_at, sync_status, sync_error,
+          created_at, updated_at`;
+
+/**
+ * SEC-CAL-01: a remote calendar URL must be one the sync may fetch (https or
+ * webcal, default port, a host name — no IP literal). The DNS answers are
+ * checked again on every sync.
+ */
+function remoteUrlRefusal(url: unknown): string | null {
+  if (typeof url !== 'string' || url.trim() === '') return 'url is required for this calendar type';
+  try {
+    icalFetchUrl(url);
+    return null;
+  } catch {
+    return 'url must be an https:// or webcal:// address with a host name';
+  }
+}
+
+/** undefined → null, so an absent field binds as NULL (COALESCE keeps the column). */
+const opt = (v: unknown): SqlParam => (v === undefined ? null : (v as SqlParam));
 
 export async function registerCalendarRoutes(fastify: FastifyInstance) {
-  const db = getDatabase();
 
   // ── Calendar Sources ──
 
@@ -22,15 +49,15 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
     try {
       const userId = getUserIdFromRequest(request);
 
-      const sources = db.prepare(`
+      const sources = await q.all(`
         SELECT
           id, name, type, url, color, is_enabled, is_primary,
           sync_enabled, sync_interval, last_synced_at, sync_status,
           created_at, updated_at
         FROM calendar_sources
         WHERE user_id = ?
-        ORDER BY is_primary DESC, name ASC
-      `).all(userId);
+        ORDER BY is_primary DESC, name ASC`,
+        userId);
 
       return { sources };
     } catch (error: any) {
@@ -65,16 +92,16 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ error: 'Invalid calendar type' });
       }
 
-      if ((type === 'ical' || type === 'webcal' || type === 'caldav') && !url) {
-        return reply.code(400).send({ error: 'url is required for this calendar type' });
+      if (type === 'ical' || type === 'webcal' || type === 'caldav') {
+        const refusal = remoteUrlRefusal(url);
+        if (refusal) return reply.code(400).send({ error: refusal });
       }
 
       const id = randomUUID();
-      db.prepare(`
+      await q.run(`
         INSERT INTO calendar_sources (
           id, user_id, name, type, url, color, description, permission, allow_agent_access
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id,
         userId,
         name,
@@ -86,7 +113,7 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
         allow_agent_access !== false ? 1 : 0
       );
 
-      const source = db.prepare('SELECT * FROM calendar_sources WHERE id = ?').get(id);
+      const source = await q.one(`SELECT ${SOURCE_COLUMNS} FROM calendar_sources WHERE id = ?`, id);
       return { source };
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
@@ -114,18 +141,22 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
         allow_agent_access?: boolean;
       };
 
+      if (url !== undefined && url !== null) {
+        const refusal = remoteUrlRefusal(url);
+        if (refusal) return reply.code(400).send({ error: refusal });
+      }
+
+      const updated = await sql().tx(function* () {
       // Verify ownership
-      const source = db.prepare('SELECT * FROM calendar_sources WHERE id = ? AND user_id = ?').get(id, userId);
-      if (!source) {
-        return reply.code(404).send({ error: 'Calendar source not found' });
-      }
+      const source = yield* one('SELECT id FROM calendar_sources WHERE id = ? AND user_id = ?', id, userId);
+      if (!source) return null;
 
-      // If setting as primary, unset other primary calendars
+      // If setting as primary, unset other primary calendars (same transaction)
       if (is_primary) {
-        db.prepare('UPDATE calendar_sources SET is_primary = 0 WHERE user_id = ?').run(userId);
+        yield* run('UPDATE calendar_sources SET is_primary = 0 WHERE user_id = ?', userId);
       }
 
-      db.prepare(`
+      yield* run(`
         UPDATE calendar_sources
         SET
           name = COALESCE(?, name),
@@ -137,23 +168,25 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
           description = COALESCE(?, description),
           permission = COALESCE(?, permission),
           allow_agent_access = COALESCE(?, allow_agent_access),
-          updated_at = datetime('now')
-        WHERE id = ? AND user_id = ?
-      `).run(
-        name,
-        url,
-        color,
-        is_enabled !== undefined ? (is_enabled ? 1 : 0) : undefined,
-        is_primary !== undefined ? (is_primary ? 1 : 0) : undefined,
-        sync_enabled !== undefined ? (sync_enabled ? 1 : 0) : undefined,
-        description,
-        permission,
-        allow_agent_access !== undefined ? (allow_agent_access ? 1 : 0) : undefined,
+          updated_at = ${nowText(yield* dialect())}
+        WHERE id = ? AND user_id = ?`,
+        opt(name),
+        opt(url),
+        opt(color),
+        is_enabled !== undefined ? (is_enabled ? 1 : 0) : null,
+        is_primary !== undefined ? (is_primary ? 1 : 0) : null,
+        sync_enabled !== undefined ? (sync_enabled ? 1 : 0) : null,
+        opt(description),
+        opt(permission),
+        allow_agent_access !== undefined ? (allow_agent_access ? 1 : 0) : null,
         id,
-        userId
-      );
+        userId);
 
-      const updated = db.prepare('SELECT * FROM calendar_sources WHERE id = ?').get(id);
+      return (yield* one(`SELECT ${SOURCE_COLUMNS} FROM calendar_sources WHERE id = ?`, id)) ?? null;
+      });
+      if (!updated) {
+        return reply.code(404).send({ error: 'Calendar source not found' });
+      }
       return { source: updated };
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
@@ -170,12 +203,11 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
       const userId = getUserIdFromRequest(request);
       const { id } = request.params as { id: string };
 
-      const source = db.prepare('SELECT * FROM calendar_sources WHERE id = ? AND user_id = ?').get(id, userId);
-      if (!source) {
+      // Ownership in the DELETE itself (events go with it: ON DELETE CASCADE)
+      const result = await q.run('DELETE FROM calendar_sources WHERE id = ? AND user_id = ?', id, userId);
+      if (result.changes === 0) {
         return reply.code(404).send({ error: 'Calendar source not found' });
       }
-
-      db.prepare('DELETE FROM calendar_sources WHERE id = ?').run(id);
       return { success: true };
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
@@ -208,7 +240,7 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
         WHERE e.user_id = ?
       `;
 
-      const params: any[] = [userId];
+      const params: SqlParam[] = [userId];
 
       if (start) {
         query += ' AND e.start_time >= ?';
@@ -225,9 +257,9 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
         params.push(source_id);
       }
 
-      query += ' ORDER BY e.start_time ASC';
+      query += ' ORDER BY e.start_time ASC, e.id ASC';
 
-      const events = db.prepare(query).all(...params);
+      const events = await q.all(query, ...params);
 
       // Parse JSON fields
       const parsedEvents = events.map((event: any) => ({
@@ -253,15 +285,15 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
       const userId = getUserIdFromRequest(request);
       const { id } = request.params as { id: string };
 
-      const event = db.prepare(`
+      const event = await q.one<any>(`
         SELECT
           e.*,
           s.name as calendar_name,
           s.color as calendar_color
         FROM calendar_events e
         LEFT JOIN calendar_sources s ON s.id = e.calendar_source_id
-        WHERE e.id = ? AND e.user_id = ?
-      `).get(id, userId) as any;
+        WHERE e.id = ? AND e.user_id = ?`,
+        id, userId);
 
       if (!event) {
         return reply.code(404).send({ error: 'Event not found' });
@@ -316,14 +348,20 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ error: 'title, start_time, and end_time are required' });
       }
 
-      // If no calendar_source_id provided, use primary calendar
+      // If no calendar_source_id provided, use primary calendar. A given id
+      // must be one of the caller's own sources (B2.2d-12: any id was accepted).
       let sourceId = calendar_source_id;
-      if (!sourceId) {
-        const primary = db.prepare(`
+      if (sourceId) {
+        const own = await q.one('SELECT id FROM calendar_sources WHERE id = ? AND user_id = ?', sourceId, userId);
+        if (!own) {
+          return reply.code(404).send({ error: 'Calendar source not found' });
+        }
+      } else {
+        const primary = await q.one<{ id: string }>(`
           SELECT id FROM calendar_sources
           WHERE user_id = ? AND is_primary = 1
-          LIMIT 1
-        `).get(userId) as { id: string } | undefined;
+          LIMIT 1`,
+          userId);
 
         if (primary) {
           sourceId = primary.id;
@@ -331,13 +369,12 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
       }
 
       const id = randomUUID();
-      db.prepare(`
+      await q.run(`
         INSERT INTO calendar_events (
           id, user_id, calendar_source_id, title, description, location,
           start_time, end_time, is_all_day, timezone, event_type,
           attendees, reminders
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id,
         userId,
         sourceId || null,
@@ -353,7 +390,7 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
         reminders ? JSON.stringify(reminders) : null
       );
 
-      const event = db.prepare('SELECT * FROM calendar_events WHERE id = ?').get(id);
+      const event = await q.one('SELECT * FROM calendar_events WHERE id = ?', id);
       return { event };
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
@@ -383,12 +420,8 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
         reminders,
       } = request.body as any;
 
-      const event = db.prepare('SELECT * FROM calendar_events WHERE id = ? AND user_id = ?').get(id, userId);
-      if (!event) {
-        return reply.code(404).send({ error: 'Event not found' });
-      }
-
-      db.prepare(`
+      const now = nowText(q.dialect);
+      const changed = await q.run(`
         UPDATE calendar_events
         SET
           title = COALESCE(?, title),
@@ -402,25 +435,26 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
           status = COALESCE(?, status),
           attendees = COALESCE(?, attendees),
           reminders = COALESCE(?, reminders),
-          updated_at = datetime('now')
-        WHERE id = ? AND user_id = ?
-      `).run(
-        title,
-        description,
-        location,
-        start_time,
-        end_time,
-        is_all_day !== undefined ? (is_all_day ? 1 : 0) : undefined,
-        timezone,
-        event_type,
-        status,
-        attendees ? JSON.stringify(attendees) : undefined,
-        reminders ? JSON.stringify(reminders) : undefined,
+          updated_at = ${now}
+        WHERE id = ? AND user_id = ?`,
+        opt(title),
+        opt(description),
+        opt(location),
+        opt(start_time),
+        opt(end_time),
+        is_all_day !== undefined ? (is_all_day ? 1 : 0) : null,
+        opt(timezone),
+        opt(event_type),
+        opt(status),
+        attendees ? JSON.stringify(attendees) : null,
+        reminders ? JSON.stringify(reminders) : null,
         id,
-        userId
-      );
+        userId);
+      if (changed.changes === 0) {
+        return reply.code(404).send({ error: 'Event not found' });
+      }
 
-      const updated = db.prepare('SELECT * FROM calendar_events WHERE id = ?').get(id);
+      const updated = await q.one('SELECT * FROM calendar_events WHERE id = ?', id);
       return { event: updated };
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
@@ -437,12 +471,10 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
       const userId = getUserIdFromRequest(request);
       const { id } = request.params as { id: string };
 
-      const event = db.prepare('SELECT * FROM calendar_events WHERE id = ? AND user_id = ?').get(id, userId);
-      if (!event) {
+      const result = await q.run('DELETE FROM calendar_events WHERE id = ? AND user_id = ?', id, userId);
+      if (result.changes === 0) {
         return reply.code(404).send({ error: 'Event not found' });
       }
-
-      db.prepare('DELETE FROM calendar_events WHERE id = ?').run(id);
       return { success: true };
     } catch (error: any) {
       // SECURITY: Use centralized error handler to prevent info disclosure (H-09)
@@ -461,7 +493,7 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
       const userId = getUserIdFromRequest(request);
       const { id } = request.params as { id: string };
 
-      const source = db.prepare('SELECT * FROM calendar_sources WHERE id = ? AND user_id = ?').get(id, userId) as any;
+      const source = await q.one<{ sync_enabled: number }>('SELECT sync_enabled FROM calendar_sources WHERE id = ? AND user_id = ?', id, userId);
       if (!source) {
         return reply.code(404).send({ error: 'Calendar source not found' });
       }
@@ -471,11 +503,11 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
       }
 
       // Update sync status
-      db.prepare(`
+      await q.run(`
         UPDATE calendar_sources
-        SET sync_status = 'syncing', updated_at = datetime('now')
-        WHERE id = ?
-      `).run(id);
+        SET sync_status = 'syncing', updated_at = ${nowText(q.dialect)}
+        WHERE id = ?`,
+        id);
 
       // Start sync (import from the calendar sync service)
       const { syncCalendarSource } = await import('../../services/calendar-sync.js');
@@ -502,17 +534,17 @@ export async function registerCalendarRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: string };
 
       // Verify ownership
-      const source = db.prepare('SELECT * FROM calendar_sources WHERE id = ? AND user_id = ?').get(id, userId);
+      const source = await q.one('SELECT id FROM calendar_sources WHERE id = ? AND user_id = ?', id, userId);
       if (!source) {
         return reply.code(404).send({ error: 'Calendar source not found' });
       }
 
-      const logs = db.prepare(`
+      const logs = await q.all(`
         SELECT * FROM calendar_sync_log
         WHERE calendar_source_id = ?
-        ORDER BY started_at DESC
-        LIMIT 20
-      `).all(id);
+        ORDER BY started_at DESC, id DESC
+        LIMIT 20`,
+        id);
 
       return { logs };
     } catch (error: any) {

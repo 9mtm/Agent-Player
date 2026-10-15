@@ -55,6 +55,12 @@ export interface SafeFetchOptions {
     timeoutMs?: number;
     maxRedirects?: number;
     userAgent?: string;
+    /**
+     * Extra request headers (e.g. Authorization), sent on every hop. Since
+     * redirects stay on the first host, they never reach another host.
+     * Backend only (SEC-CAL-01); the frontend copy has no such option.
+     */
+    headers?: Readonly<Record<string, string>>;
     lookup?: LookupFn;
     transport?: TransportFn;
 }
@@ -197,7 +203,7 @@ export async function safeDownload(
             url,
             address,
             family,
-            headers: { 'User-Agent': opts.userAgent || 'AgentPlayer/1.0', Accept: '*/*' },
+            headers: { ...(opts.headers || {}), 'User-Agent': opts.userAgent || 'AgentPlayer/1.0', Accept: '*/*' },
             timeoutMs,
             maxBytes: opts.maxBytes,
         });
