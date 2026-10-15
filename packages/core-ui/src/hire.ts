@@ -11,7 +11,8 @@ export type CreateBody = { name?: string; role: Role; department?: string; descr
 export type HireRequest =
   | { method: 'POST'; path: '/api/agents'; body: CreateBody }
   | { method: 'GET'; path: string }
-  | { method: 'PUT'; path: string; body: { grants: string[]; expectedVersion: number } };
+  | { method: 'PUT'; path: string; body: { grants: string[]; expectedVersion: number } }
+  | { method: 'POST'; path: '/api/onboarding/team-plan'; body: { size: 'solo' | 'small' | 'medium' | 'large'; departments: string[]; language?: string } };
 
 export type Tool = Readonly<{ name: string; description: string; requiresApproval: boolean; allowedByServer: boolean; execClass: boolean }>;
 export type Draft = Readonly<{ name: string; role: Role; department: string; description: string; preset: Preset; presetChosen: boolean; dialect: Dialect | ''; traits: Readonly<Partial<Record<TraitName, number>>> }>;

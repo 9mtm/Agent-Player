@@ -14,3 +14,8 @@ export function validGrantsBody(x: unknown): boolean;
 export function allowedHire(method: string, path: string, body?: unknown): boolean;
 export function hireRoute(path: string, status: number): boolean;
 export function hireResponse(path: string, status: number, body: unknown): unknown;
+export const companySizes: readonly ['solo','small','medium','large'];
+export const nameLanguages: readonly string[];
+export const CATALOGUE_PATH: '/api/onboarding/team-catalogue';
+export const PLAN_PATH: '/api/onboarding/team-plan';
+export function validPlanBody(x: unknown): boolean;

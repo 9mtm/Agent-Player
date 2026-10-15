@@ -4,6 +4,8 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { AgentsController } from './agents';
 import { HireController } from './hire';
 import { HireAgent } from './HireAgent';
+import { CompanyController } from './company';
+import { CompanyWizard } from './CompanyWizard';
 import { namingLanguages, validatedDisplayName } from './naming';
 import type { NamingLanguage } from './naming';
 import type { SessionClient } from './session';
@@ -14,23 +16,29 @@ export function AgentsDestination({ client }: { client: SessionClient }) {
   const [personality, setPersonality] = useState<PersonalityController>();
   const [hire, setHire] = useState<HireController>();
   const [hiring, setHiring] = useState(false);
+  const [company, setCompany] = useState<CompanyController>();
+  const [building, setBuilding] = useState(false);
   const session = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
   const owner = session.phase === 'authenticated' && session.user?.role === 'owner';
   useEffect(() => {
-    const c = new AgentsController(client), p = new PersonalityController(client), h = new HireController(client);
+    const c = new AgentsController(client), p = new PersonalityController(client), h = new HireController(client), w = new CompanyController(client);
     const unsubscribe = c.subscribe(() => {
       const selected = c.getSnapshot().selected; p.select(selected?.id ?? '', selected?.version);
     });
-    setController(c); setPersonality(p); setHire(h);
-    return () => { unsubscribe(); c.dispose(); p.dispose(); h.dispose(); };
+    setController(c); setPersonality(p); setHire(h); setCompany(w);
+    return () => { unsubscribe(); c.dispose(); p.dispose(); h.dispose(); w.dispose(); };
   }, [client]);
   return <section aria-label="Agents"><h2>Your team</h2>
     <p>Each agent is a member of your staff with its own name, role, persona, memory and permissions. Hire a new one, or load the team to rename an agent and review its personality changes.{client.getSnapshot().mode === 'mock' ? ' Offline practice: fictional agents only.' : ''}</p>
     <p className="fine-print">Only Save changes a name; stable IDs never change. Editing is owner-only here; the server enforces permissions separately.</p>
-    {owner && hire && !hiring && <button type="button" className="primary" onClick={() => { hire.restart(); setHiring(true); }}>Hire an agent</button>}
-    {owner && hire && hiring && <HireAgent controller={hire} onClose={() => { setHiring(false); if (hire.getSnapshot().step === 'done') void controller?.list(); }}/>}
-    {!hiring && (controller ? <AgentsReview controller={controller}/> : <p>Agents are not loaded.</p>)}
-    {!hiring && personality && <PersonalityReview controller={personality}/>}
+    {owner && hire && company && !hiring && !building && <div className="hire-actions">
+      <button type="button" className="primary" onClick={() => { hire.restart(); setHiring(true); }}>Hire an agent</button>
+      <button type="button" onClick={() => { company.restart(); setBuilding(true); }}>Build your company</button>
+    </div>}
+    {owner && company && building && <CompanyWizard controller={company} onClose={() => { setBuilding(false); if (company.getSnapshot().hires.some(x => x.status === 'created')) void controller?.list(); }}/>}
+    {owner && hire && hiring && !building && <HireAgent controller={hire} onClose={() => { setHiring(false); if (hire.getSnapshot().step === 'done') void controller?.list(); }}/>}
+    {!hiring && !building && (controller ? <AgentsReview controller={controller}/> : <p>Agents are not loaded.</p>)}
+    {!hiring && !building && personality && <PersonalityReview controller={personality}/>}
   </section>;
 }
 /** Readable status for each controller phase (the controller keeps its own words). */

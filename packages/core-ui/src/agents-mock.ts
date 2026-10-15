@@ -60,6 +60,17 @@ export function createAgentsMock() {
         return { status: 200, body: { name, language: b.language, exhausted: n > 1 } };
       }
       if (request.method === 'POST' && request.path === '/api/agents') return create(request.body as CreateBody);
+      if (request.method === 'GET' && request.path === '/api/onboarding/team-catalogue') return { status: 200, body: {
+        sizes: [{ id: 'solo', label: 'Just me' }, { id: 'small', label: '2–10 people' }, { id: 'medium', label: '11–50 people' }, { id: 'large', label: 'More than 50 people' }],
+        departments: [{ id: 'marketing', label: 'Marketing', summary: 'Fictional campaigns.' }, { id: 'finance', label: 'Finance', summary: 'Fictional invoices.' }, { id: 'support', label: 'Customer support', summary: 'Fictional customers.' }],
+        maxDepartments: 12, maxCustomDepartments: 4 } };
+      if (request.method === 'POST' && request.path === '/api/onboarding/team-plan') {
+        const b = request.body as { size: 'solo' | 'small' | 'medium' | 'large'; departments: string[] };
+        const roles = ({ solo: ['specialist'], small: ['manager', 'specialist'], medium: ['manager', 'specialist', 'specialist', 'evaluator'], large: ['manager', 'specialist', 'specialist', 'specialist', 'evaluator'] } as const)[b.size];
+        let n = 0;
+        const hires = b.departments.flatMap(dep => roles.map(role => ({ department: dep, departmentLabel: dep.replace(/^./, c => c.toUpperCase()), role, title: `Offline ${role}`, description: `Offline ${role} in ${dep}.`, preset: dep === 'finance' ? 'careful-auditor' : dep === 'marketing' ? 'bold-creative' : 'balanced-assistant', name: `Offline plan ${++n}` })));
+        return { status: 200, body: { size: b.size, language: 'en', hires } };
+      }
       const grantsFor = /^\/api\/agents\/([^/]+)\/tool-grants$/.exec(request.path)?.[1];
       if (grantsFor) {
         if (!rows.has(grantsFor)) return { status: 404, body: null };
