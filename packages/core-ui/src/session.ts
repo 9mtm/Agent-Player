@@ -1,4 +1,6 @@
 import { allowedPersonality, personalityRoute, personalityResponse } from './personality-contract.js';
+import { allowedHire, grantsAgentId, hireResponse, hireRoute } from './hire-contract.js';
+import type { HireRequest } from './hire';
 import { validDeviceToken, validLoginBody } from './login-contract.js';
 import { setupStatus } from './setup-status.js';
 import { validChatBody, validKey, validId, chatError, SSEParser, CHAT_DEADLINE_MS, CHAT_IDLE_MS } from './chat-protocol.js';
@@ -22,7 +24,7 @@ export { SessionFailure } from './session-failure';
 export interface WireRequest { method: 'GET' | 'POST' | 'PUT'; path: string; body?: unknown; headers: Readonly<Record<string, string>>; signal: AbortSignal }
 export interface WireResponse { status: number; body: unknown; retryAfterSeconds?: number; stream?: ReadableStream<Uint8Array>; streamIds?: ChatIds }
 export type WireTransport = (request: WireRequest) => Promise<WireResponse>;
-type Request = AgentRequest | MemoryRequest | SuggestionRequest | { method: 'GET'; path: '/api/auth/me' };
+type Request = AgentRequest | HireRequest | MemoryRequest | SuggestionRequest | { method: 'GET'; path: '/api/auth/me' };
 const record = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
 const id = (x: string) => /^[A-Za-z0-9][A-Za-z0-9_.@-]{0,199}$/.test(x) && !x.includes('..');
 function user(value: unknown): User {
@@ -33,7 +35,7 @@ function user(value: unknown): User {
 }
 // Reject before URL normalization. No generic URL, header, key or mutation escape hatch.
 export function allowedRequest(method: string, path: string, body?: unknown): boolean {
-  if (allowedPersonality(method, path, body)) return true;
+  if (allowedPersonality(method, path, body) || allowedHire(method, path, body)) return true;
   const agentId = /^\/api\/agents\/([^/?#]+)$/.exec(path)?.[1];
   if (method === 'PUT') return validAgentId(agentId) && record(body) && Object.keys(body).length === 2 && Object.keys(body).every(k => k === 'name' || k === 'expectedVersion') && typeof body.name === 'string' && validatedDisplayName(body.name) === body.name && validVersion(body.expectedVersion);
   if (method === 'GET' && body === undefined && (path === '/api/agents' || validAgentId(agentId))) return true;
@@ -81,6 +83,7 @@ function projectResponse(path: string, response: WireResponse): WireResponse {
   if (record(response.body) && ((response.status === 403 && ['inactive_user', 'forbidden'].includes(response.body.code as string)) || (response.status === 401 && response.body.code === 'unauthenticated'))) return { status: response.status, body: { code: response.body.code } };
   const notice = boundaryNotice(response); if (notice) return { status: response.status, body: { code: notice } };
   if (personalityRoute(path)) return { status: response.status, body: personalityResponse(path, response.status, response.body) };
+  if (hireRoute(path, response.status)) return { status: response.status, body: hireResponse(path, response.status, response.body) };
   if (path === '/api/agents' || (path.startsWith('/api/agents/') && path !== '/api/agents/name-suggestion')) return agentResponse(path, response);
   if (response.status === 200 && (path === '/api/auth/login' || path === '/api/auth/me')) {
     if (!record(response.body)) throw new SessionFailure('unavailable');
@@ -123,7 +126,7 @@ export function createSameOriginTransport(origin: string, fetcher: typeof fetch)
         return { status: 200, body: null, stream: response.body, streamIds: { runId, messageId } };
       }
       // Never return backend error text, headers or exception messages to the UI.
-      if (response.status !== 200) {
+      if (response.status !== 200 && response.status !== 201) {
         let body: unknown = null;
         if ((chat || response.status === 502 || response.status === 401 || response.status === 400 || response.status === 422 || response.status === 409 || response.status === 403 || response.status === 421 || response.status === 429) && /^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) {
           try {
@@ -259,6 +262,7 @@ export class SessionClient {
     if (request.method === 'PUT' && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     if (request.method === 'POST' && request.path.startsWith('/api/memory/') && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     if (personalityRoute(request.path) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
+    if (((request.method === 'POST' && request.path === '/api/agents') || grantsAgentId(request.path)) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     const epoch = this.#state.epoch;
     const result = await this.#send(request.method, request.path, 'body' in request ? request.body : undefined, this.#token, epoch, signal);
     if (epoch !== this.#state.epoch) return safeResponse(request.path, result);
