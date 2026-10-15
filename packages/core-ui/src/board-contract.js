@@ -7,6 +7,7 @@ import { department } from './hire-contract.js';
 export const BOARDS_PATH = '/api/boards';
 export const priorities = ['low', 'normal', 'high', 'urgent'];
 export const boardColors = ['blue', 'green', 'orange', 'red', 'purple', 'pink', 'teal', 'gray'];
+export const cardTypes = ['task', 'idea', 'bug', 'milestone', 'request'];
 const kinds = ['company', 'department', 'shared'];
 const templateId = x => typeof x === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(x);
 export const MAX_TITLE = 200;
@@ -25,6 +26,8 @@ const lineOk = (x, max) => textOk(x, max, true) && !/\n/.test(x);
 const date = x => x === null || (typeof x === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x));
 const agents = x => Array.isArray(x) && x.length <= 50 && x.every(validAgentId) && new Set(x).size === x.length;
 const departments = x => Array.isArray(x) && x.length <= 12 && x.every(department) && new Set(x).size === x.length;
+const labelIds = x => Array.isArray(x) && x.length <= 10 && x.every(id) && new Set(x).size === x.length;
+const coverOk = x => x === null || boardColors.includes(x);
 
 /** The board path this request names, or null. */
 export function boardPath(path) {
@@ -42,11 +45,23 @@ export function boardPath(path) {
   if (m) return id(m[1]) && id(m[2]) ? { kind: 'card', board: m[1], card: m[2] } : null;
   m = /^\/api\/boards\/([^/?#]+)\/cards\/([^/?#]+)\/comments$/.exec(path);
   if (m) return id(m[1]) && id(m[2]) ? { kind: 'comments', board: m[1], card: m[2] } : null;
+  m = /^\/api\/boards\/([^/?#]+)\/labels$/.exec(path);
+  if (m) return id(m[1]) ? { kind: 'labels', board: m[1] } : null;
+  m = /^\/api\/boards\/([^/?#]+)\/labels\/([^/?#]+)$/.exec(path);
+  if (m) return id(m[1]) && id(m[2]) ? { kind: 'label', board: m[1], label: m[2] } : null;
+  m = /^\/api\/boards\/([^/?#]+)\/cards\/([^/?#]+)\/checklist$/.exec(path);
+  if (m) return id(m[1]) && id(m[2]) ? { kind: 'checklist', board: m[1], card: m[2] } : null;
+  m = /^\/api\/boards\/([^/?#]+)\/cards\/([^/?#]+)\/checklist\/([^/?#]+)$/.exec(path);
+  if (m) return id(m[1]) && id(m[2]) && id(m[3]) ? { kind: 'check', board: m[1], card: m[2], item: m[3] } : null;
   return null;
 }
 
 export function validNewCard(b) {
-  if (!record(b) || !onlyKeys(b, ['columnId', 'title', 'description', 'priority', 'dueDate', 'agents', 'departments']) || !id(b.columnId) || !lineOk(b.title, MAX_TITLE)) return false;
+  if (!record(b) || !onlyKeys(b, ['columnId', 'title', 'description', 'priority', 'dueDate', 'agents', 'departments', 'type', 'startDate', 'cover', 'labels']) || !id(b.columnId) || !lineOk(b.title, MAX_TITLE)) return false;
+  if (b.type !== undefined && !cardTypes.includes(b.type)) return false;
+  if (b.startDate !== undefined && !date(b.startDate)) return false;
+  if (b.cover !== undefined && !coverOk(b.cover)) return false;
+  if (b.labels !== undefined && !labelIds(b.labels)) return false;
   if (b.description !== undefined && !textOk(b.description, MAX_DESCRIPTION, false)) return false;
   if (b.priority !== undefined && !priorities.includes(b.priority)) return false;
   if (b.dueDate !== undefined && !date(b.dueDate)) return false;
@@ -55,7 +70,11 @@ export function validNewCard(b) {
 }
 
 export function validCardEdit(b) {
-  if (!record(b) || !onlyKeys(b, ['expectedVersion', 'title', 'description', 'priority', 'dueDate', 'agents', 'departments', 'columnId', 'beforeCardId', 'archived']) || !version(b.expectedVersion)) return false;
+  if (!record(b) || !onlyKeys(b, ['expectedVersion', 'title', 'description', 'priority', 'dueDate', 'agents', 'departments', 'columnId', 'beforeCardId', 'archived', 'type', 'startDate', 'cover', 'labels']) || !version(b.expectedVersion)) return false;
+  if (b.type !== undefined && !cardTypes.includes(b.type)) return false;
+  if (b.startDate !== undefined && !date(b.startDate)) return false;
+  if (b.cover !== undefined && !coverOk(b.cover)) return false;
+  if (b.labels !== undefined && !labelIds(b.labels)) return false;
   if (Object.keys(b).length < 2) return false;
   if (b.title !== undefined && !lineOk(b.title, MAX_TITLE)) return false;
   if (b.description !== undefined && !textOk(b.description, MAX_DESCRIPTION, false)) return false;
@@ -99,6 +118,11 @@ export function allowedBoard(method, path, body) {
   if (p.kind === 'column') return method === 'PUT' && nameBody(body);
   if (p.kind === 'cards') return method === 'POST' && validNewCard(body);
   if (p.kind === 'card') return method === 'PUT' && validCardEdit(body);
+  if (p.kind === 'labels') return method === 'POST' && record(body) && onlyKeys(body, ['name', 'color']) && lineOk(body.name, 40) && boardColors.includes(body.color);
+  if (p.kind === 'label') return method === 'PUT' && record(body) && Object.keys(body).length >= 1 && onlyKeys(body, ['name', 'color']) && (body.name === undefined || lineOk(body.name, 40)) && (body.color === undefined || boardColors.includes(body.color));
+  if (p.kind === 'checklist') return (method === 'GET' && body === undefined) || (method === 'POST' && record(body) && Object.keys(body).length === 1 && lineOk(body.text, 300));
+  if (p.kind === 'check') return method === 'PUT' && record(body) && Object.keys(body).length >= 1 && onlyKeys(body, ['text', 'done', 'remove'])
+    && (body.text === undefined || lineOk(body.text, 300)) && (body.done === undefined || typeof body.done === 'boolean') && (body.remove === undefined || body.remove === true);
   if (p.kind === 'comments') return (method === 'GET' && body === undefined) || (method === 'POST' && record(body) && Object.keys(body).length === 1 && textOk(body.body, MAX_COMMENT, true));
   return false;
 }
@@ -119,6 +143,9 @@ function card(c) {
     position: c.position, dueDate: date(c.dueDate) && c.dueDate ? c.dueDate : null, archived: c.archived === true, version: c.version,
     agents: c.agents.filter(validAgentId).slice(0, 50), departments: c.departments.filter(department).slice(0, 12),
     comments: Number.isSafeInteger(c.comments) && c.comments >= 0 ? c.comments : 0, updatedAt: when(c.updatedAt),
+    type: cardTypes.includes(c.type) ? c.type : 'task', startDate: date(c.startDate) && c.startDate ? c.startDate : null, cover: boardColors.includes(c.cover) ? c.cover : null,
+    labels: Array.isArray(c.labels) ? c.labels.filter(id).slice(0, 10) : [],
+    checklist: record(c.checklist) && Number.isSafeInteger(c.checklist.done) && Number.isSafeInteger(c.checklist.total) && c.checklist.done >= 0 && c.checklist.done <= c.checklist.total ? { done: c.checklist.done, total: c.checklist.total } : { done: 0, total: 0 },
   };
 }
 
@@ -137,6 +164,7 @@ function board(b) {
     ...meta(b),
     columns: b.columns.map(c => { if (!record(c) || !id(c.id) || !Number.isSafeInteger(c.position)) fail(); return { id: c.id, name: clip(c.name, 60), position: c.position }; }),
     cards: b.cards.map(card),
+    labels: Array.isArray(b.labels) ? b.labels.filter(l => record(l) && id(l.id) && boardColors.includes(l.color)).slice(0, 30).map(l => ({ id: l.id, name: clip(l.name, 40), color: l.color })) : [],
   };
 }
 
@@ -170,6 +198,10 @@ export function boardResponse(path, status, body) {
   const p = boardPath(path);
   if (!p) fail();
   if (p.kind === 'card' || p.kind === 'cards') return card(body);
+  if (p.kind === 'checklist' || p.kind === 'check') {
+    if (!record(body) || !Array.isArray(body.items) || body.items.length > 50) fail();
+    return { items: body.items.map(i => { if (!record(i) || !id(i.id) || typeof i.done !== 'boolean') fail(); return { id: i.id, text: clip(i.text, 300), done: i.done }; }) };
+  }
   if (p.kind === 'comments') {
     if (!record(body) || !Array.isArray(body.comments) || body.comments.length > 500) fail();
     return { comments: body.comments.map(comment) };

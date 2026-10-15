@@ -1,13 +1,14 @@
 import { useState, useSyncExternalStore } from 'react';
 import type { DragEvent } from 'react';
-import { allPriorities, cardsIn, matches, priorityLabel } from './board';
-import type { BoardColor, BoardController, BoardSummary, Card, Column } from './board';
+import { allCardTypes, allPriorities, cardTypeLabel, cardsIn, matches, priorityLabel } from './board';
+import type { BoardColor, BoardController, BoardSummary, Card, CardType, Column } from './board';
 import { Icon } from './icons';
 
 const initials = (name: string) => name.trim().split(/\s+/).slice(0, 2).map(w => w.slice(0, 1).toUpperCase()).join('') || '?';
 const DRAG_TYPE = 'application/x-dpro-card';
 
 const kindLabel = { company: 'Whole company', department: 'Department', shared: 'Shared' } as const;
+const typeMark: Record<CardType, string> = { task: '✓', idea: '✦', bug: '⚑', milestone: '◆', request: '?' };
 const colorLabel: Record<BoardColor, string> = { blue: 'Blue', green: 'Green', orange: 'Orange', red: 'Red', purple: 'Purple', pink: 'Pink', teal: 'Teal', gray: 'Gray' };
 
 /** The company's boards: a list of boards (company, per department, shared), the open board's columns, and a card panel. */
@@ -202,12 +203,16 @@ function CardTile({ card, controller }: { card: Card; controller: BoardControlle
   const overdue = card.dueDate !== null && card.dueDate < new Date().toISOString().slice(0, 10);
   return <article className="board-card" data-priority={card.priority} draggable
     onDragStart={e => { e.dataTransfer.setData(DRAG_TYPE, card.id); e.dataTransfer.effectAllowed = 'move'; }}>
-    <button type="button" className="board-card-open" onClick={() => void controller.openCard(card.id)} aria-label={`Open card ${card.title}`}>
+    {card.cover && <span className="board-cover" data-color={card.cover} aria-hidden="true"/>}
+    <button type="button" className="board-card-open" onClick={() => void controller.openCard(card.id)} aria-label={`Open ${cardTypeLabel[card.type].toLowerCase()} ${card.title}`}>
+      {card.labels.length > 0 && <span className="board-labels">{card.labels.map(id => { const l = controller.getSnapshot().labels.find(x => x.id === id); return l ? <span key={id} className="board-label" data-color={l.color}>{l.name}</span> : null; })}</span>}
       {card.departments.length > 0 && <span className="board-chips">{card.departments.map(d => <span key={d} className="board-chip">{d}</span>)}</span>}
-      <span className="board-card-title">{card.title}</span>
+      <span className="board-card-title">{card.type !== 'task' && <span className={`board-type t-${card.type}`} title={cardTypeLabel[card.type]}>{typeMark[card.type]} {cardTypeLabel[card.type]}</span>}{card.title}</span>
       <span className="board-card-meta">
         {card.priority !== 'normal' && <span className={`board-priority p-${card.priority}`}>{priorityLabel[card.priority]}</span>}
+        {card.startDate && <span className="board-due">From {card.startDate}</span>}
         {card.dueDate && <span className={overdue ? 'board-due overdue' : 'board-due'}>Due {card.dueDate}</span>}
+        {card.checklist.total > 0 && <span className={card.checklist.done === card.checklist.total ? 'board-check complete' : 'board-check'} aria-label={`Checklist ${card.checklist.done} of ${card.checklist.total}`}>☑ {card.checklist.done}/{card.checklist.total}</span>}
         {card.comments > 0 && <span className="board-comments" aria-label={`${card.comments} comments`}><Icon name="message-circle"/>{card.comments}</span>}
         <span className="board-avatars">{card.agents.slice(0, 4).map(a => <span key={a} className="board-avatar" title={controller.agentName(a)}>{initials(controller.agentName(a))}</span>)}
           {card.agents.length > 4 && <span className="board-avatar more">+{card.agents.length - 4}</span>}</span>
@@ -232,6 +237,16 @@ function CardPanel({ card, controller, busy }: { card: Card; controller: BoardCo
     <label>Title<input value={d.title} maxLength={200} disabled={busy} onChange={e => controller.editDraft({ title: e.target.value })}/></label>
     <label>Description<textarea rows={5} value={d.description} maxLength={5000} disabled={busy} placeholder="Details, links, acceptance…" onChange={e => controller.editDraft({ description: e.target.value })}/></label>
     <div className="board-panel-row">
+      <label>Type<select value={d.type} disabled={busy} onChange={e => controller.editDraft({ type: e.target.value as CardType })}>
+        {allCardTypes.map(t => <option key={t} value={t}>{cardTypeLabel[t]}</option>)}
+      </select></label>
+      <label>Start date<input type="date" value={d.startDate} disabled={busy} onChange={e => controller.editDraft({ startDate: e.target.value })}/></label>
+      <label>Cover<select value={d.cover ?? ''} disabled={busy} onChange={e => controller.editDraft({ cover: (e.target.value || null) as BoardColor | null })}>
+        <option value="">None</option>{s.colors.map(c => <option key={c} value={c}>{colorLabel[c]}</option>)}
+      </select></label>
+    </div>
+    <LabelPicker controller={controller} selected={d.labels} busy={busy}/>
+    <div className="board-panel-row">
       <label>Priority<select value={d.priority} disabled={busy} onChange={e => controller.editDraft({ priority: e.target.value as never })}>
         {allPriorities.map(p => <option key={p} value={p}>{priorityLabel[p]}</option>)}
       </select></label>
@@ -253,6 +268,7 @@ function CardPanel({ card, controller, busy }: { card: Card; controller: BoardCo
         <button type="submit" disabled={!dep.trim()}>Add</button>
       </form>
     </div>
+    <Checklist controller={controller} busy={busy}/>
     <div className="hire-actions">
       <button type="button" className="primary" disabled={busy} onClick={() => void controller.saveCard()}>Save card</button>
       <button type="button" disabled={busy} onClick={() => void controller.archiveCard()}>Archive</button>
@@ -271,4 +287,40 @@ function CardPanel({ card, controller, busy }: { card: Card; controller: BoardCo
       </form>
     </section>
   </aside>;
+}
+
+/** Board labels: tick to put them on the card; add a new label to the board. */
+function LabelPicker({ controller, selected, busy }: { controller: BoardController; selected: readonly string[]; busy: boolean }) {
+  const s = controller.getSnapshot();
+  const [name, setName] = useState('');
+  const [color, setColor] = useState<BoardColor>('blue');
+  return <div className="board-panel-deps">
+    <span>Labels</span>
+    <span className="board-labels pick">{s.labels.map(l => <button key={l.id} type="button" className="board-label" data-color={l.color} aria-pressed={selected.includes(l.id)} disabled={busy} onClick={() => controller.toggleLabel(l.id)}>{l.name}</button>)}
+      {s.labels.length === 0 && <span className="fine-print">This board has no labels yet.</span>}</span>
+    <div className="board-inline">
+      <input aria-label="New label name" placeholder="New label" maxLength={40} value={name} onChange={e => setName(e.target.value)}/>
+      <select aria-label="New label colour" value={color} onChange={e => setColor(e.target.value as BoardColor)}>{s.colors.map(c => <option key={c} value={c}>{colorLabel[c]}</option>)}</select>
+      <button type="button" disabled={busy || !name.trim()} onClick={() => void controller.addLabel(name, color).then(ok => { if (ok) setName(''); })}>Add label</button>
+    </div>
+  </div>;
+}
+
+/** The card's checklist with progress; items are saved one by one. */
+function Checklist({ controller, busy }: { controller: BoardController; busy: boolean }) {
+  const items = controller.getSnapshot().checklist;
+  const [text, setText] = useState('');
+  const done = items.filter(i => i.done).length;
+  return <section className="board-checklist" aria-label="Checklist">
+    <div className="board-checklist-head"><h4>Checklist</h4>{items.length > 0 && <span className="fine-print">{done} of {items.length}</span>}</div>
+    {items.length > 0 && <progress className="company-progress" max={items.length} value={done} aria-label="Checklist progress"/>}
+    <ul>{items.map(i => <li key={i.id}>
+      <label className="check"><input type="checkbox" checked={i.done} disabled={busy} onChange={e => void controller.updateCheckItem(i.id, { done: e.target.checked })}/><span className={i.done ? 'board-done' : undefined}>{i.text}</span></label>
+      <button type="button" className="board-ghost" aria-label={`Remove ${i.text}`} disabled={busy} onClick={() => void controller.updateCheckItem(i.id, { remove: true })}>×</button>
+    </li>)}</ul>
+    <form className="board-inline" onSubmit={e => { e.preventDefault(); const t = text; setText(''); void controller.addCheckItem(t).then(ok => { if (!ok) setText(cur => cur || t); }); }}>
+      <input aria-label="New checklist item" placeholder="Add an item" maxLength={300} value={text} onChange={e => setText(e.target.value)}/>
+      <button type="submit" disabled={!text.trim()}>Add</button>
+    </form>
+  </section>;
 }

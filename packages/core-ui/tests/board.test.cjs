@@ -185,3 +185,39 @@ test('offline: create department and shared boards from templates, switch, edit 
   assert.ok(!s.boards.some(x => x.id === archivedId)); assert.notEqual(s.boardId, archivedId);
   assert.match(s.notice, /archived/);
 });
+
+test('richer cards: type, dates, cover, labels and checklist from the panel', async t => {
+  const { b, calls } = await fixture(t);
+  await b.load();
+  assert.equal(b.getSnapshot().labels.length, 4);
+  await b.addCard(col(b, 'To do'), 'Fix the export');
+  const card = b.getSnapshot().cards[0];
+  await b.openCard(card.id);
+  const important = b.getSnapshot().labels.find(l => l.name === 'Important').id;
+  b.editDraft({ type: 'bug', startDate: '2026-11-03', dueDate: '2026-11-01', cover: 'red' });
+  b.toggleLabel(important);
+  await b.saveCard();
+  assert.match(b.getSnapshot().notice, /start date cannot be after/);
+  b.editDraft({ dueDate: '2026-11-05' });
+  await b.saveCard();
+  const put = calls.filter(c => c.method === 'PUT').at(-1);
+  assert.deepEqual(put.body, { expectedVersion: 1, dueDate: '2026-11-05', type: 'bug', startDate: '2026-11-03', cover: 'red', labels: [important] });
+  assert.equal(await b.addLabel('Customer', 'teal'), true);
+  assert.ok(b.getSnapshot().labels.some(l => l.name === 'Customer'));
+  await b.addCheckItem('Find the cause');
+  await b.addCheckItem('Write the fix');
+  await b.updateCheckItem(b.getSnapshot().checklist[0].id, { done: true });
+  assert.deepEqual(b.getSnapshot().cards[0].checklist, { done: 1, total: 2 });
+  await b.updateCheckItem(b.getSnapshot().checklist[1].id, { remove: true });
+  assert.deepEqual(b.getSnapshot().checklist.map(i => [i.text, i.done]), [['Find the cause', true]]);
+  const html = markup(b);
+  for (const label of ['Bug', 'Important', 'From 2026-11-03', '1/1', 'Checklist', 'Add label', 'Cover']) assert.match(html, new RegExp(label));
+  assert.equal(validNewCard({ columnId: 'c1', title: 'x', type: 'epic' }), false);
+  assert.equal(validCardEdit({ expectedVersion: 1, cover: 'gold' }), false);
+  for (const allow of [allowedRequest, allowed]) {
+    assert.equal(allow('POST', '/api/boards/b1/labels', { name: 'X', color: 'red' }), true);
+    assert.equal(allow('PUT', '/api/boards/b1/cards/k1/checklist/i1', { done: true }), true);
+    assert.equal(allow('PUT', '/api/boards/b1/cards/k1/checklist/i1', { remove: false }), false);
+    assert.equal(allow('DELETE', '/api/boards/b1/cards/k1/checklist/i1', undefined), false);
+  }
+});
