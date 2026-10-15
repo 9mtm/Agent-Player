@@ -40,7 +40,7 @@ if (URL_) {
   const quiet = { log: console.log, info: console.info };
   console.log = () => {}; console.info = () => {};
   const { getDatabase, closeDatabase } = await import('../src/db/database.ts');
-  await getDatabase().initialize();
+  await getDatabase({ path: process.env.DATABASE_PATH }).initialize(); // B2.2d-17: an explicit temp SQLite file, watched for strays
   const mgr = getDatabase();
   for (const target of [mgr, mgr.getDb()]) {
     const original = target.prepare;

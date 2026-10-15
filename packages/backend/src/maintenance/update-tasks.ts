@@ -10,7 +10,8 @@ import '../config/load-env.js';
  *
  *  - migrate: opens the main database through the backend's own
  *    DatabaseManager and runs schema + pending migrations (same code as a
- *    normal start), then closes it.
+ *    normal start), then closes it. On PostgreSQL it runs the PostgreSQL
+ *    migrations instead (no SQLite file is opened).
  *  - health: builds the real app with buildServer() and asks GET /health
  *    through Fastify's inject(), so no port is bound.
  *
@@ -36,6 +37,8 @@ function quietConsole(): () => void {
 }
 
 async function migrate(): Promise<TaskResult> {
+  const { dbDriver } = await import('../db/pg/config.js');
+  if (dbDriver() === 'postgres') return migratePostgres();
   const { getDatabase, closeDatabase } = await import('../db/database.js');
   const db = getDatabase();
   try {
@@ -46,6 +49,25 @@ async function migrate(): Promise<TaskResult> {
     return { ok, task: 'migrate', appliedMigrations: row.n, integrity: ok ? 'ok' : 'failed' };
   } finally {
     closeDatabase();
+  }
+}
+
+/**
+ * B2.2d-17: on PostgreSQL the update runs the PostgreSQL migrations (the
+ * same runner as scripts/pg/migrate-pg.mjs); it used to run the SQLite ones.
+ */
+async function migratePostgres(): Promise<TaskResult> {
+  const { getPgPool, closePgPool } = await import('../db/pg/pool.js');
+  const { runPgMigrations } = await import('../db/pg/migrate.js');
+  try {
+    const report = await runPgMigrations(await getPgPool());
+    return {
+      ok: true, task: 'migrate', driver: 'postgres',
+      appliedMigrations: report.applied.length, alreadyApplied: report.alreadyApplied,
+      schema: report.schemaApplied ? 'applied' : 'present',
+    };
+  } finally {
+    await closePgPool();
   }
 }
 

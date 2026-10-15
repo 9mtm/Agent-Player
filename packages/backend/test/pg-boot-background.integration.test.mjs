@@ -3,7 +3,8 @@
 // already migrated database; temp data root; ephemeral 127.0.0.1 port), but
 // AGENT_PLAYER_BACKGROUND is on, so schedulers, timers, watchers and probes
 // start. It waits for their first runs, then checks:
-//   - which tables are still read or written on the SQLite side;
+//   - that no SQLite file appears (B2.2d-17: the main SQLite database is not
+//     used on PostgreSQL; reaching it throws SqliteOnPostgresError);
 //   - that nothing tried to reach a non-loopback address (the fetch guard
 //     refuses and records it; model URLs point at a closed loopback port).
 // Runs ONLY when AGENT_PLAYER_PG_TEST_URL is set (scripts/pg/integration.sh,
@@ -18,7 +19,6 @@ import { randomBytes } from 'node:crypto';
 const URL_ = process.env.AGENT_PLAYER_PG_TEST_URL;
 const skip = URL_ ? false : 'AGENT_PLAYER_PG_TEST_URL is not set (PostgreSQL integration test)';
 
-const sqliteTables = new Set();
 const external = [];
 let base;
 let m = {};
@@ -53,20 +53,12 @@ if (URL_) {
     return realFetch(url, init);
   };
 
-  const { getDatabase, closeDatabase } = await import('../src/db/database.ts');
-  const mgr = getDatabase();
-  const watch = (target) => {
-    const original = target.prepare;
-    target.prepare = function (sql) {
-      for (const t of String(sql).matchAll(/\b(?:FROM|INTO|UPDATE|JOIN)\s+([a-z_][a-z0-9_]*)/gi)) sqliteTables.add(t[1].toLowerCase());
-      return original.call(this, sql);
-    };
-  };
-  watch(mgr);
+  // B2.2d-17: no SQLite at all on PostgreSQL. Any code path that still
+  // reaches the main SQLite database throws SqliteOnPostgresError, and no
+  // SQLite file may appear under the data root.
+  const { closeDatabase } = await import('../src/db/database.ts');
   m = {
     closeDatabase,
-    getDatabase,
-    watch,
     app: await import('../src/api/app.ts'),
     startup: await import('../src/api/startup.ts'),
     pool: await import('../src/db/pg/pool.ts'),
@@ -86,13 +78,12 @@ test.after(async () => {
   rmSync(base, { recursive: true, force: true });
 });
 
-test('the backend boots on PostgreSQL with background jobs on; no SQLite-side table outside the known list, no external call', { skip }, async () => {
+test('the backend boots on PostgreSQL with background jobs on; no SQLite file, no external call', { skip }, async () => {
   const quiet = { log: console.log, info: console.info, warn: console.warn };
   console.log = () => {}; console.info = () => {}; console.warn = () => {};
   let summary;
   try {
     server = await m.app.buildServer({ logger: false });
-    m.watch(m.getDatabase().getDb());
     summary = await m.startup.initializeBackend(server);
     await server.listen({ port: 0, host: '127.0.0.1' });
     // Let the first runs of the started jobs happen (recovery kick, probes, intervals).
@@ -105,23 +96,12 @@ test('the backend boots on PostgreSQL with background jobs on; no SQLite-side ta
   const url = `http://127.0.0.1:${addr.port}`;
   assert.equal((await fetch(`${url}/health`)).status, 200);
   assert.equal((await fetch(`${url}/api/setup/status`)).status, 200);
-  const tables = [...sqliteTables].sort();
-  console.log(`[pg-boot-bg] SQLite-side tables: ${tables.join(', ') || '(none)'}; external calls: ${external.join(', ') || '(none)'}`);
+  console.log(`[pg-boot-bg] external calls: ${external.join(', ') || '(none)'}`);
   assert.deepEqual(external, [], 'no call left the machine');
-  assert.deepEqual(tables.filter((t) => !KNOWN_SQLITE_TABLES.has(t)), [], 'no new SQLite-side table');
-  // Stores with a SQLite file of their own (webhooks, audit, vault, memory
-  // index, orchestrator) must use PostgreSQL instead: only the main file exists.
+  // No store may use a SQLite file on PostgreSQL: not the main database
+  // (B2.2d-17), nor webhooks, audit, vault, memory index or orchestrator.
   const dbFiles = readdirSync(join(base, 'data'), { recursive: true }).map(String)
     .filter((f) => /\.(db|sqlite3?)$/.test(f)).sort();
   console.log(`[pg-boot-bg] SQLite files under the data root: ${dbFiles.join(', ') || '(none)'}`);
-  assert.deepEqual(dbFiles, ['agent-player.db']);
+  assert.deepEqual(dbFiles, []);
 });
-
-/**
- * Tables the PG boot still touches on the SQLite side, each with its reason.
- * Same list as the background-off boot (pg-boot.integration.test.mjs).
- */
-const KNOWN_SQLITE_TABLES = new Set([
-  'migrations', // the SQLite migration runner still runs at boot (DB manager initialize)
-  'users',      // the SQLite manager's startup check
-]);

@@ -4,7 +4,8 @@
  * Checks approval rules, requests approvals, and learns from decisions
  */
 
-import Database from 'better-sqlite3';
+import { num, q } from '../../repositories/sql-steps.js';
+import { isoUtc } from '../../api/timestamps.js';
 import type {
   InboxMessage,
   RiskAssessment,
@@ -12,8 +13,18 @@ import type {
   ApprovalRuleRow
 } from '../types.js';
 
+/**
+ * A stored time as a Date. PostgreSQL returns timestamptz as UTC text without
+ * a zone and SQLite's CURRENT_TIMESTAMP has none either; `new Date(text)`
+ * would read those as local time, isoUtc() reads them as UTC.
+ */
+function toDate(value: unknown): Date | undefined {
+  const iso = isoUtc(value);
+  return iso ? new Date(iso) : undefined;
+}
+
+/** Approval rules on the process driver (B2.2d-17: it used the SQLite file on PostgreSQL too). */
 export class ApprovalEngine {
-  constructor(private db: Database.Database) {}
 
   /**
    * Check if message matches any approval rules
@@ -23,22 +34,22 @@ export class ApprovalEngine {
     risk: RiskAssessment
   ): Promise<ApprovalRule | null> {
     // Get enabled rules for this user, ordered by priority (highest first)
-    const rows = this.db.prepare(`
+    const rows = await q.all<ApprovalRuleRow>(`
       SELECT * FROM approval_rules
       WHERE user_id = ? AND enabled = 1
       ORDER BY priority DESC, confidence_score DESC
-    `).all(message.userId) as ApprovalRuleRow[];
+    `, message.userId);
 
     // Check each rule
     for (const row of rows) {
       if (await this.ruleMatches(row, message, risk)) {
         // Update times_applied counter
-        this.db.prepare(`
+        await q.run(`
           UPDATE approval_rules
           SET times_applied = times_applied + 1,
               updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
-        `).run(row.id);
+        `, row.id);
 
         return this.mapRowToRule(row);
       }
@@ -83,17 +94,17 @@ export class ApprovalEngine {
   async createRule(rule: Partial<ApprovalRule>): Promise<ApprovalRule> {
     const id = crypto.randomUUID();
 
-    this.db.prepare(`
+    await q.run(`
       INSERT INTO approval_rules (
         id, user_id, name, description,
         source_type, action_pattern, risk_level,
         auto_approve, auto_deny, priority, enabled,
         confidence_score
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `,
       id,
-      rule.userId,
-      rule.name,
+      rule.userId as string,
+      rule.name as string,
       rule.description || null,
       rule.sourceType || null,
       rule.actionPattern || null,
@@ -112,8 +123,7 @@ export class ApprovalEngine {
    * Get rule by ID
    */
   async getRule(id: string): Promise<ApprovalRule> {
-    const row = this.db.prepare('SELECT * FROM approval_rules WHERE id = ?')
-      .get(id) as ApprovalRuleRow;
+    const row = await q.one<ApprovalRuleRow>('SELECT * FROM approval_rules WHERE id = ?', id);
 
     if (!row) {
       throw new Error(`Approval rule not found: ${id}`);
@@ -126,11 +136,11 @@ export class ApprovalEngine {
    * List rules for user
    */
   async listRules(userId: string): Promise<ApprovalRule[]> {
-    const rows = this.db.prepare(`
+    const rows = await q.all<ApprovalRuleRow>(`
       SELECT * FROM approval_rules
       WHERE user_id = ?
       ORDER BY priority DESC, created_at DESC
-    `).all(userId) as ApprovalRuleRow[];
+    `, userId);
 
     return rows.map(r => this.mapRowToRule(r));
   }
@@ -139,7 +149,7 @@ export class ApprovalEngine {
    * Delete rule
    */
   async deleteRule(id: string): Promise<void> {
-    this.db.prepare('DELETE FROM approval_rules WHERE id = ?').run(id);
+    await q.run('DELETE FROM approval_rules WHERE id = ?', id);
   }
 
   // ===================
@@ -188,14 +198,14 @@ export class ApprovalEngine {
       riskLevel: row.risk_level as any,
       autoApprove: Boolean(row.auto_approve),
       autoDeny: Boolean(row.auto_deny),
-      priority: row.priority,
+      priority: num<number>(row.priority),
       name: row.name,
       description: row.description || undefined,
       enabled: Boolean(row.enabled),
-      timesApplied: row.times_applied,
-      confidenceScore: row.confidence_score,
-      createdAt: new Date(row.created_at),
-      updatedAt: new Date(row.updated_at)
+      timesApplied: num<number>(row.times_applied),
+      confidenceScore: num<number>(row.confidence_score),
+      createdAt: toDate(row.created_at) ?? new Date(NaN),
+      updatedAt: toDate(row.updated_at) ?? new Date(NaN)
     };
   }
 }

@@ -1,11 +1,15 @@
 /**
  * Message Store - Database layer for inbox messages
  *
- * CRUD operations for inbox_messages table
+ * CRUD operations for inbox_messages table, on the process driver
+ * (B2.2d-17: it used the SQLite file on PostgreSQL too). Times are written as
+ * ISO strings: SQLite keeps them as text (compared as ISO text), PostgreSQL
+ * columns are timestamptz (the parameter is cast).
  */
 
-import Database from 'better-sqlite3';
 import crypto from 'crypto';
+import { num, q, type SqlParam } from '../../repositories/sql-steps.js';
+import { isoUtc } from '../../api/timestamps.js';
 import type {
   InboxMessage,
   InboxMessageRow,
@@ -14,8 +18,22 @@ import type {
   RiskLevel
 } from '../types.js';
 
+/**
+ * A stored time as a Date. PostgreSQL returns timestamptz as UTC text without
+ * a zone and SQLite's CURRENT_TIMESTAMP has none either; `new Date(text)`
+ * would read those as local time, isoUtc() reads them as UTC.
+ */
+function toDate(value: unknown): Date | undefined {
+  const iso = isoUtc(value);
+  return iso ? new Date(iso) : undefined;
+}
+
+/** A bound ISO time compared with a time column (text on SQLite, timestamptz on PostgreSQL). */
+function isoParam(): string {
+  return q.dialect === 'postgres' ? '(?)::timestamptz' : '?';
+}
+
 export class MessageStore {
-  constructor(private db: Database.Database) {}
 
   /**
    * Save a new inbox message
@@ -23,20 +41,18 @@ export class MessageStore {
   async save(message: Partial<InboxMessage>): Promise<InboxMessage> {
     const id = message.id || crypto.randomUUID();
 
-    const stmt = this.db.prepare(`
+    await q.run(`
       INSERT INTO inbox_messages (
         id, user_id, source_type, source_id,
         message, metadata, status, risk_level,
         auto_executed, approval_needed, received_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.run(
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${isoParam()})
+    `,
       id,
-      message.userId,
-      message.sourceType,
+      message.userId as string,
+      message.sourceType as string,
       message.sourceId || null,
-      message.message,
+      message.message as string,
       JSON.stringify(message.metadata || {}),
       message.status || 'pending',
       message.riskLevel || null,
@@ -52,7 +68,7 @@ export class MessageStore {
    * Get message by ID
    */
   async getById(id: string): Promise<InboxMessage> {
-    const row = this.db.prepare('SELECT * FROM inbox_messages WHERE id = ?').get(id) as InboxMessageRow;
+    const row = await q.one<InboxMessageRow>('SELECT * FROM inbox_messages WHERE id = ?', id);
 
     if (!row) {
       throw new Error(`Inbox message not found: ${id}`);
@@ -72,14 +88,15 @@ export class MessageStore {
     ];
 
     const fields: string[] = [];
-    const values: any[] = [];
+    const values: SqlParam[] = [];
 
     for (const [key, value] of Object.entries(updates)) {
       // Convert camelCase to snake_case
       const dbField = key.replace(/([A-Z])/g, '_$1').toLowerCase();
 
       if (allowedFields.includes(dbField)) {
-        fields.push(`${dbField} = ?`);
+        const isTime = value instanceof Date;
+        fields.push(`${dbField} = ${isTime ? isoParam() : '?'}`);
 
         // Handle different types
         if (value instanceof Date) {
@@ -89,7 +106,7 @@ export class MessageStore {
         } else if (typeof value === 'object' && value !== null) {
           values.push(JSON.stringify(value));
         } else {
-          values.push(value);
+          values.push((value ?? null) as SqlParam);
         }
       }
     }
@@ -99,7 +116,7 @@ export class MessageStore {
     }
 
     const query = `UPDATE inbox_messages SET ${fields.join(', ')} WHERE id = ?`;
-    this.db.prepare(query).run(...values, id);
+    await q.run(query, ...values, id);
   }
 
   /**
@@ -107,7 +124,7 @@ export class MessageStore {
    */
   async listByUser(userId: string, filters?: MessageFilter): Promise<InboxMessage[]> {
     let query = 'SELECT * FROM inbox_messages WHERE user_id = ?';
-    const params: any[] = [userId];
+    const params: SqlParam[] = [userId];
 
     // Apply filters
     if (filters?.status) {
@@ -126,12 +143,12 @@ export class MessageStore {
     }
 
     if (filters?.dateFrom) {
-      query += ' AND received_at >= ?';
+      query += ` AND received_at >= ${isoParam()}`;
       params.push(filters.dateFrom.toISOString());
     }
 
     if (filters?.dateTo) {
-      query += ' AND received_at <= ?';
+      query += ` AND received_at <= ${isoParam()}`;
       params.push(filters.dateTo.toISOString());
     }
 
@@ -149,7 +166,7 @@ export class MessageStore {
       params.push(filters.offset);
     }
 
-    const rows = this.db.prepare(query).all(...params) as InboxMessageRow[];
+    const rows = await q.all<InboxMessageRow>(query, ...params);
     return rows.map(r => this.mapRowToMessage(r));
   }
 
@@ -157,14 +174,14 @@ export class MessageStore {
    * Count messages by status
    */
   async countByStatus(userId: string): Promise<Record<MessageStatus, number>> {
-    const result = this.db.prepare(`
+    const result = await q.all<{ status: MessageStatus; count: number }>(`
       SELECT
         status,
         COUNT(*) as count
       FROM inbox_messages
       WHERE user_id = ?
       GROUP BY status
-    `).all(userId) as Array<{ status: MessageStatus; count: number }>;
+    `, userId);
 
     const counts: Record<string, number> = {
       pending: 0,
@@ -175,7 +192,7 @@ export class MessageStore {
     };
 
     for (const row of result) {
-      counts[row.status] = row.count;
+      counts[row.status] = num<number>(row.count);
     }
 
     return counts as Record<MessageStatus, number>;
@@ -193,7 +210,7 @@ export class MessageStore {
     autoExecuted: number;
     byRiskLevel: Record<RiskLevel, number>;
   }> {
-    const stats = this.db.prepare(`
+    const stats = await q.one<any>(`
       SELECT
         COUNT(*) as total,
         SUM(CASE WHEN status = 'needs_approval' THEN 1 ELSE 0 END) as needs_approval,
@@ -206,19 +223,20 @@ export class MessageStore {
         SUM(CASE WHEN risk_level = 'high' THEN 1 ELSE 0 END) as high_risk
       FROM inbox_messages
       WHERE user_id = ?
-    `).get(userId) as any;
+    `, userId);
+    const n = (v: unknown): number => num<number | null>(v) || 0;
 
     return {
-      total: stats.total || 0,
-      needsApproval: stats.needs_approval || 0,
-      processing: stats.processing || 0,
-      completed: stats.completed || 0,
-      failed: stats.failed || 0,
-      autoExecuted: stats.auto_executed || 0,
+      total: n(stats?.total),
+      needsApproval: n(stats?.needs_approval),
+      processing: n(stats?.processing),
+      completed: n(stats?.completed),
+      failed: n(stats?.failed),
+      autoExecuted: n(stats?.auto_executed),
       byRiskLevel: {
-        low: stats.low_risk || 0,
-        medium: stats.medium_risk || 0,
-        high: stats.high_risk || 0
+        low: n(stats?.low_risk),
+        medium: n(stats?.medium_risk),
+        high: n(stats?.high_risk)
       }
     };
   }
@@ -227,7 +245,7 @@ export class MessageStore {
    * Delete message
    */
   async delete(id: string): Promise<void> {
-    this.db.prepare('DELETE FROM inbox_messages WHERE id = ?').run(id);
+    await q.run('DELETE FROM inbox_messages WHERE id = ?', id);
   }
 
   /**
@@ -237,12 +255,12 @@ export class MessageStore {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - olderThanDays);
 
-    const result = this.db.prepare(`
+    const result = await q.run(`
       DELETE FROM inbox_messages
       WHERE user_id = ?
         AND status = 'completed'
-        AND completed_at < ?
-    `).run(userId, cutoffDate.toISOString());
+        AND completed_at < ${isoParam()}
+    `, userId, cutoffDate.toISOString());
 
     return result.changes;
   }
@@ -265,12 +283,12 @@ export class MessageStore {
       approvalNeeded: Boolean(row.approval_needed),
       approvalStatus: row.approval_status as any,
       approvedBy: row.approved_by || undefined,
-      approvedAt: row.approved_at ? new Date(row.approved_at) : undefined,
+      approvedAt: toDate(row.approved_at),
       result: row.result ? JSON.parse(row.result) : undefined,
       error: row.error || undefined,
-      receivedAt: new Date(row.received_at),
-      processedAt: row.processed_at ? new Date(row.processed_at) : undefined,
-      completedAt: row.completed_at ? new Date(row.completed_at) : undefined
+      receivedAt: toDate(row.received_at) ?? new Date(NaN),
+      processedAt: toDate(row.processed_at),
+      completedAt: toDate(row.completed_at)
     };
   }
 }

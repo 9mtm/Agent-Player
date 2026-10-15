@@ -15,7 +15,7 @@
 // ephemeral 127.0.0.1 port inside this test; model calls are stubbed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
@@ -65,17 +65,9 @@ if (URL_) {
   delete process.env.AGENT_EXEC_TOOLS;
   delete process.env.PUBLIC_URL;
 
-  const { getDatabase, closeDatabase } = await import('../src/db/database.ts');
-  await getDatabase().initialize();
-  const mgr = getDatabase();
-  const raw = mgr.getDb();
-  for (const target of [mgr, raw]) {
-    const original = target.prepare;
-    target.prepare = function (sql) {
-      if (PORTED_TABLES.test(String(sql))) sqliteHits.push(String(sql).replace(/\s+/g, ' ').slice(0, 120));
-      return original.call(this, sql);
-    };
-  }
+  // B2.2d-17: no SQLite at all. Any code path that still reaches the main
+  // SQLite database throws SqliteOnPostgresError, and the file must never appear.
+  const { closeDatabase } = await import('../src/db/database.ts');
   m = {
     closeDatabase,
     Fastify: (await import('fastify')).default,
@@ -662,6 +654,7 @@ test('database routes on PostgreSQL: stats from the catalog (owner only), backup
   assert.equal((await inject(app2, { method: 'POST', url: '/api/database/backup', headers: bearer(u.owner.id) })).statusCode, 501);
 });
 
-test('no ported statement reached SQLite', { skip }, async () => {
+test('no ported statement reached SQLite; the SQLite file was never created', { skip }, async () => {
   assert.deepEqual(sqliteHits, []);
+  assert.equal(existsSync(process.env.DATABASE_PATH), false, 'agent-player.db must not exist on PostgreSQL');
 });

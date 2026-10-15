@@ -18,6 +18,7 @@ export type { Skill, SkillSettings, SkillSecret, CreateSkillInput } from './repo
 
 // Convenience function to get all repositories
 import { getDatabase } from './database.js';
+import { dbDriver } from './pg/config.js';
 import { UsersRepository } from './repositories/users.js';
 import { SessionsRepository } from './repositories/sessions.js';
 import { SkillsRepository } from './repositories/skills.js';
@@ -57,6 +58,9 @@ export async function initializeDatabase(): Promise<void> {
   // Once per process: buildServer() runs it before the route plugins (their
   // runtime DDL must not run ahead of the migrations on a fresh database),
   // and server startup calls it again.
+  // B2.2d-17: nothing to do on PostgreSQL (no SQLite file; its schema comes
+  // from the PostgreSQL migrations, scripts/pg/migrate-pg.mjs).
+  if (dbDriver() === 'postgres') return;
   if (!initializing) {
     initializing = getDatabase().initialize().catch((err) => {
       initializing = null;
@@ -170,5 +174,5 @@ export const messagesDb = {
   }
 };
 
-// Export default for backward compatibility
-export default getDatabase();
+// B2.2d-17: no default export. It opened the SQLite file at import time,
+// on PostgreSQL too; nothing imported it.

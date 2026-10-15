@@ -10,6 +10,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { verifyRequestToken, verifyRequestTokenAsync, AuthTokenError, type TokenUser } from './jwt.js';
 import { getDatabase } from '../db/index.js';
+import { dbDriver } from '../db/pg/config.js';
 
 export type UserRole = 'owner' | 'admin' | 'user' | 'guest';
 
@@ -95,11 +96,21 @@ export function authenticateActiveUser(
   } catch {
     return null;
   }
-  const user = getDatabase()
-    .prepare('SELECT role, status FROM users WHERE id = ?')
-    .get(userId) as { role: string; status: string } | undefined;
+  const user = sqliteUserRow(userId);
   if (!user || user.status !== 'active') return null;
   return { id: userId, role: user.role as UserRole };
+}
+
+/**
+ * The user's role/status row for the synchronous fallback (no gate user).
+ * SQLite only: on PostgreSQL there is no synchronous read, so it fails closed
+ * (no user -> refused); the auth gate and requireActiveRole do the async check.
+ */
+function sqliteUserRow(userId: string): { role: string; status: string } | undefined {
+  if (dbDriver() === 'postgres') return undefined;
+  return getDatabase()
+    .prepare('SELECT role, status FROM users WHERE id = ?')
+    .get(userId) as { role: string; status: string } | undefined;
 }
 
 /**
@@ -120,9 +131,7 @@ export function authorizeActiveRole(
     reply.code(401).send({ error: 'Authentication required', code: 'unauthenticated' });
     return null;
   }
-  const user = getDatabase()
-    .prepare('SELECT role, status FROM users WHERE id = ?')
-    .get(userId) as { role: string; status: string } | undefined;
+  const user = sqliteUserRow(userId);
   return roleDecision(userId, user, reply, roles);
 }
 

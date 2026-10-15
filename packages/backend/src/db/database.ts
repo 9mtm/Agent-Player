@@ -4,6 +4,7 @@
  */
 
 import { mainDatabasePath } from '../config/data-root.js';
+import { dbDriver } from './pg/config.js';
 import Database from 'better-sqlite3';
 import { readFileSync, readdirSync, chmodSync } from 'fs';
 import { join, dirname } from 'path';
@@ -364,10 +365,21 @@ export class DatabaseManager {
 let dbInstance: DatabaseManager | null = null;
 
 /**
- * Get or create database instance
+ * B2.2d-17: on PostgreSQL (AGENT_PLAYER_DB=postgres) the main SQLite file is
+ * not used at all; reaching it is a bug, so it fails loudly instead of
+ * silently reading or creating `agent-player.db`.
+ */
+export class SqliteOnPostgresError extends Error {}
+
+/**
+ * Get or create database instance. On PostgreSQL only an explicit `config`
+ * (a tool that deliberately opens a SQLite file, e.g. a data copy) opens one.
  */
 export function getDatabase(config?: DatabaseConfig): DatabaseManager {
   if (!dbInstance) {
+    if (!config && dbDriver() === 'postgres') {
+      throw new SqliteOnPostgresError('The main SQLite database is not used on PostgreSQL (AGENT_PLAYER_DB=postgres)');
+    }
     const defaultConfig: DatabaseConfig = {
       path: mainDatabasePath(),
       verbose: process.env.NODE_ENV === 'development'

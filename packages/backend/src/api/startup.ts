@@ -53,10 +53,11 @@ export async function initializeBackend(fastify: FastifyInstance): Promise<Start
 
   // Initialize Database
   const { initializeDatabase, getDatabase } = await import('../db/index.js');
+  const { dbDriver } = await import('../db/pg/config.js');
   await initializeDatabase();
-  const db = getDatabase();
-  // Decorate Fastify instance with database for extensions to use
-  fastify.decorate('db', db);
+  // Decorate Fastify instance with database for extensions to use. Extensions
+  // are SQLite-only and off on PostgreSQL (Q-33), where no SQLite file is opened.
+  if (dbDriver() !== 'postgres') fastify.decorate('db', getDatabase());
   console.log('[Server] ✅ Database initialized\n');
 
   // Seed database in development mode
@@ -122,7 +123,7 @@ export async function initializeBackend(fastify: FastifyInstance): Promise<Start
 
   // Initialize Inbox System
   const { createInboxSystem } = await import('../inbox/index.js');
-  const inboxSystem = createInboxSystem(db);
+  const inboxSystem = createInboxSystem();
 
   // Attach to fastify instance for routes
   fastify.decorate('inboxGateway', inboxSystem.inboxGateway);

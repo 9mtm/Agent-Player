@@ -52,7 +52,7 @@ if (URL_) {
   const quiet = { log: console.log, warn: console.warn };
   console.log = () => {}; console.warn = () => {};
   const { getDatabase, closeDatabase } = await import('../src/db/database.ts');
-  await getDatabase().initialize();
+  await getDatabase({ path: process.env.DATABASE_PATH }).initialize(); // B2.2d-17: an explicit temp SQLite file, watched for strays
   console.log = quiet.log; console.warn = quiet.warn;
   // Watch SQLite: a memory table must never be touched there on PostgreSQL.
   const mgr = getDatabase();

@@ -5,11 +5,11 @@
 // Runs ONLY when AGENT_PLAYER_PG_TEST_URL is set (scripts/pg/integration.sh);
 // otherwise it skips. Every other store lives in a temp data root.
 //
-// It also records which tables the boot still reads or writes on the SQLite
-// side (modules not ported yet); the list is printed for the report.
+// B2.2d-17: no SQLite at all on PostgreSQL; the test checks that no SQLite
+// file appears under the data root.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -17,7 +17,6 @@ import { randomBytes } from 'node:crypto';
 const URL_ = process.env.AGENT_PLAYER_PG_TEST_URL;
 const skip = URL_ ? false : 'AGENT_PLAYER_PG_TEST_URL is not set (PostgreSQL integration test)';
 
-const sqliteTables = new Set();
 let base;
 let m = {};
 if (URL_) {
@@ -47,20 +46,12 @@ if (URL_) {
     return realFetch(url, init);
   };
 
-  const { getDatabase, closeDatabase } = await import('../src/db/database.ts');
-  const mgr = getDatabase();
-  const watch = (target) => {
-    const original = target.prepare;
-    target.prepare = function (sql) {
-      for (const t of String(sql).matchAll(/\b(?:FROM|INTO|UPDATE|JOIN)\s+([a-z_][a-z0-9_]*)/gi)) sqliteTables.add(t[1].toLowerCase());
-      return original.call(this, sql);
-    };
-  };
-  watch(mgr);
+  // B2.2d-17: no SQLite at all on PostgreSQL. Any code path that still
+  // reaches the main SQLite database throws SqliteOnPostgresError, and no
+  // SQLite file may appear under the data root.
+  const { closeDatabase } = await import('../src/db/database.ts');
   m = {
     closeDatabase,
-    getDatabase,
-    watch,
     app: await import('../src/api/app.ts'),
     startup: await import('../src/api/startup.ts'),
     pool: await import('../src/db/pg/pool.ts'),
@@ -86,7 +77,6 @@ test('the backend boots on PostgreSQL (buildServer + startup chain, background o
   let summary;
   try {
     server = await m.app.buildServer({ logger: false });
-    m.watch(m.getDatabase().getDb());
     summary = await m.startup.initializeBackend(server);
     await server.listen({ port: 0, host: '127.0.0.1' });
   } finally {
@@ -105,5 +95,6 @@ test('the backend boots on PostgreSQL (buildServer + startup chain, background o
   assert.equal((await fetch(`${base}/api/webhooks/status`)).status, 401, 'auth gate in front');
   const denied = await fetch(`${base}/api/database/backup`, { method: 'POST' });
   assert.equal(denied.status, 401);
-  console.log(`[pg-boot] listening on ${base}; SQLite-side tables touched during boot and requests: ${[...sqliteTables].sort().join(', ') || '(none)'}`);
+  const dbFiles = readdirSync(process.env.AGENT_PLAYER_DATA_DIR, { recursive: true }).map(String).filter((f) => /\.(db|sqlite3?)$/.test(f));
+  assert.deepEqual(dbFiles, [], 'no SQLite file on PostgreSQL');
 });
