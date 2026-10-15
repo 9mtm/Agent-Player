@@ -31,6 +31,15 @@ import { OLLAMA_URL, DEFAULT_OLLAMA_MODEL, ollamaThinkOption } from '../../llm/o
 
 const DEFAULT_MODEL = DEFAULT_OLLAMA_MODEL;
 
+/**
+ * Isolated stage 2 (chat test): every turn is answered by the local Ollama
+ * model only — no paid provider, no CLI bridge, no tools — whatever the
+ * agent or the request asks for. Set only by scripts/isolated-server.ts.
+ */
+export function localModelOnly(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (env.AGENT_PLAYER_LOCAL_MODEL_ONLY ?? '').trim() === '1' && (env.AGENT_PLAYER_ISOLATED ?? '').trim() === '1';
+}
+
 interface AgentConfig {
   id: string;
   name: string;
@@ -258,7 +267,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     // Resolve agent config: specific agent > primary agent > fallback defaults
     const agentConfig = agentId ? await getAgentById(agentId) : await getPrimaryAgent();
-    const resolvedModel = model || agentConfig?.model || DEFAULT_MODEL;
+    const resolvedModel = localModelOnly() ? DEFAULT_MODEL : (model || agentConfig?.model || DEFAULT_MODEL);
     // CORE-01: the agent's current personality version sets temperature,
     // output length and the working-style prompt block. An explicit request
     // value still wins. Personality never changes tools or approvals: the
@@ -326,8 +335,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
       resolvedSystemPrompt += `\n\n## Recent Context\nThe following information was recalled from previous interactions with this user:\n${memoryContext}`;
     }
     // An agent's explicit provider wins; without one, follow the global settings provider.
-    const resolvedProvider = agentConfig?.provider
-      || ((await getSettingsManager().getSettings()).provider === 'claude' ? 'claude' : 'ollama');
+    const resolvedProvider = localModelOnly() ? 'ollama' : (agentConfig?.provider
+      || ((await getSettingsManager().getSettings()).provider === 'claude' ? 'claude' : 'ollama'));
     // SECURITY (S1.1): keys come from the credential authority only: the
     // agent's own encrypted key, else the global Settings key.
     const resolvedApiKey = resolvedProvider === 'claude'
@@ -470,7 +479,7 @@ async function streamChat(
 
   // Get real tools from the tools registry (11 tools: exec, read, write, browser×4, memory×2, desktop)
   const toolsRegistry = await createAgentToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers });
-  const tools = toolsRegistry.getToolsForAPI();
+  const tools = localModelOnly() ? [] : toolsRegistry.getToolsForAPI();
 
   console.log('[Chat] 🔧 Available tools:', tools.length);
   if (tools.length > 0) {
@@ -834,7 +843,7 @@ async function nonStreamChat(
 
   // Get real tools from the tools registry
   const toolsRegistryNS = await createAgentToolsRegistry({ userId, sessionId, workspaceDir: process.cwd(), toolPolicy, agentId, memoryDrawers });
-  const tools = toolsRegistryNS.getToolsForAPI();
+  const tools = localModelOnly() ? [] : toolsRegistryNS.getToolsForAPI();
   if (provider === 'claude' && apiKey) {
     console.log('[Chat] 🤖 Using Claude API (non-stream)');
     return streamChatClaude(reply, apiKey, model || (await getSettingsManager().getSettings()).claude?.model || 'claude-sonnet-4-5-20250929', ollamaMessages, finalSystemPromptNS, tools, temperature, userId, sessionId, chatContext, toolPolicy, agentId, maxTokens, memoryDrawers);
