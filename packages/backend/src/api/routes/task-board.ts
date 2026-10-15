@@ -2,7 +2,10 @@
  * Task board API (BOARD-01). Owner only (auth gate owner tier, route access
  * 'owner', handler role check).
  *
- *   GET   /api/boards                                  -> { boards: [{id, name}] }  (first call creates the company board)
+ *   GET   /api/boards?archived=1                       -> { boards: [summary], templates: [{id, name, description, columns}], colors }
+ *                                                         (first call creates the company board)
+ *   POST  /api/boards   { name, description?, template?, color?, departments? } -> 201 board
+ *   PUT   /api/boards/:id { expectedVersion, name?, description?, color?, departments?, archived? } -> board
  *   GET   /api/boards/:id?archived=1                   -> { id, name, columns, cards }
  *   POST  /api/boards/:id/columns          { name }    -> board
  *   PUT   /api/boards/:id/columns/:columnId { name }   -> board
@@ -18,8 +21,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { actorOf } from '../../auth/auth-gate.js';
 import { actorOrReply, requireOwner } from '../../repositories/scope.js';
 import {
-  BoardError, addColumn, addComment, createCard, getBoard, listBoards, listComments, renameColumn, updateCard,
+  BoardError, addColumn, addComment, createBoard, createCard, getBoard, listBoards, listComments, renameColumn, updateBoard, updateCard,
 } from '../../services/task-board.js';
+import { BOARD_COLORS, BOARD_TEMPLATES } from '../../services/board-templates.js';
 
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -37,7 +41,8 @@ function objectBody(body: unknown): Record<string, unknown> {
 function fail(err: unknown, reply: FastifyReply) {
   if (err instanceof BoardError) {
     const extra = (err as BoardError & { current?: unknown }).current;
-    return reply.code(err.status).send({ error: err.message, code: err.code, ...(extra ? { card: extra } : {}) });
+    const board = (err as BoardError & { currentBoard?: unknown }).currentBoard;
+    return reply.code(err.status).send({ error: err.message, code: err.code, ...(extra ? { card: extra } : {}), ...(board ? { board } : {}) });
   }
   throw err;
 }
@@ -47,9 +52,24 @@ export async function taskBoardRoutes(fastify: FastifyInstance) {
   type P = { id: string; columnId?: string; cardId?: string };
   const ids = (p: P) => [p.id, p.columnId, p.cardId].every((x) => x === undefined || ID.test(x));
 
-  fastify.get('/api/boards', { config }, async (request, reply) => {
+  fastify.get<{ Querystring: { archived?: string } }>('/api/boards', { config }, async (request, reply) => {
     const owner = ownerOf(request, reply); if (owner === null) return reply;
-    return { boards: await listBoards(owner) };
+    return {
+      boards: await listBoards(owner, request.query?.archived === '1'),
+      templates: BOARD_TEMPLATES.map((t) => ({ id: t.id, name: t.name, description: t.description, columns: [...t.columns] })),
+      colors: [...BOARD_COLORS],
+    };
+  });
+
+  fastify.post<{ Body: unknown }>('/api/boards', { config }, async (request, reply) => {
+    const owner = ownerOf(request, reply); if (owner === null) return reply;
+    try { return reply.code(201).send(await createBoard(owner, objectBody(request.body))); } catch (err) { return fail(err, reply); }
+  });
+
+  fastify.put<{ Params: P; Body: unknown }>('/api/boards/:id', { config }, async (request, reply) => {
+    const owner = ownerOf(request, reply); if (owner === null) return reply;
+    if (!ids(request.params)) return reply.code(404).send({ error: 'Board not found', code: 'not_found' });
+    try { return await updateBoard(owner, request.params.id, objectBody(request.body)); } catch (err) { return fail(err, reply); }
   });
 
   fastify.get<{ Params: P; Querystring: { archived?: string } }>('/api/boards/:id', { config }, async (request, reply) => {
