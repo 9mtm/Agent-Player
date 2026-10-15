@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { cardTypeLabel, matches, priorityLabel } from './board';
 import type { BoardController, Card } from './board';
-import { OVERLOAD, cardsByDue, monthGrid, sortCards, workload } from './board-views';
-import type { SortKey } from './board-views';
+import { OVERLOAD, cardsByDue, monthGrid, sortCards, workloadMatrix } from './board-views';
+import type { SortKey, WorkloadRow } from './board-views';
 
 export type BoardView = 'board' | 'table' | 'calendar' | 'workload';
 export const viewLabel: Record<BoardView, string> = { board: 'Board', table: 'Table', calendar: 'Calendar', workload: 'Workload' };
@@ -80,26 +80,69 @@ export function CalendarView({ controller }: { controller: BoardController }) {
   </div>;
 }
 
-/** Open cards per agent: who has too much, who is free. */
+/** Who has too much, who is free, and where work waits: agents × board columns. */
 export function WorkloadView({ controller }: { controller: BoardController }) {
   const s = controller.getSnapshot();
-  const loads = workload(s.cards, s.columns, s.agents, today());
-  const max = Math.max(OVERLOAD, ...loads.map(l => l.open.length));
-  const assigned = loads.filter(l => l.open.length > 0 || l.done > 0);
-  const free = loads.filter(l => l.open.length === 0 && l.done === 0);
-  return <div className="board-workload">
-    <p className="fine-print">Open cards are the ones not yet in the last column. More than {OVERLOAD} open cards marks an agent as overloaded.</p>
-    <ul className="board-load-list">{assigned.map(l => <li key={l.agent.id} className="board-load" data-over={l.open.length > OVERLOAD || undefined}>
-      <div className="board-load-head"><strong>{l.agent.name}</strong>
-        <span className="fine-print">{l.open.length} open{l.overdue ? ` · ${l.overdue} overdue` : ''}{l.urgent ? ` · ${l.urgent} urgent/high` : ''}{l.done ? ` · ${l.done} done` : ''}</span>
-        {l.open.length > OVERLOAD && <span className="badge">Overloaded</span>}</div>
-      <div className="board-load-bar" aria-hidden="true"><span style={{ inlineSize: `${(l.open.length / max) * 100}%` }}/></div>
-      {l.open.length > 0 && <details><summary>Show the {l.open.length} open {l.open.length === 1 ? 'card' : 'cards'}</summary>
-        <ul>{l.open.map(c => <li key={c.id}><button type="button" className="board-link" onClick={() => void controller.openCard(c.id)}>{c.title}</button>
-          <small> · {s.columns.find(col => col.id === c.columnId)?.name}{c.dueDate ? ` · due ${c.dueDate}` : ''}</small></li>)}</ul>
-      </details>}
-    </li>)}</ul>
-    {assigned.length === 0 && <p className="fine-print">No cards are assigned to agents on this board yet.</p>}
-    {free.length > 0 && <p className="fine-print">Free on this board: {free.map(l => l.agent.name).join(', ')}.</p>}
+  const [open, setOpen] = useState<{ row: string; column: string } | null>(null);
+  const [showFree, setShowFree] = useState(false);
+  const visible = s.cards.filter(c => matches(c, s.filter));
+  const { rows, unassigned, lastColumn } = workloadMatrix(visible, s.columns, s.agents, today());
+  const columns = [...s.columns].sort((a, b) => a.position - b.position);
+  const busyRows = rows.filter(r => r.open > 0 || [...r.byColumn.values()].some(l => l.length));
+  const freeRows = rows.filter(r => !busyRows.includes(r));
+  const peak = Math.max(1, ...[...busyRows, unassigned].flatMap(r => [...r.byColumn.values()].map(l => l.length)));
+  const totals = { open: busyRows.reduce((a, r) => a + r.open, 0), overdue: busyRows.reduce((a, r) => a + r.overdue, 0), over: busyRows.filter(r => r.open > OVERLOAD).length };
+  const initials = (n: string) => n.trim().split(/\s+/).slice(0, 2).map(w => w.slice(0, 1).toUpperCase()).join('') || '?';
+  const shown = open && [...busyRows, unassigned].find(r => r.key === open.row)?.byColumn.get(open.column);
+
+  const line = (r: WorkloadRow) => <tbody key={r.key} className="wl-group">
+    <tr className="wl-row" data-over={r.open > OVERLOAD || undefined}>
+      <th scope="row" className="wl-agent">
+        {r.agent ? <span className="board-avatar" aria-hidden="true">{initials(r.agent.name)}</span> : <span className="wl-none" aria-hidden="true"/>}
+        <span className="wl-name">{r.agent ? r.agent.name : 'Not assigned'}</span>
+        {r.agent && <span className="wl-ticks" role="img" aria-label={`${r.open} open of ${OVERLOAD}`}>
+          {Array.from({ length: OVERLOAD }, (_, i) => <i key={i} data-on={i < r.open || undefined}/>)}
+          {r.open > OVERLOAD && <b>+{r.open - OVERLOAD}</b>}
+        </span>}
+      </th>
+      {columns.map(c => {
+        const n = r.byColumn.get(c.id)?.length ?? 0;
+        const active = open?.row === r.key && open.column === c.id;
+        return <td key={c.id} className="wl-cell">
+          {n > 0 ? <button type="button" className="wl-heat" data-done={c.id === lastColumn || undefined} aria-pressed={active}
+            style={{ ['--heat' as string]: String(0.18 + 0.82 * (n / peak)) }} aria-label={`${r.agent?.name ?? 'Not assigned'}: ${n} in ${c.name}`}
+            onClick={() => setOpen(active ? null : { row: r.key, column: c.id })}>{n}</button> : <span className="wl-zero" aria-hidden="true"/>}
+        </td>;
+      })}
+      <td className="wl-num">{r.open}</td>
+      <td className="wl-num" data-alert={r.overdue > 0 || undefined}>{r.overdue || ''}</td>
+      <td className="wl-num">{r.dueSoon || ''}</td>
+    </tr>
+    {shown && open?.row === r.key && <tr className="wl-detail"><td colSpan={columns.length + 4}>
+      <ul>{shown.map(c => <li key={c.id}>
+        <button type="button" className="board-link" onClick={() => void controller.openCard(c.id)}>{c.title}</button>
+        <span className={`board-priority p-${c.priority}`}>{priorityLabel[c.priority]}</span>
+        {c.dueDate && <span className={c.dueDate < today() ? 'board-due overdue' : 'board-due'}>Due {c.dueDate}</span>}
+      </li>)}</ul>
+    </td></tr>}
+  </tbody>;
+
+  return <div className="wl">
+    <p className="wl-summary"><strong>{totals.open}</strong> open {totals.open === 1 ? 'card' : 'cards'} with agents, <strong data-alert={totals.overdue > 0 || undefined}>{totals.overdue}</strong> overdue,
+      {' '}<strong data-alert={totals.over > 0 || undefined}>{totals.over}</strong> {totals.over === 1 ? 'agent' : 'agents'} over {OVERLOAD} open cards, <strong>{unassigned.open}</strong> open {unassigned.open === 1 ? 'card' : 'cards'} not assigned.</p>
+    <div className="board-table-wrap">
+      <table className="wl-table">
+        <thead><tr><th scope="col" className="wl-agent">Agent</th>
+          {columns.map(c => <th key={c.id} scope="col" data-done={c.id === lastColumn || undefined}>{c.name}</th>)}
+          <th scope="col" className="wl-num">Open</th><th scope="col" className="wl-num">Overdue</th><th scope="col" className="wl-num">Due in 7 days</th></tr></thead>
+        {busyRows.map(line)}
+        {unassigned.byColumn.size > 0 && [...unassigned.byColumn.values()].some(l => l.length) && line(unassigned)}
+      </table>
+    </div>
+    {busyRows.length === 0 && <p className="fine-print">No agent has cards on this board yet. Open a card and add agents to share out the work.</p>}
+    {freeRows.length > 0 && <div className="wl-free">
+      <button type="button" className="board-ghost" aria-expanded={showFree} onClick={() => setShowFree(v => !v)}>{freeRows.length} {freeRows.length === 1 ? 'agent has' : 'agents have'} no cards on this board</button>
+      {showFree && <p>{freeRows.map(r => r.agent!.name).join(', ')}</p>}
+    </div>}
   </div>;
 }

@@ -63,26 +63,34 @@ export function cardsByDue(cards: readonly Card[]): { byDay: Map<string, Card[]>
   return { byDay, undated };
 }
 
-export type AgentLoad = { agent: AgentOption; open: Card[]; overdue: number; urgent: number; done: number };
 /** Open cards above this count mark an agent as overloaded. */
 export const OVERLOAD = 5;
 
+export type WorkloadRow = {
+  key: string; agent: AgentOption | null; byColumn: Map<string, Card[]>; open: number; overdue: number; dueSoon: number; urgent: number;
+};
+
 /**
- * Open work per agent: cards not in the board's last column, with how many
- * are overdue or urgent/high, plus finished cards. Most loaded first; agents
- * with nothing are listed too, so free capacity is visible.
+ * The workload matrix: one row per agent (and one for cards nobody has),
+ * cards per board column, open = not in the last column, overdue = due
+ * before today, due soon = due within the next 7 days. Most open first.
  */
-export function workload(cards: readonly Card[], columns: readonly Column[], agents: readonly AgentOption[], today: string): AgentLoad[] {
-  const last = [...columns].sort((a, b) => a.position - b.position).at(-1)?.id;
-  const loads = agents.map(agent => {
-    const mine = cards.filter(c => c.agents.includes(agent.id));
+export function workloadMatrix(cards: readonly Card[], columns: readonly Column[], agents: readonly AgentOption[], today: string): { rows: WorkloadRow[]; unassigned: WorkloadRow; lastColumn?: string } {
+  const ordered = [...columns].sort((a, b) => a.position - b.position);
+  const last = ordered.at(-1)?.id;
+  const soon = new Date(`${today}T00:00:00Z`); soon.setUTCDate(soon.getUTCDate() + 7);
+  const soonIso = soon.toISOString().slice(0, 10);
+  const row = (key: string, agent: AgentOption | null, mine: Card[]): WorkloadRow => {
+    const byColumn = new Map(ordered.map(c => [c.id, mine.filter(x => x.columnId === c.id)]));
     const open = mine.filter(c => c.columnId !== last);
     return {
-      agent, open,
+      key, agent, byColumn, open: open.length,
       overdue: open.filter(c => c.dueDate !== null && c.dueDate < today).length,
+      dueSoon: open.filter(c => c.dueDate !== null && c.dueDate >= today && c.dueDate <= soonIso).length,
       urgent: open.filter(c => c.priority === 'urgent' || c.priority === 'high').length,
-      done: mine.length - open.length,
     };
-  });
-  return loads.sort((a, b) => b.open.length - a.open.length || b.overdue - a.overdue || a.agent.name.localeCompare(b.agent.name));
+  };
+  const rows = agents.map(a => row(a.id, a, cards.filter(c => c.agents.includes(a.id))))
+    .sort((a, b) => b.open - a.open || b.overdue - a.overdue || a.agent!.name.localeCompare(b.agent!.name));
+  return { rows, unassigned: row('none', null, cards.filter(c => c.agents.length === 0)), lastColumn: last };
 }
