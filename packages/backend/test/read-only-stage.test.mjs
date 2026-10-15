@@ -354,6 +354,17 @@ test('stage 3 (hire test): exactly create agent + read/replace its tool grants, 
     const permPut = await req('PUT', `/api/agents/${id}/permissions`, { payload: { memoryRead: ['task'], memoryWrite: ['task'], sharedMemory: false, modes: { ...permView.json().modes, browser: 'off' }, expectedVersion: permView.json().version } });
     assert.equal(permPut.statusCode, 200, permPut.body);
     assertReadOnly(await req('PUT', `/api/agents/${id}/permissions?x=1`, { payload: {} }), 'permissions query trick');
+    // BOARD-01: board reads and writes on the hire stage (PATCH too).
+    const boards = await req('GET', '/api/boards');
+    assert.equal(boards.statusCode, 200, boards.body);
+    const bid = boards.json().boards[0].id;
+    const bview = await req('GET', `/api/boards/${bid}`);
+    const card = await req('POST', `/api/boards/${bid}/cards`, { payload: { columnId: bview.json().columns[0].id, title: 'Stage three card' } });
+    assert.equal(card.statusCode, 201, card.body);
+    const moved = await req('PATCH', `/api/boards/${bid}/cards/${card.json().id}`, { payload: { expectedVersion: 1, columnId: bview.json().columns[1].id } });
+    assert.equal(moved.statusCode, 200, moved.body);
+    assertReadOnly(await req('PATCH', `/api/boards/${bid}/cards/${card.json().id}?x=1`, { payload: { expectedVersion: 2 } }), 'board PATCH query trick');
+    assertReadOnly(await req('PATCH', '/api/agents/a1', { payload: { name: 'x' } }), 'other PATCH stays refused');
     const catalogue = await req('GET', '/api/onboarding/team-catalogue');
     assert.equal(catalogue.statusCode, 200, catalogue.body);
     const teamPlan = await req('POST', '/api/onboarding/team-plan', { payload: { size: 'small', departments: ['sales', 'finance'] } });

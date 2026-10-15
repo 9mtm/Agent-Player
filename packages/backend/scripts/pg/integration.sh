@@ -11,7 +11,7 @@
 # test/pg-routes.integration.test.mjs and test/pg-boot.integration.test.mjs and (B2.2d)
 # test/pg-storage, pg-evaluation, pg-workflows, pg-camera, pg-skills,
 # pg-leftovers, pg-chat-sessions, pg-claude-import, pg-worlds, pg-marketplace,
-# pg-calendar, pg-voice-messages, pg-orchestrator, pg-inbox, pg-update-tasks, pg-team-batch, pg-agent-permissions and pg-boot-background (.integration.test.mjs)
+# pg-calendar, pg-voice-messages, pg-orchestrator, pg-inbox, pg-update-tasks, pg-team-batch, pg-agent-permissions, pg-task-board and pg-boot-background (.integration.test.mjs)
 # against it, then always drops it.
 #
 # Usage: scripts/pg/integration.sh [report-dir]
@@ -103,6 +103,8 @@ test "${PIPESTATUS[0]}" -eq 0
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-team-batch.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-team-batch-output.txt"
 test "${PIPESTATUS[0]}" -eq 0
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-agent-permissions.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-agent-permissions-output.txt"
+test "${PIPESTATUS[0]}" -eq 0
+AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test test/pg-task-board.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-task-board-output.txt"
 test "${PIPESTATUS[0]}" -eq 0
 AGENT_PLAYER_PG_TEST_URL="$URL" node --import tsx --test --test-force-exit test/pg-boot-background.integration.test.mjs 2>&1 | tee "$OUT_DIR/integration-boot-background-output.txt"
 test "${PIPESTATUS[0]}" -eq 0

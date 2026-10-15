@@ -58,6 +58,7 @@ import { mcpServersRoutes } from './routes/mcp-servers.js';
 import { instanceRoutes } from './routes/instance.js';
 import { agentGrantsRoutes } from './routes/agent-grants.js';
 import { agentPermissionsRoutes } from './routes/agent-permissions.js'; // CORE-PERMS-01
+import { taskBoardRoutes } from './routes/task-board.js'; // BOARD-01
 import { terminalRoutes } from './routes/terminal.js';
 import { agentPersonalityRoutes } from './routes/agent-personality.js';
 import { storageRoutes } from './routes/storage.js';
@@ -324,6 +325,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   await fastify.register(instanceRoutes); // MCP-01b: public instance proof for local clients (no secret returned)
   await fastify.register(agentGrantsRoutes); // S1.4: owner view/edit of agent tool grants
   await fastify.register(agentPermissionsRoutes); // CORE-PERMS-01: memory scope + off/ask/allow per agent
+  await fastify.register(taskBoardRoutes); // BOARD-01: company task board
   await fastify.register(terminalRoutes); // TERM-01: owner-only, loopback-only shell (off unless AGENT_TERMINAL=true)
   await fastify.register(agentPersonalityRoutes); // CORE-01: owner-only versioned personality
   await fastify.register(storageRoutes);       // 📦 Local Storage (Cache + CDN)
