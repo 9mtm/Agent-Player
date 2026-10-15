@@ -5,7 +5,7 @@ const React = require('../node_modules/react');
 const { renderToStaticMarkup } = require('../node_modules/react-dom/server');
 const { SessionClient } = require('../src/session.ts');
 const { BoardController } = require('../src/board.ts');
-const { OVERLOAD, cardsByDue, monthGrid, sortCards, workload } = require('../src/board-views.ts');
+const { cardsByDue, monthGrid, sortCards, workloadMatrix } = require('../src/board-views.ts');
 const { CalendarView, TableView, WorkloadView, ViewSwitch } = require('../src/BoardViews.tsx');
 const { createLoginMock } = require('../src/session-mock.ts');
 
@@ -33,16 +33,6 @@ test('month grid: Monday first, whole weeks, days of other months marked', () =>
   assert.deepEqual(byDay.get('2026-10-15').map(c => c.id), ['x', 'z']); assert.deepEqual(undated.map(c => c.id), ['y']);
 });
 
-test('workload: open cards per agent (last column counts as done), overdue and urgent, most loaded first, free agents listed', () => {
-  const agents = [{ id: 'a1', name: 'Nora' }, { id: 'a2', name: 'Wren' }, { id: 'a3', name: 'Idle' }];
-  const cards = [
-    ...Array.from({ length: OVERLOAD + 1 }, (_, i) => card(`n${i}`, { agents: ['a1'], dueDate: i === 0 ? '2026-01-01' : null, priority: i === 1 ? 'urgent' : 'normal' })),
-    card('w1', { agents: ['a2', 'a1'], columnId: 'c3' }), card('w2', { agents: ['a2'] }),
-  ];
-  const loads = workload(cards, columns, agents, '2026-10-15');
-  assert.deepEqual(loads.map(l => [l.agent.name, l.open.length, l.overdue, l.urgent, l.done]), [['Nora', 6, 1, 1, 1], ['Wren', 1, 0, 0, 1], ['Idle', 0, 0, 0, 0]]);
-});
-
 async function fixture(t) {
   const client = new SessionClient({ mock: createLoginMock() });
   client.selectMode('mock'); await client.login('demo@example.invalid', 'mock-only');
@@ -68,9 +58,27 @@ test('views render from the open board: table with sortable headers, calendar wi
   assert.match(cal, new RegExp(`aria-label="${today}"[^>]*>.*?Write the post`));
   assert.match(cal, /No due date \(1\)/);
   const load = html(WorkloadView, { controller: b });
-  assert.match(load, new RegExp(`${b.getSnapshot().agents[0].name}</strong>`));
-  assert.match(load, /1 open/);
-  assert.match(load, /Free on this board/);
+  assert.match(load, new RegExp(`class="wl-name">${b.getSnapshot().agents[0].name}<`));
+  assert.match(load, /aria-label="1 open of 5"/);
+  assert.match(load, /Not assigned/);
+  assert.match(load, /agents? ha(s|ve) no cards on this board/);
+  assert.match(load, /<strong>1<\/strong> open card with agents/);
   const sw = html(ViewSwitch, { view: 'calendar', onChange: () => {} });
   assert.match(sw, /aria-selected="true"[^>]*>Calendar/);
+});
+
+test('workload matrix: cards per agent and column, open / overdue / due in 7 days, a row for unassigned cards', () => {
+  const agents = [{ id: 'a1', name: 'Nora' }, { id: 'a2', name: 'Wren' }];
+  const cards = [
+    card('k1', { agents: ['a1'], columnId: 'c1', dueDate: '2026-10-10' }), card('k2', { agents: ['a1'], columnId: 'c2', dueDate: '2026-10-20' }),
+    card('k3', { agents: ['a1'], columnId: 'c3' }), card('k4', { agents: [], columnId: 'c1', dueDate: '2026-12-01' }),
+  ];
+  const m = workloadMatrix(cards, columns, agents, '2026-10-15');
+  const nora = m.rows[0];
+  assert.equal(nora.agent.name, 'Nora');
+  assert.deepEqual(['c1', 'c2', 'c3'].map(c => nora.byColumn.get(c).length), [1, 1, 1]);
+  assert.deepEqual([nora.open, nora.overdue, nora.dueSoon], [2, 1, 1]);
+  assert.equal(m.rows[1].open, 0);
+  assert.deepEqual([m.unassigned.open, m.unassigned.dueSoon], [1, 0]);
+  assert.equal(m.lastColumn, 'c3');
 });
