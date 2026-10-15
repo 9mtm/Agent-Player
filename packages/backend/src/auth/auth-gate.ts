@@ -155,6 +155,7 @@ export const TIER_RULES: readonly Rule[] = [
   // --- owner: host takeover, code execution, whole-database and key access ---
   { methods: '*', prefix: '/api/database', access: 'owner' },        // raw SQL, restore, wipe, backups
   { methods: '*', prefix: '/api/sandbox', access: 'owner' },         // command execution (native fallback)
+  { methods: '*', prefix: '/api/terminal', access: 'owner' },        // interactive shell on the host (TERM-01)
   { methods: '*', prefix: '/api/system', access: 'owner' },          // restart / shutdown
   { methods: '*', prefix: '/api/browser', access: 'owner' },         // headless browser: JS eval, file:// and SSRF
   { methods: '*', prefix: '/api/claude-local', access: 'owner' },    // reads the OS user's ~/.claude
