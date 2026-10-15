@@ -1,7 +1,7 @@
 export const CONVERSATIONS_PATH: '/api/chat/conversations';
 export const PROJECTS_PATH: '/api/chat/projects';
 export type WireProject = { id: string; name: string; slug: string; folder: string | null; repoUrl: string | null };
-export type WireGit = { branch: string | null; remote: string | null; dirty: boolean | null };
+export type WireGit = { branch: string | null; remote: string | null; dirty: boolean | null; added?: number | null; removed?: number | null; files?: number | null };
 export const MAX_MESSAGE: number;
 export const MAX_TITLE: number;
 export const RUN_STREAM_MS: number;

@@ -36,6 +36,8 @@ export type ConversationsState = Readonly<{
   stopping: boolean;
   reconnecting: boolean;
   queue: readonly { key: string; text: string }[];
+  /** Text files attached to the next message (read in the browser). */
+  attachments: readonly { name: string; text: string }[];
   /** After Stop the queue waits for the owner (Send now) instead of going on its own. */
   queuePaused: boolean;
   notice?: string;
@@ -43,11 +45,20 @@ export type ConversationsState = Readonly<{
 
 const record = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
 const RETRY_MS = [500, 1000, 2000, 4000, 8000];
+export const ATTACH_FILE_CHARS = 60_000;
+export const ATTACH_TOTAL_CHARS = 90_000;
+const LANG: Record<string, string> = { ts: 'ts', tsx: 'tsx', js: 'js', jsx: 'jsx', mjs: 'js', cjs: 'js', py: 'python', rb: 'ruby', go: 'go', rs: 'rust', java: 'java', php: 'php', sh: 'bash', zsh: 'bash', sql: 'sql', json: 'json', yml: 'yaml', yaml: 'yaml', md: 'markdown', html: 'html', css: 'css', csv: 'csv', xml: 'xml', toml: 'toml' };
+/** The message text with each attached file as a fenced block. */
+export function withAttachments(message: string, files: readonly { name: string; text: string }[]): string {
+  if (!files.length) return message;
+  const blocks = files.map(f => { const ext = f.name.split('.').at(-1)?.toLowerCase() ?? ''; const fence = f.text.includes('```') ? '~~~~' : '```'; return `Attached file \`${f.name}\`:\n${fence}${LANG[ext] ?? ''}\n${f.text}\n${fence}`; });
+  return [message || 'Please look at the attached files.', ...blocks].join('\n\n');
+}
 
 export class ConversationsController {
   #state: ConversationsState = Object.freeze({
     access: 'ready', listPhase: 'idle', conversations: [], activeId: null, threadPhase: 'empty', turns: [], draft: '', agentId: '', agents: [], models: [], model: '', projects: [], projectFilter: '', git: null,
-    runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false,
+    runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, attachments: [],
   });
   #listeners = new Set<() => void>();
   #unsubscribe: () => void;
@@ -75,6 +86,20 @@ export class ConversationsController {
 
   edit(draft: string) { this.publish({ draft: draft.slice(0, MAX_MESSAGE) }); }
   selectAgent(agentId: string) { if (!this.#state.activeId) this.publish({ agentId }); }
+  /** Adds text files to the next message; refuses files that are too big or not text. */
+  attach(files: readonly { name: string; text: string }[]): string | null {
+    const next = [...this.#state.attachments];
+    for (const f of files) {
+      if (f.text.length > ATTACH_FILE_CHARS) return `${f.name} is too big (more than ${ATTACH_FILE_CHARS / 1000}k characters).`;
+      if (/\u0000/.test(f.text)) return `${f.name} is not a text file.`;
+      next.push({ name: f.name.slice(0, 120), text: f.text });
+    }
+    if (next.reduce((n, f) => n + f.text.length, 0) > ATTACH_TOTAL_CHARS) return 'Attached files are too big together.';
+    this.publish({ attachments: next });
+    return null;
+  }
+  detach(name: string) { this.publish({ attachments: this.#state.attachments.filter(f => f.name !== name) }); }
+
   /** The last sent message (↑ in an empty composer). */
   recall(): string | undefined { return this.#history.at(-1); }
 
@@ -200,7 +225,8 @@ export class ConversationsController {
 
   /** Sends the draft (or `text`); while the agent works, the message waits in the queue. */
   async send(text?: string) {
-    const message = (text ?? this.#state.draft).trim();
+    const files = text === undefined ? this.#state.attachments : [];
+    const message = withAttachments((text ?? this.#state.draft).trim(), files);
     if (!this.live() || !message || message.length > MAX_MESSAGE) return;
     if (this.#state.runId || this.#state.starting) {
       this.publish({ queue: [...this.#state.queue, { key: this.newId(), text: message }], ...(text === undefined ? { draft: '' } : {}) });
@@ -212,7 +238,7 @@ export class ConversationsController {
     try { runId = `run-${this.newId()}`; } catch { this.publish({ notice: 'A secure id is not available here. Nothing was sent.' }); return; }
     if (!validRunId(runId)) return;
     const optimistic = userTurn(`pending:${runId}`, message, runId, true);
-    this.publish({ starting: true, notice: undefined, turns: [...this.#state.turns, optimistic], threadPhase: 'ready', ...(text === undefined ? { draft: '' } : {}) });
+    this.publish({ starting: true, notice: undefined, turns: [...this.#state.turns, optimistic], threadPhase: 'ready', ...(text === undefined ? { draft: '', attachments: [] } : {}) });
     try {
       let id = this.#state.activeId;
       if (!id) {

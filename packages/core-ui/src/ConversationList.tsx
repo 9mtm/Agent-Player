@@ -2,6 +2,20 @@ import { useState, useSyncExternalStore } from 'react';
 import type { ConversationsController, Conversation } from './conversations';
 import { UiIcon } from './ui-icons';
 
+/** Today / Yesterday / Previous 7 days / Older, by last activity (newest first). */
+export function dateGroups<T extends { updatedAt: string }>(items: readonly T[], now: Date = new Date()): [string, T[]][] {
+  const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const today = day(now);
+  const groups = new Map<string, T[]>();
+  for (const c of items) {
+    const raw = c.updatedAt.includes('T') ? c.updatedAt : `${c.updatedAt.replace(' ', 'T')}Z`;
+    const t = new Date(raw); const d = Number.isNaN(t.getTime()) ? today : day(t);
+    const label = d >= today ? 'Today' : d >= today - 86_400_000 ? 'Yesterday' : d >= today - 7 * 86_400_000 ? 'Previous 7 days' : 'Older';
+    groups.set(label, [...(groups.get(label) ?? []), c]);
+  }
+  return ['Today', 'Yesterday', 'Previous 7 days', 'Older'].filter(l => groups.has(l)).map(l => [l, groups.get(l)!]);
+}
+
 /** Rows shown before the list offers a filter box. */
 export const FILTER_AFTER = 8;
 
@@ -27,7 +41,7 @@ export function ConversationList({ controller, onOpen }: { controller: Conversat
     {picker}
     {s.conversations.length > FILTER_AFTER && <input className="conversation-filter" type="search" placeholder="Filter conversations" aria-label="Filter conversations" value={query} onChange={e => setQuery(e.target.value)}/>}
     {pinned.length > 0 && <><p className="conversation-group">Pinned</p>{pinned.map(row)}</>}
-    {recent.length > 0 && <>{pinned.length > 0 && <p className="conversation-group">Recent</p>}{recent.map(row)}</>}
+    {dateGroups(recent).map(([label, items]) => <div key={label}><p className="conversation-group">{label}</p>{items.map(row)}</div>)}
     {rows.length === 0 && <p className="session-empty">{q ? 'No match.' : 'No conversations in this project yet.'}</p>}
   </div>;
 }

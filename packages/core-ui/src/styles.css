@@ -962,3 +962,32 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .project-bar-item { display:inline-flex; align-items:center; gap:4px; color:var(--text-3); max-inline-size:28rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-decoration:none; }
 .app-shell a.project-bar-item:hover { color:var(--accent); }
 .app-shell .project-dirty { display:inline-block; inline-size:6px; block-size:6px; border-radius:50%; background:#d29922; margin-inline-start:4px; }
+
+/* Chat details panel (right) */
+.app-shell .chat-layout { flex:1 1 auto; min-block-size:0; display:grid; grid-template-columns:minmax(0,1fr); }
+.app-shell .chat-layout[data-panel] { grid-template-columns:minmax(0,1fr) 17rem; }
+.app-shell .chat-layout .chat-screen { min-inline-size:0; }
+.app-shell .chat-topbar { display:flex; align-items:stretch; border-block-end:1px solid var(--stroke-3); min-block-size:30px; }
+.app-shell .chat-topbar .project-bar { flex:1; border:0; }
+.app-shell .chat-topbar-spacer { flex:1; }
+.app-shell .chat-panel-toggle { align-self:center; margin-inline:6px; }
+.app-shell .chat-panel { border-inline-start:1px solid var(--stroke-3); overflow:auto; padding:10px; display:grid; align-content:start; gap:10px; background:color-mix(in srgb,var(--text) 1.5%,var(--canvas)); }
+.app-shell .panel-card { display:grid; gap:6px; padding:10px 12px; border-radius:8px; background:var(--canvas); box-shadow:inset 0 0 0 1px var(--stroke-3); }
+.app-shell .panel-card h3 { margin:0; font-size:11.5px; font-weight:600; color:var(--text-2); }
+.app-shell .panel-list { margin:0; display:grid; gap:5px; font-size:12px; }
+.app-shell .panel-list div { display:grid; grid-template-columns:3.2rem minmax(0,1fr); gap:6px; align-items:center; }
+.app-shell .panel-list dt { color:var(--text-3); font-size:11px; display:flex; align-items:center; }
+.app-shell .panel-list dd { margin:0; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.app-shell .panel-files { list-style:none; margin:0; padding:0; display:grid; gap:4px; font-size:12px; }
+.app-shell .panel-files li { display:flex; align-items:center; gap:6px; color:var(--text-2); overflow:hidden; }
+.app-shell .panel-files span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:Menlo,Monaco,"SF Mono",monospace; font-size:11.5px; }
+.app-shell .panel-changes { margin:0; font-size:12px; font-variant-numeric:tabular-nums; }
+.app-shell .panel-changes .plus { color:#2da44e; font-weight:600; } .app-shell .panel-changes .minus { color:var(--danger); font-weight:600; }
+.app-shell .chat-panel .muted, .app-shell .panel-list .muted { margin:0; font-size:11.5px; color:var(--text-3); }
+@media (max-width: 900px) { .app-shell .chat-layout[data-panel] { grid-template-columns:minmax(0,1fr); } .app-shell .chat-panel { display:none; } }
+
+.app-shell .chat-attachments { inline-size:min(48rem,100%); display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.app-shell .attach-chip { display:inline-flex; align-items:center; gap:5px; padding:2px 4px 2px 8px; border-radius:6px; font-size:11.5px; background:var(--composer-fill); box-shadow:inset 0 0 0 1px var(--stroke-3); }
+.app-shell .attach-chip small { color:var(--text-3); }
+.app-shell .attach-error { font-size:11.5px; color:var(--danger); }
+.app-shell .composer-attach { margin-inline-start:-4px; }

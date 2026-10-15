@@ -4,7 +4,7 @@ import type { ConversationsController } from './conversations';
 import { Markdown } from './markdown';
 import { UiIcon } from './ui-icons';
 import type { UiIconName } from './ui-icons';
-import { duration, splitWork, toolCount, toolView, workSummary } from './turns';
+import { approxTokens, duration, splitWork, toolCount, toolView, turnOutputs, workSummary } from './turns';
 import type { Part, ToolCall, ToolKind, Turn } from './turns';
 
 /** Pixels from the bottom within which the thread keeps following new text. */
@@ -63,7 +63,17 @@ export function ChatView({ controller, mode, productName = 'Dpro' }: { controlle
   }, [s.draft]);
   useEffect(() => { input.current?.focus(); }, [s.activeId]);
 
-  const submit = () => { if (s.draft.trim()) { setFollowing(true); void controller.send(); } };
+  const submit = () => { if (s.draft.trim() || s.attachments.length) { setFollowing(true); void controller.send(); } };
+  const picker = useRef<HTMLInputElement>(null);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const onFiles = async (list: FileList | null) => {
+    if (!list?.length) return;
+    try {
+      const files = await Promise.all([...list].map(async f => ({ name: f.name, text: f.size > 2_000_000 ? '\u0000' : await f.text() })));
+      setAttachError(controller.attach(files));
+    } catch { setAttachError('The file could not be read.'); }
+    if (picker.current) picker.current.value = '';
+  };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!e.repeat) submit(); return; }
@@ -76,8 +86,13 @@ export function ChatView({ controller, mode, productName = 'Dpro' }: { controlle
   const empty = s.turns.length === 0 && s.threadPhase !== 'loading';
 
   const project = controller.activeProject();
-  return <div className="chat-screen">
-    {project && <ProjectBar name={project.name} folder={project.folder} repoUrl={project.repoUrl} git={s.git}/>}
+  const [panel, setPanel] = useState(() => typeof window === 'undefined' || window.innerWidth >= 1100);
+  return <div className="chat-layout" data-panel={panel || undefined}>
+  <div className="chat-screen">
+    <div className="chat-topbar">
+      {project ? <ProjectBar name={project.name} folder={project.folder} repoUrl={project.repoUrl} git={s.git}/> : <span className="chat-topbar-spacer"/>}
+      <button type="button" className="tool chat-panel-toggle" aria-pressed={panel} aria-label={panel ? 'Hide details' : 'Show details'} title={panel ? 'Hide details' : 'Show details'} onClick={() => setPanel(v => !v)}><UiIcon name="sidebar" size={14}/></button>
+    </div>
     <div className="chat-thread" ref={thread} onScroll={onScroll} aria-label="Conversation">
       {s.threadPhase === 'loading' && <p className="chat-loading" role="status"><span className="pulse" aria-hidden="true"/>Opening the conversation</p>}
       {empty ? <div className="chat-empty">
@@ -108,12 +123,21 @@ export function ChatView({ controller, mode, productName = 'Dpro' }: { controlle
           <button type="button" className="ghost-action" aria-label="Remove from the queue" onClick={() => controller.removeQueued(q.key)}><UiIcon name="trash" size={13}/></button>
         </li>)}
       </ul>}
-      <form className="chat-composer" method="post" onSubmit={e => { e.preventDefault(); submit(); }}>
+      {(s.attachments.length > 0 || attachError) && <div className="chat-attachments" aria-label="Attached files">
+        {s.attachments.map(f => <span key={f.name} className="attach-chip" dir="ltr"><UiIcon name="file" size={12}/>{f.name}<small>{Math.ceil(f.text.length / 1000)}k</small>
+          <button type="button" className="row-tool" aria-label={`Remove ${f.name}`} onClick={() => controller.detach(f.name)}><UiIcon name="trash" size={11}/></button></span>)}
+        {attachError && <span className="attach-error" role="alert">{attachError}</span>}
+      </div>}
+      <form className="chat-composer" method="post" onSubmit={e => { e.preventDefault(); submit(); }}
+        onDragOver={e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); }} onDrop={e => { if (e.dataTransfer.files.length) { e.preventDefault(); void onFiles(e.dataTransfer.files); } }}>
         <label htmlFor="chat-input" className="sr-only">Message</label>
         <textarea id="chat-input" ref={input} rows={1} dir="auto" value={s.draft} maxLength={100000}
           placeholder={running ? 'Type the next message; it is sent when this reply ends' : agentName ? `Message ${agentName}` : s.turns.length ? 'Send a follow-up' : "What's on your mind?"}
           onChange={e => controller.edit(e.target.value)} onKeyDown={onKeyDown} disabled={s.access === 'denied'}/>
         <div className="chat-composer-row">
+          <input ref={picker} type="file" multiple hidden onChange={e => void onFiles(e.target.files)}
+            accept=".txt,.md,.csv,.json,.yml,.yaml,.xml,.toml,.ini,.log,.ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.rb,.go,.rs,.java,.php,.sh,.sql,.html,.css,text/*"/>
+          <button type="button" className="tool composer-attach" aria-label="Attach text files" title="Attach text files (code, notes, CSV…)" onClick={() => picker.current?.click()}><UiIcon name="plus" size={14}/></button>
           {s.agents.length > 0 && !s.activeId
             ? <label className="composer-agent"><span className="sr-only">Agent</span>
               <select value={s.agentId} onChange={e => controller.selectAgent(e.target.value)}>
@@ -130,11 +154,60 @@ export function ChatView({ controller, mode, productName = 'Dpro' }: { controlle
           <span className="composer-keys" aria-hidden="true">{running ? 'Esc stops' : 'Enter sends · Shift+Enter new line'}</span>
           {running && !s.draft.trim()
             ? <button type="button" className="round-button stop" onClick={() => void controller.stop()} disabled={s.stopping} aria-label={s.stopping ? 'Stopping' : 'Stop the reply'}><UiIcon name="stop" size={10}/></button>
-            : <button type="submit" className="round-button" disabled={!s.draft.trim() || s.access === 'denied'} aria-label={busy ? 'Queue the message' : 'Send'}><UiIcon name="arrow-up" size={14}/></button>}
+            : <button type="submit" className="round-button" disabled={(!s.draft.trim() && !s.attachments.length) || s.access === 'denied'} aria-label={busy ? 'Queue the message' : 'Send'}><UiIcon name="arrow-up" size={14}/></button>}
         </div>
       </form>
     </div>
+  </div>
+  {panel && <ChatSidePanel controller={controller}/>}
   </div>;
+}
+
+/** Details of the open conversation: where it works, how big it is, what it produced. */
+function ChatSidePanel({ controller }: { controller: ConversationsController }) {
+  const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const project = controller.activeProject();
+  const conv = s.conversations.find(c => c.id === s.activeId);
+  const outputs = turnOutputs(s.turns);
+  const tokens = approxTokens(s.turns);
+  const agent = s.agents.find(a => a.id === (conv?.agentId ?? s.agentId))?.name ?? 'Main agent';
+  const model = s.models.find(m => m.id === s.model)?.label ?? (s.model || "Agent's model");
+  const replies = s.turns.filter(t => t.role === 'assistant');
+  const worked = replies.reduce((n, t) => n + (t.durationMs ?? 0), 0);
+  const tools = workSummary(s.turns.flatMap(t => t.parts));
+  const home = project?.folder?.match(/^\/Users\/[^/]+/)?.[0];
+  return <aside className="chat-panel" aria-label="Conversation details">
+    <section className="panel-card">
+      <h3>Environment</h3>
+      <dl className="panel-list">
+        <div><dt><UiIcon name="board" size={12}/></dt><dd>{project ? project.name : <span className="muted">No project</span>}</dd></div>
+        {project?.folder && <div><dt><UiIcon name="file" size={12}/></dt><dd dir="ltr" title={project.folder}>{home ? `~${project.folder.slice(home.length)}` : project.folder}</dd></div>}
+        {s.git?.branch && <div><dt aria-label="Branch">⎇</dt><dd dir="ltr">{s.git.branch}</dd></div>}
+        {(project?.repoUrl ?? s.git?.remote) && <div><dt><UiIcon name="globe" size={12}/></dt><dd dir="ltr">{(project?.repoUrl ?? s.git?.remote ?? '').replace(/^https:\/\//, '')}</dd></div>}
+        <div><dt><UiIcon name="brain" size={12}/></dt><dd>{agent} · {model}</dd></div>
+      </dl>
+    </section>
+    <section className="panel-card">
+      <h3>Conversation</h3>
+      <dl className="panel-list">
+        <div><dt>Size</dt><dd>≈ {tokens.toLocaleString('en')} tokens</dd></div>
+        <div><dt>Replies</dt><dd>{replies.length}{worked ? ` · worked ${duration(worked)}` : ''}</dd></div>
+        {tools && <div><dt>Tools</dt><dd>{tools}</dd></div>}
+      </dl>
+    </section>
+    <section className="panel-card">
+      <h3>Outputs</h3>
+      {outputs.length ? <ul className="panel-files">{outputs.slice(-8).reverse().map(o => <li key={o.path} dir="ltr"><UiIcon name={o.kind === 'edit' ? 'pencil' : 'file'} size={12}/><span title={o.path}>{o.path.split('/').at(-1)}</span></li>)}</ul>
+        : <p className="muted">Files the agent writes appear here.</p>}
+    </section>
+    {project?.folder && <section className="panel-card">
+      <h3>Changes</h3>
+      {s.git && s.git.added !== null && s.git.added !== undefined
+        ? (s.git.files ? <p className="panel-changes"><span className="plus">+{s.git.added}</span> <span className="minus">−{s.git.removed ?? 0}</span> <span className="muted">in {s.git.files} {s.git.files === 1 ? 'file' : 'files'} not committed</span></p>
+          : <p className="muted">No uncommitted changes.</p>)
+        : <p className="muted">Not a git folder.</p>}
+    </section>}
+  </aside>;
 }
 
 /** Where this conversation works: project, folder, git branch and repository. */

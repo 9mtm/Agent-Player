@@ -117,7 +117,7 @@ export function conversationResponse(path, status, body) {
   if (p.kind === 'projects' && status === 200) { if (!Array.isArray(body.projects)) throw Error('protocol'); return { projects: body.projects.slice(0, 500).map(project) }; }
   if (p.kind === 'projects' || (p.kind === 'project' && record(body.project))) return { project: project(body.project) };
   if (p.kind === 'project') { if (body.ok !== true) throw Error('protocol'); return { ok: true }; }
-  if (p.kind === 'project-git') { const g = record(body.git) ? body.git : {}; return { git: { branch: typeof g.branch === 'string' ? g.branch.slice(0, 200) : null, remote: typeof g.remote === 'string' ? g.remote.slice(0, 300) : null, dirty: typeof g.dirty === 'boolean' ? g.dirty : null } }; }
+  if (p.kind === 'project-git') { const g = record(body.git) ? body.git : {}; const count = x => (Number.isSafeInteger(x) && x >= 0 ? x : null); return { git: { branch: typeof g.branch === 'string' ? g.branch.slice(0, 200) : null, remote: typeof g.remote === 'string' ? g.remote.slice(0, 300) : null, dirty: typeof g.dirty === 'boolean' ? g.dirty : null, added: count(g.added), removed: count(g.removed), files: count(g.files) } }; }
   if (p.kind === 'list' && status === 200) {
     if (!Array.isArray(body.conversations) || body.conversations.length > 1000) throw Error('protocol');
     return { conversations: body.conversations.map(conversation) };

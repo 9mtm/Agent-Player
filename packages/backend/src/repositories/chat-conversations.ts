@@ -224,11 +224,16 @@ export async function deleteProject(userId: string, id: string): Promise<boolean
 }
 
 /** The folder's git branch and origin URL (local commands only, no network). */
-export function gitInfo(folder: string): Promise<{ branch: string | null; remote: string | null; dirty: boolean | null }> {
+export function gitInfo(folder: string): Promise<{ branch: string | null; remote: string | null; dirty: boolean | null; added: number | null; removed: number | null; files: number | null }> {
   const git = (args: string[]) => new Promise<string | null>((resolve) => {
     execFile('git', ['-C', folder, ...args], { timeout: 3000, env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '', GIT_TERMINAL_PROMPT: '0' } },
       (err, out) => resolve(err ? null : String(out).trim()));
   });
-  return Promise.all([git(['rev-parse', '--abbrev-ref', 'HEAD']), git(['remote', 'get-url', 'origin']), git(['status', '--porcelain'])])
-    .then(([branch, remote, status]) => ({ branch: branch || null, remote: remote ? remote.replace(/\/\/[^/@]+@/, '//') : null, dirty: status === null ? null : status.length > 0 }));
+  return Promise.all([git(['rev-parse', '--abbrev-ref', 'HEAD']), git(['remote', 'get-url', 'origin']), git(['status', '--porcelain']), git(['diff', '--shortstat', 'HEAD'])])
+    .then(([branch, remote, status, stat]) => {
+      // "3 files changed, 10 insertions(+), 2 deletions(-)" (uncommitted changes against HEAD)
+      const n = (re: RegExp) => { const m = stat === null ? null : re.exec(stat); return stat === null ? null : m ? Number(m[1]) : 0; };
+      return { branch: branch || null, remote: remote ? remote.replace(/\/\/[^/@]+@/, '//') : null, dirty: status === null ? null : status.length > 0,
+        added: n(/(\d+) insertion/), removed: n(/(\d+) deletion/), files: n(/(\d+) files? changed/) };
+    });
 }

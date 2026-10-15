@@ -90,7 +90,7 @@ export function createConversationsMock(options: { stepMs?: number } = {}) {
     if (p.kind === 'project' || p.kind === 'project-git') {
       const pr = projects.get(p.id);
       if (!pr) return { status: 404, body: { code: 'not_found' } };
-      if (p.kind === 'project-git') return { status: 200, body: { git: pr.folder ? { branch: 'main', remote: pr.repoUrl, dirty: false } : { branch: null, remote: null, dirty: null } } };
+      if (p.kind === 'project-git') return { status: 200, body: { git: pr.folder ? { branch: 'main', remote: pr.repoUrl, dirty: true, added: 12, removed: 3, files: 2 } : { branch: null, remote: null, dirty: null } } };
       if (request.method === 'DELETE') { projects.delete(pr.id); for (const c of convs.values()) if (c.projectId === pr.id) c.projectId = null; return { status: 200, body: { ok: true } }; }
       Object.assign(pr, Object.fromEntries(Object.entries(body ?? {}).filter(([, v]) => v !== undefined)));
       return { status: 200, body: { project: pr } };

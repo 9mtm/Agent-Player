@@ -158,3 +158,23 @@ export function duration(ms: number): string {
   if (m < 60) return `${m}m ${String(r).padStart(2, '0')}s`;
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
 }
+
+/** Files the agent wrote or edited in these turns (newest last, no duplicates). */
+export function turnOutputs(turns: readonly Turn[]): { path: string; kind: 'write' | 'edit' }[] {
+  const out = new Map<string, 'write' | 'edit'>();
+  for (const t of turns) for (const p of t.parts) if (p.kind === 'tools') for (const c of p.calls) {
+    if (c.isError || c.running) continue;
+    const v = toolView({ ...c, running: false });
+    if (v.kind !== 'write' && v.kind !== 'edit') continue;
+    const path = ['path', 'file', 'file_path', 'filename'].map(k => v.args[k]).find(x => typeof x === 'string') as string | undefined;
+    if (path) { out.delete(path); out.set(path, v.kind); }
+  }
+  return [...out].map(([path, kind]) => ({ path, kind }));
+}
+
+/** A rough size of the conversation in tokens (about 4 characters each). */
+export function approxTokens(turns: readonly Turn[]): number {
+  let chars = 0;
+  for (const t of turns) { chars += t.content.length; for (const p of t.parts) if (p.kind === 'tools') for (const c of p.calls) chars += c.input.length + (c.output?.length ?? 0); }
+  return Math.round(chars / 4);
+}

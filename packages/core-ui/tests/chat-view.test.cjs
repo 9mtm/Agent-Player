@@ -171,3 +171,21 @@ test('projects: create one, chats go into it, the chat shows the project bar; mo
   assert.equal(c.getSnapshot().projects.length, 0);
   assert.equal(c.getSnapshot().projectFilter, '');
 });
+
+test('side panel shows environment, size, outputs and changes; the list groups by date', async t => {
+  const { dateGroups } = require('../src/ConversationList.tsx');
+  const now = new Date('2026-10-15T12:00:00');
+  const g = dateGroups([{ updatedAt: '2026-10-15 09:00:00' }, { updatedAt: '2026-10-14 09:00:00' }, { updatedAt: '2026-10-10 09:00:00' }, { updatedAt: '2026-09-01 09:00:00' }], now);
+  assert.deepEqual(g.map(x => x[0]), ['Today', 'Yesterday', 'Previous 7 days', 'Older']);
+  const { c } = await fixture(t);
+  await c.load(); await new Promise(r => setTimeout(r, 30));
+  await c.createProject({ name: 'App', folder: '/fiction/app', repoUrl: '' });
+  await c.send('Plan it'); await until(() => !c.getSnapshot().runId);
+  await until(() => c.getSnapshot().git?.added === 12);
+  const html = renderToStaticMarkup(React.createElement(ChatView, { controller: c, mode: 'mock' }));
+  assert.match(html, /aria-label="Conversation details"/);
+  assert.match(html, />Environment</);
+  assert.match(html, /≈ [\d,]+ tokens/);
+  assert.match(html, /\+12/);
+  assert.match(html, /in 2 files not committed/);
+});
