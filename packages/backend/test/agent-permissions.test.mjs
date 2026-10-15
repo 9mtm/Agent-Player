@@ -180,3 +180,31 @@ test('memory scope: unread drawers are closed; read-only drawers refuse writes',
   assert.deepEqual([...actor.writeKinds], ['task']);
   await assert.rejects(repositories.memory.create(actor, { content: 'x', type: 'fact', importance: 3, drawer: { kind: 'owner' } }), /not open/i);
 });
+
+test('a delegated run gets the strictest of its own and the delegating agents\' permissions', async () => {
+  const lead = await hire('Lead Strict');
+  const worker = await hire('Worker Strict');
+  const lv = (await get(lead)).json().version;
+  await put(lead, { ...body({ memoryRead: ['task', 'project'], memoryWrite: ['task'], modes: modes({ network: 'off', message: 'allow' }) }), expectedVersion: lv });
+  const wv = (await get(worker)).json().version;
+  await put(worker, { ...body({ modes: modes({ network: 'allow', message: 'ask', browser: 'allow' }) }), expectedVersion: wv });
+  const run = await perms.loadRunPermissions(worker, [lead]);
+  assert.equal(run.modes.network, 'off');
+  assert.equal(run.modes.message, 'ask');
+  assert.equal(run.modes.browser, 'ask');
+  assert.deepEqual(run.memoryRead, ['project', 'task']);
+  assert.deepEqual(run.memoryWrite, ['task']);
+  const reg = await tools.createAgentToolsRegistry({ workspaceDir: dir, agentId: worker, delegatedFrom: [lead], userId: 'ap-owner', grants: { agentId: worker, tools: new Map([['web_fetch', null]]) } });
+  reg.register(fakeTool('web_fetch'));
+  assert.match(text(await quietly(() => reg.execute('web_fetch', {}))), /switched off/);
+});
+
+test('reflect and derived saves respect read-only drawers', async () => {
+  const { actorFromToolContext } = await import(join(backendDir, 'src/repositories/actor.ts'));
+  const id = await hire('Reflect Strict');
+  const v = (await get(id)).json().version;
+  await put(id, { ...body({ memoryWrite: [] }), expectedVersion: v });
+  const reg = await tools.createAgentToolsRegistry({ workspaceDir: dir, agentId: id, userId: 'ap-owner', sessionId: 's-ref' });
+  const actor = actorFromToolContext(reg['context']);
+  await assert.rejects(repositories.memory.saveDerived(actor, { id: 'derived-1', content: 'x', type: 'insight', importance: 3, drawer: { kind: 'experience' } }), /not open/i);
+});

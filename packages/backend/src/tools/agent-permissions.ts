@@ -118,6 +118,37 @@ export async function loadAgentPermissions(agentId: string): Promise<AgentPermis
   try { return await sql().read(loadStep(agentId)); } catch { return closedPermissions(agentId); }
 }
 
+const MODE_RANK: Record<PermissionMode, number> = { off: 0, ask: 1, allow: 2 };
+
+/**
+ * The strictest of several agents' permissions (a delegated run must never
+ * get more than any agent it was delegated from): per category the most
+ * restrictive mode, memory kinds intersected, shared memory only when all allow it.
+ */
+export function strictest(agentId: string, list: readonly AgentPermissions[]): AgentPermissions {
+  const [first, ...rest] = list;
+  return rest.reduce<AgentPermissions>((acc, p) => ({
+    agentId,
+    memoryRead: acc.memoryRead.filter((k) => p.memoryRead.includes(k)),
+    memoryWrite: acc.memoryWrite.filter((k) => p.memoryWrite.includes(k)),
+    sharedMemory: acc.sharedMemory && p.sharedMemory,
+    modes: Object.fromEntries(PERMISSION_CATEGORIES.map((c) => [c, MODE_RANK[p.modes[c]] < MODE_RANK[acc.modes[c]] ? p.modes[c] : acc.modes[c]])) as Record<PermissionCategory, PermissionMode>,
+    version: acc.version,
+  }), { ...first, agentId });
+}
+
+/** The permissions a run of `agentId` gets: its own, narrowed by every agent it was delegated from. */
+export async function loadRunPermissions(agentId: string, delegatedFrom: readonly string[] = []): Promise<AgentPermissions> {
+  const ids = [agentId, ...delegatedFrom.filter((d) => d && d !== agentId)];
+  return strictest(agentId, await Promise.all(ids.map((id) => loadAgentPermissions(id))));
+}
+
+/** loadRunPermissions, synchronously: SQLite only. */
+export function loadRunPermissionsSync(agentId: string, delegatedFrom: readonly string[] = []): AgentPermissions {
+  const ids = [agentId, ...delegatedFrom.filter((d) => d && d !== agentId)];
+  return strictest(agentId, ids.map((id) => loadAgentPermissionsSync(id)));
+}
+
 /** loadAgentPermissions, synchronously: SQLite only (createToolsRegistry's synchronous path). */
 export function loadAgentPermissionsSync(agentId: string): AgentPermissions {
   try { return sqliteSync(loadStep(agentId)); } catch { return closedPermissions(agentId); }

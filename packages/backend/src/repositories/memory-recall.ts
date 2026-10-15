@@ -22,7 +22,7 @@
  */
 
 import type { Actor } from './actor.js';
-import { ScopeError, drawerOpen, requireOwner } from './scope.js';
+import { ScopeError, drawerOpen, drawerWritable, requireOwner } from './scope.js';
 import { memberUser, memoryUser, versionActor } from './memory-actor.js';
 import { all, one, sql } from './sql-steps.js';
 import { getMemoryStorage } from '../memory/storage.js';
@@ -166,7 +166,8 @@ export const memoryRecall: MemoryRecallRepository = {
   async saveDerived(actor, memory) {
     const { a, userId } = memoryUser(actor);
     const drawer = memory.drawer ? normalizeDrawer(memory.drawer) : defaultDrawerForType(memory.type);
-    if (!drawerOpen(a, drawer)) throw new ScopeError(403, DRAWER_CLOSED);
+    // CORE-PERMS-01: open for the run and a kind the agent may write.
+    if (!drawerWritable(a, drawer)) throw new ScopeError(403, DRAWER_CLOSED);
     const saved = { ...memory, drawer, userId } as Memory;
     await getMemoryStorage().save(saved);
     return saved;

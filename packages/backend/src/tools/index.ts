@@ -20,7 +20,7 @@ export * from './notifications/index.js';
 export * from './credentials/index.js';
 
 // Utility function to create a pre-configured registry
-import { loadAgentPermissions, loadAgentPermissionsSync } from './agent-permissions.js';
+import { loadRunPermissions, loadRunPermissionsSync } from './agent-permissions.js';
 import { ToolsRegistry } from './registry.js';
 import type { ToolExecutionContext } from './types.js';
 import { defaultGrants, loadAgentGrants, loadAgentGrantsSync } from './grants.js';
@@ -164,8 +164,9 @@ export function createToolsRegistry(context: ToolExecutionContext): ToolsRegistr
         : defaultGrants(),
     });
   }
-  // CORE-PERMS-01: the agent's memory scope and off / ask / allow modes.
-  if (!context.permissions && context.agentId) registry.updateContext({ permissions: loadAgentPermissionsSync(context.agentId) });
+  // CORE-PERMS-01: the agent's memory scope and off / ask / allow modes,
+  // narrowed by every agent this run was delegated from.
+  if (!context.permissions && context.agentId) registry.updateContext({ permissions: loadRunPermissionsSync(context.agentId, context.delegatedFrom || []) });
   return registry;
 }
 
@@ -182,8 +183,9 @@ export async function createAgentToolsRegistry(context: ToolExecutionContext): P
         : defaultGrants(),
     });
   }
-  // CORE-PERMS-01: the agent's memory scope and off / ask / allow modes.
-  if (!context.permissions && context.agentId) registry.updateContext({ permissions: await loadAgentPermissions(context.agentId) });
+  // CORE-PERMS-01: the agent's memory scope and off / ask / allow modes,
+  // narrowed by every agent this run was delegated from.
+  if (!context.permissions && context.agentId) registry.updateContext({ permissions: await loadRunPermissions(context.agentId, context.delegatedFrom || []) });
   return registry;
 }
 
