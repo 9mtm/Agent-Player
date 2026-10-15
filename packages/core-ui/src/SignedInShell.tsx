@@ -101,7 +101,7 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
     <main id="content" className="page-area">
       {notice && <p className="page-notice" role="status">{notice}</p>}
       <section className="page page-chat" aria-label="Chat" hidden={page !== 'chat'}>
-        {chat ? <ChatView controller={chat} mode={mode}/> : <p>Chat is not connected.</p>}
+        {chat ? <ChatView controller={chat} mode={mode} client={client}/> : <p>Chat is not connected.</p>}
       </section>
       <section className="page page-scroll" hidden={page !== 'agents'}><div className="page-column"><AgentsDestination client={client} active={page === 'agents'} onOpenMemory={() => setPage('memory')}/></div></section>
       <section className="page page-scroll page-board page-ui" hidden={page !== 'board'}>{board && <TaskBoard controller={board} active={page === 'board'}/>}</section>

@@ -991,3 +991,25 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .attach-chip small { color:var(--text-3); }
 .app-shell .attach-error { font-size:11.5px; color:var(--danger); }
 .app-shell .composer-attach { margin-inline-start:-4px; }
+.app-shell .panel-count { font-weight:400; color:var(--text-3); margin-inline-start:6px; }
+.app-shell .panel-groups, .app-shell .panel-modes, .app-shell .panel-tools { list-style:none; margin:0; padding:0; display:grid; gap:2px; }
+.app-shell .panel-group { display:grid; grid-template-columns:1fr auto; align-items:center; gap:4px; }
+.app-shell .panel-group-name { display:flex; align-items:center; gap:6px; justify-content:space-between; padding:3px 4px; border:0; background:none; color:inherit; font:inherit; font-size:12px; text-align:start; border-radius:5px; cursor:pointer; }
+.app-shell .panel-group-name:hover { background:var(--row-hover); }
+.app-shell .panel-tools { grid-column:1 / -1; padding:2px 0 6px 10px; }
+.app-shell .panel-tools label { display:flex; align-items:center; gap:6px; font-size:11.5px; }
+.app-shell .panel-modes li { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; padding:2px 0; }
+.app-shell .panel-modes select { font:inherit; font-size:11.5px; padding:1px 4px; border-radius:5px; background:var(--composer-fill); color:inherit; border:1px solid var(--stroke-3); }
+.app-shell .panel-modes select[data-mode="allow"] { color:var(--accent); }
+.app-shell .panel-modes select[data-mode="off"] { color:var(--text-3); }
+.app-shell .panel-confirm, .app-shell .panel-notice { font-size:11.5px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.app-shell .panel-notice.error { color:var(--danger); }
+.app-shell .panel-memory { font-size:12px; margin:0 0 2px; }
+.app-shell .switch { position:relative; display:inline-block; inline-size:26px; block-size:15px; }
+.app-shell .switch input { position:absolute; inset:0; opacity:0; margin:0; cursor:pointer; }
+.app-shell .switch span { position:absolute; inset:0; border-radius:99px; background:var(--stroke-3); transition:background .15s; pointer-events:none; }
+.app-shell .switch span::after { content:""; position:absolute; inset-block-start:2px; inset-inline-start:2px; inline-size:11px; block-size:11px; border-radius:50%; background:var(--canvas); transition:transform .15s; }
+.app-shell .switch input:checked + span { background:var(--accent); }
+.app-shell .switch input:checked + span::after { transform:translateX(11px); }
+.app-shell .switch input:focus-visible + span { outline:2px solid var(--accent); outline-offset:2px; }
+.app-shell .switch input:disabled + span { opacity:.5; }

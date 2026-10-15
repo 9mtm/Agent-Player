@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { ConversationsController } from './conversations';
+import { AgentPanel } from './AgentPanel';
+import type { SessionClient } from './session';
 import { Markdown } from './markdown';
 import { UiIcon } from './ui-icons';
 import type { UiIconName } from './ui-icons';
@@ -27,7 +29,7 @@ const SUGGESTIONS = [
  * finished turn folds its work into "Worked for …". Behaviour lives in
  * ConversationsController; this file is layout and local view state only.
  */
-export function ChatView({ controller, mode, productName = 'Dpro' }: { controller: ConversationsController; mode: 'live' | 'mock'; productName?: string }) {
+export function ChatView({ controller, mode, productName = 'Dpro', client }: { controller: ConversationsController; mode: 'live' | 'mock'; productName?: string; client?: SessionClient }) {
   const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const thread = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -159,12 +161,12 @@ export function ChatView({ controller, mode, productName = 'Dpro' }: { controlle
       </form>
     </div>
   </div>
-  {panel && <ChatSidePanel controller={controller}/>}
+  {panel && <ChatSidePanel controller={controller} client={client}/>}
   </div>;
 }
 
 /** Details of the open conversation: where it works, how big it is, what it produced. */
-function ChatSidePanel({ controller }: { controller: ConversationsController }) {
+function ChatSidePanel({ controller, client }: { controller: ConversationsController; client?: SessionClient }) {
   const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const project = controller.activeProject();
   const conv = s.conversations.find(c => c.id === s.activeId);
@@ -207,6 +209,7 @@ function ChatSidePanel({ controller }: { controller: ConversationsController }) 
           : <p className="muted">No uncommitted changes.</p>)
         : <p className="muted">Not a git folder.</p>}
     </section>}
+    {client && <AgentPanel client={client} agentId={conv?.agentId || s.agentId || s.agents[0]?.id || ''}/>}
   </aside>;
 }
 

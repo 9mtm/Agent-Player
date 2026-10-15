@@ -176,3 +176,20 @@ test('model choice: chat picks a model for the next reply; the card saves a defa
   const html = renderToStaticMarkup(React.createElement(CardView, { card: c, onBack: () => {} }));
   assert.match(html, /On this computer/);
 });
+
+test('chat agent panel shows tool groups, permissions and memory, and saves a group switch', async t => {
+  const { AgentPanelBody } = require('../src/AgentPanel.tsx');
+  const c = new AgentCardController(await client(), 'sample-main', 'memory'); t.after(() => c.dispose());
+  await c.load();
+  const html = renderToStaticMarkup(React.createElement(AgentPanelBody, { card: c }));
+  assert.match(html, /Skills and tools/);
+  assert.match(html, /\d+ of \d+ on/);
+  assert.match(html, /Connectors/);
+  assert.match(html, /Spend money/);
+  assert.match(html, /it can read/);
+  const before = c.getSnapshot().grants.granted.length;
+  c.setTools(['web_fetch'], true); await c.savePermissions();
+  assert.ok(c.getSnapshot().grants.granted.includes('web_fetch'));
+  assert.ok(c.getSnapshot().grants.granted.length >= before);
+  assert.equal(require('../src/agent-card.ts').toolGroup('mcp:files:read'), 'Connectors');
+});

@@ -19,7 +19,7 @@ const TRAIT: Record<TraitName, [string, string, string]> = {
   thoroughness: ['Thoroughness', 'Quick', 'Thorough'], independence: ['Independence', 'Asks often', 'Decides alone'], verbosity: ['Length', 'Short', 'Detailed'],
   warmth: ['Warmth', 'Neutral', 'Warm'], curiosity: ['Curiosity', 'Focused', 'Explores'], persistence: ['Persistence', 'Gives up early', 'Keeps trying'],
 };
-const CATEGORY: Record<string, string> = { browser: 'Use the browser', network: 'Reach the internet', message: 'Send messages', delete: 'Delete things', install: 'Install software', money: 'Spend money', settings: 'Change settings' };
+export const CATEGORY: Record<string, string> = { browser: 'Use the browser', network: 'Reach the internet', message: 'Send messages', delete: 'Delete things', install: 'Install software', money: 'Spend money', settings: 'Change settings' };
 const DIALECT: Record<string, string> = { 'ar-IQ': 'Arabic (Iraqi)', ar: 'Arabic', en: 'English', de: 'German', fr: 'French', es: 'Spanish', zh: 'Chinese', ja: 'Japanese', ko: 'Korean', 'pt-BR': 'Portuguese (Brazil)', ru: 'Russian', tr: 'Turkish', hi: 'Hindi' };
 
 /**

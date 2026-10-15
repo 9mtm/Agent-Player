@@ -26,10 +26,11 @@ const profileOf = (a?: PublicAgent): ProfileDraft => ({ role: a?.role ?? '', dep
 const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every(x => b.includes(x));
 
 /** Tool groups on the card, in display order. */
-export const TOOL_GROUPS = ['Memory', 'Board', 'Files', 'Internet and browser', 'Messages and reminders', 'System', 'Other'] as const;
+export const TOOL_GROUPS = ['Memory', 'Board', 'Files', 'Internet and browser', 'Messages and reminders', 'System', 'Connectors', 'Other'] as const;
 export type ToolGroup = (typeof TOOL_GROUPS)[number];
 /** Which group a tool belongs to, by its name. */
 export function toolGroup(name: string): ToolGroup {
+  if (/^mcp:/.test(name)) return 'Connectors';
   if (/^memory_/.test(name)) return 'Memory';
   if (/^board_/.test(name)) return 'Board';
   if (/^(read|write|storage_)/.test(name)) return 'Files';
