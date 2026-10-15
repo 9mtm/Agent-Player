@@ -70,7 +70,8 @@ function call(x) {
 
 function part(x) {
   if (!record(x)) throw Error('protocol');
-  if (x.kind === 'text' || x.kind === 'reasoning') return { kind: x.kind, text: str(x.text, 1000000) };
+  if (x.kind === 'text') return { kind: 'text', text: str(x.text, 1000000) };
+  if (x.kind === 'reasoning') return { kind: 'reasoning', text: str(x.text, 1000000), ...(num(x.ms) !== undefined ? { ms: num(x.ms) } : {}) };
   if (x.kind === 'tools' && Array.isArray(x.calls) && x.calls.length <= 200) return { kind: 'tools', step: num(x.step) ?? 0, calls: x.calls.map(call) };
   return null;
 }
@@ -115,6 +116,10 @@ export function conversationResponse(path, status, body) {
 
 /** One run event, reduced to the reviewed fields; undefined for kinds the UI does not show. */
 export function projectRunEvent(x) {
+  const e = projectEvent(x);
+  return e && num(x.at) !== undefined ? { ...e, at: num(x.at) } : e;
+}
+function projectEvent(x) {
   if (!record(x) || !Number.isSafeInteger(x.seq) || x.seq < 1) throw Error('protocol');
   const seq = x.seq;
   if (x.type === 'text' || x.type === 'reasoning') return { seq, type: x.type, content: str(x.content, RUN_FRAME_BYTES) };

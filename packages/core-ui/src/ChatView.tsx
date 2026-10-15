@@ -96,10 +96,12 @@ export function ChatView({ controller, mode, productName = 'Dpro' }: { controlle
     <div className="chat-dock">
       {s.notice && <p className="chat-notice" role="status">{s.notice}</p>}
       {s.reconnecting && <p className="chat-notice" role="status">Reconnecting to the reply…</p>}
+      {s.queuePaused && s.queue.length > 0 && <p className="chat-notice" role="status">Stopped. The waiting {s.queue.length === 1 ? 'message stays' : 'messages stay'} here until you send {s.queue.length === 1 ? 'it' : 'them'}.</p>}
       {s.queue.length > 0 && <ul className="chat-queue" aria-label="Waiting to send">
         {s.queue.map((q, i) => <li key={q.key}>
           <span className="chat-queue-n">{i === 0 ? 'Next' : `${i + 1}.`}</span>
           <span className="chat-queue-text" dir="auto">{q.text}</span>
+          {s.queuePaused && !busy && <button type="button" className="ghost-action strong" onClick={() => controller.sendQueued(q.key)}>Send now</button>}
           <button type="button" className="ghost-action" onClick={() => controller.editQueued(q.key)}>Edit</button>
           <button type="button" className="ghost-action" aria-label="Remove from the queue" onClick={() => controller.removeQueued(q.key)}><UiIcon name="trash" size={13}/></button>
         </li>)}
@@ -130,7 +132,8 @@ export function ChatView({ controller, mode, productName = 'Dpro' }: { controlle
 /** The user's message: right-aligned, pinned while its answer scrolls; long text folds. */
 function UserMessage({ turn }: { turn: Turn }) {
   const [open, setOpen] = useState(false);
-  const long = turn.content.length > 600 || turn.content.split('\n').length > 8;
+  // The pinned bubble stays short (3 lines) so the answer under it stays readable.
+  const long = turn.content.length > 220 || turn.content.split('\n').length > 3;
   return <div className="chat-user" data-pending={turn.pending || undefined}>
     <div className="user-bubble" data-folded={long && !open || undefined}>
       <p className="sr-only">You</p>

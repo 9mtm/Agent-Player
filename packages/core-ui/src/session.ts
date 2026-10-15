@@ -138,7 +138,7 @@ export function createSameOriginTransport(origin: string, fetcher: typeof fetch)
         return { status: 200, body: null, stream: response.body, streamIds: { runId, messageId } };
       }
       // Never return backend error text, headers or exception messages to the UI.
-      if (response.status !== 200 && response.status !== 201) {
+      if (response.status !== 200 && response.status !== 201 && response.status !== 202) {
         let body: unknown = null;
         if ((chat || response.status === 502 || response.status === 401 || response.status === 400 || response.status === 422 || response.status === 409 || response.status === 403 || response.status === 421 || response.status === 429) && /^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) {
           try {

@@ -127,3 +127,15 @@ test('bridge: a reader connection is capped; the run keeps going on the server',
   assert.equal(closed, true, 'the bridge closed its upstream reader (the server run is unaffected)');
   assert.throws(() => createApplicationServer({ channel: 'candidate', runStreamMs: 10 * 60 * 1000 }));
 });
+
+test('browser transport: a 202 run start is a success with its projected body', async () => {
+  const { createSameOriginTransport } = require('../src/session.ts');
+  const origin = 'http://127.0.0.1:42522';
+  const fetcher = async (url) => ({ status: 202, url, redirected: false, type: 'basic', headers: new Headers({ 'content-type': 'application/json' }),
+    json: async () => ({ runId: RID, userMessage: { id: 'm1', role: 'user', content: 'hi', parts: null, status: 'complete', runId: RID, durationMs: null, createdAt: 'c' }, internal: 'x' }) });
+  const transport = createSameOriginTransport(origin, fetcher);
+  const r = await transport({ method: 'POST', path: `/api/chat/conversations/${CID}/runs`, body: { runId: RID, message: 'hi' }, headers: { Authorization: 'Bearer token' }, signal: new AbortController().signal });
+  assert.equal(r.status, 202);
+  assert.equal(r.body.runId, RID);
+  assert.equal(r.body.internal, undefined);
+});

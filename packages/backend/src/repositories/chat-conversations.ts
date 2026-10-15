@@ -15,7 +15,7 @@ export type TurnStatus = 'complete' | 'stopped' | 'error';
 
 /** One piece of an assistant turn, in the order it happened. */
 export type TurnPart =
-  | { kind: 'reasoning'; text: string }
+  | { kind: 'reasoning'; text: string; ms?: number }
   | { kind: 'text'; text: string }
   | { kind: 'tools'; step: number; calls: ToolCallPart[] };
 

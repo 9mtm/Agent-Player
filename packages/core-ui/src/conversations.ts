@@ -26,6 +26,8 @@ export type ConversationsState = Readonly<{
   stopping: boolean;
   reconnecting: boolean;
   queue: readonly { key: string; text: string }[];
+  /** After Stop the queue waits for the owner (Send now) instead of going on its own. */
+  queuePaused: boolean;
   notice?: string;
 }>;
 
@@ -35,7 +37,7 @@ const RETRY_MS = [500, 1000, 2000, 4000, 8000];
 export class ConversationsController {
   #state: ConversationsState = Object.freeze({
     access: 'ready', listPhase: 'idle', conversations: [], activeId: null, threadPhase: 'empty', turns: [], draft: '', agentId: '', agents: [],
-    runId: null, starting: false, stopping: false, reconnecting: false, queue: [],
+    runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false,
   });
   #listeners = new Set<() => void>();
   #unsubscribe: () => void;
@@ -96,7 +98,7 @@ export class ConversationsController {
   /** A blank conversation (created on the first message). */
   newChat() {
     this.#follow?.abort(); this.#openSeq++;
-    this.publish({ activeId: null, turns: [], threadPhase: 'empty', runId: null, starting: false, stopping: false, reconnecting: false, queue: [], notice: undefined, agentId: '' });
+    this.publish({ activeId: null, turns: [], threadPhase: 'empty', runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, notice: undefined, agentId: '' });
   }
 
   async open(id: string) {
@@ -104,7 +106,7 @@ export class ConversationsController {
     this.#follow?.abort();
     const seq = ++this.#openSeq;
     const known = this.#state.conversations.find(c => c.id === id);
-    this.publish({ activeId: id, turns: [], threadPhase: 'loading', runId: null, starting: false, stopping: false, reconnecting: false, queue: [], notice: undefined, agentId: known?.agentId ?? '' });
+    this.publish({ activeId: id, turns: [], threadPhase: 'loading', runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, notice: undefined, agentId: known?.agentId ?? '' });
     try {
       const r = await this.call('GET', `/api/chat/conversations/${id}/messages`);
       if (!this.live() || seq !== this.#openSeq) return;
@@ -163,6 +165,7 @@ export class ConversationsController {
       const stored = record(r.body.userMessage) ? fromWire(r.body.userMessage as WireMessage) : userTurn(`user:${runId}`, message, runId);
       this.publish({ starting: false, runId, turns: [...this.#state.turns.filter(t => t !== optimistic), stored, liveTurn(runId, this.now())] });
       void this.follow(runId, seq);
+      void this.refreshList(); // the first message names the conversation
     } catch {
       if (this.live() && seq === this.#openSeq) this.publish({ starting: false, turns: this.#state.turns.filter(t => t !== optimistic), draft: this.#state.draft || message, notice: 'The message was not sent (no connection). It is back in the box.' });
     }
@@ -207,10 +210,20 @@ export class ConversationsController {
   }
 
   private finished() {
-    this.publish({ runId: null, stopping: false, reconnecting: false });
+    const stopped = this.#state.turns.at(-1)?.status === 'stopped';
+    this.publish({ runId: null, stopping: false, reconnecting: false, queuePaused: stopped && this.#state.queue.length > 0 });
     void this.refreshList();
+    if (stopped) return;
     const [next, ...rest] = this.#state.queue;
     if (next) { this.publish({ queue: rest }); void this.send(next.text); }
+  }
+
+  /** Sends a waiting message now (after a Stop paused the queue). */
+  sendQueued(key: string) {
+    const item = this.#state.queue.find(q => q.key === key);
+    if (!item || this.#state.runId || this.#state.starting) return;
+    this.publish({ queue: this.#state.queue.filter(q => q.key !== key), queuePaused: false });
+    void this.send(item.text);
   }
 
   private async refreshList() {
@@ -228,7 +241,7 @@ export class ConversationsController {
     try { await this.call('POST', `/api/chat/runs/${runId}/stop`); } catch { this.publish({ stopping: false, notice: 'Stop did not reach the server. Try again.' }); }
   }
 
-  removeQueued(key: string) { this.publish({ queue: this.#state.queue.filter(q => q.key !== key) }); }
+  removeQueued(key: string) { const queue = this.#state.queue.filter(q => q.key !== key); this.publish({ queue, queuePaused: this.#state.queuePaused && queue.length > 0 }); }
   editQueued(key: string) {
     const item = this.#state.queue.find(q => q.key === key);
     if (item) this.publish({ queue: this.#state.queue.filter(q => q.key !== key), draft: this.#state.draft ? `${this.#state.draft}\n${item.text}` : item.text });

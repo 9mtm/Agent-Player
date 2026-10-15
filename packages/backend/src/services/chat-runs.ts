@@ -44,9 +44,13 @@ export class ChatRun {
   readonly raw: FakeRaw;
   private seq = 0;
   private stopRequested = false;
+  private reasoningFrom?: number;
+  private openReasoning?: Extract<TurnPart, { kind: 'reasoning' }>;
+  private readonly clock: () => number;
 
-  constructor(readonly id: string, readonly userId: string, readonly sessionId: string, now: number) {
+  constructor(readonly id: string, readonly userId: string, readonly sessionId: string, now: number, clock: () => number = Date.now) {
     this.startedAt = now;
+    this.clock = clock;
     this.emitter.setMaxListeners(50);
     this.raw = new FakeRaw((frame) => this.push(frame));
   }
@@ -74,17 +78,29 @@ export class ChatRun {
 
   error?: string;
 
+  /** Every event carries `at`: milliseconds since the run started (durations survive a re-attach). */
   private emit(frame: RunFrame) {
-    const event = { seq: ++this.seq, frame };
+    const at = Math.max(0, this.clock() - this.startedAt);
+    if (frame.type !== 'reasoning') this.closeReasoning(at);
+    const event = { seq: ++this.seq, frame: { ...frame, at } };
     this.events.push(event);
     if (this.events.length > MAX_EVENTS) this.compact();
     this.emitter.emit('event', event);
   }
 
+  private closeReasoning(at: number) {
+    if (this.openReasoning && this.reasoningFrom !== undefined) this.openReasoning.ms = at - this.reasoningFrom;
+    this.openReasoning = undefined; this.reasoningFrom = undefined;
+  }
+
   private addText(kind: 'text' | 'reasoning', content: string) {
     const last = this.parts.at(-1);
     if (last && last.kind === kind) last.text += content;
-    else this.parts.push({ kind, text: content });
+    else {
+      const part: TurnPart = { kind, text: content };
+      if (part.kind === 'reasoning') { this.reasoningFrom = Math.max(0, this.clock() - this.startedAt); this.openReasoning = part; }
+      this.parts.push(part);
+    }
     if (kind === 'text' && this.answer.length + content.length <= MAX_ANSWER_CHARS) this.answer += content;
     this.emit({ type: kind, content });
   }
@@ -130,13 +146,17 @@ export class ChatRun {
   /** Ends the run once: emits the closing event and resolves the final status. */
   finish(status: TurnStatus, now: number) {
     if (this.status !== 'running') return;
+    this.closeReasoning(now - this.startedAt);
     this.endedAt = now;
-    const event = { seq: ++this.seq, frame: { type: 'end', status, ms: now - this.startedAt, ...(this.error ? { code: this.error } : {}) } };
+    const event = { seq: ++this.seq, frame: { type: 'end', status, ms: now - this.startedAt, at: now - this.startedAt, ...(this.error ? { code: this.error } : {}) } };
     this.status = status;
     this.events.push(event);
     this.emitter.emit('event', event);
     this.emitter.emit('end');
   }
+
+  /** Closes an open thinking part before the turn is stored. */
+  settle(now: number) { this.closeReasoning(now - this.startedAt); }
 
   requestStop() {
     if (this.status !== 'running' || this.stopRequested) return;
@@ -230,12 +250,13 @@ export class ChatRunRegistry {
   /** Starts the turn in the background; resolves when the run is registered (not when it ends). */
   start(input: StartRunInput): ChatRun {
     this.sweep();
-    const run = new ChatRun(input.runId, input.userId, input.sessionId, this.now());
+    const run = new ChatRun(input.runId, input.userId, input.sessionId, this.now(), this.now);
     this.runs.set(run.id, run);
     void (async () => {
       try { await input.execute(runReply(run)); }
       catch (err) { if (!run.error) run.error = 'failed'; console.error('[ChatRuns] Turn failed', { runId: run.id, name: (err as Error)?.name ?? 'Error' }); }
       const status: TurnStatus = run.stopping ? 'stopped' : run.error ? 'error' : 'complete';
+      run.settle(this.now());
       try {
         await this.persist(run.sessionId, { runId: run.id, content: run.answer, parts: run.parts, status, durationMs: this.now() - run.startedAt });
       } catch (err) {

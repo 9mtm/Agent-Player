@@ -13,6 +13,8 @@ export type TurnStatus = 'running' | 'complete' | 'stopped' | 'error';
 export type Turn = Readonly<{
   key: string; role: 'user' | 'assistant'; content: string; parts: readonly Part[]; status: TurnStatus;
   runId: string | null; durationMs: number | null; startedAt?: number; code?: 'model_unavailable'; lastSeq: number; pending?: boolean;
+  /** Client clock time of the run's start, from the first event's `at` (keeps durations right after a re-attach). */
+  base?: number;
 }>;
 
 export function userTurn(key: string, content: string, runId: string | null, pending = false): Turn {
@@ -25,7 +27,8 @@ export function liveTurn(runId: string, now: number): Turn {
 
 function fromWirePart(p: WirePart): Part {
   if (p.kind === 'tools') return { kind: 'tools', step: p.step, calls: p.calls.map(c => ({ ...c, running: false })) };
-  return { kind: p.kind, text: p.text };
+  if (p.kind === 'reasoning') return p.ms !== undefined ? { kind: 'reasoning', text: p.text, startedAt: 0, endedAt: p.ms } : { kind: 'reasoning', text: p.text };
+  return { kind: 'text', text: p.text };
 }
 
 /** A stored message as a transcript turn. */
@@ -35,8 +38,12 @@ export function fromWire(m: WireMessage): Turn {
 }
 
 /** Applies one run event to the live assistant turn (events at or below lastSeq are ignored). */
-export function applyEvent(turn: Turn, e: RunEvent, now: number): Turn {
+export function applyEvent(turn: Turn, e: RunEvent, received: number): Turn {
   if (e.seq <= turn.lastSeq) return turn;
+  // Server time when known: replayed events keep their real spacing.
+  const base = turn.base ?? (e.at !== undefined ? received - e.at : undefined);
+  const now = e.at !== undefined && base !== undefined ? base + e.at : received;
+  if (base !== undefined && turn.base === undefined) turn = { ...turn, base, startedAt: base };
   const parts = [...turn.parts];
   const last = parts.at(-1);
   let content = turn.content;

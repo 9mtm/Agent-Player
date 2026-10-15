@@ -97,6 +97,7 @@ test('a run streams reasoning, tools and text, then stores both turns with their
   const ev = frames((await call('r-owner', 'GET', `/api/chat/runs/${runId}/events`)).body);
   assert.deepEqual(ev.map((f) => f.type), ['reasoning', 'tool_start', 'tool_result', 'text', 'text', 'end']);
   assert.deepEqual(ev.map((f) => f.seq), [1, 2, 3, 4, 5, 6]);
+  assert.ok(ev.every((f) => Number.isFinite(f.at) && f.at >= 0), 'every event carries its time since the run started');
   assert.equal(ev[1].tools[0].name, 'x_echo');
   assert.equal(ev[2].results[0].output, 'echo: hi');
   assert.equal(ev.at(-1).status, 'complete');
@@ -110,6 +111,7 @@ test('a run streams reasoning, tools and text, then stores both turns with their
   assert.equal(m.activeRunId, null);
   assert.deepEqual(m.messages.map((x) => [x.role, x.content, x.status]), [['user', 'Echo hi please\nsecond line', 'complete'], ['assistant', 'All done.', 'complete']]);
   assert.deepEqual(m.messages[1].parts.map((p) => p.kind), ['reasoning', 'tools', 'text']);
+  assert.ok(Number.isFinite(m.messages[1].parts[0].ms), 'the thinking time is stored');
   assert.equal(m.messages[1].parts[1].calls[0].output, 'echo: hi');
   assert.ok(m.messages[1].durationMs >= 0);
 

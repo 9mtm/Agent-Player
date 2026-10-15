@@ -127,3 +127,21 @@ test('transcript model: events in order, duplicates ignored, tools named by what
   const stored = fromWire({ id: 'm', role: 'assistant', content: 'plain', parts: null, status: 'complete', runId: null, durationMs: null, createdAt: '' });
   assert.deepEqual(stored.parts, [{ kind: 'text', text: 'plain' }]);
 });
+
+test('Stop pauses the queue; Send now sends the waiting message', async t => {
+  const { c } = await fixture(t);
+  await c.send('Big job');
+  c.edit('Follow-up'); await c.send();
+  assert.equal(c.getSnapshot().queue.length, 1);
+  await until(() => c.getSnapshot().turns.at(-1).parts.length > 0);
+  await c.stop();
+  await until(() => !c.getSnapshot().runId);
+  const s = c.getSnapshot();
+  assert.equal(s.queuePaused, true);
+  assert.equal(s.queue.length, 1, 'nothing was sent on its own');
+  assert.match(view(c), /Send now/);
+  c.sendQueued(s.queue[0].key);
+  await until(() => c.getSnapshot().turns.filter(x => x.role === 'user').length === 2);
+  assert.equal(c.getSnapshot().queuePaused, false);
+  await until(() => !c.getSnapshot().runId);
+});
