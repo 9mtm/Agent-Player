@@ -324,6 +324,20 @@ form > label { display:block; margin-block-end:8px; }
 .memory-list-id { font:11px Menlo,Monaco,"SF Mono",monospace; color:var(--text-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-inline-size:100%; }
 @media (max-width:900px) { .memory-columns { grid-template-columns:minmax(0,1fr); } }
 
+/* Account page: profile card, session facts, sign out everywhere. */
+.account-card { display:flex; align-items:center; gap:12px; padding:14px 16px; border-radius:4.8px; background:var(--surface); box-shadow:inset 0 0 0 1px var(--stroke-3); }
+.account-avatar { inline-size:40px; block-size:40px; font-size:17px; }
+.account-who { display:grid; gap:2px; min-inline-size:0; flex:1; }
+.app-shell .page-column .account-name { color:var(--text); font-size:13.5px; font-weight:600; }
+.app-shell .page-column .account-card .badge { justify-self:auto; }
+.app-shell .page-column .account-section { background:var(--surface); border-radius:4.8px; padding:14px 16px; box-shadow:inset 0 0 0 1px var(--stroke-3); display:grid; gap:10px; margin:0; }
+.app-shell .page-column .account-section h3 { margin:0; }
+.app-shell .page-column .account-danger { box-shadow:inset 0 0 0 1px color-mix(in srgb,#e5484d 45%,var(--stroke-3)); }
+.app-shell .page-column .account-danger label.check { display:flex; gap:8px; align-items:flex-start; justify-content:flex-start; inline-size:auto; max-inline-size:none; font-size:12.5px; color:var(--text-2); }
+.app-shell .page-column .account-danger label.check input[type="checkbox"] { inline-size:14px; block-size:14px; min-inline-size:0; margin:2px 0 0; padding:0; flex:0 0 auto; accent-color:#e5484d; }
+.app-shell .page-column button.danger:not(:disabled) { background:#e5484d; color:#fff; box-shadow:none; }
+.app-shell .page-column button.danger:hover:not(:disabled) { background:#d93d42; }
+
 /* Before sign-in: the session band and the fixture workspace in the same look. */
 :root, .shell { --text-2:color-mix(in srgb,var(--text) 74%,transparent); --text-3:color-mix(in srgb,var(--text) 54%,transparent); --text-4:color-mix(in srgb,var(--text) 36%,transparent);
   --row-hover:color-mix(in srgb,var(--accent) 6%,transparent); --row-active:color-mix(in srgb,var(--accent) 10%,transparent); --stroke-3:color-mix(in srgb,var(--accent) 16%,var(--border)); }
