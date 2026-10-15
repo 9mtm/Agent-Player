@@ -120,7 +120,7 @@ test('ISO-2 launcher: every provider endpoint is refused when inherited, even a 
 });
 
 test('ISO-2 launcher: stage defaults to 1 (read-only, dead model endpoints)', () => {
-  assert.match(refused({ ...good, AGENT_PLAYER_ISOLATED_STAGE: '3' }), /AGENT_PLAYER_ISOLATED_STAGE must be unset, 1 or 2/);
+  assert.match(refused({ ...good, AGENT_PLAYER_ISOLATED_STAGE: '4' }), /AGENT_PLAYER_ISOLATED_STAGE must be unset, 1, 2 or 3/);
   assert.match(refused({ ...good, AGENT_PLAYER_ISOLATED_STAGE: '2', OLLAMA_URL: 'http://127.0.0.1:11434' }), /OLLAMA_URL must be unset/);
   assert.match(refused({ ...good, AGENT_PLAYER_LOCAL_MODEL_ONLY: '1' }), /AGENT_PLAYER_LOCAL_MODEL_ONLY must be unset/);
   const env = iso.buildIsolatedChildEnv(iso.checkLauncherEnv(good, ctx).config, { OLLAMA_URL: 'http://127.0.0.1:11434', LOCAL_MODEL_API_URL: 'http://127.0.0.1:11434/v1' }, '/n');
@@ -142,6 +142,23 @@ test('stage 2 (chat test): still read-only except chat; OLLAMA_URL is exactly th
   assert.equal(env.LOCAL_MODEL_API_URL, 'http://127.0.0.1:9/v1');
   assert.equal(env.AGENT_PLAYER_LOCAL_MODEL_ONLY, '1');
   assert.equal(env.ANTHROPIC_API_KEY, undefined, 'no inherited key reaches the server');
+});
+
+test('stage 3 (hire test): stage 2 env plus nothing else; server check accepts it; 4 is refused', () => {
+  const r = iso.checkLauncherEnv({ ...good, AGENT_PLAYER_ISOLATED_STAGE: '3' }, ctx);
+  assert.equal(r.ok, true, r.ok ? '' : r.errors.join('; '));
+  assert.equal(r.config.stage, 3);
+  const env = iso.buildIsolatedChildEnv(r.config, { OLLAMA_URL: 'http://10.0.0.5:11434', OPENAI_API_KEY: 'sk-SECRET' }, '/n');
+  assert.equal(env.AGENT_PLAYER_ISOLATED_STAGE, '3');
+  assert.equal(env.AGENT_PLAYER_READONLY, '1', 'the gate stays on; stage 3 only opens listed routes');
+  assert.equal(env.OLLAMA_URL, 'http://127.0.0.1:11434');
+  assert.equal(env.AGENT_PLAYER_LOCAL_MODEL_ONLY, '1');
+  assert.equal(env.OPENAI_API_KEY, undefined);
+  assert.equal(iso.checkIsolatedServerEnv(env, ctx, join(dataDir, 'run')).join('\n'), '');
+  assert.match(iso.checkIsolatedServerEnv({ ...env, AGENT_PLAYER_LOCAL_MODEL_ONLY: undefined }, ctx, join(dataDir, 'run')).join('\n'), /must be 1 in stages 2 and 3/);
+  const bad = iso.checkLauncherEnv({ ...good, AGENT_PLAYER_ISOLATED_STAGE: '4' }, ctx);
+  assert.equal(bad.ok, false);
+  assert.match(bad.errors.join('\n'), /must be unset, 1, 2 or 3/);
 });
 
 test('launcher: refusal messages never echo values', () => {
@@ -214,7 +231,7 @@ test('stage 2 server check: accepts what the launcher builds; local Ollama exact
   assert.match(errs({ OLLAMA_URL: 'http://10.0.0.5:11434' }), /OLLAMA_URL must be/);
   assert.match(errs({ AGENT_PLAYER_LOCAL_MODEL_ONLY: undefined }), /AGENT_PLAYER_LOCAL_MODEL_ONLY must be 1/);
   assert.match(errs({ AGENT_PLAYER_READONLY: undefined }), /AGENT_PLAYER_READONLY must be 1/);
-  assert.match(errs({ AGENT_PLAYER_ISOLATED_STAGE: '3' }), /AGENT_PLAYER_ISOLATED_STAGE must be 1 or 2/);
+  assert.match(errs({ AGENT_PLAYER_ISOLATED_STAGE: '4' }), /AGENT_PLAYER_ISOLATED_STAGE must be 1, 2 or 3/);
   // Stage 1 never carries the local-model-only switch.
   const one = iso.buildIsolatedChildEnv(iso.checkLauncherEnv(good, ctx).config, {}, '/node/bin');
   assert.match(iso.checkIsolatedServerEnv({ ...one, AGENT_PLAYER_LOCAL_MODEL_ONLY: '1' }, ctx, join(dataDir, 'run')).join('\n'), /must be unset in stage 1/);
