@@ -5,8 +5,8 @@
  * Uses semantic search to find related memories
  */
 
-import type { Tool, ToolResult } from './types.js';
-import type { MemoryType } from '../../memory/types.js';
+import type { Tool, ToolResult } from '../types.js';
+import type { ImportanceLevel, MemoryType } from '../../memory/types.js';
 import type { ToolExecutionContext } from '../types.js';
 import { toolMemoryUser } from './scope.js';
 import { repositories } from '../../repositories/index.js';
@@ -155,7 +155,8 @@ Returns:
     ],
   },
 
-  async execute(params: MemorySearchParams, context?: ToolExecutionContext): Promise<ToolResult> {
+  async execute(rawParams, context?: ToolExecutionContext): Promise<ToolResult> {
+    const params = rawParams as MemorySearchParams;
     try {
       // CORE-03: the run's own user and only the drawers selected for this turn
       // (B1.6: enforced by the memory repository from the tool call's actor).
@@ -167,11 +168,10 @@ Returns:
         type: params.type,
         layer: params.layer,
         limit: params.limit || 5,
-        minImportance: params.minImportance,
-        visibility: params.visibility,
-        includeShared: params.includeShared !== false, // Default true
-        teamCriticalOnly: params.teamCriticalOnly || false,
-        sourceAgentId: params.sourceAgentId,
+        minImportance: params.minImportance as ImportanceLevel | undefined,
+        // visibility / includeShared / teamCriticalOnly / sourceAgentId are not
+        // applied by the memory search (they never were; follow-up in BACKLOG
+        // TSC-01), so they are not passed.
       });
 
       // Extract memories from search results
@@ -180,7 +180,8 @@ Returns:
       // Apply tag filter (not supported in storage.search yet)
       if (params.tags && params.tags.length > 0) {
         filtered = filtered.filter((m) => {
-          const memoryTags = m.metadata?.tags || [];
+          // Only an array of tags counts (a string would match substrings).
+          const memoryTags = Array.isArray(m.metadata?.tags) ? (m.metadata!.tags as unknown[]) : [];
           return params.tags!.some((tag) => memoryTags.includes(tag));
         });
       }
@@ -250,8 +251,9 @@ Returns:
           responseText += `   Source: Agent ${(memory as any).source_agent_id}\n`;
         }
 
-        if (memory.metadata?.tags && memory.metadata.tags.length > 0) {
-          responseText += `   Tags: ${memory.metadata.tags.join(', ')}\n`;
+        const tags = memory.metadata?.tags;
+        if (Array.isArray(tags) && tags.length > 0) {
+          responseText += `   Tags: ${tags.join(', ')}\n`;
         }
 
         responseText += '\n';

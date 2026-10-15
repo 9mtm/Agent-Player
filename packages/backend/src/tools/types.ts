@@ -10,6 +10,11 @@ export interface ToolParameter {
   description?: string;
   enum?: string[];
   required?: boolean;
+  /** Element schema of an 'array' parameter (JSON Schema `items`). */
+  items?: ToolParameter;
+  /** Bounds of a 'number' / 'integer' parameter (JSON Schema). */
+  minimum?: number;
+  maximum?: number;
 }
 
 export interface ToolParameters {
@@ -30,6 +35,8 @@ export interface ToolResult {
     };
   }>;
   details?: Record<string, any>;
+  /** Structured result some tools also return (memory, browser, desktop tools). */
+  data?: unknown;
   error?: string;
 }
 

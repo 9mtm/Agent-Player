@@ -230,7 +230,7 @@ export class MemoryRetrieval implements IMemoryRetrieval {
 
         if (similarity > 0.9) {
           // Very similar - keep the more important one
-          const toKeep = memories[i].importance >= memories[j].importance ? i : j;
+          const toKeep = (memories[i].importance ?? 0) >= (memories[j].importance ?? 0) ? i : j;
           const toDelete = toKeep === i ? j : i;
 
           await this.storage.delete(memories[toDelete].id);

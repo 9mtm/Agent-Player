@@ -75,3 +75,28 @@ test('a parent task completes after a restart (subtasks saved and loaded back)',
     return o;
   });
 });
+
+test('task priority: unknown values and the old "medium" become "normal"; the priority sort holds', async () => {
+  const { normalizeTaskPriority } = await import(join(backendDir, 'src/multi-agent/orchestrator.ts'));
+  for (const p of ['low', 'normal', 'high', 'urgent']) assert.equal(normalizeTaskPriority(p), p);
+  for (const p of ['medium', 'critical', '', undefined, null, 3]) assert.equal(normalizeTaskPriority(p), 'normal');
+
+  const file = join(dir, 'prio', 'orchestrator.db');
+  const o = new AgentOrchestrator();
+  await o.initialize(file);
+  const low = o.createTask({ title: 'low', description: 'd', priority: 'low' });
+  const medium = o.createTask({ title: 'medium', description: 'd', priority: 'medium' });
+  const urgent = o.createTask({ title: 'urgent', description: 'd', priority: 'urgent' });
+  assert.equal(o.getTask(medium.id).priority, 'normal');
+  o.close();
+  // A row written by the old tool keeps 'medium' on disk; it loads as 'normal'.
+  const raw = new Database(file);
+  raw.prepare(`UPDATE tasks SET priority = 'medium' WHERE id = ?`).run(medium.id);
+  raw.close();
+  const again = new AgentOrchestrator();
+  await again.initialize(file);
+  assert.equal(again.getTask(medium.id).priority, 'normal');
+  assert.deepEqual(again.listTasks().map((t) => t.title), ['urgent', 'medium', 'low']);
+  again.close();
+  assert.ok(urgent && low);
+});

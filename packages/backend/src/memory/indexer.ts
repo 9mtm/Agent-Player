@@ -416,11 +416,12 @@ export class MemoryIndexer implements IMemoryIndexer {
         return false;
       }
 
-      if (options.layers && !options.layers.includes(memory.layer)) {
+      if (options.layers && (!memory.layer || !options.layers.includes(memory.layer))) {
         return false;
       }
 
-      if (options.minImportance && memory.importance < options.minImportance) {
+      // A memory without an importance counts as 0 (it used to pass any minimum).
+      if (options.minImportance && (memory.importance ?? 0) < options.minImportance) {
         return false;
       }
 

@@ -25,6 +25,17 @@ import { RiskAnalyzer } from './core/risk-analyzer.js';
 import { AutoExecutor } from './core/auto-executor.js';
 import { ApprovalEngine } from './approval/approval-engine.js';
 
+// The inbox parts api/startup.ts decorates the Fastify instance with
+// (routes/inbox.ts reads them; absent until startup ran).
+declare module 'fastify' {
+  interface FastifyInstance {
+    inboxGateway?: InboxGateway;
+    messageStore?: MessageStore;
+    riskAnalyzer?: RiskAnalyzer;
+    approvalEngine?: ApprovalEngine;
+  }
+}
+
 export function createInboxSystem() {
   const messageStore = new MessageStore();
   const riskAnalyzer = new RiskAnalyzer();

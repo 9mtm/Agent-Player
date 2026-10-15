@@ -117,6 +117,17 @@ function loadTasksSql(table: string): string {
           OR parent_id IN (SELECT id FROM ${table} WHERE ${open})`;
 }
 
+const TASK_PRIORITIES: readonly TaskPriority[] = ['low', 'normal', 'high', 'urgent'];
+
+/**
+ * A known task priority. 'medium' (what the task_create tool used to send,
+ * and may be stored in old rows) and anything unknown become 'normal'; an
+ * unknown value broke the priority sort (NaN comparison).
+ */
+export function normalizeTaskPriority(value: unknown): TaskPriority {
+  return TASK_PRIORITIES.includes(value as TaskPriority) ? (value as TaskPriority) : 'normal';
+}
+
 /** INSERT that replaces the row with the same id (same SQL on both drivers). */
 function upsertSql(table: string, columns: string[]): string {
   const updates = columns.filter((c) => c !== 'id').map((c) => `${c} = excluded.${c}`).join(', ');
@@ -490,7 +501,7 @@ export class AgentOrchestrator {
       id,
       title: input.title,
       description: input.description,
-      priority: input.priority || 'normal',
+      priority: normalizeTaskPriority(input.priority),
       status: 'pending',
       requiredCapabilities: input.requiredCapabilities,
       teamId: input.teamId,
@@ -555,7 +566,7 @@ export class AgentOrchestrator {
     return this.createTask({
       title: input.title,
       description: input.description,
-      priority: input.priority || parentTask.priority,
+      priority: normalizeTaskPriority(input.priority || parentTask.priority),
       teamId: parentTask.teamId,
       parentId: parentTaskId,
       spawnedBy: parentTask.assignedTo,
@@ -1024,7 +1035,7 @@ export class AgentOrchestrator {
       id: row.id,
       title: row.title,
       description: row.description,
-      priority: row.priority,
+      priority: normalizeTaskPriority(row.priority),
       status: row.status,
       requiredCapabilities: row.required_capabilities ? JSON.parse(row.required_capabilities) : undefined,
       assignedTo: row.assigned_to || undefined,

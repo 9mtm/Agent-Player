@@ -35,7 +35,7 @@ export async function inboxRoutes(fastify: FastifyInstance) {
   async function ownMessage(id: string, userId: string, reply: any) {
     let message;
     try {
-      message = await messageStore.getById(id);
+      message = await messageStore!.getById(id); // checked at registration above
     } catch {
       message = null;
     }

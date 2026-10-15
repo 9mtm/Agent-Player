@@ -5,7 +5,7 @@
  * Information persists across conversations and can be recalled later
  */
 
-import type { Tool, ToolResult } from './types.js';
+import type { Tool, ToolResult } from '../types.js';
 import type { MemoryType } from '../../memory/types.js';
 import type { ToolExecutionContext } from '../types.js';
 import { toolMemoryUser } from './scope.js';
@@ -123,7 +123,8 @@ Examples:
     ],
   },
 
-  async execute(params: MemorySaveParams, context?: ToolExecutionContext): Promise<ToolResult> {
+  async execute(rawParams, context?: ToolExecutionContext): Promise<ToolResult> {
+    const params = rawParams as MemorySaveParams;
     try {
       // CORE-03: the run's own user; a drawer only from those open for this turn.
       if (!toolMemoryUser(context)) throw new Error('No user for this memory');

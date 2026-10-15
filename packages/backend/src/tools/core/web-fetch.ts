@@ -4,7 +4,7 @@
  * Fetch content from URLs
  */
 
-import type { Tool, ToolResult } from './types.js';
+import type { Tool, ToolResult } from '../types.js';
 
 const DEFAULT_TIMEOUT = 10000; // 10 seconds
 const MAX_CONTENT_LENGTH = 1024 * 1024 * 5; // 5MB

@@ -14,7 +14,20 @@ import {
   createSchedule,
   updateSchedule,
   deleteSchedule,
+  type CreateNotificationInput,
 } from '../../services/notification-service.js';
+
+/** The JSON body as a plain object ({} for a missing or non-object body, which used to crash with a 500). */
+function bodyOf<T extends object>(body: unknown): Partial<T> {
+  return body && typeof body === 'object' && !Array.isArray(body) ? (body as Partial<T>) : {};
+}
+
+type NotificationBody = Omit<CreateNotificationInput, 'userId'>;
+interface ScheduleBody {
+  title: string; body: string; type: string;
+  scheduleType: string; scheduleTime: string; scheduleDays: unknown; scheduleDate: string;
+  channels: unknown;
+}
 
 // SECURITY: Use centralized JWT verification from auth/jwt.ts
 function getUserId(request: any): string | null {
@@ -87,8 +100,8 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     const userId = getUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const { title, body, type, channel, actionUrl, meta, source } = request.body;
-    if (!title) return reply.status(400).send({ error: 'title is required' });
+    const { title, body, type, channel, actionUrl, meta, source } = bodyOf<NotificationBody>(request.body);
+    if (!title || typeof title !== 'string') return reply.status(400).send({ error: 'title is required' });
 
     const notif = await notify({ userId, title, body, type, channel, actionUrl, meta, source });
     return reply.status(201).send({ success: true, notification: notif });
@@ -150,7 +163,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     const userId = getUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const settings = await saveNotificationSettings(userId, request.body);
+    const settings = await saveNotificationSettings(userId, bodyOf<Parameters<typeof saveNotificationSettings>[1]>(request.body));
     return reply.send({ success: true, settings });
   });
 
@@ -175,7 +188,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
       title, body = '', type = 'reminder',
       scheduleType = 'daily', scheduleTime, scheduleDays, scheduleDate,
       channels = ['in_app'],
-    } = request.body;
+    } = bodyOf<ScheduleBody>(request.body);
 
     if (!title || !scheduleTime) {
       return reply.status(400).send({ error: 'title and scheduleTime are required' });

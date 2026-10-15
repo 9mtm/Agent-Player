@@ -11,6 +11,7 @@
 
 import type { Tool, ToolResult, ToolExecutionContext } from '../types.js';
 import { getOrchestrator } from '../../multi-agent/index.js';
+import { normalizeTaskPriority } from '../../multi-agent/orchestrator.js';
 import { one, sql } from '../../repositories/sql-steps.js';
 
 export const taskCreateTool: Tool = {
@@ -33,8 +34,8 @@ export const taskCreateTool: Tool = {
       },
       priority: {
         type: 'string',
-        enum: ['low', 'medium', 'high', 'urgent'],
-        description: 'Task priority. Default: medium',
+        enum: ['low', 'normal', 'high', 'urgent'],
+        description: 'Task priority. Default: normal',
       },
       dependencies: {
         type: 'array',
@@ -50,7 +51,7 @@ export const taskCreateTool: Tool = {
   },
 
   async execute(params, context?: ToolExecutionContext): Promise<ToolResult> {
-    const { title, description, assigned_to, priority = 'medium', dependencies, input_data } = params as {
+    const { title, description, assigned_to, priority, dependencies, input_data } = params as {
       title: string;
       description: string;
       assigned_to: string;
@@ -87,7 +88,8 @@ export const taskCreateTool: Tool = {
       const task = orchestrator.createTask({
         title,
         description,
-        priority: priority as 'low' | 'medium' | 'high' | 'urgent',
+        // Unknown values (and the old 'medium') become 'normal' in the orchestrator.
+        priority: normalizeTaskPriority(priority),
         requiredCapabilities: [],
         dependencies: dependencies ?? [],
         inputData: safeInput && Object.keys(safeInput).length ? safeInput : undefined,

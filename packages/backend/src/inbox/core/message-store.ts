@@ -122,7 +122,7 @@ export class MessageStore {
   /**
    * List messages by user with filters
    */
-  async listByUser(userId: string, filters?: MessageFilter): Promise<InboxMessage[]> {
+  async listByUser(userId: string, filters?: Omit<MessageFilter, 'userId'>): Promise<InboxMessage[]> {
     let query = 'SELECT * FROM inbox_messages WHERE user_id = ?';
     const params: SqlParam[] = [userId];
 
