@@ -1,4 +1,5 @@
 const { allowedPersonality, personalityRoute, personalityResponse } = require('../src/personality-contract.js');
+const { allowedHire, hireRoute, hireResponse } = require('../src/hire-contract.js');
 const { validDeviceToken, validLoginBody } = require('../src/login-contract.js');
 const { setupStatus } = require('../src/setup-status.js');
 const { memoryResponse } = require('./memory-response.cjs');
@@ -24,7 +25,7 @@ const agent = x => {
     : { id: x.id, version: x.version, nameUnavailable: true };
 };
 function allowed(method, target, body) {
-  if (allowedPersonality(method, target, body)) return true;
+  if (allowedPersonality(method, target, body) || allowedHire(method, target, body)) return true;
   const id = /^\/api\/agents\/([^/?#]+)$/.exec(target)?.[1];
   if (method === 'PUT') return agentId(id) && record(body) && Object.keys(body).length === 2 && Object.keys(body).every(k => k === 'name' || k === 'expectedVersion') && name(body.name) && version(body.expectedVersion);
   if (method === 'GET' && body === undefined && (target === '/api/agents' || agentId(id))) return true;
@@ -68,6 +69,7 @@ function project(target, status, body) {
   const boundaryCode = body?.code;
   if ((status === 403 && ['published_password', 'account_inactive', 'origin_not_allowed', 'read_only_stage'].includes(boundaryCode)) || (status === 429 && boundaryCode === 'rate_limited') || (status === 421 && boundaryCode === 'host_not_allowed')) return { code: boundaryCode };
   if (personalityRoute(target)) return personalityResponse(target, status, body);
+  if (hireRoute(target, status)) return hireResponse(target, status, body);
   if (target === '/api/agents' || (target.startsWith('/api/agents/') && target !== '/api/agents/name-suggestion')) {
     if (status === 200 && target === '/api/agents') {
       if (!Array.isArray(body?.agents) || body.agents.length > 10000) throw Error();

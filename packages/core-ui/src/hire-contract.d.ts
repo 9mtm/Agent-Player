@@ -1,0 +1,16 @@
+export const roles: readonly ['main','manager','specialist','evaluator'];
+export const presets: readonly ['balanced-assistant','careful-auditor','bold-creative','precise-developer','strict-evaluator'];
+export const dialects: readonly ['ar-IQ','ar','en','de','fr','es','zh','ja','ko','pt-BR','ru','tr','hi'];
+export const MAX_GRANTS: number;
+export const MAX_AVAILABLE: number;
+export function displayName(x: unknown): x is string;
+export function department(x: unknown): x is string;
+export function description(x: unknown): x is string;
+export function toolName(x: unknown): x is string;
+export function validPersonality(x: unknown): boolean;
+export function validCreateBody(x: unknown): boolean;
+export function grantsAgentId(path: string): string | null;
+export function validGrantsBody(x: unknown): boolean;
+export function allowedHire(method: string, path: string, body?: unknown): boolean;
+export function hireRoute(path: string, status: number): boolean;
+export function hireResponse(path: string, status: number, body: unknown): unknown;
