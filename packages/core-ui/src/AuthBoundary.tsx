@@ -8,6 +8,7 @@ import { createMemoryAdapter, MemoryController } from './memory';
 import { MemoryReview } from './MemoryDestination';
 
 import { retryAfterNotice } from './retry-after.js';
+import { devQuickLoginAccounts } from './dev-quick-login';
 
 const notices = {
   published_password: 'Sign-in refused because the password is a published default. Reset it from the CLI.',
@@ -63,12 +64,24 @@ function SessionWorkspace({ client }: { client: SessionClient }) {
       {state.mode === 'mock' && <p>Fictional credentials only: demo@example.invalid / mock-only. Never enter a real password here.</p>}
       <label htmlFor="auth-email">Email</label><input id="auth-email" type="email" name={state.mode === 'live' ? 'username' : undefined} autoComplete={state.mode === 'live' ? 'username' : 'off'} required value={email} onChange={e => setEmail(e.target.value)} disabled={state.phase === 'signing-in'}/>
       <label htmlFor="auth-password">Password</label><input id="auth-password" type="password" name={state.mode === 'live' ? 'password' : undefined} autoComplete={state.mode === 'live' ? 'current-password' : 'off'} required value={password} onChange={e => setPassword(e.target.value)} disabled={state.phase === 'signing-in'}/>
+      {state.mode === 'live' && <DevQuickLogin disabled={state.phase === 'signing-in'} onFill={(a) => { setEmail(a.email); setPassword(a.password); }}/>}
       <button className="primary" disabled={state.phase === 'signing-in'}>Sign in</button>
       {state.phase === 'signing-in' && <button type="button" onClick={() => client.cancel()}>Cancel sign-in</button>}
     </form>}
     <p>Settings credentials remain masked-only; no credential values are fetched.</p>
   </main>;
 }
+/** Local test accounts (dev-quick-login.ts): fills the form only; local builds on a loopback host only. */
+function DevQuickLogin({ disabled, onFill, hostname }: { disabled: boolean; onFill: (a: { email: string; password: string }) => void; hostname?: string }) {
+  const host = hostname ?? (typeof window !== 'undefined' ? window.location.hostname : '');
+  const accounts = devQuickLoginAccounts(host);
+  if (accounts.length === 0) return null;
+  return <fieldset className="dev-quick-login" aria-label="Development quick sign-in">
+    <legend>Development quick sign-in — local test accounts only</legend>
+    {accounts.map(a => <button key={a.email} type="button" disabled={disabled} onClick={() => onFill(a)}>Fill {a.label}</button>)}
+  </fieldset>;
+}
+export { DevQuickLogin };
 function ProtectedTools({ client }: { client: SessionClient }) {
   const state = client.getSnapshot();
   const [agent, setAgent] = useState(state.mode === 'mock' ? 'sample-main' : ''); const [drawer, setDrawer] = useState('owner');
