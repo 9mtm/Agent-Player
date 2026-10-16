@@ -1319,6 +1319,7 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .chat-export-button { display:inline-flex; align-items:center; gap:6px; inline-size:auto; padding:0 8px; font-size:12px; }
 .app-shell .chat-export-pop { position:absolute; inset-inline-end:0; inset-block-start:calc(100% + 6px); z-index:30; display:grid; gap:8px; inline-size:min(300px, calc(100vw - 32px)); padding:12px; border-radius:8px; background:var(--surface); box-shadow:0 0 0 1px var(--stroke-3),0 8px 24px rgba(0,0,0,.16); font-size:12px; }
 .app-shell .chat-export-check { display:flex; align-items:center; gap:6px; color:var(--text-2); }
+.app-shell .chat-export-check input[type="checkbox"] { inline-size:14px; block-size:14px; min-inline-size:0; min-block-size:0; margin:0; padding:0; flex:0 0 auto; accent-color:var(--accent); }
 .app-shell .chat-export-hint { margin:0; color:var(--text-3); line-height:1.4; }
 .app-shell .chat-export-note { margin:0; color:var(--text-2); overflow-wrap:anywhere; }
 .app-shell .chat-export-actions { display:flex; align-items:center; gap:10px; }
