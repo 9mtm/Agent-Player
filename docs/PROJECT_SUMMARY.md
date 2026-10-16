@@ -751,5 +751,5 @@ The installer transforms Agent Player from a developer-only tool requiring manua
 **Last Updated:** 2026-03-10
 
 **For Questions or Issues:**
-GitHub Issues: https://github.com/Agent-Player/Agent-Player/issues
-Documentation: https://github.com/Agent-Player/Agent-Player/tree/main/docs
+GitHub Issues: https://github.com/9mtm/Agent-Player/issues
+Documentation: https://github.com/9mtm/Agent-Player/tree/main/docs

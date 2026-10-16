@@ -11,7 +11,7 @@
 set -e  # Exit on error
 
 VERSION="1.3.0"
-REPO="Agent-Player/Agent-Player"
+REPO="9mtm/Agent-Player"
 RELEASES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/releases"
 
 echo "========================================"
@@ -122,10 +122,10 @@ Verify downloads using `checksums.txt` (SHA256).
 
 Complete guides included:
 
-- [Installation Guide](https://github.com/Agent-Player/Agent-Player/blob/main/docs/INSTALLATION.md) (~650 lines)
-- [Deployment Guide](https://github.com/Agent-Player/Agent-Player/blob/main/docs/DEPLOYMENT.md) (~800 lines)
-- [Upgrading Guide](https://github.com/Agent-Player/Agent-Player/blob/main/docs/UPGRADING.md) (~450 lines)
-- [Testing Checklist](https://github.com/Agent-Player/Agent-Player/blob/main/docs/TESTING_CHECKLIST.md) (234 scenarios)
+- [Installation Guide](https://github.com/9mtm/Agent-Player/blob/main/docs/INSTALLATION.md) (~650 lines)
+- [Deployment Guide](https://github.com/9mtm/Agent-Player/blob/main/docs/DEPLOYMENT.md) (~800 lines)
+- [Upgrading Guide](https://github.com/9mtm/Agent-Player/blob/main/docs/UPGRADING.md) (~450 lines)
+- [Testing Checklist](https://github.com/9mtm/Agent-Player/blob/main/docs/TESTING_CHECKLIST.md) (234 scenarios)
 
 ## 🚀 Quick Start
 
@@ -156,12 +156,12 @@ All installers are:
 
 ## 🆕 Migration from v1.2.x
 
-Existing users can migrate using the new installer. See [UPGRADING.md](https://github.com/Agent-Player/Agent-Player/blob/main/docs/UPGRADING.md) for detailed instructions.
+Existing users can migrate using the new installer. See [UPGRADING.md](https://github.com/9mtm/Agent-Player/blob/main/docs/UPGRADING.md) for detailed instructions.
 
 ## 💬 Support
 
-- **Issues**: https://github.com/Agent-Player/Agent-Player/issues
-- **Discussions**: https://github.com/Agent-Player/Agent-Player/discussions
+- **Issues**: https://github.com/9mtm/Agent-Player/issues
+- **Discussions**: https://github.com/9mtm/Agent-Player/discussions
 
 ## 🙏 Credits
 
@@ -169,7 +169,7 @@ Built by: **9mtm** (Creator) with **Claude Code** (AI Assistant)
 
 ---
 
-**Full Changelog**: https://github.com/Agent-Player/Agent-Player/blob/main/CHANGELOG.md
+**Full Changelog**: https://github.com/9mtm/Agent-Player/blob/main/CHANGELOG.md
 EOF
 )
 

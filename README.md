@@ -16,7 +16,7 @@ Agent Player was built on a vision that goes beyond conversation: a workspace wh
 
 **Work WITH AI, not replaced by it.**
 
-![Version](https://img.shields.io/badge/Version-1.3.0%20Beta-yellow?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-1.3.1%20Beta-yellow?style=for-the-badge)
 ![Free Forever](https://img.shields.io/badge/💰-100%25%20FREE%20Forever-brightgreen?style=for-the-badge)
 ![Open Source](https://img.shields.io/badge/📖-Open%20Source-blue?style=for-the-badge)
 ![Agent Framework](https://img.shields.io/badge/🔧-Agent%20Framework-purple?style=for-the-badge)
@@ -213,27 +213,27 @@ Download the installer for your platform:
 
 **Windows:**
 ```powershell
-# Download: agent-player-installer-1.3.0-win-x64.msi (90 MB)
+# Download: agent-player-installer-1.3.1-win-x64.msi (90 MB)
 # Right-click → Run as Administrator
 # Follow 8-step wizard → Done!
 ```
-👉 **[Download for Windows](https://github.com/Agent-Player/Agent-Player/releases/download/v1.3.0/agent-player-installer-1.3.0-win-x64.msi)**
+👉 **[Download for Windows](https://github.com/9mtm/Agent-Player/releases/download/v1.3.1/agent-player-installer-1.3.1-win-x64.msi)**
 
 **Linux:**
 ```bash
-# Download: agent-player-installer-1.3.0-linux-x86_64.AppImage (95 MB)
-wget https://github.com/Agent-Player/Agent-Player/releases/download/v1.3.0/agent-player-installer-1.3.0-linux-x86_64.AppImage
-chmod +x agent-player-installer-1.3.0-linux-x86_64.AppImage
-./agent-player-installer-1.3.0-linux-x86_64.AppImage
+# Download: agent-player-installer-1.3.1-x86_64.AppImage (95 MB)
+wget https://github.com/9mtm/Agent-Player/releases/download/v1.3.1/agent-player-installer-1.3.1-x86_64.AppImage
+chmod +x agent-player-installer-1.3.1-x86_64.AppImage
+./agent-player-installer-1.3.1-x86_64.AppImage
 ```
-👉 **[Download for Linux](https://github.com/Agent-Player/Agent-Player/releases/download/v1.3.0/agent-player-installer-1.3.0-linux-x86_64.AppImage)**
+👉 **[Download for Linux](https://github.com/9mtm/Agent-Player/releases/download/v1.3.1/agent-player-installer-1.3.1-x86_64.AppImage)**
 
 **macOS:**
 ```bash
-# Download: agent-player-installer-1.3.0-macos-universal.dmg (92 MB)
+# Download: agent-player-installer-1.3.1-macos-x64.dmg (92 MB)
 # Open DMG → Drag to Applications → Run
 ```
-👉 **[Download for macOS](https://github.com/Agent-Player/Agent-Player/releases/download/v1.3.0/agent-player-installer-1.3.0-macos-universal.dmg)**
+👉 **[Download for macOS](https://github.com/9mtm/Agent-Player/releases/download/v1.3.1/agent-player-installer-1.3.1-macos-x64.dmg)**
 
 **What You Get:**
 - ✅ **System tray application** - Start/Stop/Restart with one click
@@ -257,7 +257,7 @@ chmod +x agent-player-installer-1.3.0-linux-x86_64.AppImage
 If you want to run from source code or contribute to development:
 
 ```bash
-git clone https://github.com/Agent-Player/Agent-Player.git
+git clone https://github.com/9mtm/Agent-Player.git
 cd Agent-Player
 pnpm install
 

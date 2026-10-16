@@ -41,7 +41,7 @@ impl UpdaterService {
     pub async fn check_for_updates() -> Result<Option<UpdateInfo>> {
         println!("Checking for updates...");
 
-        let url = "https://api.github.com/repos/Agent-Player/Agent-Player/releases/latest";
+        let url = "https://api.github.com/repos/9mtm/Agent-Player/releases/latest";
 
         let client = reqwest::Client::builder()
             .user_agent("Agent-Player-Installer")

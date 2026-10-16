@@ -164,9 +164,9 @@ jobs:
           APPIMAGE_PATH=$(find installer/target/release/bundle/appimage/ -name "*.AppImage" | head -n 1)
 
           if [ -f "$APPIMAGE_PATH" ]; then
-            cp "$APPIMAGE_PATH" "agent-player-installer-${VERSION}-linux-x86_64.AppImage"
-            chmod +x "agent-player-installer-${VERSION}-linux-x86_64.AppImage"
-            echo "✅ Linux AppImage ready: agent-player-installer-${VERSION}-linux-x86_64.AppImage"
+            cp "$APPIMAGE_PATH" "agent-player-installer-${VERSION}-x86_64.AppImage"
+            chmod +x "agent-player-installer-${VERSION}-x86_64.AppImage"
+            echo "✅ Linux AppImage ready: agent-player-installer-${VERSION}-x86_64.AppImage"
           else
             echo "⚠️ AppImage not found"
             find installer/target/release/bundle/appimage/ -type f
@@ -176,7 +176,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-appimage
-          path: agent-player-installer-*-linux-x86_64.AppImage
+          path: agent-player-installer-*-x86_64.AppImage
           retention-days: 1
 
   # ==================== Job 4: Build macOS DMG ====================
@@ -250,7 +250,7 @@ jobs:
 
           # Find all files
           WIN_MSI=$(find . -name "*-win-x64.msi" -type f)
-          LINUX_APPIMAGE=$(find . -name "*-linux-x86_64.AppImage" -type f)
+          LINUX_APPIMAGE=$(find . -name "*-x86_64.AppImage" -type f)
           MACOS_DMG=$(find . -name "*-macos-x64.dmg" -type f)
           APP_ZIP=$(find . -name "agent-player-files.zip" -type f)
 
@@ -304,7 +304,7 @@ jobs:
           - **Installation**: Double-click MSI, follow wizard
 
           ### Linux
-          - **AppImage**: `agent-player-installer-*-linux-x86_64.AppImage` (~80 MB)
+          - **AppImage**: `agent-player-installer-*-x86_64.AppImage` (~80 MB)
           - **Requirements**: Ubuntu 20.04+ or equivalent
           - **Installation**: `chmod +x *.AppImage && ./agent-player-installer-*.AppImage`
 
