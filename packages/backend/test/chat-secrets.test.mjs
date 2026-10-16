@@ -216,3 +216,120 @@ test('the older POST /api/sessions/:id/messages also keeps references only', asy
   assert.ok(!res.body.includes(fakeToken));
   assert.match(db.prepare('SELECT content FROM chat_messages WHERE session_id = ?').get(c.id).content, REF);
 });
+
+// CHAT-SECRETS-02: a secret the agent meets in a tool's output or writes in its reply.
+test('a secret in a tool output or the reply goes to the key store; the chat, events, next turn, search and export keep the reference', async () => {
+  const fakeKey = 'sk-proj-' + 'Q1w2E3r4T5y6U7i8O9p0A1s2D3f4G5h6';
+  const fakeDbPass = 'Tr0ub4dor-Db-Pass';
+  tools.registerExtensionTool({ name: 'x_read_env', description: 'reads the .env file', extensionId: 'x', requiresApproval: false,
+    input_schema: { type: 'object', properties: {} },
+    execute: async () => ({ content: [{ type: 'text', text: `OPENAI_API_KEY=${fakeKey}\nDB_PASSWORD=${fakeDbPass}\nPORT=3000` }], details: { raw: `key ${fakeKey}` } }) });
+  await grants.setAgentGrants('s-agent', { grants: ['x_call_api', 'x_fail_api', 'x_read_env'] }, 's-owner', tools.createToolsRegistry({ workspaceDir: dir }).listRegistered());
+  const c = (await call('s-owner', 'POST', '/api/chat/conversations', { agentId: 's-agent' })).json().conversation;
+  const before = bodies.length;
+  script.push(
+    [{ message: { content: '', tool_calls: [{ function: { name: 'x_read_env', arguments: {} } }] } }, { done: true }],
+    // The (stubbed) model writes the raw key in its reply, cut across two deltas.
+    [{ message: { content: `Your key is ${fakeKey.slice(0, 14)}` } }, { message: { content: `${fakeKey.slice(14)} and the port is 3000.` } }, { done: true }],
+  );
+  const runId = rid();
+  assert.equal((await call('s-owner', 'POST', `/api/chat/conversations/${c.id}/runs`, { runId, message: 'Read my .env file' })).statusCode, 202);
+  await ended(runId);
+  const raw = (s) => s.includes(fakeKey) || s.includes(fakeDbPass) || s.includes(fakeKey.slice(0, 14));
+
+  // The model got the tool result with references only.
+  const turnBodies = bodies.slice(before);
+  assert.equal(turnBodies.length, 2, 'tool call + answer');
+  for (const b of turnBodies) assert.ok(!b.includes(fakeKey) && !b.includes(fakeDbPass), 'the model never got the raw value from the tool');
+  assert.match(turnBodies[1], /OPENAI_API_KEY=\[SECRET:openai_key:[a-z0-9]+\]/);
+  assert.match(turnBodies[1], /encrypted key store/, 'the tool result says how to use the reference');
+
+  // chat_messages: the reply text and the stored tool work keep references; one reference per value.
+  const row = db.prepare("SELECT content, parts FROM chat_messages WHERE session_id = ? AND role = 'assistant'").get(c.id);
+  assert.ok(!raw(row.content) && !raw(row.parts), 'no raw secret in the stored turn');
+  const keyRefs = new Set(`${row.content} ${row.parts}`.match(/\[SECRET:openai_key:[a-z0-9]+\]/g));
+  assert.equal(keyRefs.size, 1, 'the tool output and the reply share one reference');
+  assert.match(row.content, /^Your key is \[SECRET:openai_key:[a-z0-9]+\] and the port is 3000\.$/);
+  assert.match(row.parts, /DB_PASSWORD=\[SECRET:password:[a-z0-9]+\]/);
+  assert.match(row.parts, /PORT=3000/);
+
+  // The key store: owned by the user, linked to this conversation, encrypted.
+  const keyId = /\[SECRET:openai_key:([a-z0-9]+)\]/.exec(row.content)[1];
+  const cred = db.prepare('SELECT * FROM credentials WHERE name = ?').get(`chat:openai_key:${keyId}`);
+  assert.equal(cred.user_id, 's-owner');
+  assert.equal(cred.description, `chat:${c.id}`);
+  assert.ok(!JSON.stringify(cred).includes(fakeKey));
+  const { getCredentialManager } = await import(join(backendDir, 'src/credentials/manager.ts'));
+  assert.equal(await getCredentialManager().getValue(cred.id), fakeKey);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM credentials WHERE description = ? AND name LIKE 'chat:openai_key:%'").get(`chat:${c.id}`).n, 1);
+
+  // Run events (replayed), messages, search, export with tool calls: references only.
+  const events = await call('s-owner', 'GET', `/api/chat/runs/${runId}/events`);
+  assert.match(events.body, /\[SECRET:openai_key:/);
+  for (const res of [
+    events,
+    await call('s-owner', 'GET', `/api/chat/conversations/${c.id}/messages`),
+    await call('s-owner', 'GET', `/api/chat/search?q=port`),
+    await call('s-owner', 'GET', `/api/chat/conversations/${c.id}/export?tools=1`),
+  ]) {
+    assert.equal(res.statusCode, 200, res.body);
+    assert.ok(!raw(res.body), res.body.slice(0, 300));
+  }
+  assert.equal((await call('s-owner', 'GET', `/api/chat/search?q=${encodeURIComponent(fakeKey.slice(0, 14))}`)).json().results?.length ?? 0, 0, 'the value is not searchable');
+  assert.ok((await call('s-owner', 'GET', `/api/chat/search?q=port`)).json().results.length > 0, 'the reply itself is searchable');
+
+  // The next turn: the model's history has the reference and the note, never the value.
+  script.push([{ message: { content: 'Noted.' } }, { done: true }]);
+  const next = rid();
+  assert.equal((await call('s-owner', 'POST', `/api/chat/conversations/${c.id}/runs`, { runId: next, message: 'Thanks' })).statusCode, 202);
+  await ended(next);
+  assert.ok(!raw(bodies.at(-1)));
+  assert.ok(bodies.at(-1).includes(`[SECRET:openai_key:${keyId}]`));
+  assert.match(bodies.at(-1), /or a tool showed/);
+
+  // The agent can still use it: the same value in a later tool output gets the same reference.
+  const reg = await tools.createAgentToolsRegistry({ workspaceDir: dir, userId: 's-owner', sessionId: c.id, agentId: 's-agent' });
+  const again = await reg.execute('x_read_env', {});
+  assert.ok(again.content[0].text.includes(`OPENAI_API_KEY=[SECRET:openai_key:${keyId}]`));
+  assert.ok(!JSON.stringify(again).includes(fakeKey), 'details are vaulted too');
+
+  // Nothing written to the logs or data files holds the value in plain text.
+  assert.ok(!logged.some((l) => l.includes(fakeKey) || l.includes(fakeDbPass)), 'never logged');
+  for (const f of allFiles(join(dir, '.data')).filter((f) => !/\.db(-wal|-shm)?$/.test(f))) assert.ok(!readFileSync(f, 'utf8').includes(fakeKey), f);
+});
+
+test('outside an owner chat (no conversation, channel turn) a secret in a tool output is redacted, not stored', async () => {
+  const fakeKey = 'sk-proj-' + 'Z0x9C8v7B6n5M4a3S2d1F0g9H8j7K6l5';
+  const count = () => db.prepare("SELECT COUNT(*) AS n FROM credentials WHERE skill_id = 'chat'").get().n;
+  const n = count();
+  tools.registerExtensionTool({ name: 'x_print_key', description: 'prints a key', extensionId: 'x', requiresApproval: false,
+    input_schema: { type: 'object', properties: {} }, execute: async () => ({ content: [{ type: 'text', text: `key=${fakeKey}` }] }) });
+  await grants.setAgentGrants('s-agent', { grants: ['x_print_key'] }, 's-owner', tools.createToolsRegistry({ workspaceDir: dir }).listRegistered());
+  const noChat = await (await tools.createAgentToolsRegistry({ workspaceDir: dir, userId: 's-owner', agentId: 's-agent' })).execute('x_print_key', {});
+  assert.equal(noChat.content[0].text, 'key=[REDACTED:openai_key]');
+  const { vaultToolResult } = await import(join(backendDir, 'src/services/chat-secrets.ts'));
+  const c = (await call('s-owner', 'POST', '/api/chat/conversations', {})).json().conversation;
+  const channel = await vaultToolResult({ userId: 's-owner', sessionId: c.id, toolPolicy: { channel: 'telegram' } }, { content: [{ type: 'text', text: `key=${fakeKey}` }] });
+  assert.equal(channel.content[0].text, 'key=[REDACTED:openai_key]');
+  const foreign = await vaultToolResult({ userId: 's-other', sessionId: c.id }, { content: [{ type: 'text', text: `key=${fakeKey}` }] });
+  assert.equal(foreign.content[0].text, 'key=[REDACTED:openai_key]', "never stored in someone else's conversation");
+  const clean = { content: [{ type: 'text', text: 'nothing secret here' }] };
+  assert.equal(await vaultToolResult({ userId: 's-owner', sessionId: c.id }, clean), clean, 'a clean result is passed through as is');
+  assert.equal(count(), n, 'no key was stored');
+});
+
+test('cleanup also moves secrets in stored tool work of older replies', async () => {
+  const fakeKey = 'ghp_' + 'C1l2E3a4N5u6P7t8O9o0L1w2O3r4K5s6T7u8';
+  const { addAssistantMessage } = await import(join(backendDir, 'src/repositories/chat-conversations.ts'));
+  const c = (await call('s-owner', 'POST', '/api/chat/conversations', {})).json().conversation;
+  await addUserMessage(c.id, 'read it', 'run-old-00002');
+  // As stored before CHAT-SECRETS-02 (the repository itself does not scan).
+  await addAssistantMessage(c.id, { runId: 'run-old-00002', content: `The token is ${fakeKey}`, status: 'complete', durationMs: 5,
+    parts: [{ kind: 'tools', step: 0, calls: [{ id: 't1', name: 'read', input: '{}', output: `TOKEN=${fakeKey}` }] }, { kind: 'text', text: `The token is ${fakeKey}` }] });
+  const dry = (await call('s-owner', 'POST', '/api/chat/secrets/cleanup', { apply: false })).json().report;
+  assert.deepEqual([dry.conversations, dry.messages], [1, 1]);
+  await call('s-owner', 'POST', '/api/chat/secrets/cleanup', { apply: true });
+  const row = db.prepare("SELECT content, parts FROM chat_messages WHERE session_id = ? AND role = 'assistant'").get(c.id);
+  assert.ok(!row.content.includes(fakeKey) && !row.parts.includes(fakeKey));
+  assert.equal(new Set(`${row.content} ${row.parts}`.match(/\[SECRET:github_token:[a-z0-9]+\]/g)).size, 1, 'one reference per value');
+});

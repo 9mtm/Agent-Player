@@ -207,7 +207,7 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
       execute: (runReply) => executeChatTurn(runReply, {
         agentId: replyAgent, messages, stream: true, sessionId: c.id, userId, uiSet: 'chat',
         ...(project ? { memoryScope: { project: project.slug }, ...(project.folder ? { fileReadRoot: project.folder } : {}) } : {}),
-        systemPromptAppend: [project ? projectNote(project.name, project.folder, project.repoUrl) : '', PLAN_NOTE, [...prior, userMessage].some((m) => m.role === 'user' && new RegExp(SECRET_REF_RE.source).test(m.content)) ? SECRET_NOTE : '', prior.some((m) => m.role === 'assistant' && (m.agentId ?? c.agentId ?? null) !== (replyAgent ?? null)) ? TEAM_NOTE : ''].filter(Boolean).join('\n\n'),
+        systemPromptAppend: [project ? projectNote(project.name, project.folder, project.repoUrl) : '', PLAN_NOTE, [...prior, userMessage].some((m) => new RegExp(SECRET_REF_RE.source).test(m.content)) ? SECRET_NOTE : '', prior.some((m) => m.role === 'assistant' && (m.agentId ?? c.agentId ?? null) !== (replyAgent ?? null)) ? TEAM_NOTE : ''].filter(Boolean).join('\n\n'),
         ...(b.model ? { model: b.model, provider: /^claude-/.test(b.model) ? 'claude' as const : 'ollama' as const } : {}),
       }),
     });
@@ -292,7 +292,7 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
   /** CHAT-PRO-02 I: more than one agent has answered in this conversation. */
   const TEAM_NOTE = 'Several agents of the team answer in this conversation. Earlier replies written by another agent start with that agent\'s name in brackets, like [Name]. Build on their work; do not repeat it, and do not write as them.';
   /** CHAT-PRO-02 H: how the agent shows its work in the chat. */
-  const SECRET_NOTE = 'Secrets the owner typed (keys, tokens, passwords) were moved to the encrypted key store; you see a reference like [SECRET:github_token:abc123] instead. Never ask for the value again and never try to reveal it. When a tool needs it, put the reference itself in the tool input; the tool gets the real value after the owner approves that call.';
+  const SECRET_NOTE = 'Secrets in this chat (keys, tokens, passwords the owner typed or a tool showed) were moved to the encrypted key store; you see a reference like [SECRET:github_token:abc123] instead. Never ask for the value again and never try to reveal it. When a tool needs it, put the reference itself in the tool input; the tool gets the real value after the owner approves that call.';
   const PLAN_NOTE = 'When a request needs several steps (3 or more), first call plan_steps with the whole plan so the owner sees it, then work through it and call plan_steps again with the whole list as each step finishes. Keep steps short. Skip the plan for a quick question or a one-step answer. When the owner gives a larger task that other agents of the team should share, you may call board_suggest_card once; the owner decides whether it becomes a board card. When the owner shares a lasting fact, preference or decision worth keeping, you may call memory_save; in this chat it is shown to the owner, who accepts or rejects it.';
 
   // ---- microphone (CHAT-PRO-02 C): a recorded clip → text, on this computer only (owner) ----

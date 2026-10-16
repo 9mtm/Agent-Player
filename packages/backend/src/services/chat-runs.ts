@@ -18,6 +18,7 @@
 import { EventEmitter } from 'node:events';
 import type { FastifyReply } from 'fastify';
 import { addAssistantMessage, type ToolCallPart, type TurnPart, type TurnStatus } from '../repositories/chat-conversations.js';
+import { vaultRunSecrets } from './chat-secrets.js';
 
 export type RunFrame = Record<string, unknown> & { type: string };
 export interface RunEvent { seq: number; frame: RunFrame }
@@ -262,6 +263,10 @@ export class ChatRunRegistry {
       catch (err) { if (!run.error) run.error = 'failed'; console.error('[ChatRuns] Turn failed', { runId: run.id, name: (err as Error)?.name ?? 'Error' }); }
       const status: TurnStatus = run.stopping ? 'stopped' : run.error ? 'error' : 'complete';
       run.settle(this.now());
+      // CHAT-SECRETS-02: secrets in the reply or its work go to the key store before the turn is stored or replayed.
+      try { await vaultRunSecrets(run); } catch (err) {
+        console.error('[ChatRuns] Could not check the turn for secrets', { runId: run.id, name: (err as Error)?.name ?? 'Error' });
+      }
       try {
         await this.persist(run.sessionId, { runId: run.id, content: run.answer, parts: run.parts, status, durationMs: this.now() - run.startedAt, agentId: input.agentId ?? null });
       } catch (err) {

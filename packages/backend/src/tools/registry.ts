@@ -12,7 +12,7 @@ import { channelToolCallRefusal, isToolAllowedInChannel } from './channel-policy
 import { defaultGrants, grantCallRefusal, isToolGranted, type AgentToolGrants } from './grants.js';
 import { approvalCategory, consumeApprovalTicket, isConfinedChannelReply, requestApproval } from './approvals.js';
 import { actorFromToolContextAsync } from '../repositories/actor.js';
-import { hasSecretRef, resolveSecretRefs, scrubSecretValues } from '../services/chat-secrets.js';
+import { hasSecretRef, resolveSecretRefs, scrubSecretValues, vaultToolResult } from '../services/chat-secrets.js';
 
 /** Tools whose input is stored as text by Dpro: key-store references are never resolved for them (CHAT-SECRETS-01). */
 const KEEPS_TEXT = /^(?:memory_|board_|task_|plan_steps$|create_reminder$)/;
@@ -179,7 +179,9 @@ export class ToolsRegistry {
       // B1-core: one actor per tool call, from the trusted run context only.
       // CHAT-SECRETS-01: references become the stored values only here, and go back into the result.
       secrets = usesSecret ? await resolveSecretRefs(this.context.userId!, params) : { value: params, used: [] };
-      const result = scrubSecretValues(await tool.execute(secrets.value, { ...this.context, actor: await actorFromToolContextAsync(this.context) }), secrets.used);
+      const scrubbed = scrubSecretValues(await tool.execute(secrets.value, { ...this.context, actor: await actorFromToolContextAsync(this.context) }), secrets.used);
+      // CHAT-SECRETS-02: other secrets in the result (a read .env, a printed token) go to the key store too.
+      const result = await vaultToolResult(this.context, scrubbed);
 
       console.log(`[ToolsRegistry] ✅ Tool executed successfully`);
       return result;
@@ -187,7 +189,7 @@ export class ToolsRegistry {
       // A call that used a saved secret never logs or returns the raw error (it may echo the value).
       const message = scrubSecretValues(String(error?.message ?? error), secrets.used);
       console.error(`[ToolsRegistry] ❌ Tool execution failed:`, secrets.used.length ? message : error);
-      return {
+      return await vaultToolResult(this.context, {
         content: [
           {
             type: 'text',
@@ -195,7 +197,7 @@ export class ToolsRegistry {
           },
         ],
         error: message,
-      };
+      });
     }
   }
 

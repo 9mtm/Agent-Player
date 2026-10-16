@@ -23,6 +23,22 @@
  *
  * If the store cannot save a value (e.g. encryption fails), the value is
  * dropped as `[REDACTED:<type>]`; it is never kept in plain text.
+ *
+ * Secrets the agent meets (CHAT-SECRETS-02): a secret in a tool's result
+ * (e.g. the agent reads a .env file) or in the agent's own reply is moved to
+ * the key store the same way, owned by the conversation's user, one reference
+ * per value per conversation (a value already saved for that conversation
+ * gets its existing reference). Decision: vault, not only redact, so the agent
+ * can still use the value through the reference (owner approval, as above).
+ *  - Tool results: the tools registry vaults them (vaultToolResult) before the
+ *    model, the run events, the approval record or the stored turn see them.
+ *    Outside the owner's own chat conversation (channel turns, tasks, no
+ *    conversation) there is no chat to link to: the value is redacted.
+ *  - The reply: when a run ends, before the turn is stored, the answer, the
+ *    stored work and the run's event log are vaulted (vaultRunSecrets). Text
+ *    deltas already streamed live to an open page are not taken back; every
+ *    later read (events replay, messages, search, export, the next turn's
+ *    model history) sees the reference.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -167,10 +183,155 @@ export function scrubSecretValues<T>(value: T, used: Array<{ ref: string; secret
   return walkStrings(value, (s) => used.reduce((acc, u) => (u.secret ? acc.split(u.secret).join(u.ref) : acc), s));
 }
 
+// ---- secrets the agent meets: tool results and its own reply (CHAT-SECRETS-02) ----
+
+const NOTE = '\n\n[Secrets in this result were moved to the encrypted key store. Use the [SECRET:…] reference itself in a tool input; the tool gets the value after the owner approves that call.]';
+const hasSecret = (s: string): boolean => redactImportText(s).total > 0;
+
+/** One vaulting at a time per conversation, so a value gets one reference even across parallel tool calls. */
+const locks = new Map<string, Promise<unknown>>();
+function serial<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const next = (locks.get(key) ?? Promise.resolve()).catch(() => undefined).then(fn);
+  const tail = next.catch(() => undefined);
+  locks.set(key, tail);
+  void tail.then(() => { if (locks.get(key) === tail) locks.delete(key); });
+  return next;
+}
+
+/** The values already saved for this conversation of `userId` → their reference. */
+async function knownSecrets(userId: string, conversationId: string): Promise<Map<string, SavedSecret>> {
+  const known = new Map<string, SavedSecret>();
+  const storage = getCredentialStorage();
+  for (const c of await ownChatSecrets(userId)) {
+    if (c.description !== `chat:${conversationId}`) continue;
+    const [, type, id] = NAME_RE.exec(c.name)!;
+    try { known.set(await storage.decrypt(c), { id, type: type as RedactionType, ref: secretRef(type, id) }); } catch { /* unreadable (key changed): a new reference is made */ }
+  }
+  return known;
+}
+
+/** The conversation when it is `userId`'s own chat conversation. */
+async function ownConversation(userId: string | undefined, conversationId: string | undefined): Promise<boolean> {
+  if (!userId || !conversationId) return false;
+  return !!(await q.one<{ id: string }>('SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?', conversationId, userId));
+}
+
+/**
+ * Vault (owner chat) or redact (anywhere else) every secret in the strings of
+ * `value`. Returns the same object when nothing was found.
+ */
+async function vaultStrings<T>(owner: { userId?: string; conversationId?: string; channel?: boolean }, value: T): Promise<{ value: T; changed: number; vaulted: boolean }> {
+  const todo = new Set<string>();
+  walkStrings(value, (s) => { if (hasSecret(s)) todo.add(s); return s; });
+  if (todo.size === 0) return { value, changed: 0, vaulted: false };
+  if (owner.channel || !(await ownConversation(owner.userId, owner.conversationId))) {
+    const out = walkStrings(value, (s) => (todo.has(s) ? redactImportText(s).text : s));
+    return { value: out, changed: todo.size, vaulted: false };
+  }
+  const userId = owner.userId!; const conversationId = owner.conversationId!;
+  return serial(conversationId, async () => {
+    const known = await knownSecrets(userId, conversationId);
+    const done = new Map<string, string>();
+    let vaulted = false;
+    for (const s of todo) {
+      const v = await vaultSecretsInText(userId, conversationId, s, known);
+      if ((v.text.match(SECRET_REF_RE) ?? []).length > (s.match(SECRET_REF_RE) ?? []).length) vaulted = true;
+      done.set(s, v.text);
+    }
+    known.clear();
+    return { value: walkStrings(value, (s) => done.get(s) ?? s), changed: todo.size, vaulted };
+  });
+}
+
+export interface ToolSecretContext { userId?: string; sessionId?: string; toolPolicy?: unknown }
+
+/**
+ * A tool's result before anyone reads it: secrets in its text, error and
+ * structured fields go to the key store of the chat's owner (or are redacted
+ * outside an owner chat). Image data is not scanned.
+ */
+export async function vaultToolResult<R extends { content?: Array<{ type: string; text?: string }>; error?: string; details?: unknown; data?: unknown }>(ctx: ToolSecretContext, result: R): Promise<R> {
+  if (!result || typeof result !== 'object') return result;
+  const texts = (result.content ?? []).map((b) => (b && b.type === 'text' && typeof b.text === 'string' ? b.text : null));
+  const scan = { texts, error: result.error, details: result.details, data: result.data };
+  const out = await vaultStrings({ userId: ctx.userId, conversationId: ctx.sessionId, channel: !!ctx.toolPolicy }, scan)
+    // The store or the database failed: never pass the value on, redact it.
+    .catch(() => vaultStrings({ channel: true }, scan));
+  if (out.changed === 0) return result;
+  const v = out.value;
+  let noted = !out.vaulted;
+  const content = (result.content ?? []).map((b, i) => {
+    if (v.texts[i] === null || v.texts[i] === undefined) return b;
+    const text = noted ? v.texts[i]! : `${v.texts[i]}${NOTE}`;
+    noted = true;
+    return { ...b, text };
+  });
+  const next: R = { ...result, content };
+  if (result.error !== undefined) next.error = v.error;
+  if (result.details !== undefined) next.details = v.details;
+  if (result.data !== undefined) next.data = v.data;
+  return next;
+}
+
+/** The parts of a run that vaultRunSecrets rewrites (a ChatRun). */
+export interface RunSecretsTarget {
+  userId: string;
+  sessionId: string;
+  answer: string;
+  parts: unknown[];
+  events: Array<{ seq: number; frame: Record<string, unknown> & { type: string } }>;
+}
+
+/**
+ * When a run ends, before its turn is stored: secrets in the reply text, the
+ * stored work (reasoning, tool inputs/outputs) and the run's event log are
+ * replaced by references (the owner's chat) — the same reference per value.
+ * Returns the number of rewritten strings (0 = nothing found).
+ */
+export async function vaultRunSecrets(run: RunSecretsTarget): Promise<number> {
+  const scan = { answer: run.answer, parts: run.parts };
+  let known = new Map<string, SavedSecret>();
+  let out: Awaited<ReturnType<typeof vaultStrings<typeof scan>>>;
+  try {
+    out = await vaultStrings({ userId: run.userId, conversationId: run.sessionId }, scan);
+    if (out.changed > 0 && out.vaulted) known = await knownSecrets(run.userId, run.sessionId);
+  } catch {
+    // The store or the database failed: never keep the value, redact it.
+    out = await vaultStrings({ channel: true }, scan);
+  }
+  if (out.changed === 0) return 0;
+  run.answer = out.value.answer;
+  run.parts.splice(0, run.parts.length, ...out.value.parts);
+  // The event log: the same values → the same references. Text deltas may cut
+  // a value in two, so each run of text (or reasoning) deltas is read as one.
+  const clean = (s: string) => redactImportText(s, { onSecret: (type, value) => known.get(value)?.ref ?? `[REDACTED:${type}]` }).text;
+  const events = run.events;
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    if (e.frame.type !== 'text' && e.frame.type !== 'reasoning') {
+      if (e.frame.type === 'tool_start' || e.frame.type === 'tool_result') e.frame = walkStrings(e.frame, clean);
+      continue;
+    }
+    let j = i;
+    let joined = '';
+    while (j < events.length && events[j].frame.type === e.frame.type) { joined += String(events[j].frame.content ?? ''); j++; }
+    const cleaned = clean(joined);
+    if (cleaned !== joined) {
+      e.frame = { ...e.frame, content: cleaned };
+      events.splice(i + 1, j - i - 1);
+    } else i = j - 1;
+  }
+  known.clear();
+  return out.changed;
+}
+
 function walkStrings<T>(value: T, fn: (s: string) => string, depth = 0): T {
   if (typeof value === 'string') return fn(value) as unknown as T;
   if (depth > 20 || value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) return value.map((v) => walkStrings(v, fn, depth + 1)) as unknown as T;
+  // Plain objects only: class instances (Buffer, Date, …) are kept as they are.
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return value;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = walkStrings(v, fn, depth + 1);
   return out as T;
