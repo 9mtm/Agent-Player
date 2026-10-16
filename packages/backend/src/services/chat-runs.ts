@@ -35,6 +35,8 @@ export const MAX_ANSWER_CHARS = 1_000_000;
 export class ChatRun {
   readonly events: RunEvent[] = [];
   readonly parts: TurnPart[] = [];
+  /** CHAT-PRO-02 I: the agent writing this reply (null = the conversation's agent). */
+  agentId: string | null = null;
   status: RunStatus = 'running';
   answer = '';
   readonly startedAt: number;
@@ -253,6 +255,7 @@ export class ChatRunRegistry {
   start(input: StartRunInput): ChatRun {
     this.sweep();
     const run = new ChatRun(input.runId, input.userId, input.sessionId, this.now(), this.now);
+    run.agentId = input.agentId ?? null;
     this.runs.set(run.id, run);
     void (async () => {
       try { await input.execute(runReply(run)); }

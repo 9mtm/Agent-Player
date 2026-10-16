@@ -14,7 +14,7 @@ import { approvalCategory, consumeApprovalTicket, isConfinedChannelReply, reques
 import { actorFromToolContextAsync } from '../repositories/actor.js';
 
 /** Self-only tools need no grant; an extension or MCP tool can never claim it. */
-const SELF_ONLY_TOOLS = new Set(['plan_steps']);
+const SELF_ONLY_TOOLS = new Set(['plan_steps', 'board_suggest_card']);
 const isSelfOnly = (tool: Tool) => tool.selfOnly === true && SELF_ONLY_TOOLS.has(tool.name) && !tool.extensionId && !(tool as { mcp?: unknown }).mcp && !tool.execClass;
 
 export class ToolsRegistry {

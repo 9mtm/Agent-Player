@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { orderedId } from '../repositories/ordered-id.js';
 import { all, dialect, one, run, sql, type Step } from '../repositories/sql-steps.js';
 import { nowText } from '../db/pg/dialect.js';
 import { normalizeDepartment } from './personality.js';
@@ -51,6 +52,8 @@ export interface BoardCard {
   agents: string[]; departments: string[]; comments: number; createdAt: string; updatedAt: string;
   /** BOARD-03 step B */
   type: CardType; startDate: string | null; cover: string | null; labels: string[]; checklist: { done: number; total: number };
+  /** CHAT-PRO-02 I step 2: the chat conversation this card was made from (null = made on the board). */
+  conversationId: string | null;
 }
 export interface BoardLabel { id: string; name: string; color: string; position: number }
 export interface ChecklistItem { id: string; text: string; done: boolean; position: number }
@@ -148,8 +151,8 @@ function* cardsOf(boardId: string, includeArchived: boolean, onlyCard?: string):
   const rows = yield* all<{
     id: string; column_id: string; title: string; description: string; priority: Priority; position: number; due_date: string | null;
     task_id: string | null; archived: number; version: number; created_at: string; updated_at: string;
-    card_type: CardType; start_date: string | null; cover: string | null;
-  }>(`SELECT id, column_id, title, description, priority, position, due_date, task_id, archived, version, created_at, updated_at, card_type, start_date, cover
+    card_type: CardType; start_date: string | null; cover: string | null; conversation_id: string | null;
+  }>(`SELECT id, column_id, title, description, priority, position, due_date, task_id, archived, version, created_at, updated_at, card_type, start_date, cover, conversation_id
       FROM board_cards WHERE board_id = ?${includeArchived ? '' : ' AND archived = 0'}${onlyCard ? ' AND id = ?' : ''} ORDER BY position, created_at`,
   ...(onlyCard ? [boardId, onlyCard] : [boardId]));
   if (rows.length === 0) return [];
@@ -179,6 +182,7 @@ function* cardsOf(boardId: string, includeArchived: boolean, onlyCard?: string):
     agents: byAgents.get(r.id) ?? [], departments: byDeps.get(r.id) ?? [], comments: byCount.get(r.id) ?? 0,
     createdAt: r.created_at, updatedAt: r.updated_at,
     type: r.card_type, startDate: r.start_date, cover: r.cover, labels: byLabels.get(r.id) ?? [], checklist: byCheck.get(r.id) ?? { done: 0, total: 0 },
+    conversationId: r.conversation_id ?? null,
   }));
 }
 
@@ -344,6 +348,39 @@ function* setLinks(cardId: string, agents: string[] | undefined, deps: string[] 
   }
 }
 
+// ---------------------------------------------------------------------------
+// Activity (CHAT-PRO-02 I step 2): what happened to a card, so the chat it
+// came from can show moves, comments and "done".
+// ---------------------------------------------------------------------------
+
+export const ACTIVITY_KINDS = ['created', 'moved', 'done', 'comment', 'archived', 'restored'] as const;
+export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
+export type Actor = { kind: 'user' | 'agent'; id: string };
+export interface CardActivity { id: string; kind: ActivityKind; actorKind: 'user' | 'agent'; actorId: string; detail: string; createdAt: string }
+/** Characters of a comment kept in the activity line. */
+export const ACTIVITY_DETAIL = 200;
+
+/** Ids are time-ordered (orderedId), so the id alone keeps the order within one second. */
+function* logActivity(cardId: string, kind: ActivityKind, actor: Actor, detail = ''): Step<void> {
+  const d = yield* dialect();
+  yield* run(`INSERT INTO board_card_activity (id, card_id, kind, actor_kind, actor_id, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ${nowText(d)})`,
+    orderedId(), cardId, kind, actor.kind, actor.id, [...detail.replace(/\s+/g, ' ').trim()].slice(0, ACTIVITY_DETAIL).join(''));
+}
+
+/** A move into the board's last column counts as done. */
+function* moveKind(boardId: string, columnId: string): Step<{ kind: ActivityKind; name: string }> {
+  const cols = yield* all<{ id: string; name: string }>('SELECT id, name FROM board_columns WHERE board_id = ? ORDER BY position', boardId);
+  const col = cols.find((c) => c.id === columnId);
+  return { kind: cols.length > 1 && cols[cols.length - 1].id === columnId ? 'done' : 'moved', name: col?.name ?? '' };
+}
+
+/** The newest activity of a card (oldest first), at most `limit`. */
+export function* cardActivity(cardId: string, limit = 20): Step<CardActivity[]> {
+  const rows = yield* all<{ id: string; kind: ActivityKind; actor_kind: 'user' | 'agent'; actor_id: string; detail: string; created_at: string }>(
+    'SELECT id, kind, actor_kind, actor_id, detail, created_at FROM board_card_activity WHERE card_id = ? ORDER BY id DESC LIMIT ?', cardId, limit);
+  return rows.reverse().map((r) => ({ id: r.id, kind: r.kind, actorKind: r.actor_kind, actorId: r.actor_id, detail: r.detail, createdAt: r.created_at }));
+}
+
 export function addColumn(ownerId: string, boardId: string, body: Record<string, unknown>): Promise<Board> {
   onlyKeys(body, ['name']);
   const name = line(body.name, 'name', 60);
@@ -367,7 +404,7 @@ export function renameColumn(ownerId: string, boardId: string, columnId: string,
   }, { immediate: true });
 }
 
-export function createCard(ownerId: string, boardId: string, body: Record<string, unknown>): Promise<BoardCard> {
+export function createCard(ownerId: string, boardId: string, body: Record<string, unknown>, opts: { conversationId?: string } = {}): Promise<BoardCard> {
   onlyKeys(body, ['columnId', 'title', 'description', 'priority', 'dueDate', 'agents', 'departments', 'type', 'startDate', 'cover', 'labels']);
   const title = line(body.title, 'title', MAX_TITLE);
   const type = body.type === undefined ? 'task' : cardType(body.type);
@@ -391,6 +428,8 @@ export function createCard(ownerId: string, boardId: string, body: Record<string
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowText(d)}, ${nowText(d)})`, id, boardId, col.id, title, description, prio, yield* nextPosition(col.id), due, ownerId, type, start, cov);
     yield* setLinks(id, agents, deps);
     yield* setLabels(boardId, id, labels);
+    if (opts.conversationId) yield* run('UPDATE board_cards SET conversation_id = ? WHERE id = ?', opts.conversationId, id);
+    yield* logActivity(id, 'created', { kind: 'user', id: ownerId }, (yield* moveKind(boardId, col.id)).name);
     return (yield* cardsOf(boardId, true, id))[0];
   }, { immediate: true });
 }
@@ -425,7 +464,7 @@ export function updateCard(ownerId: string, boardId: string, cardId: string, bod
   return sql().tx(function* () {
     const d = yield* dialect();
     yield* boardRow(ownerId, boardId);
-    const card = yield* one<{ version: number; column_id: string; start_date: string | null; due_date: string | null }>('SELECT version, column_id, start_date, due_date FROM board_cards WHERE id = ? AND board_id = ?', cardId, boardId);
+    const card = yield* one<{ version: number; column_id: string; start_date: string | null; due_date: string | null; archived: number }>('SELECT version, column_id, start_date, due_date, archived FROM board_cards WHERE id = ? AND board_id = ?', cardId, boardId);
     if (!card) throw notFound('Card');
     datesOk(newStart === undefined ? card.start_date : newStart, newDue === undefined ? card.due_date : newDue);
     if (Number(card.version) !== expected) {
@@ -456,7 +495,9 @@ export function updateCard(ownerId: string, boardId: string, cardId: string, bod
         pos = yield* nextPosition(col.id);
       }
       sets.push('column_id = ?', 'position = ?'); args.push(col.id, pos);
+      if (col.id !== card.column_id) { const m = yield* moveKind(boardId, col.id); yield* logActivity(cardId, m.kind, { kind: 'user', id: ownerId }, m.name); }
     }
+    if (body.archived !== undefined && (Number(card.archived) === 1) !== body.archived) yield* logActivity(cardId, body.archived ? 'archived' : 'restored', { kind: 'user', id: ownerId });
     yield* setLinks(cardId, agents, deps);
     yield* setLabels(boardId, cardId, labelIds);
     const r = yield* run(`UPDATE board_cards SET ${[...sets, 'version = version + 1', `updated_at = ${nowText(d)}`].join(', ')} WHERE id = ? AND version = ?`, ...args, cardId, expected);
@@ -484,6 +525,7 @@ export function addComment(ownerId: string, boardId: string, cardId: string, bod
     if (!(yield* one('SELECT id FROM board_cards WHERE id = ? AND board_id = ?', cardId, boardId))) throw notFound('Card');
     yield* run(`INSERT INTO board_card_comments (id, card_id, author_kind, author_id, body, created_at) VALUES (?, ?, ?, ?, ?, ${nowText(d)})`,
       randomUUID(), cardId, author.kind, author.id, textBody);
+    yield* logActivity(cardId, 'comment', author, textBody);
     return (yield* all<{ id: string; author_kind: 'user' | 'agent'; author_id: string; body: string; created_at: string }>(
       'SELECT id, author_kind, author_id, body, created_at FROM board_card_comments WHERE card_id = ? ORDER BY created_at, id LIMIT 500', cardId))
       .map((c) => ({ id: c.id, authorKind: c.author_kind, authorId: c.author_id, body: c.body, createdAt: c.created_at }));
@@ -538,6 +580,7 @@ export function agentComment(ownerId: string, agentId: string, cardId: unknown, 
     const card = yield* assignedCard(ownerId, agentId, cardId);
     yield* run(`INSERT INTO board_card_comments (id, card_id, author_kind, author_id, body, created_at) VALUES (?, ?, 'agent', ?, ?, ${nowText(d)})`,
       randomUUID(), card.id, agentId, textBody);
+    yield* logActivity(card.id, 'comment', { kind: 'agent', id: agentId }, textBody);
     const n = yield* one<{ n: number }>('SELECT COUNT(*) AS n FROM board_card_comments WHERE card_id = ?', card.id);
     return Number(n?.n ?? 0);
   }, { immediate: true });
@@ -558,6 +601,7 @@ export function agentMove(ownerId: string, agentId: string, cardId: unknown, col
     const r = yield* run(`UPDATE board_cards SET column_id = ?, position = ?, version = version + 1, updated_at = ${nowText(d)} WHERE id = ? AND version = ?`,
       col.id, pos, card.id, card.version);
     if (r.changes !== 1) throw new BoardError(409, 'version_conflict', 'The card was changed meanwhile; try again.');
+    yield* logActivity(card.id, 'moved', { kind: 'agent', id: agentId }, col.name);
     return { column: col.name };
   }, { immediate: true });
 }

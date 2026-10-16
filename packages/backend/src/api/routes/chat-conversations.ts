@@ -9,6 +9,8 @@
  *   POST   /api/chat/conversations/:id/runs        { runId, message } → starts a turn (202)
  *   GET    /api/chat/runs/:runId/events?after=N    SSE: the run's events after N, then live
  *   POST   /api/chat/runs/:runId/stop              stop; the partial reply is kept
+ *   GET    /api/chat/conversations/:id/cards       owner: board cards made from it + who works on it (CHAT-PRO-02 I step 2)
+ *   POST   /api/chat/conversations/:id/cards       owner: { boardId, columnId?, title, description?, priority?, type?, agents? } → 201 { card }
  *
  * SECURITY: an active signed-in user (auth gate 'user' tier + the handler's
  * own check). Conversations and runs of other users answer 404. The model
@@ -29,6 +31,8 @@ import { chatRuns, MAX_RUNNING_PER_USER, type RunEvent } from '../../services/ch
 import { openSseStream } from '../../services/chat-sse.js';
 import { executeChatTurn } from './chat.js';
 import { q } from '../../repositories/sql-steps.js';
+import { chatProgress, conversationCards, createChatCard } from '../../services/chat-board.js';
+import { BoardError } from '../../services/task-board.js';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/;
 /** A model id the chat may pick (local model names like qwen3.8:27b, or claude-…). */
@@ -171,6 +175,29 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     return reply.code(202).send({ runId: b.runId, userMessage });
   });
 
+  // ---- board cards made from a conversation (CHAT-PRO-02 I step 2): owner only, like the board ----
+  const boardError = (reply: FastifyReply, err: unknown) => {
+    if (err instanceof BoardError) return reply.code(err.status).send({ error: err.message, code: err.code });
+    throw err;
+  };
+  fastify.get('/api/chat/conversations/:id/cards', { config: { access: 'owner' } }, async (request: Req, reply) => {
+    const userId = caller(request);
+    const c = await findConversation(userId, request.params.id!);
+    if (!c) return notFound(reply);
+    try {
+      const cards = await conversationCards(userId, c.id);
+      const active = chatRuns.activeFor(c.id);
+      const assigned = [...new Set(cards.filter((k) => !k.archived).flatMap((k) => k.agents))];
+      const progress = await chatProgress(c.id, c.agentId, assigned, active ? { agentId: active.agentId, parts: active.parts } : null);
+      return { cards, progress };
+    } catch (err) { return boardError(reply, err); }
+  });
+  fastify.post('/api/chat/conversations/:id/cards', { config: { access: 'owner' } }, async (request: Req, reply) => {
+    const b = request.body;
+    if (b === null || typeof b !== 'object' || Array.isArray(b)) return bad(reply, 'Body must be a JSON object');
+    try { return reply.code(201).send({ card: await createChatCard(caller(request), request.params.id!, b as Record<string, unknown>) }); } catch (err) { return boardError(reply, err); }
+  });
+
   // ---- projects (CHAT-PRO-02 A): owner only (a project names a folder the agent may read) ----
   const projectError = (reply: FastifyReply, err: unknown) => {
     if (err instanceof ProjectInputError) return reply.code(400).send({ error: err.message, code: 'invalid_project' });
@@ -197,7 +224,7 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
   /** CHAT-PRO-02 I: more than one agent has answered in this conversation. */
   const TEAM_NOTE = 'Several agents of the team answer in this conversation. Earlier replies written by another agent start with that agent\'s name in brackets, like [Name]. Build on their work; do not repeat it, and do not write as them.';
   /** CHAT-PRO-02 H: how the agent shows its work in the chat. */
-  const PLAN_NOTE = 'When a request needs several steps (3 or more), first call plan_steps with the whole plan so the owner sees it, then work through it and call plan_steps again with the whole list as each step finishes. Keep steps short. Skip the plan for a quick question or a one-step answer.';
+  const PLAN_NOTE = 'When a request needs several steps (3 or more), first call plan_steps with the whole plan so the owner sees it, then work through it and call plan_steps again with the whole list as each step finishes. Keep steps short. Skip the plan for a quick question or a one-step answer. When the owner gives a larger task that other agents of the team should share, you may call board_suggest_card once; the owner decides whether it becomes a board card.';
 
   // ---- microphone (CHAT-PRO-02 C): a recorded clip → text, on this computer only (owner) ----
   fastify.get('/api/chat/transcribe', { config: { access: 'owner' } }, async () => { const s = sttSetup(); return { available: s.available, missing: s.missing }; });

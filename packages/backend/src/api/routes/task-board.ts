@@ -18,6 +18,7 @@
  *   GET   /api/boards/:id/cards/:cardId/checklist -> { items }
  *   POST  /api/boards/:id/cards/:cardId/checklist { text } -> 201 { items }
  *   PUT   /api/boards/:id/cards/:cardId/checklist/:itemId { text?, done?, remove? } -> { items }
+ *   GET   /api/boards/:id/cards/:cardId/chat -> { conversation: { id, title } | null, progress } (CHAT-PRO-02 I step 2: the chat it came from, who works on it)
  *   Cards also take type (task|idea|bug|milestone|request), startDate, cover (colour or null) and labels (label ids).
  * Errors: 400 { code: 'invalid_board' | 'invalid_version' }, 404 { code: 'not_found' }.
  */
@@ -30,6 +31,8 @@ import {
   updateBoard, updateCard, updateChecklistItem, updateLabel,
 } from '../../services/task-board.js';
 import { BOARD_COLORS, BOARD_TEMPLATES } from '../../services/board-templates.js';
+import { cardConversation, chatProgress } from '../../services/chat-board.js';
+import { chatRuns } from '../../services/chat-runs.js';
 
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -119,6 +122,20 @@ export async function taskBoardRoutes(fastify: FastifyInstance) {
     if (!ids(request.params)) return reply.code(404).send({ error: 'Card not found', code: 'not_found' });
     try {
       return reply.code(201).send({ comments: await addComment(owner, request.params.id, request.params.cardId!, objectBody(request.body), { kind: 'user', id: owner }) });
+    } catch (err) { return fail(err, reply); }
+  });
+
+  // CHAT-PRO-02 I step 2: the conversation a card came from and the progress of the agents on it
+  fastify.get<{ Params: P }>('/api/boards/:id/cards/:cardId/chat', { config }, async (request, reply) => {
+    const owner = ownerOf(request, reply); if (owner === null) return reply;
+    if (!ids(request.params)) return reply.code(404).send({ error: 'Card not found', code: 'not_found' });
+    try {
+      const { conversation, agents } = await cardConversation(owner, request.params.id, request.params.cardId!);
+      const active = conversation ? chatRuns.activeFor(conversation.id) : undefined;
+      const progress = conversation
+        ? await chatProgress(conversation.id, conversation.agentId, agents, active ? { agentId: active.agentId, parts: active.parts } : null)
+        : { running: false, agents: agents.map((agentId) => ({ agentId, replies: 0, lastAt: null, running: false, plan: null })) };
+      return { conversation: conversation ? { id: conversation.id, title: conversation.title } : null, progress };
     } catch (err) { return fail(err, reply); }
   });
 
