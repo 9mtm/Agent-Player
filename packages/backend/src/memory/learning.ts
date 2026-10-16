@@ -22,6 +22,8 @@
  *   low-confidence  extraction confidence below 0.6
  *   outsider        learned in a turn that answers an outsider (channel / public room);
  *                   never auto-saved into the owner's drawers
+ *   chat            proposed by an agent in a saved chat conversation (CHAT-PRO-02 E):
+ *                   the owner accepts or rejects it in the chat, never saved by itself
  *
  * Proposals are reviewed by the owner account only (owner-only API). For a
  * non-owner account an important item is not saved (reported as skipped).
@@ -55,7 +57,7 @@ export type LearningOrigin = 'owner' | 'agent' | 'extraction' | 'outsider';
 export type LearningReason =
   | 'owner-identity' | 'owner-preference' | 'people'
   | 'money' | 'credentials' | 'health' | 'legal' | 'permissions' | 'decision'
-  | 'conflict' | 'overwrite' | 'low-confidence' | 'outsider';
+  | 'conflict' | 'overwrite' | 'low-confidence' | 'outsider' | 'chat';
 
 export interface LearningCandidate {
   content: string;
@@ -235,6 +237,8 @@ export interface LearnInput {
   openDrawers?: readonly DrawerRef[] | null;
   /** Extra metadata stored with routine memories. */
   metadata?: Record<string, unknown>;
+  /** CHAT-PRO-02 E: every new item goes to the owner as a proposal (routine ones too). */
+  review?: boolean;
 }
 
 export interface LearnOutcome {
@@ -271,6 +275,7 @@ export async function learn(input: LearnInput): Promise<LearnOutcome> {
       // similarity (search scores depend on the active embedding model).
       .map((r) => ({ id: r.memory.id, content: r.memory.content, similarity: textSimilarity(content, r.memory.content) }));
     const cls = classifyLearning({ ...c, content, type, drawer }, { similar });
+    if (input.review && cls.kind === 'routine') { cls.kind = 'important'; cls.reasons.push('chat'); }
     const entry: VersionEntry = { type, importance: clampImportance(c.importance), content };
 
     if (cls.kind === 'duplicate') {

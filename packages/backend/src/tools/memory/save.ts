@@ -11,6 +11,7 @@ import type { ToolExecutionContext } from '../types.js';
 import { toolMemoryUser } from './scope.js';
 import { repositories } from '../../repositories/index.js';
 import { toolActor } from '../../repositories/actor.js';
+import { isUserConversation, linkAgentProposal } from '../../services/chat-memory.js';
 import { DrawerInputError, defaultDrawerForType, parseDrawerId, sameDrawer, type DrawerRef } from '../../memory/drawers.js';
 
 interface MemorySaveParams {
@@ -154,13 +155,24 @@ Examples:
       // CORE-05: routine facts are saved (versioned); important ones become a
       // proposal the owner approves. Outsider turns never auto-save (B1.6:
       // the memory repository sets user, drawers, origin and version actor).
+      // CHAT-PRO-02 E: in a saved chat conversation the owner decides every
+      // memory in the chat (Accept / Reject); nothing is saved by itself.
+      const chat = context?.chatPlan === true && !context.toolPolicy && await isUserConversation(context.userId, context.sessionId);
       const outcome = await repositories.memory.learn(actor, {
         candidates: [{ content: params.content, type, importance, drawer }],
         metadata: { ...params.metadata, tags: params.tags || [], savedAt: new Date().toISOString() },
+        ...(chat ? { review: true } : {}),
       });
       const memory = outcome.saved[0];
       const proposal = outcome.proposed[0];
 
+      if (proposal && chat) {
+        await linkAgentProposal(context!.userId!, context!.sessionId!, proposal);
+        return {
+          content: [{ type: 'text', text: `Proposed to the owner: the chat shows this memory with Accept and Reject. It is saved only if the owner accepts it (proposal ${proposal.id}).` }],
+          data: { success: true, pendingApproval: true, proposalId: proposal.id, reasons: proposal.reasons },
+        };
+      }
       if (proposal) {
         return {
           content: [{

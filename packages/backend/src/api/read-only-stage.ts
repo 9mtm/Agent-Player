@@ -112,6 +112,9 @@ export const STAGE3_ROUTES: ReadonlySet<string> = new Set([
   'GET /api/chat/conversations/:id/messages', 'POST /api/chat/conversations/:id/runs', 'POST /api/chat/runs/:runId/stop',
   // CHAT-PRO-02 I step 2: a chat task becomes a board card (owner only, like the board)
   'GET /api/chat/conversations/:id/cards', 'POST /api/chat/conversations/:id/cards', 'GET /api/boards/:id/cards/:cardId/chat',
+  // CHAT-PRO-02 E: chat memory ("Remember this", the conversation's memories; proposals use the memory proposal routes)
+  'GET /api/chat/conversations/:id/memories', 'POST /api/chat/conversations/:id/memories',
+  'POST /api/memory/proposals/:id/approve', 'POST /api/memory/proposals/:id/reject',
   // AGENT-CARD-01: the agent card edits role/department/description and the versioned persona (owner)
   'PUT /api/agents/:id', 'GET /api/agents/:id/personality/current', 'GET /api/agents/:id/personality/versions',
   'POST /api/agents/:id/personality/versions', 'POST /api/agents/:id/personality/lock', 'POST /api/agents/:id/personality/unlock',
