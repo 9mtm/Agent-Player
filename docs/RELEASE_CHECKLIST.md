@@ -378,7 +378,7 @@ See CHANGELOG.md for full details."
 **Manual Process:**
 
 1. **Navigate to GitHub:**
-   - Go to: https://github.com/Agent-Player/Agent-Player/releases/new
+   - Go to: https://github.com/9mtm/Agent-Player/releases/new
 
 2. **Fill Release Form:**
    - **Tag:** v1.3.0
@@ -435,7 +435,7 @@ After release is published, verify README.md links work:
 
 **URL Format:**
 ```
-https://github.com/Agent-Player/Agent-Player/releases/download/v1.3.0/agent-player-installer-1.3.0-win-x64.msi
+https://github.com/9mtm/Agent-Player/releases/download/v1.3.0/agent-player-installer-1.3.0-win-x64.msi
 ```
 
 ---
@@ -602,10 +602,10 @@ If critical issues discovered after release:
 - Professional uninstaller
 
 📥 Download now:
-https://github.com/Agent-Player/Agent-Player/releases/tag/v1.3.0
+https://github.com/9mtm/Agent-Player/releases/tag/v1.3.0
 
 📖 Full changelog:
-https://github.com/Agent-Player/Agent-Player/blob/main/CHANGELOG.md
+https://github.com/9mtm/Agent-Player/blob/main/CHANGELOG.md
 ```
 
 ---

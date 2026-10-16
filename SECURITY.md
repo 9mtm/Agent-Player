@@ -22,7 +22,7 @@ We currently support the following versions with security updates:
 
 Please report security vulnerabilities via **GitHub Security Advisories**:
 
-1. Go to: https://github.com/Agent-Player/Agent-Player/security/advisories
+1. Go to: https://github.com/9mtm/Agent-Player/security/advisories
 2. Click "Report a vulnerability"
 3. Fill in the details:
    - Description of the vulnerability
@@ -106,7 +106,7 @@ Agent Player implements multiple security layers:
 ### Installation
 
 1. **Use official sources only**
-   - Clone from: https://github.com/Agent-Player/Agent-Player
+   - Clone from: https://github.com/9mtm/Agent-Player
    - Don't use unofficial forks or mirrors
 
 2. **Verify integrity**

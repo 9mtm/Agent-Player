@@ -24,7 +24,7 @@ git push origin v1.3.0
 
 3. **Job 3: Build Linux AppImage** (Ubuntu runner, ~8 min)
    - Builds Tauri AppImage
-   - Output: `agent-player-installer-{version}-linux-x86_64.AppImage` (~80 MB)
+   - Output: `agent-player-installer-{version}-x86_64.AppImage` (~80 MB)
 
 4. **Job 4: Build macOS DMG** (macOS runner, ~7 min)
    - Builds Tauri DMG
@@ -79,7 +79,7 @@ Each release creates these files:
 | File | Size | Platform | Purpose |
 |------|------|----------|---------|
 | `agent-player-installer-{v}-win-x64.msi` | ~3 MB | Windows | Stub installer |
-| `agent-player-installer-{v}-linux-x86_64.AppImage` | ~80 MB | Linux | Self-contained installer |
+| `agent-player-installer-{v}-x86_64.AppImage` | ~80 MB | Linux | Self-contained installer |
 | `agent-player-installer-{v}-macos-x64.dmg` | ~3 MB | macOS | Stub installer |
 | `agent-player-files.zip` | ~90 MB | All | Application files (downloaded by stub installer) |
 | `checksums.txt` | ~1 KB | All | SHA256 verification |

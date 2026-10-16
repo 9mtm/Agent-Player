@@ -4,12 +4,12 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/Agent-Player/Agent-Player.git"
+    "url": "https://github.com/9mtm/Agent-Player.git"
   },
   "bugs": {
-    "url": "https://github.com/Agent-Player/Agent-Player/issues"
+    "url": "https://github.com/9mtm/Agent-Player/issues"
   },
-  "homepage": "https://github.com/Agent-Player/Agent-Player#readme",
+  "homepage": "https://github.com/9mtm/Agent-Player#readme",
   "scripts": {
     "dev": "node scripts/next-local.mjs dev --hostname 127.0.0.1 --port 41521",
     "build": "node scripts/next-local.mjs build",

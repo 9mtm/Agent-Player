@@ -29,7 +29,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli
+        run: cargo install tauri-cli --version "^2" --locked
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -123,7 +123,7 @@ jobs:
           targets: x86_64-unknown-linux-gnu
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli
+        run: cargo install tauri-cli --version "^2" --locked
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -187,7 +187,7 @@ jobs:
             ls -laR installer/target/release/bundle/ 2>/dev/null || true
             exit 1
           fi
-          OUTPUT_NAME="agent-player-installer-${VERSION}-linux-x86_64.AppImage"
+          OUTPUT_NAME="agent-player-installer-${VERSION}-x86_64.AppImage"
           cp "$APPIMAGE" "$OUTPUT_NAME"
           chmod +x "$OUTPUT_NAME"
 
@@ -202,7 +202,7 @@ jobs:
               VERSION="1.3.0"
             fi
           fi
-          FILE="agent-player-installer-${VERSION}-linux-x86_64.AppImage"
+          FILE="agent-player-installer-${VERSION}-x86_64.AppImage"
           sha256sum "$FILE" > checksums-linux.txt
 
       - name: Upload artifacts
@@ -230,7 +230,7 @@ jobs:
           targets: x86_64-apple-darwin
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli
+        run: cargo install tauri-cli --version "^2" --locked
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -414,20 +414,20 @@ jobs:
           Choose the installer for your platform:
 
           - **Windows**: `agent-player-installer-${{ steps.version.outputs.VERSION }}-win-x64.msi` (~4 MB)
-          - **Linux**: `agent-player-installer-${{ steps.version.outputs.VERSION }}-linux-x86_64.AppImage` (~4 MB)
+          - **Linux**: `agent-player-installer-${{ steps.version.outputs.VERSION }}-x86_64.AppImage` (~4 MB)
           - **macOS Intel**: `agent-player-installer-${{ steps.version.outputs.VERSION }}-macos-x64.dmg` (~4 MB)
 
           Verify downloads using `checksums.txt` (SHA256).
 
           ## ✨ What's New
 
-          See [CHANGELOG.md](https://github.com/Agent-Player/Agent-Player/blob/main/CHANGELOG.md) for full details.
+          See [CHANGELOG.md](https://github.com/9mtm/Agent-Player/blob/main/CHANGELOG.md) for full details.
 
           ## 📚 Documentation
 
-          - [Installation Guide](https://github.com/Agent-Player/Agent-Player/blob/main/docs/INSTALLATION.md)
-          - [Deployment Guide](https://github.com/Agent-Player/Agent-Player/blob/main/docs/DEPLOYMENT.md)
-          - [Upgrading Guide](https://github.com/Agent-Player/Agent-Player/blob/main/docs/UPGRADING.md)
+          - [Installation Guide](https://github.com/9mtm/Agent-Player/blob/main/docs/INSTALLATION.md)
+          - [Deployment Guide](https://github.com/9mtm/Agent-Player/blob/main/docs/DEPLOYMENT.md)
+          - [Upgrading Guide](https://github.com/9mtm/Agent-Player/blob/main/docs/UPGRADING.md)
 
           ## 🔒 Security
 
