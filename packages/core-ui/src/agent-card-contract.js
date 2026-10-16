@@ -8,7 +8,7 @@ import { validAgentId } from './agent-id.js';
 export const roles = ['main', 'manager', 'specialist', 'evaluator'];
 export const providers = ['ollama', 'claude'];
 export const MODELS_PATH = '/api/models';
-const modelId = x => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:\/-]{0,99}$/.test(x);
+const modelId = x => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:@\/-]{0,99}$/.test(x);
 export const memoryTypes = ['fact', 'event', 'context', 'insight', 'preference', 'skill', 'relationship', 'task'];
 export const drawerKinds = ['owner', 'experience', 'project', 'task', 'people'];
 export const traitNames = ['doubt', 'caution', 'creativity', 'thoroughness', 'independence', 'verbosity', 'warmth', 'curiosity', 'persistence'];
@@ -122,8 +122,9 @@ export function agentCardResponse(path, status, body) {
     case 'models': {
       if (!Array.isArray(body.models)) fail();
       // Runs twice on the live path (bridge, then browser): already-projected rows ("ollama", "label") pass unchanged.
-      const list = body.models.filter(m => record(m) && modelId(m.id) && ['local', 'ollama', 'claude'].includes(m.provider)).slice(0, 200)
-        .map(m => ({ id: m.id, provider: m.provider === 'claude' ? 'claude' : 'ollama', label: str(String(m.label ?? m.name ?? m.id).replace(/^[^A-Za-z0-9]+/u, ''), 80), size: str(m.size, 20) }));
+      // CHAT-PRO-02 G: LM Studio models keep their own provider and must carry the `lmstudio:` id prefix.
+      const list = body.models.filter(m => record(m) && modelId(m.id) && ['local', 'ollama', 'claude', 'lmstudio'].includes(m.provider) && (m.provider === 'lmstudio') === m.id.startsWith('lmstudio:')).slice(0, 200)
+        .map(m => ({ id: m.id, provider: m.provider === 'claude' || m.provider === 'lmstudio' ? m.provider : 'ollama', label: str(String(m.label ?? m.name ?? m.id).replace(/^[^A-Za-z0-9]+/u, ''), 80), size: str(m.size, 20) }));
       return { models: list };
     }
     case 'persona-current': {

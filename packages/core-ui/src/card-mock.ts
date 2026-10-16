@@ -52,6 +52,7 @@ export function createCardMock() {
     if (p.kind === 'models') return { status: 200, body: { models: [
       { id: 'qwen-fiction:7b', name: '🏠 qwen-fiction:7b', provider: 'local', size: '4.1GB', available: true },
       { id: 'llama-fiction:3b', name: '🏠 llama-fiction:3b', provider: 'local', size: '2.0GB', available: true },
+      { id: 'lmstudio:fiction/mistral-7b', name: 'fiction/mistral-7b', provider: 'lmstudio', size: '', available: true },
     ], activeProvider: 'local' } };
     if (p.kind === 'memories') {
       if (request.method === 'GET') return { status: 200, body: { success: true, memories: [...mem.values()].map(view) } };

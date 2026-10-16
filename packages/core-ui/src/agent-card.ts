@@ -11,7 +11,7 @@ export type CardTab = 'profile' | 'persona' | 'permissions' | 'memory';
 export type Grants = { version: number; granted: readonly string[]; available: readonly { name: string; description: string; requiresApproval: boolean; allowedByServer: boolean; execClass: boolean }[] };
 export type Permissions = { memoryRead: string[]; memoryWrite: string[]; sharedMemory: boolean; modes: Record<string, string>; version: number };
 export type ProfileDraft = { role: string; department: string; description: string; model: string };
-export type ModelOption = { id: string; provider: 'ollama' | 'claude'; label: string; size: string };
+export type ModelOption = { id: string; provider: 'ollama' | 'claude' | 'lmstudio'; label: string; size: string };
 export type CardState = Readonly<{
   agentId: string; tab: CardTab; phase: 'loading' | 'ready' | 'saving' | 'error';
   agent?: PublicAgent; profile: ProfileDraft; models?: readonly ModelOption[];
@@ -83,7 +83,8 @@ export class AgentCardController {
   private async loadModels() {
     try {
       const r = await this.get('/api/models');
-      if (r.status === 200 && record(r.body) && Array.isArray(r.body.models)) this.publish({ models: r.body.models as ModelOption[] });
+      // An agent's default model is Ollama or Claude; LM Studio models are picked per reply in the chat.
+      if (r.status === 200 && record(r.body) && Array.isArray(r.body.models)) this.publish({ models: (r.body.models as ModelOption[]).filter(m => m.provider !== 'lmstudio') });
     } catch { /* the model stays as it is */ }
   }
 

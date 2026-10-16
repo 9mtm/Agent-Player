@@ -155,7 +155,7 @@ test('model choice: chat picks a model for the next reply; the card saves a defa
   const conv = new ConversationsController(cl); t.after(() => conv.dispose());
   await conv.load();
   await new Promise(r => setTimeout(r, 50));
-  assert.deepEqual(conv.getSnapshot().models.map(m => [m.id, m.provider]), [['qwen-fiction:7b', 'ollama'], ['llama-fiction:3b', 'ollama']]);
+  assert.deepEqual(conv.getSnapshot().models.map(m => [m.id, m.provider]), [['qwen-fiction:7b', 'ollama'], ['llama-fiction:3b', 'ollama'], ['lmstudio:fiction/mistral-7b', 'lmstudio']]);
   conv.selectModel('not-installed'); assert.equal(conv.getSnapshot().model, '', 'only listed models can be picked');
   conv.selectModel('llama-fiction:3b'); assert.equal(conv.getSnapshot().model, 'llama-fiction:3b');
   for (const allow of [allowedRequest, allowed]) {

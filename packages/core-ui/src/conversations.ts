@@ -14,7 +14,7 @@ import type { Turn } from './turns';
 export type Conversation = WireConversation;
 export type Project = WireProject;
 export type AgentChoice = Readonly<{ id: string; name: string; primary?: boolean }>;
-export type ModelOption = Readonly<{ id: string; provider: 'ollama' | 'claude'; label: string; size: string }>;
+export type ModelOption = Readonly<{ id: string; provider: 'ollama' | 'claude' | 'lmstudio'; label: string; size: string }>;
 export type ConversationsState = Readonly<{
   access: 'ready' | 'denied';
   listPhase: 'idle' | 'loading' | 'ready' | 'error';
@@ -137,13 +137,24 @@ export class ConversationsController {
   }
 
   /** The team for the agent picker (owner only; others talk to the primary agent). */
-  /** Installed models for the picker (owner only; others use the agent's model). */
-  async loadModels() {
-    if (this.client.getSnapshot().user?.role !== 'owner' || this.#state.models.length) return;
+  #modelsAt = 0;
+  /**
+   * Installed models for the picker (owner only; others use the agent's model):
+   * whatever runs on this computer right now (Ollama, LM Studio) plus Claude
+   * with a key. `refresh` asks again (at most every 5 s), so a local server
+   * started later shows up when the picker is opened.
+   */
+  async loadModels(refresh = false) {
+    if (this.client.getSnapshot().user?.role !== 'owner' || (this.#state.models.length && !refresh)) return;
+    if (refresh && Date.now() - this.#modelsAt < 5000) return;
+    this.#modelsAt = Date.now();
     try {
       const r = await this.client.request({ method: 'GET', path: '/api/models' } as never);
-      if (this.live() && r.status === 200 && record(r.body) && Array.isArray(r.body.models)) this.publish({ models: r.body.models as ModelOption[] });
-    } catch { /* the picker stays on the agent's model */ }
+      if (!this.live() || r.status !== 200 || !record(r.body) || !Array.isArray(r.body.models)) return;
+      const models = r.body.models as ModelOption[];
+      // A picked model that is gone (its server stopped) stays picked: the reply then says why it failed.
+      this.publish({ models: this.#state.model && !models.some(m => m.id === this.#state.model) ? [...models, ...this.#state.models.filter(m => m.id === this.#state.model)] : models });
+    } catch { /* the picker stays as it was */ }
   }
   async loadProjects() {
     if (this.client.getSnapshot().user?.role !== 'owner') return;

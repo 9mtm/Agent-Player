@@ -264,9 +264,10 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
                 </select>}</label>
             : <span className="composer-hint">{agentName ? agentName : ''}</span>}
           {s.models.length > 0 && <label className="composer-agent composer-model"><span className="sr-only">Model</span>
-            <select value={s.model} onChange={e => controller.selectModel(e.target.value)} title="Model for the next reply">
+            <select value={s.model} onChange={e => controller.selectModel(e.target.value)} onFocus={() => void controller.loadModels(true)} onMouseDown={() => void controller.loadModels(true)} title="Model for the next reply">
               <option value="">Agent's model</option>
-              {s.models.some(m => m.provider === 'ollama') && <optgroup label="On this computer">{s.models.filter(m => m.provider === 'ollama').map(m => <option key={m.id} value={m.id}>{m.label}{m.size ? ` · ${m.size}` : ''}</option>)}</optgroup>}
+              {/* One list of what runs on this computer (Ollama and LM Studio alike): the owner just picks a name. */}
+              {s.models.some(m => m.provider !== 'claude') && <optgroup label="On this computer">{s.models.filter(m => m.provider !== 'claude').map(m => <option key={m.id} value={m.id}>{m.label}{m.size ? ` · ${m.size}` : ''}</option>)}</optgroup>}
               {s.models.some(m => m.provider === 'claude') && <optgroup label="Claude (paid)">{s.models.filter(m => m.provider === 'claude').map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</optgroup>}
             </select></label>}
           {mic && <MicButton mic={mic}/>}
@@ -472,8 +473,8 @@ function AssistantTurn({ turn, last, onRetry, writer, onSuggest, onRemember, pro
           : work.map((p, i) => <PartView key={i} part={p}/>)}
         {answer.map((p, i) => <PartView key={`a${i}`} part={p}/>)}
         {turn.status === 'error' && <div className="chat-error" role="alert">
-          <strong>{turn.code === 'model_unavailable' ? 'The model could not be reached' : 'This reply failed'}</strong>
-          <span>{turn.code === 'model_unavailable' ? 'Check that the model is running, then try again.' : 'Anything above was written before the failure.'}</span>
+          <strong>{turn.code === 'lmstudio_not_running' ? 'LM Studio is not running' : turn.code === 'model_unavailable' ? 'The model could not be reached' : 'This reply failed'}</strong>
+          <span>{turn.code === 'lmstudio_not_running' ? 'Open LM Studio, load the model and start its local server (port 1234), then try again.' : turn.code === 'model_unavailable' ? 'Check that the model is running, then try again.' : 'Anything above was written before the failure.'}</span>
           {last && onRetry && <button type="button" className="chat-error-action" onClick={onRetry}><UiIcon name="refresh" size={12}/>Try again</button>}
         </div>}
         {suggestions.map((g, i) => <CardSuggestionView key={i} suggestion={g} onCreate={onSuggest}/>)}

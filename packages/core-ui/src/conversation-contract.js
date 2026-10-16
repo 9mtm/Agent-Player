@@ -85,7 +85,7 @@ export function allowedConversation(method, path, body) {
     && (body.name === undefined || (title(body.name) && body.name.trim().length > 0)) && (body.folder === undefined || body.folder === null || folderOk(body.folder)) && (body.repoUrl === undefined || body.repoUrl === null || repoOk(body.repoUrl));
   if (method === 'POST' && p.kind === 'list') return record(body) && onlyKeys(body, ['title', 'agentId', 'projectId']) && (body.title === undefined || title(body.title)) && (body.agentId === undefined || agentId(body.agentId)) && (body.projectId === undefined || uuid(body.projectId));
   if (method === 'POST' && p.kind === 'runs') return record(body) && onlyKeys(body, ['runId', 'message', 'model', 'agentId']) && (body.agentId === undefined || agentId(body.agentId)) && validRunId(body.runId) && text(body.message, MAX_MESSAGE) && body.message.trim().length > 0
-    && (body.model === undefined || (typeof body.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:\/-]{0,99}$/.test(body.model)));
+    && (body.model === undefined || (typeof body.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:@\/-]{0,99}$/.test(body.model)));
   if (method === 'POST' && p.kind === 'stop') return body === undefined;
   if (method === 'PUT' && p.kind === 'one') return record(body) && Object.keys(body).length > 0 && onlyKeys(body, ['title', 'pinned', 'projectId']) && (body.projectId === undefined || body.projectId === null || uuid(body.projectId)) && (body.title === undefined || body.title === null || title(body.title)) && (body.pinned === undefined || typeof body.pinned === 'boolean');
   return false;
@@ -194,6 +194,8 @@ export function projectRunEvent(x) {
   const e = projectEvent(x);
   return e && num(x.at) !== undefined ? { ...e, at: num(x.at) } : e;
 }
+/** Typed reasons a run may end with (CHAT-PRO-02 G: LM Studio not running). */
+const END_CODES = ['model_unavailable', 'lmstudio_not_running'];
 function projectEvent(x) {
   if (!record(x) || !Number.isSafeInteger(x.seq) || x.seq < 1) throw Error('protocol');
   const seq = x.seq;
@@ -205,7 +207,7 @@ function projectEvent(x) {
     return { seq, type: 'tool_result', step: num(x.step) ?? 0, results: x.results.map(r => ({ id: str(r?.id, 128), name: str(r?.name, 128), output: str(r?.output, 12000), isError: r?.isError === true, ...(num(r?.ms) !== undefined ? { ms: num(r.ms) } : {}) })) };
   }
   if (x.type === 'end' && ['complete', 'stopped', 'error'].includes(x.status)) {
-    return { seq, type: 'end', status: x.status, ms: num(x.ms) ?? 0, ...(x.code === 'model_unavailable' ? { code: 'model_unavailable' } : {}) };
+    return { seq, type: 'end', status: x.status, ms: num(x.ms) ?? 0, ...(END_CODES.includes(x.code) ? { code: x.code } : {}) };
   }
   return undefined;
 }

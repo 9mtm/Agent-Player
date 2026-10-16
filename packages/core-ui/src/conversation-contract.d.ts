@@ -38,7 +38,7 @@ export type RunEvent = ({ seq: number; at?: number }) & (
   | { type: 'text' | 'reasoning'; content: string }
   | { type: 'tool_start'; step: number; tools: { id: string; name: string; input: string }[] }
   | { type: 'tool_result'; step: number; results: { id: string; name: string; output: string; isError: boolean; ms?: number }[] }
-  | { type: 'end'; status: 'complete' | 'stopped' | 'error'; ms: number; code?: 'model_unavailable' });
+  | { type: 'end'; status: 'complete' | 'stopped' | 'error'; ms: number; code?: 'model_unavailable' | 'lmstudio_not_running' });
 export function projectRunEvent(x: unknown): RunEvent | undefined;
 export class RunEventParser {
   constructor(after?: number);
