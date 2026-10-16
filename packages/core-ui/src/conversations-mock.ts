@@ -1,6 +1,7 @@
 import type { WireRequest, WireResponse } from './session';
 import { conversationPath } from './conversation-contract.js';
 import { searchPath } from './chat-search-contract.js';
+import { exportPath } from './chat-export-contract.js';
 
 type Msg = { id: string; role: 'user' | 'assistant'; content: string; parts: unknown[] | null; status: 'complete' | 'stopped' | 'error'; runId: string | null; durationMs: number | null; createdAt: string; agentId?: string };
 type Proj = { id: string; name: string; slug: string; folder: string | null; repoUrl: string | null };
@@ -109,9 +110,25 @@ export function createConversationsMock(options: { stepMs?: number } = {}) {
     return { status: 200, body: { query, results, truncated: false } };
   }
 
+  /** CHAT-PRO-02 F: a simple Markdown export of a fictional conversation (same answer shape as the backend). */
+  function exported(id: string, tools: boolean): WireResponse {
+    const c = convs.get(id);
+    if (!c) return { status: 404, body: { code: 'not_found' } };
+    const turns = c.messages.filter(m => m.role === 'user' || m.role === 'assistant');
+    const blocks = turns.map(m => {
+      const calls = tools && m.role === 'assistant' ? ((m.parts ?? []) as any[]).flatMap(p => (p.kind === 'tools' ? p.calls : [])) : [];
+      const summary = calls.length ? `\n\n<details>\n<summary>Tool calls (${calls.length})</summary>\n\n${calls.map((t: any) => `- \`${t.name}\` — ${t.isError ? 'error' : 'ok'}`).join('\n')}\n\n</details>` : '';
+      return `\n---\n\n### ${m.role === 'user' ? 'You' : 'Main agent'} · ${m.createdAt.slice(0, 16)}\n\n${m.content}${summary}\n`;
+    });
+    const markdown = `# ${c.title ?? 'Conversation'}\n\n- Date: ${c.createdAt.slice(0, 16)}\n- Agent: Main agent\n${blocks.join('')}\n---\n\n_Exported from Dpro._\n`;
+    return { status: 200, body: { filename: `${(c.title ?? 'conversation').replace(/[^\p{L}\p{N} _.-]+/gu, ' ').trim() || 'conversation'}.md`, markdown, turns: turns.length, totalTurns: turns.length, truncated: false, redacted: 0 } };
+  }
+
   return function transport(request: WireRequest): WireResponse {
     const sp = searchPath(request.path);
     if (sp) return search(sp.query, sp.projectId);
+    const ep = exportPath(request.path);
+    if (ep) return exported(ep.id, ep.tools);
     const p = conversationPath(request.path);
     const body = request.body as Record<string, any> | undefined;
     if (!p) return { status: 404, body: { code: 'not_found' } };

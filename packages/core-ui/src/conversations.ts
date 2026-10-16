@@ -7,6 +7,8 @@ import type { SessionClient } from './session';
 import { MAX_MESSAGE, validRunId } from './conversation-contract.js';
 import type { RunEvent, WireConversation, WireGit, WireMessage, WireProject } from './conversation-contract.js';
 import { applyEvent, fromWire, liveTurn, userTurn } from './turns';
+import { exportConversation } from './chat-export';
+import type { ExportResult } from './chat-export';
 import type { Turn } from './turns';
 
 export type Conversation = WireConversation;
@@ -406,6 +408,13 @@ export class ConversationsController {
   async pin(id: string, pinned: boolean) {
     const r = await this.call('PUT', `/api/chat/conversations/${id}`, { pinned });
     if (this.live() && r.status === 200 && record(r.body) && record(r.body.conversation)) { this.replace(r.body.conversation as Conversation); void this.refreshList(); }
+  }
+
+  /** CHAT-PRO-02 F: saves the conversation as a Markdown file (a failure shows as the notice). */
+  async exportMarkdown(id: string, tools = false): Promise<ExportResult> {
+    const r = await exportConversation(this.client, id, tools);
+    if (!r.ok && this.live()) this.publish({ notice: r.message });
+    return r;
   }
 
   async remove(id: string) {

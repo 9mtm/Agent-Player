@@ -32,6 +32,7 @@ const shapes = {
   expand: <><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></>,
   shrink: <><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></>,
   eraser: <><path d="M20 20H9L4 15a2 2 0 0 1 0-2.8L13.2 3a2 2 0 0 1 2.8 0L21 8a2 2 0 0 1 0 2.8L12 20"/><path d="M8.5 9.5l6 6"/></>,
+  download: <><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></>,
   close: <><path d="M6 6l12 12"/><path d="M18 6L6 18"/></>,
   refresh: <><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></>,
 } as const;

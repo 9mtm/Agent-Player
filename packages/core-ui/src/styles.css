@@ -1314,6 +1314,14 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 /* Chat tasks on the board (CHAT-PRO-02 I step 2) */
 .app-shell .chat-to-board { display:inline-flex; align-items:center; gap:6px; inline-size:auto; padding:0 8px; font-size:12px; margin-inline-start:auto; }
 .app-shell .chat-to-board + .pane-bar { margin-inline-start:6px; }
+.app-shell .chat-export { position:relative; margin-inline-start:auto; }
+.app-shell .chat-export + .chat-to-board, .app-shell .chat-export + .pane-bar { margin-inline-start:6px; }
+.app-shell .chat-export-button { display:inline-flex; align-items:center; gap:6px; inline-size:auto; padding:0 8px; font-size:12px; }
+.app-shell .chat-export-pop { position:absolute; inset-inline-end:0; inset-block-start:calc(100% + 6px); z-index:30; display:grid; gap:8px; inline-size:min(300px, calc(100vw - 32px)); padding:12px; border-radius:8px; background:var(--surface); box-shadow:0 0 0 1px var(--stroke-3),0 8px 24px rgba(0,0,0,.16); font-size:12px; }
+.app-shell .chat-export-check { display:flex; align-items:center; gap:6px; color:var(--text-2); }
+.app-shell .chat-export-hint { margin:0; color:var(--text-3); line-height:1.4; }
+.app-shell .chat-export-note { margin:0; color:var(--text-2); overflow-wrap:anywhere; }
+.app-shell .chat-export-actions { display:flex; align-items:center; gap:10px; }
 .app-shell .chat-card-block { border:1px solid var(--stroke-3); border-inline-start:3px solid var(--accent); border-radius:10px; margin:6px 0 14px; padding:10px 12px; display:grid; gap:6px; background:color-mix(in srgb,var(--text) 2%,var(--canvas)); font-size:12.5px; }
 .app-shell .chat-card-block[data-status="done"] { border-inline-start-color:#2da44e; }
 .app-shell .chat-card-block[data-status="archived"] { opacity:.65; border-inline-start-color:var(--stroke-1, var(--text-3)); }
@@ -1358,7 +1366,7 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .chat-card-form-actions .fine-print { flex:1; color:var(--text-3); font-size:11.5px; }
 .app-shell .board-card-chat { display:grid; gap:6px; padding:10px; border:1px solid var(--stroke-3); border-radius:8px; font-size:12.5px; }
 .app-shell .board-card-chat-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-@media (max-width: 640px) { .app-shell .chat-card-form-row { grid-template-columns:1fr; } .app-shell .chat-to-board span { display:none; } }
+@media (max-width: 640px) { .app-shell .chat-card-form-row { grid-template-columns:1fr; } .app-shell .chat-to-board span, .app-shell .chat-export-button span { display:none; } }
 
 /* CHAT-PRO-02 E: chat memory */
 .app-shell .chat-user .user-actions { display:flex; align-items:center; gap:4px; min-block-size:20px; opacity:0; transition:opacity .15s ease; }

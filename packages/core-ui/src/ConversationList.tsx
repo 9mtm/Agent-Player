@@ -89,6 +89,7 @@ function Row({ c, active, running, onOpen, controller }: { c: Conversation; acti
           <option value="">No project</option>
           {controller.getSnapshot().projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select></label>}
+      <button type="button" role="menuitem" onClick={() => { setMenu(false); void controller.exportMarkdown(c.id); }}>Export as Markdown</button>
       <button type="button" role="menuitem" className="danger" onClick={() => { setMenu(false); setConfirm(true); }}>Delete</button>
     </div>}
   </div>;

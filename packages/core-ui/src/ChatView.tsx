@@ -20,6 +20,7 @@ import type { Priority } from './board';
 import { ChatMemoryController, messageRef, proposalsByRun, rememberDraft, MAX_REMEMBER } from './chat-memory';
 import type { ChatMemory, RememberDrawer, RememberType } from './chat-memory';
 import { drawerLabel } from './MemoryViews';
+import { exportConversation, exportNote } from './chat-export';
 import type { Part, ToolCall, ToolKind, Turn } from './turns';
 
 /** Pixels from the bottom within which the thread keeps following new text. */
@@ -184,6 +185,7 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
   <div className="chat-screen">
     <div className="chat-topbar">
       {project ? <ProjectBar name={project.name} folder={project.folder} repoUrl={project.repoUrl} git={s.git}/> : <span className="chat-topbar-spacer"/>}
+      {client && s.activeId && s.threadPhase !== 'loading' && <ExportMenu key={s.activeId} client={client} conversationId={s.activeId} disabled={running}/>}
       {owner && cardsCtl && s.activeId && <button type="button" className="tool chat-to-board" onClick={() => cardForm ? setCardForm(null) : openCardForm()} aria-pressed={!!cardForm} title="Put this task on a board, with the agents it needs">
         <UiIcon name="board" size={14}/><span>Add to board</span></button>}
       <span className="pane-bar" role="toolbar" aria-label="Side panes">{paneButtons.map(b =>
@@ -374,6 +376,35 @@ function MicButton({ mic }: { mic: MicController }) {
 }
 
 /** Where this conversation works: project, folder, git branch and repository. */
+/** CHAT-PRO-02 F: "Export" — the conversation as a Markdown file, optionally with a summary of the tool calls. */
+function ExportMenu({ client, conversationId, disabled }: { client: SessionClient; conversationId: string; disabled: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [tools, setTools] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const run = async () => {
+    setBusy(true); setNote(null);
+    const r = await exportConversation(client, conversationId, tools);
+    setBusy(false);
+    setNote(r.ok ? exportNote(r.file) : r.message);
+  };
+  return <span className="chat-export">
+    <button type="button" className="tool chat-export-button" aria-expanded={open} aria-haspopup="dialog" title="Save this conversation as a Markdown file"
+      onClick={() => { setOpen(v => !v); setNote(null); }}><UiIcon name="download" size={14}/><span>Export</span></button>
+    {open && <div className="chat-export-pop" role="dialog" aria-label="Export this conversation" onKeyDown={e => { if (e.key === 'Escape') setOpen(false); }}>
+      <strong>Export as Markdown</strong>
+      <label className="chat-export-check"><input type="checkbox" checked={tools} onChange={e => setTools(e.target.checked)}/> Include tool calls (collapsed summary)</label>
+      <p className="chat-export-hint">Your messages and the agents' answers. Secret values such as keys and passwords are left out.</p>
+      <div className="chat-export-actions">
+        <button type="button" className="primary" disabled={busy} onClick={() => void run()}>{busy ? 'Preparing…' : 'Download .md'}</button>
+        <button type="button" className="link-button" onClick={() => setOpen(false)}>Close</button>
+      </div>
+      {disabled && !note && <p className="chat-export-hint">The agent is still answering; the file has what is saved so far.</p>}
+      {note && <p className="chat-export-note" role="status">{note}</p>}
+    </div>}
+  </span>;
+}
+
 function ProjectBar({ name, folder, repoUrl, git }: { name: string; folder: string | null; repoUrl: string | null; git: { branch: string | null; remote: string | null; dirty: boolean | null } | null }) {
   const home = folder?.match(/^\/Users\/[^/]+/)?.[0];
   const shortFolder = folder && home ? `~${folder.slice(home.length)}` : folder;
