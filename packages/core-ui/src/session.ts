@@ -129,10 +129,17 @@ function projectResponse(path: string, response: WireResponse): WireResponse {
   return { status: response.status, body: allowed ? { code } : null };
 }
 
+/** The app's own origin: plain http on 127.0.0.1 with an explicit port
+ * (42522 from the CLI, a random port inside the desktop app). */
+export function isAppOrigin(origin: string): boolean {
+  const match = /^http:\/\/127\.0\.0\.1:([1-9][0-9]{0,4})$/.exec(origin);
+  return match !== null && Number(match[1]) <= 65535;
+}
+
 /** Deployment must serve these routes on this exact origin from the reviewed backend.
  * This is a client boundary, not a proxy. Static fixture preview does not implement it. */
 export function createSameOriginTransport(origin: string, fetcher: typeof fetch): WireTransport {
-  if (origin !== 'http://127.0.0.1:42522') throw new SessionFailure('blocked');
+  if (!isAppOrigin(origin)) throw new SessionFailure('blocked');
   return async request => {
     if (!allowedRequest(request.method, request.path, request.body)) throw new SessionFailure('blocked');
     const keys = Object.keys(request.headers);

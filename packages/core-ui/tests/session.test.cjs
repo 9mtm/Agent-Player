@@ -107,7 +107,9 @@ test('same-origin transport pins URL and request security flags', async () => {
   await transport({ method: 'GET', path: '/api/auth/me', headers: { Authorization: `Bearer ${token}` }, signal: new AbortController().signal });
   assert.equal(call[0], 'http://127.0.0.1:42522/api/auth/me');
   for (const [key, value] of Object.entries({ redirect: 'error', credentials: 'omit', mode: 'same-origin', cache: 'no-store', referrerPolicy: 'no-referrer' })) assert.equal(call[1][key], value);
-  for (const origin of ['https://evil.invalid', 'http://localhost:42522', 'http://127.0.0.1:42521', 'http://127.0.0.1:42522/', 'http://user:pass@127.0.0.1:42522']) assert.throws(() => createSameOriginTransport(origin, async () => {}));
+  for (const origin of ['https://evil.invalid', 'http://localhost:42522', 'http://127.0.0.2:42522', 'http://127.0.0.1', 'http://127.0.0.1:0', 'http://127.0.0.1:65536', 'http://127.0.0.1:42522/', 'http://user:pass@127.0.0.1:42522']) assert.throws(() => createSameOriginTransport(origin, async () => {}));
+  // The desktop app's bridge listens on a random loopback port.
+  assert.equal(typeof createSameOriginTransport('http://127.0.0.1:50550', async () => {}), 'function');
 });
 test('redirects, mismatched response URL, HTML, errors and unsafe headers fail closed', async () => {
   const r = { method: 'GET', path: '/api/auth/me', headers: { Authorization: `Bearer ${token}` }, signal: new AbortController().signal };

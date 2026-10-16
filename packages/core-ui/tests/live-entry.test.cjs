@@ -50,10 +50,19 @@ test('compiled opt-in injects live only and shows no fictional workspace; nothin
   assert.match(renderToStaticMarkup(React.createElement(App, { client })), /Check setup status/);
   assert.equal(b.calls.length, 0);
 });
-for (const value of ['http://localhost:42522', 'http://127.0.0.1:42521', 'https://127.0.0.1:42522', 'null', 'https://example.invalid', origin + '/', origin + '?live=true']) test(`wrong origin fails before mounting: ${value}`, () => {
+for (const value of ['http://localhost:42522', 'http://[::1]:42522', 'http://127.0.0.2:42522', 'http://127.0.0.1', 'http://127.0.0.1:0', 'http://127.0.0.1:042522', 'http://127.0.0.1:65536', 'https://127.0.0.1:42522', 'null', 'https://example.invalid', origin + '/', origin + '?live=true']) test(`wrong origin fails before mounting: ${value}`, () => {
   const b = browser(); b.instance.location.origin = value;
-  assert.throws(() => entry(b.instance, true), /fixed application origin/);
+  assert.throws(() => entry(b.instance, true), /loopback application origin/);
   assert.equal(b.calls.length, 0);
+});
+test('desktop app: a random 127.0.0.1 port is the page origin and every request stays on it', async () => {
+  const appOrigin = 'http://127.0.0.1:50550';
+  const b = browser(() => Promise.resolve(new Response(JSON.stringify({ setupComplete: true, setupRequired: false, message: 'Setup already completed' }), { headers: { 'Content-Type': 'application/json' } })));
+  b.instance.location.origin = appOrigin;
+  const client = entry(b.instance, true); client.selectMode('live');
+  await client.discoverSetup();
+  assert.deepEqual(b.calls.map(c => c[0]), [appOrigin + '/api/setup/status']);
+  assert.equal(b.calls[0][1].mode, 'same-origin');
 });
 test('explicit setup and login use bound fetch; no retry or fallback after live error', async () => {
   const b = browser(url => url.endsWith('/setup/status') ? Promise.resolve(new Response(JSON.stringify({ setupComplete: true, setupRequired: false, message: 'Setup already completed' }), { headers: { 'Content-Type': 'application/json' } })) : Promise.reject(Error('fictional failure')));
