@@ -112,6 +112,8 @@ export const STAGE3_ROUTES: ReadonlySet<string> = new Set([
   'GET /api/chat/conversations/:id/messages', 'POST /api/chat/conversations/:id/runs', 'POST /api/chat/runs/:runId/stop',
   // CHAT-PRO-02 I step 2: a chat task becomes a board card (owner only, like the board)
   'GET /api/chat/conversations/:id/cards', 'POST /api/chat/conversations/:id/cards', 'GET /api/boards/:id/cards/:cardId/chat',
+  // CHAT-PRO-02 D: search inside the caller's own conversations (read only)
+  'GET /api/chat/search',
   // CHAT-PRO-02 E: chat memory ("Remember this", the conversation's memories; proposals use the memory proposal routes)
   'GET /api/chat/conversations/:id/memories', 'POST /api/chat/conversations/:id/memories',
   'POST /api/memory/proposals/:id/approve', 'POST /api/memory/proposals/:id/reject',
@@ -128,6 +130,12 @@ const RUN_EVENTS_ROUTE = '/api/chat/runs/:runId/events';
 const RUN_EVENTS_URL = /^\/api\/chat\/runs\/[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}\/events(\?after=\d{1,9})?$/;
 function runEventsRoute(method: string, rawUrl: string, route: string | undefined): boolean {
   return hireStageEnabled() && method === 'GET' && route === RUN_EVENTS_ROUTE && RUN_EVENTS_URL.test(rawUrl);
+}
+/** CHAT-PRO-02 D: the one stage-3 GET with a query: the search, in its canonical form (q, then optional projectId and limit). */
+const SEARCH_ROUTE = '/api/chat/search';
+const SEARCH_URL = /^\/api\/chat\/search\?q=[A-Za-z0-9%._~!*'()-]{1,2400}(&projectId=[A-Za-z0-9][A-Za-z0-9_-]{7,63})?(&limit=[1-9]\d{0,2})?$/;
+function searchStageRoute(method: string, rawUrl: string, route: string | undefined): boolean {
+  return hireStageEnabled() && method === 'GET' && route === SEARCH_ROUTE && SEARCH_URL.test(rawUrl);
 }
 function hireStageEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return (env.AGENT_PLAYER_ISOLATED_STAGE ?? '').trim() === '3' && (env.AGENT_PLAYER_LOCAL_MODEL_ONLY ?? '').trim() === '1';
@@ -233,7 +241,7 @@ export async function readOnlyAllows(request: FastifyRequest, opts: ReadOnlyStag
   if (String(headers.accept ?? '').toLowerCase().includes('text/event-stream')) return false;
 
   if (method === 'GET' || method === 'HEAD') {
-    if (method === 'GET' && hireStageRoute(method, rawUrl, route)) return true;
+    if (method === 'GET' && (hireStageRoute(method, rawUrl, route) || searchStageRoute(method, rawUrl, route))) return true;
     return cleanPath(rawUrl) !== null && isSafeRead(method, route);
   }
   if (method === 'PUT' || method === 'DELETE') return hireStageRoute(method, rawUrl, route);

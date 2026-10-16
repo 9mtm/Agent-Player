@@ -2,6 +2,7 @@
  * Saved conversations and resumable chat runs (CHAT-REBUILD-01).
  *
  *   GET    /api/chat/conversations                 the caller's conversations (pinned first)
+ *   GET    /api/chat/search?q=&projectId=&limit=   the caller's conversations containing q, grouped, newest first (CHAT-PRO-02 D)
  *   POST   /api/chat/conversations                 { title?, agentId? } → new conversation
  *   PUT    /api/chat/conversations/:id             { title?, pinned? }
  *   DELETE /api/chat/conversations/:id
@@ -37,6 +38,7 @@ import { chatProgress, conversationCards, createChatCard } from '../../services/
 import { BoardError } from '../../services/task-board.js';
 import { ChatMemoryError, conversationMemories, rememberFromChat } from '../../services/chat-memory.js';
 import { actorOf } from '../../auth/auth-gate.js';
+import { ChatSearchError, parseSearch, searchConversations } from '../../services/chat-search.js';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/;
 /** A model id the chat may pick (local model names like qwen3.8:27b, or claude-…). */
@@ -107,6 +109,17 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
   const bad = (reply: FastifyReply, error: string) => reply.code(400).send({ error, code: 'invalid_request' });
 
   fastify.get('/api/chat/conversations', async (request) => ({ conversations: await listConversations(caller(request)) }));
+
+  // ---- search inside conversations (CHAT-PRO-02 D): the caller's own conversations only ----
+  fastify.get('/api/chat/search', async (request, reply) => {
+    try {
+      const { query, projectId, limit } = await parseSearch(caller(request), (request.query ?? {}) as Record<string, unknown>);
+      return await searchConversations(caller(request), query, { projectId, limit });
+    } catch (err) {
+      if (err instanceof ChatSearchError) return reply.code(err.status).send({ error: err.message, code: err.code });
+      throw err;
+    }
+  });
 
   fastify.post('/api/chat/conversations', async (request: Req, reply) => {
     const b: any = request.body ?? {};

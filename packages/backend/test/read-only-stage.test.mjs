@@ -397,6 +397,14 @@ test('stage 3 (hire test): exactly create agent + read/replace its tool grants, 
     assertReadOnly(await req('GET', '/api/chat/runs/run-unknown-1/events?after=3&x=1', { headers: sse }), 'events query trick');
     assertReadOnly(await req('GET', '/api/chat/runs/run-unknown-1/events?after=-1', { headers: sse }), 'events negative after');
     assertReadOnly(await req('PUT', `/api/chat/conversations/${cid}?x=1`, { payload: { pinned: false } }), 'conversation PUT query trick');
+    // CHAT-PRO-02 D: search inside conversations, only in its canonical form.
+    const found = await req('GET', '/api/chat/search?q=Stage%20chat&limit=20');
+    assert.equal(found.statusCode, 200, found.body);
+    assert.equal(found.json().results[0].conversationId, cid);
+    assertReadOnly(await req('GET', '/api/chat/search?q=Stage&x=1'), 'search query trick');
+    assertReadOnly(await req('GET', '/api/chat/search?limit=5&q=Stage'), 'search parameter order');
+    assertReadOnly(await req('GET', '/api/chat/search?q=Stage&limit=0'), 'search limit 0');
+    assertReadOnly(await req('GET', '/api/chat/search?q=a/b'), 'search raw slash');
     assert.equal((await req('DELETE', `/api/chat/conversations/${cid}`)).statusCode, 200);
     assertReadOnly(await req('DELETE', '/api/sessions/x'), 'other DELETE');
     // Still behind the auth gate.
