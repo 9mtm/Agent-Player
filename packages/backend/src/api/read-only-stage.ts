@@ -114,6 +114,8 @@ export const STAGE3_ROUTES: ReadonlySet<string> = new Set([
   'GET /api/chat/conversations/:id/cards', 'POST /api/chat/conversations/:id/cards', 'GET /api/boards/:id/cards/:cardId/chat',
   // CHAT-PRO-02 D: search inside the caller's own conversations (read only)
   'GET /api/chat/search',
+  // CHAT-PRO-02 F: export the caller's own conversation as Markdown (read only)
+  'GET /api/chat/conversations/:id/export',
   // CHAT-PRO-02 E: chat memory ("Remember this", the conversation's memories; proposals use the memory proposal routes)
   'GET /api/chat/conversations/:id/memories', 'POST /api/chat/conversations/:id/memories',
   'POST /api/memory/proposals/:id/approve', 'POST /api/memory/proposals/:id/reject',
@@ -136,6 +138,12 @@ const SEARCH_ROUTE = '/api/chat/search';
 const SEARCH_URL = /^\/api\/chat\/search\?q=[A-Za-z0-9%._~!*'()-]{1,2400}(&projectId=[A-Za-z0-9][A-Za-z0-9_-]{7,63})?(&limit=[1-9]\d{0,2})?$/;
 function searchStageRoute(method: string, rawUrl: string, route: string | undefined): boolean {
   return hireStageEnabled() && method === 'GET' && route === SEARCH_ROUTE && SEARCH_URL.test(rawUrl);
+}
+/** CHAT-PRO-02 F: the export may carry exactly `?tools=1` (without a query it is a plain stage-3 GET). */
+const EXPORT_ROUTE = '/api/chat/conversations/:id/export';
+const EXPORT_URL = /^\/api\/chat\/conversations\/[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}\/export\?tools=1$/;
+function exportStageRoute(method: string, rawUrl: string, route: string | undefined): boolean {
+  return hireStageEnabled() && method === 'GET' && route === EXPORT_ROUTE && EXPORT_URL.test(rawUrl);
 }
 function hireStageEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return (env.AGENT_PLAYER_ISOLATED_STAGE ?? '').trim() === '3' && (env.AGENT_PLAYER_LOCAL_MODEL_ONLY ?? '').trim() === '1';
@@ -241,7 +249,7 @@ export async function readOnlyAllows(request: FastifyRequest, opts: ReadOnlyStag
   if (String(headers.accept ?? '').toLowerCase().includes('text/event-stream')) return false;
 
   if (method === 'GET' || method === 'HEAD') {
-    if (method === 'GET' && (hireStageRoute(method, rawUrl, route) || searchStageRoute(method, rawUrl, route))) return true;
+    if (method === 'GET' && (hireStageRoute(method, rawUrl, route) || searchStageRoute(method, rawUrl, route) || exportStageRoute(method, rawUrl, route))) return true;
     return cleanPath(rawUrl) !== null && isSafeRead(method, route);
   }
   if (method === 'PUT' || method === 'DELETE') return hireStageRoute(method, rawUrl, route);

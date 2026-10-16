@@ -7,6 +7,7 @@
  *   PUT    /api/chat/conversations/:id             { title?, pinned? }
  *   DELETE /api/chat/conversations/:id
  *   GET    /api/chat/conversations/:id/messages    turns with their work + the running run id
+ *   GET    /api/chat/conversations/:id/export[?tools=1]  the conversation as Markdown { filename, markdown, … } (CHAT-PRO-02 F)
  *   POST   /api/chat/conversations/:id/runs        { runId, message } → starts a turn (202)
  *   GET    /api/chat/runs/:runId/events?after=N    SSE: the run's events after N, then live
  *   POST   /api/chat/runs/:runId/stop              stop; the partial reply is kept
@@ -39,6 +40,7 @@ import { BoardError } from '../../services/task-board.js';
 import { ChatMemoryError, conversationMemories, rememberFromChat } from '../../services/chat-memory.js';
 import { actorOf } from '../../auth/auth-gate.js';
 import { ChatSearchError, parseSearch, searchConversations } from '../../services/chat-search.js';
+import { exportConversation } from '../../services/chat-export.js';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/;
 /** A model id the chat may pick (local model names like qwen3.8:27b, or claude-…). */
@@ -150,6 +152,17 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     if (!c) return notFound(reply);
     const active = chatRuns.activeFor(c.id);
     return { conversation: c, messages: await listConversationMessages(c.id), activeRunId: active?.id ?? null };
+  });
+
+  // ---- export as Markdown (CHAT-PRO-02 F): the caller's own conversation, secrets removed ----
+  fastify.get('/api/chat/conversations/:id/export', async (request: Req, reply) => {
+    const query = (request.query ?? {}) as Record<string, unknown>;
+    if (Object.keys(query).some((k) => k !== 'tools') || (query.tools !== undefined && query.tools !== '1')) return bad(reply, 'the only option is tools=1');
+    if (!ID.test(request.params.id ?? '')) return notFound(reply);
+    const out = await exportConversation(caller(request), request.params.id!, { tools: query.tools === '1' });
+    if (!out) return notFound(reply);
+    reply.header('Cache-Control', 'no-store');
+    return out;
   });
 
   fastify.post('/api/chat/conversations/:id/runs', async (request: Req, reply) => {

@@ -405,6 +405,14 @@ test('stage 3 (hire test): exactly create agent + read/replace its tool grants, 
     assertReadOnly(await req('GET', '/api/chat/search?limit=5&q=Stage'), 'search parameter order');
     assertReadOnly(await req('GET', '/api/chat/search?q=Stage&limit=0'), 'search limit 0');
     assertReadOnly(await req('GET', '/api/chat/search?q=a/b'), 'search raw slash');
+    // CHAT-PRO-02 F: export as Markdown, plain or with exactly ?tools=1.
+    const exported = await req('GET', `/api/chat/conversations/${cid}/export`);
+    assert.equal(exported.statusCode, 200, exported.body);
+    assert.match(exported.json().markdown, /^# Stage chat/);
+    assert.equal((await req('GET', `/api/chat/conversations/${cid}/export?tools=1`)).statusCode, 200);
+    assertReadOnly(await req('GET', `/api/chat/conversations/${cid}/export?tools=1&x=1`), 'export query trick');
+    assertReadOnly(await req('GET', `/api/chat/conversations/${cid}/export?tools=0`), 'export tools=0');
+    assertReadOnly(await req('GET', `/api/chat/conversations/${cid}/export?x=1`), 'export other query');
     assert.equal((await req('DELETE', `/api/chat/conversations/${cid}`)).statusCode, 200);
     assertReadOnly(await req('DELETE', '/api/sessions/x'), 'other DELETE');
     // Still behind the auth gate.
