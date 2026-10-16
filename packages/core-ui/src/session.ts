@@ -17,6 +17,8 @@ import type { HireRequest } from './hire';
 import type { BoardRequest } from './board';
 import { validDeviceToken, validLoginBody } from './login-contract.js';
 import { setupStatus } from './setup-status.js';
+import { OWNER_SETUP_PATH, validOwnerSetupBody, ownerSetupResponse } from './owner-setup-contract.js';
+import type { OwnerSetupBody, OwnerSetupCode } from './owner-setup-contract.js';
 import { validChatBody, validKey, validId, chatError, SSEParser, CHAT_DEADLINE_MS, CHAT_IDLE_MS } from './chat-protocol.js';
 import type { ChatBody, ChatFrame, ChatIds } from './chat-protocol.js';
 import { agentResponse, validAgentId, validVersion } from './agents';
@@ -60,6 +62,7 @@ export function allowedRequest(method: string, path: string, body?: unknown): bo
     if (decision) return record(body) && Object.keys(body).length === 1 && typeof body.expectedReviewHash === 'string' && /^[a-f0-9]{64}$/.test(body.expectedReviewHash);
     if (path === '/api/auth/logout') return body === undefined;
     if (path === '/api/auth/login') return validLoginBody(body);
+    if (path === OWNER_SETUP_PATH) return validOwnerSetupBody(body);
     return path === '/api/agents/name-suggestion' && record(body) && Object.keys(body).length === 2
       && namingLanguages.includes(body.language as never) && Array.isArray(body.exclude) && body.exclude.length <= 100
       && body.exclude.every(x => typeof x === 'string' && x.length <= 200);
@@ -94,6 +97,7 @@ function safeResponse(path: string, response: WireResponse): WireResponse {
 }
 function projectResponse(path: string, response: WireResponse): WireResponse {
   if (path === '/api/setup/status') return { status: response.status, body: setupStatus(response.status, response.body) };
+  if (path === OWNER_SETUP_PATH) return { status: response.status, body: ownerSetupResponse(response.status, response.body) };
   if (path === '/api/chat') return { status: response.status, body: chatError(response.status, response.body) };
   if (record(response.body) && ((response.status === 403 && ['inactive_user', 'forbidden'].includes(response.body.code as string)) || (response.status === 401 && response.body.code === 'unauthenticated'))) return { status: response.status, body: { code: response.body.code } };
   const notice = boundaryNotice(response); if (notice) return { status: response.status, body: { code: notice } };
@@ -134,7 +138,7 @@ export function createSameOriginTransport(origin: string, fetcher: typeof fetch)
     const keys = Object.keys(request.headers);
     const chat = request.path === '/api/chat';
     const runEvents = request.method === 'GET' && (conversationPath(request.path)?.kind === 'events' || terminalPath(request.path)?.kind === 'stream');
-    const expected = ['/api/auth/login', '/api/setup/status'].includes(request.path) ? [] : chat ? ['Authorization', 'Idempotency-Key'] : ['Authorization'];
+    const expected = ['/api/auth/login', '/api/setup/status', OWNER_SETUP_PATH].includes(request.path) ? [] : chat ? ['Authorization', 'Idempotency-Key'] : ['Authorization'];
     if (keys.length !== expected.length || keys.some(k => !expected.includes(k)) || expected.some(k => !Object.prototype.hasOwnProperty.call(request.headers, k))
       || (expected.includes('Authorization') && (request.headers.Authorization.length > 8200 || !/^Bearer [A-Za-z0-9._~-]+$/.test(request.headers.Authorization)))
       || (chat && !validKey(request.headers['Idempotency-Key']))) throw new SessionFailure('blocked');
@@ -254,6 +258,32 @@ export class SessionClient {
       if (epoch === this.#state.epoch) this.#publish({ ...this.#state, setup: 'unavailable' });
     }
   }
+  /**
+   * INSTALLER-07: create the first owner with the one-time setup code from
+   * the installation computer, then sign in with the same credentials.
+   * Only after discovery reported "setup required"; never automatic.
+   */
+  async createOwner(input: OwnerSetupBody): Promise<{ ok: true } | { ok: false; code: OwnerSetupCode | 'unavailable' }> {
+    if (this.#state.mode === 'fixture' || this.#state.phase !== 'signed-out' || this.#state.setup !== 'required') return { ok: false, code: 'unavailable' };
+    if (!validOwnerSetupBody(input)) return { ok: false, code: 'missing_fields' };
+    const epoch = this.#state.epoch;
+    let result: ReturnType<typeof ownerSetupResponse>;
+    try {
+      const response = await this.#send('POST', OWNER_SETUP_PATH, { name: input.name, email: input.email, password: input.password, setupToken: input.setupToken }, undefined, epoch);
+      result = ownerSetupResponse(response.status, response.body);
+    } catch { return { ok: false, code: 'unavailable' }; }
+    if (!result) return { ok: false, code: 'unavailable' };
+    if ('code' in result) {
+      // Someone finished setup meanwhile: go to sign-in.
+      if (result.code === 'setup_complete' && epoch === this.#state.epoch) this.#publish({ ...this.#state, setup: 'login' });
+      return { ok: false, code: result.code };
+    }
+    if (epoch === this.#state.epoch && this.#state.phase === 'signed-out') {
+      this.#publish({ ...this.#state, setup: 'login' });
+      await this.login(input.email, input.password);
+    }
+    return { ok: true };
+  }
   async login(email: string, password: string) {
     const keep = this.#nextKeep;
     if (this.#state.mode === 'fixture' || this.#state.phase === 'signing-out') return;
@@ -317,7 +347,7 @@ export class SessionClient {
   request = async (request: Request, signal?: AbortSignal): Promise<WireResponse> => {
     if (!this.#token || this.#state.phase !== 'authenticated') throw new SessionFailure('blocked');
     // The public adapter transport cannot call login/logout or add arbitrary request fields.
-    if (request.path === '/api/setup/status' || request.path === '/api/chat' || request.path === '/api/auth/login' || request.path === '/api/auth/logout' || Object.keys(request).some(k => !['method', 'path', 'body'].includes(k))) throw new SessionFailure('blocked');
+    if (request.path === '/api/setup/status' || request.path === OWNER_SETUP_PATH || request.path === '/api/chat' || request.path === '/api/auth/login' || request.path === '/api/auth/logout' || Object.keys(request).some(k => !['method', 'path', 'body'].includes(k))) throw new SessionFailure('blocked');
     if ((conversationRoute(request.path) || chatSearchRoute(request.path) || chatExportRoute(request.path) || chatSecretsRoute(request.path)) && this.#state.user?.role === 'guest') throw new SessionFailure('blocked');
     if (request.path === CLEANUP_PATH && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     if ((connectorRoute(request.path) || localImportRoute(request.path) || chatBoardRoute(request.path) || chatMemoryRoute(request.path)) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');

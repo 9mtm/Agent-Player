@@ -39,8 +39,13 @@ for (const scenario of ['first-run', 'existing-owner', 'error']) test(`offline d
     await s.client.login('wrong', 'wrong'); assert.equal(s.client.getSnapshot().setup, 'login'); assert.match(render(s.client), /Check your credentials/);
     await s.client.login('demo@example.invalid', 'mock-only'); assert.equal(s.client.getSnapshot().phase, 'authenticated');
     assert.deepEqual(s.calls.slice(-2).map(r => r.path), ['/api/auth/login', '/api/auth/me']);
+  } else if (scenario === 'first-run') {
+    // INSTALLER-07: first run shows the owner form (needs the setup code); still no sign-in.
+    assert.match(html, /Create the owner account/); assert.match(html, /agent-player setup/);
+    assert.doesNotMatch(html, /Check your credentials/);
+    await s.client.login('demo@example.invalid', 'mock-only'); assert.equal(s.calls.length, 1);
   } else {
-    assert.match(html, scenario === 'first-run' ? /Setup not finished.*CLI/ : /Setup status unavailable/);
+    assert.match(html, /Setup status unavailable/);
     assert.doesNotMatch(html, /type="password"|Check your credentials/);
     await s.client.login('demo@example.invalid', 'mock-only'); assert.equal(s.calls.length, 1);
   }

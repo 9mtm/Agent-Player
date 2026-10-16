@@ -12,6 +12,7 @@ import { chatSearchRoute } from './chat-search-contract.js';
 import { chatExportRoute } from './chat-export-contract.js';
 import { chatSecretsRoute, CLEANUP_PATH, SECRETS_PATH } from './chat-secrets-contract.js';
 import { allowedRequest } from './session';
+import { OWNER_SETUP_PATH } from './owner-setup-contract.js';
 import { createMemoryMock } from './memory-mock';
 import { createChatMemoryMock } from './chat-memory-mock';
 import type { WireTransport } from './session';
@@ -27,6 +28,7 @@ export function createLoginMock(agents = createAgentsMock(), setup: 'existing-ow
   let serial = 0;
   let active = '';
   const user = { id: 'mock-owner', email: 'demo@example.invalid', username: 'Offline demo', role: 'owner' };
+  let password = 'mock-only';
   return async request => {
     if (!allowedRequest(request.method, request.path, request.body) || Object.keys(request.headers).some(k => k !== 'Authorization' && !(request.path === '/api/chat' && k === 'Idempotency-Key'))) return { status: 400, body: null };
     if (request.signal.aborted) throw new Error('cancelled');
@@ -36,10 +38,18 @@ export function createLoginMock(agents = createAgentsMock(), setup: 'existing-ow
       const complete = setup === 'existing-owner';
       return { status: 200, body: { setupComplete: complete, setupRequired: !complete, message: complete ? 'Setup already completed' : 'Setup required' } };
     }
+    // INSTALLER-07 offline exercise: any well-formed fictional setup code works once.
+    if (request.path === OWNER_SETUP_PATH && request.method === 'POST') {
+      if (Object.keys(request.headers).length) return { status: 400, body: null };
+      if (setup !== 'first-run') return { status: 403, body: { code: 'setup_complete' } };
+      const body = request.body as { email: string; password: string };
+      user.email = body.email; password = body.password; setup = 'existing-owner';
+      return { status: 200, body: { success: true } };
+    }
     if (request.path === '/api/auth/login' && request.method === 'POST') {
       if (setup !== 'existing-owner') return { status: 401, body: null };
       const body = request.body as { email?: string; password?: string };
-      if (body.email !== user.email || body.password !== 'mock-only') return { status: 401, body: null };
+      if (body.email !== user.email || body.password !== password) return { status: 401, body: null };
       active = `fictional-session-${++serial}`;
       return { status: 200, body: { user, token: active, deviceToken: `fictional-device-${serial}`.padEnd(43, '_') } };
     }

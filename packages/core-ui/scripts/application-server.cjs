@@ -13,6 +13,7 @@ const { allowedTerminal, terminalPath, terminalRoute, terminalResponse, Terminal
 const { allowedConversation, conversationPath, conversationRoute, conversationResponse, RunEventParser, RUN_STREAM_MS, RUN_IDLE_MS } = require('../src/conversation-contract.js');
 const { validDeviceToken, validLoginBody } = require('../src/login-contract.js');
 const { setupStatus } = require('../src/setup-status.js');
+const { OWNER_SETUP_PATH, validOwnerSetupBody, ownerSetupResponse } = require('../src/owner-setup-contract.js');
 const { memoryResponse } = require('./memory-response.cjs');
 const { validChatBody, validKey, validId, chatError, SSEParser, CHAT_BYTES, CHAT_DEADLINE_MS, CHAT_IDLE_MS } = require('../src/chat-protocol.js');
 const http = require('node:http');
@@ -58,6 +59,7 @@ function allowed(method, target, body) {
     if (/^\/api\/memory\/proposals\/[A-Za-z0-9-]{1,64}\/(approve|reject)$/.test(target)) return record(body) && Object.keys(body).length === 1 && /^[a-f0-9]{64}$/.test(body.expectedReviewHash) && typeof body.expectedReviewHash === 'string';
     if (target === '/api/auth/logout') return body === undefined;
     if (target === '/api/auth/login') return validLoginBody(body);
+    if (target === OWNER_SETUP_PATH) return validOwnerSetupBody(body);
     return target === '/api/agents/name-suggestion' && record(body) && Object.keys(body).length === 2 && languages.includes(body.language) && Array.isArray(body.exclude) && body.exclude.length <= 100 && body.exclude.every(x => typeof x === 'string' && x.length <= 200);
   }
   if (method !== 'GET' || body !== undefined) return false;
@@ -88,6 +90,8 @@ function stage1Route(method, target) {
 }
 function project(target, status, body) {
   if (target === '/api/setup/status') return setupStatus(status, body);
+  // INSTALLER-07: fixed codes only; a reply outside the contract fails closed.
+  if (target === OWNER_SETUP_PATH) { const r = ownerSetupResponse(status, body); if (!r) throw Error(); return r; }
   if (target === '/api/chat') return chatError(status, body);
   if ((status === 403 && ['inactive_user', 'forbidden'].includes(body?.code)) || (status === 401 && body?.code === 'unauthenticated')) return { code: body.code };
   const boundaryCode = body?.code;
@@ -189,7 +193,7 @@ function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly =
     if (Object.keys(req.headers).some(k => !passiveHeaders.has(k) && !(chat && k === 'idempotency-key')) || (req.headers.connection && !/^(close|keep-alive)$/i.test(req.headers.connection)) || (req.headers['sec-fetch-mode'] && req.headers['sec-fetch-mode'] !== 'same-origin') || (req.headers['sec-fetch-dest'] && req.headers['sec-fetch-dest'] !== 'empty')) return send(400);
     if (['POST', 'PUT', 'DELETE'].includes(req.method) && req.headers.origin !== origin) return send(403);
     if (chat && !validKey(req.headers['idempotency-key'])) return send(400);
-    const login = raw === '/api/auth/login';
+    const login = raw === '/api/auth/login' || (raw === OWNER_SETUP_PATH && req.method === 'POST');
     const discovery = raw === '/api/setup/status' && req.method === 'GET';
     const auth = req.headers.authorization;
     if ((login || discovery) ? auth !== undefined : typeof auth !== 'string' || auth.length > 8200 || !/^Bearer [A-Za-z0-9._~-]+$/.test(auth)) return send(401);

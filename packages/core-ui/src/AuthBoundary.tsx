@@ -7,6 +7,8 @@ import { createLoginMock } from './session-mock';
 import { retryAfterNotice } from './retry-after.js';
 import { devQuickLoginAccounts } from './dev-quick-login';
 import { devSessionKeep } from './dev-session-keep';
+import { setupCodeFromFragment } from './owner-setup-contract.js';
+import type { OwnerSetupCode } from './owner-setup-contract.js';
 
 const notices = {
   published_password: 'Sign-in refused because the password is a published default. Reset it from the CLI.',
@@ -23,6 +25,9 @@ export function AuthBoundary({ client: supplied, children }: { client?: SessionC
   const fallback = useMemo(() => supplied ? undefined : new SessionClient({ mock: createLoginMock() }), [supplied]);
   const client = supplied ?? fallback!;
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
+  // INSTALLER-07: a local setup link carries the one-time code in the
+  // fragment. Read it once, keep it in memory only, drop it from the address bar.
+  const [setupCode] = useState(readSetupLink);
   useEffect(() => () => client.cancel(), [client]);
   // A build for real data (live transport only, no practice mode) opens the
   // real sign-in at once: no fictional workspace in between.
@@ -48,10 +53,10 @@ export function AuthBoundary({ client: supplied, children }: { client?: SessionC
       </> : <button disabled={state.phase === 'signing-out'} onClick={() => client.selectMode('fixture')}>Return to fixture (local session cleared)</button>}
       <span>Authentication copy: English draft.</span>
     </section>}
-    {state.mode === 'fixture' ? (liveOnly ? null : children) : <SessionWorkspace key={`${state.mode}:${state.epoch}`} client={client}/>}
+    {state.mode === 'fixture' ? (liveOnly ? null : children) : <SessionWorkspace key={`${state.mode}:${state.epoch}`} client={client} setupCode={setupCode}/>}
   </div>;
 }
-function SessionWorkspace({ client }: { client: SessionClient }) {
+function SessionWorkspace({ client, setupCode }: { client: SessionClient; setupCode: string | null }) {
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
   const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
   // Signed in: the full workspace (sidebar, chat, agents, memory, account).
@@ -59,10 +64,8 @@ function SessionWorkspace({ client }: { client: SessionClient }) {
   return <main className="auth-workspace" lang="en" dir="ltr">
     <h1>Dpro · {state.mode === 'mock' ? 'Offline login exercise' : 'Account'}</h1>
     {state.notice && <p role="status">{notices[state.notice]}{retryAfterNotice(state.retryAfterSeconds)}</p>}
-    {state.phase === 'authenticated' && state.user ? null : state.phase === 'signing-out' ? <><p role="status">Signing out on all devices…</p><button onClick={() => client.cancel()}>Clear locally; server outcome remains unknown</button></> : state.phase === 'signed-out' && state.setup !== 'login' ? <section aria-label="Setup discovery">
-      <p role="status">{state.setup === 'checking' ? 'Checking installation setup…' : state.setup === 'required'
-        ? 'Installation reports: Setup not finished — finish it from the CLI on the installation computer, then check again. This screen cannot create an owner.'
-        : state.setup === 'unavailable' ? 'Setup status unavailable. Sign-in is withheld; no automatic retry was sent.'
+    {state.phase === 'authenticated' && state.user ? null : state.phase === 'signed-out' && state.setup === 'required' ? <OwnerSetup client={client} setupCode={setupCode}/> : state.phase === 'signing-out' ? <><p role="status">Signing out on all devices…</p><button onClick={() => client.cancel()}>Clear locally; server outcome remains unknown</button></> : state.phase === 'signed-out' && state.setup !== 'login' ? <section aria-label="Setup discovery">
+      <p role="status">{state.setup === 'checking' ? 'Checking installation setup…' : state.setup === 'unavailable' ? 'Setup status unavailable. Sign-in is withheld; no automatic retry was sent.'
         : 'Check installation setup before signing in. No request has been sent automatically.'}</p>
       <p>Discovery does not verify an account, installation identity, or system readiness.</p>
       {state.setup === 'checking' ? <button onClick={() => client.cancel()}>Cancel setup check</button>
@@ -80,6 +83,61 @@ function SessionWorkspace({ client }: { client: SessionClient }) {
     </form>}
     <p>Settings credentials remain masked-only; no credential values are fetched.</p>
   </main>;
+}
+// Read once per page load (a repeated initializer must not lose the code).
+let linkCode: string | null | undefined;
+function readSetupLink(): string | null {
+  if (linkCode !== undefined) return linkCode;
+  if (typeof window === 'undefined') return null;
+  linkCode = setupCodeFromFragment(window.location.hash);
+  if (linkCode) try { window.history.replaceState(null, '', window.location.pathname + window.location.search); } catch { /* keep going */ }
+  return linkCode;
+}
+const ownerSetupNotices: Record<OwnerSetupCode | 'unavailable' | 'mismatch', string> = {
+  setup_token_missing: 'No setup code is active. Run `agent-player setup` in a terminal on this computer, then enter the code it shows.',
+  setup_token_invalid: 'This setup code is not valid. Check it, or run `agent-player setup` again for a new one.',
+  setup_token_expired: 'This setup code has expired (it lasts 24 hours). Run `agent-player setup` again for a new one.',
+  setup_not_local: 'The owner can only be created on the installation computer itself.',
+  setup_complete: 'An owner already exists. Sign in instead.',
+  missing_fields: 'Fill in every field. The password needs at least 12 characters.',
+  weak_password: 'Choose a stronger password: at least 12 characters, not a published default.',
+  invalid_email: 'Enter a valid email address.',
+  user_exists: 'An account with this email already exists.',
+  unavailable: 'The installation did not answer. Nothing was created; try again.',
+  mismatch: 'The two passwords do not match.',
+};
+/** First run (INSTALLER-07): create the owner with the one-time code from this computer's terminal. */
+function OwnerSetup({ client, setupCode }: { client: SessionClient; setupCode: string | null }) {
+  const [name, setName] = useState(''); const [email, setEmail] = useState('');
+  const [password, setPassword] = useState(''); const [confirm, setConfirm] = useState('');
+  const [code, setCode] = useState(setupCode ?? ''); const [editCode, setEditCode] = useState(!setupCode);
+  const [busy, setBusy] = useState(false); const [notice, setNotice] = useState<keyof typeof ownerSetupNotices | null>(null);
+  return <form className="owner-setup" aria-label="Create the owner account" method="post" onSubmit={async e => {
+    e.preventDefault();
+    if (password !== confirm) { setNotice('mismatch'); return; }
+    setBusy(true); setNotice(null);
+    const result = await client.createOwner({ name: name.trim(), email: email.trim(), password, setupToken: code.trim() });
+    setBusy(false);
+    if (!result.ok) {
+      setNotice(result.code);
+      if (['setup_token_invalid', 'setup_token_expired', 'setup_token_missing'].includes(result.code)) setEditCode(true);
+    }
+  }}>
+    <h2>Create the owner account</h2>
+    <p>This is the first start of this installation. The owner controls every agent, key and setting.</p>
+    {notice && <p role="alert">{ownerSetupNotices[notice]}</p>}
+    <label htmlFor="owner-name">Your name</label><input id="owner-name" required maxLength={100} autoComplete="name" value={name} onChange={e => setName(e.target.value)} disabled={busy}/>
+    <label htmlFor="owner-email">Email</label><input id="owner-email" type="email" name="username" required maxLength={320} autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} disabled={busy}/>
+    <label htmlFor="owner-password">Password (at least 12 characters)</label><input id="owner-password" type="password" name="new-password" required minLength={12} maxLength={4096} autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} disabled={busy}/>
+    <label htmlFor="owner-confirm">Repeat the password</label><input id="owner-confirm" type="password" required minLength={12} maxLength={4096} autoComplete="new-password" value={confirm} onChange={e => setConfirm(e.target.value)} disabled={busy}/>
+    {editCode ? <>
+      <label htmlFor="owner-code">Setup code</label>
+      <input id="owner-code" required autoComplete="one-time-code" spellCheck={false} pattern="[A-Za-z0-9_\-]{43}" title="The 43-character code from agent-player setup" value={code} onChange={e => setCode(e.target.value)} disabled={busy}/>
+      <p>Run <code>agent-player setup</code> in a terminal on this computer: it shows a one-time code (valid 24 hours) and a link that fills it in.</p>
+    </> : <p>Setup code received from the local link. <button type="button" onClick={() => setEditCode(true)} disabled={busy}>Enter a different code</button></p>}
+    <button className="primary" disabled={busy}>{busy ? 'Creating…' : 'Create owner and sign in'}</button>
+    <button type="button" onClick={() => void client.discoverSetup()} disabled={busy}>Check setup again</button>
+  </form>;
 }
 /** Local test accounts (dev-quick-login.ts): fills the form only; local builds on a loopback host only. */
 function DevQuickLogin({ disabled, onFill, hostname }: { disabled: boolean; onFill: (a: { email: string; password: string }) => void; hostname?: string }) {
