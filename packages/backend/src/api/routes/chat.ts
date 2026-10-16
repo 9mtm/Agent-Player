@@ -29,6 +29,8 @@ import { createModelRouter, ModelRouter } from '../../services/model-router.js';
 import { CostTracker } from '../../services/cost-tracker.js';
 import { ModelUnavailable, runOllamaAgentLoop } from '../../services/ollama-agent-loop.js';
 import { OLLAMA_URL, DEFAULT_OLLAMA_MODEL, ollamaThinkOption } from '../../llm/ollama.js';
+import { lmStudioApiUrl, lmStudioModelName, lmStudioNotRunningMessage } from '../../llm/lmstudio.js';
+import { runLmStudioAgentLoop } from '../../services/lmstudio-agent-loop.js';
 
 const DEFAULT_MODEL = DEFAULT_OLLAMA_MODEL;
 
@@ -294,7 +296,7 @@ export interface ChatTurnInput {
   userId: string;
   channelTurn?: ReturnType<typeof channelTurnFromHeaders>;
   /** The model's provider when the turn picks a model itself (chat model picker). */
-  provider?: 'ollama' | 'claude';
+  provider?: 'ollama' | 'claude' | 'lmstudio';
   /** CHAT-PRO-02 A: the project folder the read tool reads from (writes stay in the agent's workspace). */
   fileReadRoot?: string;
   /** CHAT-SPEC-01: which rich-answer components the page draws ('chat' = the new chat's display set). */
@@ -319,7 +321,8 @@ export async function executeChatTurn(reply: FastifyReply, input: ChatTurnInput)
 
     // Resolve agent config: specific agent > primary agent > fallback defaults
     const agentConfig = agentId ? await getAgentById(agentId) : await getPrimaryAgent();
-    let resolvedModel = localModelOnly() ? DEFAULT_MODEL : (model || agentConfig?.model || DEFAULT_MODEL);
+    // The local-model-only stage answers with the default local model, or with a picked LM Studio model (also on this machine).
+    let resolvedModel = localModelOnly() ? (input.provider === 'lmstudio' && model ? model : DEFAULT_MODEL) : (model || agentConfig?.model || DEFAULT_MODEL);
     // CORE-01: the agent's current personality version sets temperature,
     // output length and the working-style prompt block. An explicit request
     // value still wins. Personality never changes tools or approvals: the
@@ -387,7 +390,8 @@ export async function executeChatTurn(reply: FastifyReply, input: ChatTurnInput)
       resolvedSystemPrompt += `\n\n## Recent Context\nThe following information was recalled from previous interactions with this user:\n${memoryContext}`;
     }
     // An agent's explicit provider wins; without one, follow the global settings provider.
-    let resolvedProvider = localModelOnly() ? 'ollama' : (input.provider || agentConfig?.provider
+    // LM Studio is local too (127.0.0.1 only), so the local-model-only stage keeps a picked LM Studio model.
+    let resolvedProvider = localModelOnly() ? (input.provider === 'lmstudio' ? 'lmstudio' : 'ollama') : (input.provider || agentConfig?.provider
       || ((await getSettingsManager().getSettings()).provider === 'claude' ? 'claude' : 'ollama'));
     // SECURITY (S1.1): keys come from the credential authority only: the
     // agent's own encrypted key, else the global Settings key.
@@ -402,7 +406,9 @@ export async function executeChatTurn(reply: FastifyReply, input: ChatTurnInput)
       console.log('[Chat] No Claude key set; using the local model', { model: resolvedModel });
     }
     // A Claude model name never goes to the local model server.
-    if (resolvedProvider === 'ollama' && /^claude-/.test(resolvedModel)) resolvedModel = DEFAULT_MODEL;
+    if (resolvedProvider === 'ollama' && /^(claude-|lmstudio:)/.test(resolvedModel)) resolvedModel = DEFAULT_MODEL;
+    // CHAT-PRO-02 G: an LM Studio turn needs an LM Studio model id (`lmstudio:<name>`).
+    if (resolvedProvider === 'lmstudio' && !lmStudioModelName(resolvedModel)) return reply.status(400).send({ error: 'Pick an LM Studio model', code: 'invalid_model' });
 
     console.log('[Chat] Agent:', agentConfig?.name || 'none (fallback)', '| Provider:', resolvedProvider, '| Model:', resolvedModel);
     if (memoryContext) console.log('[Chat] Memory context injected', { chars: String(memoryContext).length });
@@ -452,6 +458,19 @@ function modelUnavailable(reply: FastifyReply): FastifyReply {
     return reply;
   }
   return reply.status(502).send({ error: 'Model unavailable', code: 'model_unavailable' });
+}
+
+/** LM Studio could not be reached or refused: one typed error that says what to do (no upstream text). */
+function lmStudioNotRunning(reply: FastifyReply): FastifyReply {
+  const error = lmStudioNotRunningMessage();
+  if (reply.raw.headersSent) {
+    if (!reply.raw.writableEnded) {
+      reply.raw.write(`data: ${JSON.stringify({ type: 'error', error, code: 'lmstudio_not_running' })}\n\n`);
+      reply.raw.end();
+    }
+    return reply;
+  }
+  return reply.status(502).send({ error, code: 'lmstudio_not_running' });
 }
 
 // Streaming chat response
@@ -708,6 +727,35 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
     return reply;
   }
 
+  // CHAT-PRO-02 G: LM Studio on this computer, same loop and frames as the local Ollama model.
+  if (provider === 'lmstudio') {
+    console.log('[Chat] 🤖 Using LM Studio (local) agent loop');
+    openSseStream(reply.raw);
+    const lmAbort = new AbortController();
+    reply.raw.once?.('close', () => { if (!reply.raw.writableEnded) lmAbort.abort(); });
+    const lmStarted = Date.now();
+    try {
+      const result = await runLmStudioAgentLoop({
+        url: lmStudioApiUrl(),
+        model: lmStudioModelName(model),
+        messages: ollamaMessages.map((m) => ({ role: m.role === 'system' ? 'system' as const : m.role === 'assistant' ? 'assistant' as const : 'user' as const, content: messageText(m.content) })),
+        tools,
+        execute: (name, args) => toolsRegistry.execute(name, args),
+        write: (frame) => { if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(frame)}\n\n`); },
+        signal: lmAbort.signal,
+        temperature,
+        maxTokens,
+      });
+      console.log('[Chat] ✅ LM Studio turn ended', { steps: result.steps, chars: result.answer.length, aborted: result.aborted, ms: Date.now() - lmStarted });
+    } catch (err) {
+      if (lmAbort.signal.aborted) { reply.raw.end(); return reply; }
+      console.error('[Chat] ❌ LM Studio unreachable', safeErrorFields(err, lmStarted));
+      return lmStudioNotRunning(reply);
+    }
+    reply.raw.end();
+    return reply;
+  }
+
   // Default: the local model, with its own agent loop (CHAT-REBUILD-01):
   // streamed text and reasoning, tool calls run through the same registry
   // (exec policy, channel policy, grants and approvals apply), results fed back.
@@ -852,6 +900,26 @@ async function nonStreamChat(
     }, { workspaceDir: process.cwd(), userId, sessionId, agentId });
     const text = result.content?.[0]?.text || '(no response)';
     return reply.send({ message: { role: 'assistant', content: text } });
+  }
+
+  // CHAT-PRO-02 G: LM Studio answers in one piece here (no tools, like the local path below).
+  if (provider === 'lmstudio') {
+    try {
+      const result = await runLmStudioAgentLoop({
+        url: lmStudioApiUrl(),
+        model: lmStudioModelName(model),
+        messages: ollamaMessages.map((m) => ({ role: m.role === 'system' ? 'system' as const : m.role === 'assistant' ? 'assistant' as const : 'user' as const, content: messageText(m.content) })),
+        tools: [],
+        execute: async () => ({ content: [] }),
+        write: () => {},
+        signal: AbortSignal.timeout(180_000),
+        temperature,
+        maxTokens,
+      });
+      return { message: { role: 'assistant', content: result.answer } };
+    } catch {
+      return lmStudioNotRunning(reply);
+    }
   }
 
   const response = await fetch(`${OLLAMA_URL}/api/chat`, {

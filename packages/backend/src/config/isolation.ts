@@ -79,7 +79,10 @@ export const DEAD_LOCAL_MODEL_API_URL = `${DEAD_OLLAMA_URL}/v1`;
 export const FORCED_PROVIDER_URLS: Readonly<Record<string, string>> = {
   OLLAMA_URL: DEAD_OLLAMA_URL,
   LOCAL_MODEL_API_URL: DEAD_LOCAL_MODEL_API_URL,
+  LMSTUDIO_API_URL: DEAD_LOCAL_MODEL_API_URL,
 };
+/** Stage 2/3: LM Studio's local server on this machine (CHAT-PRO-02 G; loopback only, like the local Ollama). */
+export const LOCAL_CHAT_LMSTUDIO_API_URL = 'http://127.0.0.1:1234/v1';
 
 /**
  * Environment names that select a model-provider endpoint: the two local
@@ -285,6 +288,7 @@ export function buildIsolatedChildEnv(
   };
   if (cfg.stage === 2 || cfg.stage === 3) {
     child.OLLAMA_URL = LOCAL_CHAT_OLLAMA_URL;
+    child.LMSTUDIO_API_URL = LOCAL_CHAT_LMSTUDIO_API_URL;
     child[LOCAL_MODEL_ONLY_ENV] = '1';
   }
   if (cfg.stage === 3 && cfg.localTools) child[LOCAL_MODEL_TOOLS_ENV] = '1';
@@ -314,7 +318,7 @@ export function checkIsolatedServerEnv(env: NodeJS.ProcessEnv, ctx: IsolationCon
   // ISO-2: both local endpoints are exactly the dead port (stage 2: OLLAMA_URL
   // is exactly the local Ollama and every turn is local-only), and no other
   // provider endpoint variable may point off the machine.
-  const expected: Record<string, string> = localChat ? { ...FORCED_PROVIDER_URLS, OLLAMA_URL: LOCAL_CHAT_OLLAMA_URL } : { ...FORCED_PROVIDER_URLS };
+  const expected: Record<string, string> = localChat ? { ...FORCED_PROVIDER_URLS, OLLAMA_URL: LOCAL_CHAT_OLLAMA_URL, LMSTUDIO_API_URL: LOCAL_CHAT_LMSTUDIO_API_URL } : { ...FORCED_PROVIDER_URLS };
   for (const [name, forced] of Object.entries(expected)) {
     if ((env[name] ?? '').trim() !== forced) errors.push(`${name} must be ${forced}`);
   }

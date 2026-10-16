@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import { getSettingsManager } from '../../settings/index.js';
 
 import { OLLAMA_URL } from '../../llm/ollama.js';
+import { LMSTUDIO_PREFIX, listLmStudioModels } from '../../llm/lmstudio.js';
 import { getEnvProviderApiKey, hasGlobalProviderApiKey } from '../../credentials/authority.js';
 
 interface OllamaModel {
@@ -54,6 +55,17 @@ export async function modelsRoutes(fastify: FastifyInstance) {
       } catch (error) {
         console.log('[Models] Ollama not available');
       }
+
+      // 1b. LM Studio models on this computer (CHAT-PRO-02 G): listed only
+      // while its local server answers; ids carry the `lmstudio:` prefix.
+      const lmStudio = await listLmStudioModels();
+      allModels.push(...lmStudio.models.map((id) => ({
+        id: `${LMSTUDIO_PREFIX}${id}`,
+        name: id,
+        provider: 'lmstudio',
+        size: '',
+        available: true,
+      })));
 
       // 2. Add Claude models (if API key configured)
       if (await hasGlobalProviderApiKey('claude')) {
@@ -136,6 +148,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
   fastify.get('/api/models/providers', async () => {
     const providers = [
       { name: 'ollama', available: await checkOllama() },
+      { name: 'lmstudio', available: (await listLmStudioModels()).running },
       { name: 'openai', available: !!getEnvProviderApiKey('openai') },
       { name: 'anthropic', available: !!getEnvProviderApiKey('claude') },
     ];

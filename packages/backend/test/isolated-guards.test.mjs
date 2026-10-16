@@ -237,7 +237,7 @@ test('ISO-1 server: load-env refuses an interior symlink before any file is writ
     NEXT_PUBLIC_APP_URL: 'http://127.0.0.1:42522', AGENT_PLAYER_DATA_DIR: root, AGENT_PLAYER_ISOLATED: '1',
     AGENT_PLAYER_BACKGROUND: 'off', EXTENSIONS_DISABLED: 'true', MEMORY_EMBEDDINGS: 'hash',
     AGENT_PLAYER_READONLY: '1', AGENT_PLAYER_ISOLATED_STAGE: '1',
-    OLLAMA_URL: 'http://127.0.0.1:9', LOCAL_MODEL_API_URL: 'http://127.0.0.1:9/v1',
+    OLLAMA_URL: 'http://127.0.0.1:9', LOCAL_MODEL_API_URL: 'http://127.0.0.1:9/v1', LMSTUDIO_API_URL: 'http://127.0.0.1:9/v1',
     TSX_TSCONFIG_PATH: tsconfigPath,
   };
   const r = spawnSync(process.execPath, ['--import', tsxLoader, join(backendDir, 'src', 'config', 'load-env.ts')],

@@ -121,6 +121,8 @@ export const STAGE3_ROUTES: ReadonlySet<string> = new Set([
   'POST /api/memory/proposals/:id/approve', 'POST /api/memory/proposals/:id/reject',
   // CHAT-SECRETS-01: keys saved from the chat (the caller's own, no values) and the owner's one-time cleanup
   'GET /api/chat/secrets', 'DELETE /api/chat/secrets/:id', 'POST /api/chat/secrets/cleanup',
+  // CHAT-PRO-02 G: the chat model picker (local Ollama + LM Studio on 127.0.0.1; reads only)
+  'GET /api/models',
   // AGENT-CARD-01: the agent card edits role/department/description and the versioned persona (owner)
   'PUT /api/agents/:id', 'GET /api/agents/:id/personality/current', 'GET /api/agents/:id/personality/versions',
   'POST /api/agents/:id/personality/versions', 'POST /api/agents/:id/personality/lock', 'POST /api/agents/:id/personality/unlock',

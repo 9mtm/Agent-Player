@@ -46,10 +46,13 @@ import { ChatSearchError, parseSearch, searchConversations } from '../../service
 import { exportConversation } from '../../services/chat-export.js';
 import { cleanupChatSecrets, deleteChatSecret, listChatSecrets, vaultSecretsInText } from '../../services/chat-secrets.js';
 import { redactImportText, SECRET_REF_RE } from '../../memory/import/redact.js';
+import { isLmStudioModelId } from '../../llm/lmstudio.js';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/;
 /** A model id the chat may pick (local model names like qwen3.8:27b, or claude-…). */
-const MODEL = /^[A-Za-z0-9][A-Za-z0-9_.:\/-]{0,99}$/;
+const MODEL = /^[A-Za-z0-9][A-Za-z0-9_.:@\/-]{0,99}$/;
+/** Which provider a picked model belongs to (`lmstudio:` ids run on LM Studio, CHAT-PRO-02 G). */
+const modelProvider = (model: string) => (/^claude-/.test(model) ? 'claude' as const : isLmStudioModelId(model) ? 'lmstudio' as const : 'ollama' as const);
 const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 export const MESSAGE_CHARS = 100_000;
 /** Characters of earlier turns given to the model (the newest are kept). */
@@ -208,7 +211,7 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
         agentId: replyAgent, messages, stream: true, sessionId: c.id, userId, uiSet: 'chat',
         ...(project ? { memoryScope: { project: project.slug }, ...(project.folder ? { fileReadRoot: project.folder } : {}) } : {}),
         systemPromptAppend: [project ? projectNote(project.name, project.folder, project.repoUrl) : '', PLAN_NOTE, [...prior, userMessage].some((m) => new RegExp(SECRET_REF_RE.source).test(m.content)) ? SECRET_NOTE : '', prior.some((m) => m.role === 'assistant' && (m.agentId ?? c.agentId ?? null) !== (replyAgent ?? null)) ? TEAM_NOTE : ''].filter(Boolean).join('\n\n'),
-        ...(b.model ? { model: b.model, provider: /^claude-/.test(b.model) ? 'claude' as const : 'ollama' as const } : {}),
+        ...(b.model ? { model: b.model, provider: modelProvider(b.model) } : {}),
       }),
     });
     console.log('[ChatRuns] Run started', { runId: b.runId, history: messages.length });

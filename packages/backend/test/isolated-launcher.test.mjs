@@ -139,6 +139,7 @@ test('stage 2 (chat test): still read-only except chat; OLLAMA_URL is exactly th
   assert.equal(env.AGENT_PLAYER_ISOLATED_STAGE, '2');
   assert.equal(env.AGENT_PLAYER_READONLY, '1', 'the read-only gate stays on');
   assert.equal(env.OLLAMA_URL, 'http://127.0.0.1:11434', 'set by the launcher, never inherited');
+  assert.equal(env.LMSTUDIO_API_URL, 'http://127.0.0.1:1234/v1', 'stage 2: LM Studio on this machine only (CHAT-PRO-02 G)');
   assert.equal(env.LOCAL_MODEL_API_URL, 'http://127.0.0.1:9/v1');
   assert.equal(env.AGENT_PLAYER_LOCAL_MODEL_ONLY, '1');
   assert.equal(env.ANTHROPIC_API_KEY, undefined, 'no inherited key reaches the server');
@@ -174,7 +175,7 @@ test('launcher: the child environment is built from nothing (no inherited secret
   const env = iso.buildIsolatedChildEnv(r.config, parent, '/node/bin');
   assert.deepEqual(Object.keys(env).sort(), ['AGENT_PLAYER_BACKGROUND', 'AGENT_PLAYER_DATA_DIR', 'AGENT_PLAYER_ISOLATED',
     'AGENT_PLAYER_ISOLATED_STAGE', 'AGENT_PLAYER_READONLY', 'ALLOWED_ORIGINS',
-    'EXTENSIONS_DISABLED', 'HOME', 'HOST', 'LOCAL_MODEL_API_URL', 'MEMORY_EMBEDDINGS', 'NEXT_PUBLIC_APP_URL', 'NODE_ENV', 'OLLAMA_URL',
+    'EXTENSIONS_DISABLED', 'HOME', 'HOST', 'LMSTUDIO_API_URL', 'LOCAL_MODEL_API_URL', 'MEMORY_EMBEDDINGS', 'NEXT_PUBLIC_APP_URL', 'NODE_ENV', 'OLLAMA_URL',
     'PATH', 'PORT', 'TMPDIR', 'TZ', 'XDG_CONFIG_HOME']);
   assert.equal(env.HOST, '127.0.0.1');
   assert.equal(env.AGENT_PLAYER_ISOLATED, '1');
@@ -184,6 +185,7 @@ test('launcher: the child environment is built from nothing (no inherited secret
   assert.equal(env.NODE_ENV, 'production');
   assert.equal(env.OLLAMA_URL, 'http://127.0.0.1:9');
   assert.equal(env.LOCAL_MODEL_API_URL, 'http://127.0.0.1:9/v1');
+  assert.equal(env.LMSTUDIO_API_URL, 'http://127.0.0.1:9/v1', 'stage 1: LM Studio is the dead port too');
   assert.equal(env.PATH, '/node/bin:/usr/bin:/bin');
   for (const k of ['HOME', 'XDG_CONFIG_HOME', 'TMPDIR']) assert.ok(iso.isInsideOrEqual(env[k], dataDir), k);
   // The server-side check accepts exactly what the launcher builds (cwd = <data>/run).
