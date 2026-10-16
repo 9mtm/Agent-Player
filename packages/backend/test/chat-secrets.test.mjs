@@ -201,6 +201,8 @@ test('cleanup of older messages: counts first, moves only when asked, owner only
   const title = db.prepare('SELECT title FROM chat_sessions WHERE id = ?').get(old.id).title;
   assert.ok(!row.includes(fakeToken) && !title.includes(fakeToken));
   assert.equal(REF.exec(row)[1], REF.exec(title)[1], 'one reference per value in a conversation');
+  // The old value is not left readable in the database files (freed space zeroed, WAL emptied).
+  for (const f of allFiles(join(dir, '.data')).filter((f) => /agent-player\.db(-wal)?$/.test(f))) assert.ok(!readFileSync(f).includes(Buffer.from(fakeToken)), f);
   assert.deepEqual((await call('s-owner', 'POST', '/api/chat/secrets/cleanup', { apply: false })).json().report.secrets, 0);
   // Delete one key: gone from the store, the reference stays in the chat.
   assert.equal((await call('s-owner', 'DELETE', `/api/chat/secrets/${refId}`)).statusCode, 200);

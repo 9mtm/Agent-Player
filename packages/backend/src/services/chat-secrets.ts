@@ -31,6 +31,8 @@ import { getCredentialStorage } from '../credentials/storage.js';
 import { CredentialType } from '../credentials/types.js';
 import { redactImportText, SECRET_REF_RE, type RedactionType } from '../memory/import/redact.js';
 import { q } from '../repositories/sql-steps.js';
+import { dbDriver } from '../db/pg/config.js';
+import { getDatabase } from '../db/index.js';
 
 export const CHAT_SECRET_SKILL = 'chat';
 const NAME_RE = /^chat:([a-z_]+):([a-z0-9]{6,32})$/;
@@ -186,35 +188,47 @@ export interface CleanupReport { conversations: number; messages: number; secret
 export async function cleanupChatSecrets(userId: string, apply: boolean): Promise<CleanupReport> {
   const sessions = await q.all<{ id: string; title: string | null }>('SELECT id, title FROM chat_sessions WHERE user_id = ?', userId);
   const report: CleanupReport = { conversations: 0, messages: 0, secrets: 0, applied: apply };
-  for (const s of sessions) {
-    let touched = false;
-    const known = new Map<string, SavedSecret>(); // one reference per value in a conversation
-    const rows = await q.all<{ id: string; content: string | null; parts: string | null }>('SELECT id, content, parts FROM chat_messages WHERE session_id = ?', s.id);
-    for (const row of rows) {
-      const content = row.content ?? '';
-      let parts: unknown = null;
-      try { parts = row.parts ? JSON.parse(row.parts) : null; } catch { parts = null; }
-      let count = redactImportText(content).total;
-      walkStrings(parts, (x) => { count += redactImportText(x).total; return x; });
-      if (count === 0) continue;
-      report.messages++; report.secrets += count; touched = true;
-      if (!apply) continue;
-      const nextContent = (await vaultSecretsInText(userId, s.id, content, known)).text;
-      let nextParts = row.parts;
-      if (parts !== null) {
-        const strings = new Map<string, string>();
-        const todo: string[] = [];
-        walkStrings(parts, (x) => { if (redactImportText(x).total) todo.push(x); return x; });
-        for (const x of todo) if (!strings.has(x)) strings.set(x, (await vaultSecretsInText(userId, s.id, x, known)).text);
-        nextParts = JSON.stringify(walkStrings(parts, (x) => strings.get(x) ?? x));
+  // SQLite: rewritten and freed space is zeroed, and the WAL is emptied afterwards,
+  // so the old values do not stay readable in the database files.
+  const sqlite = apply && dbDriver() === 'sqlite' ? getDatabase().getDb() : null;
+  const secureBefore = sqlite ? sqlite.pragma('secure_delete', { simple: true }) : null;
+  if (sqlite) sqlite.pragma('secure_delete = ON');
+  try {
+    for (const s of sessions) {
+      let touched = false;
+      const known = new Map<string, SavedSecret>(); // one reference per value in a conversation
+      const rows = await q.all<{ id: string; content: string | null; parts: string | null }>('SELECT id, content, parts FROM chat_messages WHERE session_id = ?', s.id);
+      for (const row of rows) {
+        const content = row.content ?? '';
+        let parts: unknown = null;
+        try { parts = row.parts ? JSON.parse(row.parts) : null; } catch { parts = null; }
+        let count = redactImportText(content).total;
+        walkStrings(parts, (x) => { count += redactImportText(x).total; return x; });
+        if (count === 0) continue;
+        report.messages++; report.secrets += count; touched = true;
+        if (!apply) continue;
+        const nextContent = (await vaultSecretsInText(userId, s.id, content, known)).text;
+        let nextParts = row.parts;
+        if (parts !== null) {
+          const strings = new Map<string, string>();
+          const todo: string[] = [];
+          walkStrings(parts, (x) => { if (redactImportText(x).total) todo.push(x); return x; });
+          for (const x of todo) if (!strings.has(x)) strings.set(x, (await vaultSecretsInText(userId, s.id, x, known)).text);
+          nextParts = JSON.stringify(walkStrings(parts, (x) => strings.get(x) ?? x));
+        }
+        await q.run('UPDATE chat_messages SET content = ?, parts = ? WHERE id = ?', nextContent, nextParts, row.id);
       }
-      await q.run('UPDATE chat_messages SET content = ?, parts = ? WHERE id = ?', nextContent, nextParts, row.id);
+      if (s.title && redactImportText(s.title).total) {
+        touched = true; report.secrets += redactImportText(s.title).total;
+        if (apply) await q.run('UPDATE chat_sessions SET title = ? WHERE id = ?', (await vaultSecretsInText(userId, s.id, s.title, known)).text, s.id);
+      }
+      if (touched) report.conversations++;
     }
-    if (s.title && redactImportText(s.title).total) {
-      touched = true; report.secrets += redactImportText(s.title).total;
-      if (apply) await q.run('UPDATE chat_sessions SET title = ? WHERE id = ?', (await vaultSecretsInText(userId, s.id, s.title, known)).text, s.id);
+  } finally {
+    if (sqlite) {
+      sqlite.pragma(`secure_delete = ${secureBefore ? 'ON' : 'OFF'}`);
+      if (report.secrets > 0) sqlite.pragma('wal_checkpoint(TRUNCATE)');
     }
-    if (touched) report.conversations++;
   }
   return report;
 }
