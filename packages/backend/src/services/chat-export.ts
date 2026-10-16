@@ -8,7 +8,7 @@
  * collapsed summary (name, ok/error, time, a short input). Reasoning is
  * never exported. Every piece of text goes through the memory-import
  * redaction first, so tokens, keys and passwords do not leave in the file.
- * The Markdown is capped; a longer conversation keeps its first turns and
+ * The Markdown is capped in bytes; a longer conversation keeps its first turns and
  * ends with a note.
  */
 
@@ -16,8 +16,8 @@ import { findConversation, findProject, listConversationMessages, type Conversat
 import { redactImportText } from '../memory/import/redact.js';
 import { q } from '../repositories/sql-steps.js';
 
-/** Characters the exported Markdown may have (UTF-16 code units). */
-export const MAX_EXPORT_CHARS = 2_000_000;
+/** UTF-8 bytes the exported Markdown may have (JSON escaping at most doubles it: stays under the bridge's 4 MB answer limit). */
+export const MAX_EXPORT_BYTES = 1_500_000;
 /** Characters of a tool call's input shown in the summary. */
 const TOOL_INPUT_CHARS = 160;
 /** Tool calls listed per reply. */
@@ -83,10 +83,10 @@ function turnBlock(m: ConversationMessage, writer: string, tools: boolean, clean
 }
 
 /** The caller's conversation as Markdown, or null when it is not theirs (or does not exist). */
-export async function exportConversation(userId: string, conversationId: string, opts: { tools?: boolean; maxChars?: number } = {}): Promise<ChatExport | null> {
+export async function exportConversation(userId: string, conversationId: string, opts: { tools?: boolean; maxBytes?: number } = {}): Promise<ChatExport | null> {
   const c = await findConversation(userId, conversationId);
   if (!c) return null;
-  const max = opts.maxChars ?? MAX_EXPORT_CHARS;
+  const max = opts.maxBytes ?? MAX_EXPORT_BYTES;
   const project = c.projectId ? await findProject(userId, c.projectId) : undefined;
   const agents = new Map((await q.all<{ id: string; name: string | null }>('SELECT id, name FROM agents_config')).map((r) => [r.id, r.name || r.id]));
   const agentName = (id: string | null | undefined) => (id && agents.get(id)) || 'Main agent';
@@ -104,15 +104,16 @@ export async function exportConversation(userId: string, conversationId: string,
 
   const turns = (await listConversationMessages(c.id)).filter((m) => m.role === 'user' || m.role === 'assistant');
   const blocks: string[] = [];
-  let used = header.length;
+  let used = Buffer.byteLength(header);
   let truncated = false;
   for (const m of turns) {
     const writer = m.role === 'user' ? 'You' : agentName(m.agentId ?? c.agentId);
     const block = `\n---\n\n${turnBlock(m, writer, !!opts.tools, clean)}\n`;
     // Room for the closing note.
-    if (used + block.length > max - 200) { truncated = true; break; }
+    const size = Buffer.byteLength(block);
+    if (used + size > max - 300) { truncated = true; break; }
     blocks.push(block);
-    used += block.length;
+    used += size;
   }
   const note = truncated ? `\n---\n\n_Export cut: ${blocks.length} of ${turns.length} turns fit in the size limit._\n` : '';
   const footer = `\n---\n\n_Exported from Dpro${redacted ? ` · ${redacted} secret value${redacted === 1 ? ' was' : 's were'} left out` : ''}._\n`;

@@ -100,7 +100,7 @@ test('tools=1 adds a collapsed tool summary with escaped input', async () => {
 });
 
 test('size cap keeps the first turns and says so', async () => {
-  const out = await exportConversation('ce-owner', mine.id, { maxChars: 400 });
+  const out = await exportConversation('ce-owner', mine.id, { maxBytes: 500 });
   assert.equal(out.truncated, true);
   assert.equal(out.totalTurns, 2);
   assert.ok(out.turns < 2);
