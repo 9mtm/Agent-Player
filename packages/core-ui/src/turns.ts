@@ -201,12 +201,33 @@ export function turnPlan(parts: readonly Part[]): PlanStep[] | null {
   return plan;
 }
 
-/** The parts without plan updates: the plan is shown on its own, not as tool work. */
+/** CHAT-PRO-02 I step 2: an agent's suggestion to put the task on the board (the owner decides). */
+export const SUGGEST_TOOL = 'board_suggest_card';
+export type CardSuggestion = Readonly<{ title: string; description: string; agents: readonly string[]; priority: 'low' | 'normal' | 'high' | 'urgent' }>;
+
+/** The card suggestions in this turn (successful calls only), at most 3. */
+export function turnSuggestions(parts: readonly Part[]): CardSuggestion[] {
+  const out: CardSuggestion[] = [];
+  for (const p of parts) if (p.kind === 'tools') for (const c of p.calls) {
+    if (c.name !== SUGGEST_TOOL || c.isError || c.output === undefined) continue;
+    const a = args(c.input);
+    const title = typeof a.title === 'string' ? a.title.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
+    if (!title || out.length >= 3) continue;
+    out.push(Object.freeze({
+      title, description: typeof a.description === 'string' ? a.description.trim().slice(0, 2000) : '',
+      agents: Array.isArray(a.agents) ? a.agents.filter((x): x is string => typeof x === 'string').map(x => x.trim().replace(/^@/, '')).filter(Boolean).slice(0, 10) : [],
+      priority: (['low', 'normal', 'high', 'urgent'] as const).find(x => x === a.priority) ?? 'normal',
+    }));
+  }
+  return out;
+}
+
+/** The parts without plan updates and card suggestions: both are shown on their own, not as tool work. */
 export function withoutPlan(parts: readonly Part[]): Part[] {
   const out: Part[] = [];
   for (const p of parts) {
     if (p.kind !== 'tools') { out.push(p); continue; }
-    const calls = p.calls.filter(c => c.name !== PLAN_TOOL);
+    const calls = p.calls.filter(c => c.name !== PLAN_TOOL && c.name !== SUGGEST_TOOL);
     if (calls.length) out.push(calls.length === p.calls.length ? p : { ...p, calls });
   }
   return out;

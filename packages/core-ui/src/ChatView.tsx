@@ -12,8 +12,11 @@ import type { SessionClient } from './session';
 import { Markdown } from './markdown';
 import { UiIcon } from './ui-icons';
 import type { UiIconName } from './ui-icons';
-import { approxTokens, duration, splitWork, toolCount, toolView, turnOutputs, turnPlan, withoutPlan, workSummary } from './turns';
-import type { PlanStep } from './turns';
+import { approxTokens, duration, splitWork, toolCount, toolView, turnOutputs, turnPlan, turnSuggestions, withoutPlan, workSummary } from './turns';
+import type { CardSuggestion, PlanStep } from './turns';
+import { ChatCardsController, activityLine, cardDraftFrom } from './chat-board';
+import type { ChatCard, ChatProgress } from './chat-board';
+import type { Priority } from './board';
 import type { Part, ToolCall, ToolKind, Turn } from './turns';
 
 /** Pixels from the bottom within which the thread keeps following new text. */
@@ -36,7 +39,7 @@ const SUGGESTIONS = [
  * finished turn folds its work into "Worked for …". Behaviour lives in
  * ConversationsController; this file is layout and local view state only.
  */
-export function ChatView({ controller, mode, productName = 'Dpro', client, onAddConnector }: { controller: ConversationsController; mode: 'live' | 'mock'; productName?: string; client?: SessionClient; onAddConnector?: () => void }) {
+export function ChatView({ controller, mode, productName = 'Dpro', client, onAddConnector, onOpenCard }: { controller: ConversationsController; mode: 'live' | 'mock'; productName?: string; client?: SessionClient; onAddConnector?: () => void; onOpenCard?: (boardId: string, cardId: string) => void }) {
   const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const thread = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -124,6 +127,19 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
   const [maximized, setMaximized] = useState(false);
   useEffect(() => { if (!client) return; const p = new PanesController(client); setPanes(p); const t = { tabs: new TerminalTabs(client), prefs: new TerminalPrefsController(client) }; setTerminal(t); return () => { p.dispose(); t.tabs.dispose(); t.prefs.dispose(); }; }, [client]);
   const owner = client?.getSnapshot().user?.role === 'owner';
+  // CHAT-PRO-02 I step 2: board cards made from this conversation.
+  const [cardsCtl, setCardsCtl] = useState<ChatCardsController | null>(null);
+  useEffect(() => { if (!client) return; const c = new ChatCardsController(client); setCardsCtl(c); return () => c.dispose(); }, [client]);
+  useEffect(() => { cardsCtl?.setConversation(s.activeId); }, [cardsCtl, s.activeId]);
+  // A reply that ends may have moved the work on; read the cards again.
+  const wasRunning = useRef(false);
+  useEffect(() => { if (wasRunning.current && !running) void cardsCtl?.refresh(); wasRunning.current = running; }, [running, cardsCtl]);
+  const [cardForm, setCardForm] = useState<CardFormSeed | null>(null);
+  const openCardForm = (seed?: CardSuggestion) => {
+    const draft = cardDraftFrom(s.turns, activeConv?.title ?? null);
+    const ids = (seed?.agents ?? []).map(n => s.agents.find(a => a.name.toLowerCase() === n.toLowerCase() || a.id === n)?.id).filter((x): x is string => !!x);
+    setCardForm({ title: seed?.title ?? draft.title, description: seed ? [seed.description, draft.description].filter(Boolean).join('\n\n') : draft.description, agents: ids, priority: seed?.priority ?? 'normal', key: Date.now() });
+  };
   const folderProject = project?.folder ? project.id : null;
   useEffect(() => { panes?.setProject(folderProject); }, [panes, folderProject]);
   const paneButtons: { name: PaneName; icon: UiIconName; label: string }[] = [
@@ -135,6 +151,8 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
   <div className="chat-screen">
     <div className="chat-topbar">
       {project ? <ProjectBar name={project.name} folder={project.folder} repoUrl={project.repoUrl} git={s.git}/> : <span className="chat-topbar-spacer"/>}
+      {owner && cardsCtl && s.activeId && <button type="button" className="tool chat-to-board" onClick={() => cardForm ? setCardForm(null) : openCardForm()} aria-pressed={!!cardForm} title="Put this task on a board, with the agents it needs">
+        <UiIcon name="board" size={14}/><span>Add to board</span></button>}
       <span className="pane-bar" role="toolbar" aria-label="Side panes">{paneButtons.map(b =>
         <button key={b.name} type="button" className="tool" aria-pressed={pane === b.name} aria-label={b.label} title={pane === b.name ? `Hide ${b.label.toLowerCase()}` : b.label}
           onClick={() => setPane(p => p === b.name ? null : b.name)}><UiIcon name={b.icon} size={14}/></button>)}</span>
@@ -151,13 +169,16 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
       </div> : <div className="chat-column" role="log" aria-live="polite" aria-relevant="additions">
         {s.turns.map((t, i) => t.role === 'user'
           ? <UserMessage key={t.key} turn={t}/>
-          : <AssistantTurn key={t.key} turn={t} writer={teamChat ? nameOf(t.agentId ?? convAgentId) : undefined} last={i === s.turns.length - 1} onRetry={lastUser ? () => void controller.send(lastUser.content) : undefined}/>)}
+          : <AssistantTurn key={t.key} turn={t} writer={teamChat ? nameOf(t.agentId ?? convAgentId) : undefined} last={i === s.turns.length - 1} onRetry={lastUser ? () => void controller.send(lastUser.content) : undefined}
+            onSuggest={owner && cardsCtl && s.activeId ? openCardForm : undefined}/>)}
+        {cardsCtl && <ChatCards controller={cardsCtl} nameOf={id => s.agents.find(a => a.id === id)?.name ?? 'Former agent'} onOpen={onOpenCard}/>}
         {s.starting && !s.turns.some(t => t.status === 'running') && <WorkingRow since={Date.now()} label="Starting"/>}
       </div>}
     </div>
     {below && !empty && <button type="button" className="chat-jump" onClick={jump} aria-label="Jump to the latest message"><UiIcon name="arrow-down" size={15}/></button>}
     <div className="chat-dock">
       {s.notice && <p className="chat-notice" role="status">{s.notice}</p>}
+      {cardForm && cardsCtl && <ChatCardForm key={cardForm.key} controller={cardsCtl} seed={cardForm} agents={s.agents} onClose={() => setCardForm(null)}/>}
       {s.reconnecting && <p className="chat-notice" role="status">Reconnecting to the reply…</p>}
       {s.queuePaused && s.queue.length > 0 && <p className="chat-notice" role="status">Stopped. The waiting {s.queue.length === 1 ? 'message stays' : 'messages stay'} here until you send {s.queue.length === 1 ? 'it' : 'them'}.</p>}
       {s.queue.length > 0 && <ul className="chat-queue" aria-label="Waiting to send">
@@ -345,10 +366,11 @@ function UserMessage({ turn }: { turn: Turn }) {
 }
 
 /** One assistant turn: live parts in order while running; work folded once finished. */
-function AssistantTurn({ turn, last, onRetry, writer }: { turn: Turn; last: boolean; onRetry?: () => void; writer?: string }) {
+function AssistantTurn({ turn, last, onRetry, writer, onSuggest }: { turn: Turn; last: boolean; onRetry?: () => void; writer?: string; onSuggest?: (s: CardSuggestion) => void }) {
   const live = turn.status === 'running';
   const plan = turnPlan(turn.parts);
-  const parts = plan ? withoutPlan(turn.parts) : turn.parts;
+  const suggestions = turnSuggestions(turn.parts);
+  const parts = plan || suggestions.length ? withoutPlan(turn.parts) : turn.parts;
   const { work, answer } = splitWork(parts);
   const tools = toolCount(parts);
   const answerText = answer.filter(p => p.kind === 'text').map(p => (p as { text: string }).text).join('');
@@ -369,9 +391,96 @@ function AssistantTurn({ turn, last, onRetry, writer }: { turn: Turn; last: bool
           <span>{turn.code === 'model_unavailable' ? 'Check that the model is running, then try again.' : 'Anything above was written before the failure.'}</span>
           {last && onRetry && <button type="button" className="chat-error-action" onClick={onRetry}><UiIcon name="refresh" size={12}/>Try again</button>}
         </div>}
+        {suggestions.map((g, i) => <CardSuggestionView key={i} suggestion={g} onCreate={onSuggest}/>)}
         <TurnFooter text={answerText || turn.content} ms={turn.durationMs} stopped={turn.status === 'stopped'}/>
       </>}
   </article>;
+}
+
+/** An agent's suggestion to put the task on the board; only the owner creates the card. */
+function CardSuggestionView({ suggestion, onCreate }: { suggestion: CardSuggestion; onCreate?: (s: CardSuggestion) => void }) {
+  return <section className="card-suggestion" aria-label="Suggested board card">
+    <UiIcon name="board" size={13}/>
+    <span className="card-suggestion-text"><span className="card-suggestion-label">Suggested card</span><strong dir="auto">{suggestion.title}</strong>
+      {suggestion.agents.length > 0 && <small>for {suggestion.agents.join(', ')}</small>}</span>
+    {onCreate ? <button type="button" className="ghost-action strong" onClick={() => onCreate(suggestion)}>Review and create</button> : <small>The owner decides.</small>}
+  </section>;
+}
+
+type CardFormSeed = { title: string; description: string; agents: string[]; priority: Priority; key: number };
+
+/** "Add to board": pick a board and column, the title, the description and the agents the task needs. */
+function ChatCardForm({ controller, seed, agents, onClose }: { controller: ChatCardsController; seed: CardFormSeed; agents: readonly { id: string; name: string }[]; onClose: () => void }) {
+  const st = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const [boardId, setBoardId] = useState('');
+  const [columnId, setColumnId] = useState('');
+  const [title, setTitle] = useState(seed.title);
+  const [description, setDescription] = useState(seed.description);
+  const [picked, setPicked] = useState<string[]>(seed.agents);
+  const [priority, setPriority] = useState<Priority>(seed.priority);
+  useEffect(() => { void controller.loadBoards().then(id => { if (id) setBoardId(b => b || id); }); }, [controller]);
+  useEffect(() => { if (st.columns.length && !st.columns.some(c => c.id === columnId)) setColumnId((st.columns.find(c => c.name.toLowerCase() === 'to do') ?? st.columns[0]).id); }, [st.columns, columnId]);
+  const submit = async () => { if (await controller.create({ boardId, columnId: columnId || undefined, title, description, priority, agents: picked })) onClose(); };
+  return <form className="chat-card-form" aria-label="Add this task to a board" onSubmit={e => { e.preventDefault(); void submit(); }}>
+    <div className="chat-card-form-head"><UiIcon name="board" size={14}/><strong>Add this task to a board</strong>
+      <button type="button" className="row-tool" aria-label="Close" onClick={onClose}><UiIcon name="close" size={12}/></button></div>
+    <div className="chat-card-form-row">
+      <label>Board<select value={boardId} onChange={e => { setBoardId(e.target.value); setColumnId(''); void controller.pickBoard(e.target.value); }} disabled={!st.boards.length}>
+        {st.boards.length ? st.boards.map(b => <option key={b.id} value={b.id}>{b.name}</option>) : <option value="">Reading the boards…</option>}</select></label>
+      <label>Column<select value={columnId} onChange={e => setColumnId(e.target.value)} disabled={!st.columns.length}>
+        {st.columns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+      <label>Priority<select value={priority} onChange={e => setPriority(e.target.value as Priority)}>
+        {(['low', 'normal', 'high', 'urgent'] as const).map(p => <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}</select></label>
+    </div>
+    <label>Title<input value={title} maxLength={200} onChange={e => setTitle(e.target.value)} dir="auto" required/></label>
+    <label>Description<textarea value={description} rows={3} maxLength={5000} onChange={e => setDescription(e.target.value)} dir="auto"/></label>
+    {agents.length > 0 && <fieldset className="chat-card-agents"><legend>Agents it needs</legend>
+      {agents.map(a => <label key={a.id} className="chat-card-agent"><input type="checkbox" checked={picked.includes(a.id)} onChange={e => setPicked(p => e.target.checked ? [...p, a.id] : p.filter(x => x !== a.id))}/>
+        <span className="avatar" aria-hidden="true">{a.name.slice(0, 1).toUpperCase()}</span>{a.name}</label>)}</fieldset>}
+    {st.notice && <p className="chat-card-notice" role="status">{st.notice}</p>}
+    <div className="chat-card-form-actions">
+      <span className="fine-print">The card links back to this chat; its moves and comments show up here.</span>
+      <button type="button" className="ghost-action" onClick={onClose}>Cancel</button>
+      <button type="submit" className="primary" disabled={st.saving || !boardId || !title.trim()}>{st.saving ? 'Adding…' : 'Add card'}</button>
+    </div>
+  </form>;
+}
+
+/** The board cards made from this conversation: column, agents and their progress, newest board activity. */
+function ChatCards({ controller, nameOf, onOpen }: { controller: ChatCardsController; nameOf: (agentId: string) => string; onOpen?: (boardId: string, cardId: string) => void }) {
+  const st = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  if (!st.owner || !st.cards.length) return null;
+  return <>{st.cards.map(c => <ChatCardBlock key={c.id} card={c} progress={st.progress} nameOf={nameOf} onOpen={onOpen}/>)}</>;
+}
+
+function ChatCardBlock({ card, progress, nameOf, onOpen }: { card: ChatCard; progress: ChatProgress; nameOf: (agentId: string) => string; onOpen?: (boardId: string, cardId: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const status = card.archived ? 'archived' : card.done ? 'done' : 'open';
+  const people = card.agents.map(id => ({ id, p: progress.agents.find(a => a.agentId === id) }));
+  const recent = open ? card.activity : card.activity.slice(-3);
+  return <section className="chat-card-block" data-status={status} aria-label={`Board card ${card.title}`}>
+    <div className="chat-card-head">
+      <UiIcon name="board" size={13}/>
+      <span className="chat-card-where">{card.boardName} · <b>{card.archived ? 'Archived' : card.column}</b></span>
+      {card.done && !card.archived && <span className="chat-card-badge">Done</span>}
+      {onOpen && !card.archived && <button type="button" className="ghost-action strong" onClick={() => onOpen(card.boardId, card.id)}>Open card</button>}
+    </div>
+    <p className="chat-card-title" dir="auto">{card.title}</p>
+    {people.length > 0 && <ul className="chat-card-people" aria-label="Agents on this card">{people.map(({ id, p }) =>
+      <li key={id} data-running={p?.running || undefined}>
+        <span className="avatar" aria-hidden="true">{nameOf(id).slice(0, 1).toUpperCase()}</span>
+        <span>{nameOf(id)}</span>
+        <small>{p?.running ? (p.plan?.active ? `working: ${p.plan.active}` : 'working now')
+          : p?.plan ? `plan ${p.plan.done} of ${p.plan.total}` : p?.replies ? `${p.replies} ${p.replies === 1 ? 'reply' : 'replies'}` : 'not started'}</small>
+        {p?.plan && p.plan.total > 0 && <span className="plan-bar" aria-hidden="true"><i style={{ inlineSize: `${Math.round((p.plan.done / p.plan.total) * 100)}%` }}/></span>}
+      </li>)}</ul>}
+    {(card.checklist.total > 0 || card.comments > 0) && <p className="chat-card-meta">
+      {card.checklist.total > 0 && <span>Checklist {card.checklist.done}/{card.checklist.total}</span>}
+      {card.comments > 0 && <span>{card.comments} {card.comments === 1 ? 'comment' : 'comments'}</span>}</p>}
+    {recent.length > 0 && <ol className="chat-card-activity" aria-label="Board updates">{recent.map(a =>
+      <li key={a.id} data-kind={a.kind}><span dir="auto">{activityLine(a, nameOf)}</span><time>{a.createdAt.slice(5, 16).replace('T', ' ')}</time></li>)}</ol>}
+    {card.activity.length > 3 && <button type="button" className="ghost-action" onClick={() => setOpen(v => !v)}>{open ? 'Fewer updates' : `All ${card.activity.length} updates`}</button>}
+  </section>;
 }
 
 /** The agent's task plan as a live checklist; folds to one line once every step is done. */

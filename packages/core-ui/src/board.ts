@@ -1,6 +1,8 @@
 import { SessionFailure } from './session-failure';
 import { BOARDS_PATH, MAX_COMMENT, MAX_DESCRIPTION, MAX_TITLE, validBoardEdit, validCardEdit, validNewBoard, validNewCard } from './board-contract.js';
 import type { SessionClient } from './session';
+import { cardChatPath } from './chat-board-contract.js';
+import type { ChatProgress } from './chat-board-contract.js';
 
 export type Priority = 'low' | 'normal' | 'high' | 'urgent';
 /** Board writes (checked against board-contract.js before sending). */
@@ -10,6 +12,8 @@ export type Card = Readonly<{
   id: string; columnId: string; title: string; description: string; priority: Priority; position: number; dueDate: string | null;
   archived: boolean; version: number; agents: readonly string[]; departments: readonly string[]; comments: number; updatedAt: string;
   type: CardType; startDate: string | null; cover: BoardColor | null; labels: readonly string[]; checklist: Readonly<{ done: number; total: number }>;
+  /** CHAT-PRO-02 I step 2: the conversation this card was made from (null = made on the board). */
+  conversationId?: string | null;
 }>;
 export type CardType = 'task' | 'idea' | 'bug' | 'milestone' | 'request';
 export type Label = Readonly<{ id: string; name: string; color: BoardColor }>;
@@ -35,6 +39,8 @@ export type BoardState = Readonly<{
   labels: readonly Label[]; checklist: readonly CheckItem[];
   /** The open card (detail panel) and its editable copy and comments. */
   open?: string; draft?: CardDraft; comments: readonly Comment[]; commentsPhase: 'idle' | 'loading' | 'ready' | 'error';
+  /** CHAT-PRO-02 I step 2: the open card's conversation and the progress of the agents on it. */
+  chat?: Readonly<{ conversation: { id: string; title: string | null } | null; progress: ChatProgress }>;
   /** Filters: text search, one agent, one department. */
   filter: Readonly<{ text: string; agent: string; department: string }>;
   notice?: string;
@@ -246,8 +252,9 @@ export class BoardController {
   async openCard(cardId: string) {
     const card = this.#state.cards.find(c => c.id === cardId);
     if (!card || !this.#state.owner) return;
-    this.#publish({ open: cardId, draft: draftOf(card), comments: [], checklist: [], commentsPhase: 'loading', notice: undefined });
+    this.#publish({ open: cardId, draft: draftOf(card), comments: [], checklist: [], commentsPhase: 'loading', notice: undefined, chat: undefined });
     const ticket = this.#ticket;
+    if (card.conversationId || card.agents.length) void this.#loadChat(cardId, ticket);
     try {
       const k = await this.client.request({ method: 'GET', path: `${BOARDS_PATH}/${this.#state.boardId}/cards/${cardId}/checklist` });
       const items = (k.body as { items?: CheckItem[] } | null)?.items;
@@ -260,7 +267,23 @@ export class BoardController {
       this.#publish(r.status === 200 && list ? { comments: Object.freeze(list.map(c => Object.freeze(c))), commentsPhase: 'ready' } : { commentsPhase: 'error' });
     } catch { if (this.#state.open === cardId) this.#publish({ commentsPhase: 'error' }); }
   }
-  closeCard() { this.#publish({ open: undefined, draft: undefined, comments: [], checklist: [], commentsPhase: 'idle', notice: undefined }); }
+  closeCard() { this.#publish({ open: undefined, draft: undefined, comments: [], checklist: [], commentsPhase: 'idle', notice: undefined, chat: undefined }); }
+  /** The open card's conversation and who works on it (read again on demand). */
+  async #loadChat(cardId: string, ticket = this.#ticket) {
+    try {
+      const r = await this.client.request({ method: 'GET', path: cardChatPath(this.#state.boardId!, cardId) });
+      const b = r.body as { conversation?: { id: string; title: string | null } | null; progress?: ChatProgress } | null;
+      if (ticket === this.#ticket && this.#state.open === cardId && r.status === 200 && b?.progress) this.#publish({ chat: Object.freeze({ conversation: b.conversation ?? null, progress: b.progress }) });
+    } catch { /* the panel works without it */ }
+  }
+  refreshChat() { if (this.#state.open) void this.#loadChat(this.#state.open); }
+  /** Open a board and one of its cards (from a chat card block). */
+  async reveal(boardId: string, cardId: string) {
+    if (!this.#state.owner) return;
+    if (this.#state.boardId !== boardId || !this.#state.cards.some(c => c.id === cardId)) { this.closeCard(); await this.load(boardId); }
+    if (this.#state.cards.some(c => c.id === cardId)) await this.openCard(cardId);
+    else this.#publish({ notice: 'That card is archived or no longer on this board.' });
+  }
   toggleLabel(id: string) {
     const d = this.#state.draft; if (!d) return;
     if (!d.labels.includes(id) && d.labels.length >= 10) return this.#publish({ notice: 'At most 10 labels on a card.' });

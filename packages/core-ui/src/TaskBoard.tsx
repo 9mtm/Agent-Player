@@ -14,7 +14,7 @@ const typeMark: Record<CardType, string> = { task: '✓', idea: '✦', bug: '⚑
 const colorLabel: Record<BoardColor, string> = { blue: 'Blue', green: 'Green', orange: 'Orange', red: 'Red', purple: 'Purple', pink: 'Pink', teal: 'Teal', gray: 'Gray' };
 
 /** The company's boards: a list of boards (company, per department, shared), the open board's columns, and a card panel. */
-export function TaskBoard({ controller, active = false }: { controller: BoardController; active?: boolean }) {
+export function TaskBoard({ controller, active = false, onOpenChat }: { controller: BoardController; active?: boolean; onOpenChat?: (conversationId: string) => void }) {
   const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const [newColumn, setNewColumn] = useState('');
   const [mode, setMode] = useState<'board' | 'new' | 'settings'>('board');
@@ -77,7 +77,7 @@ export function TaskBoard({ controller, active = false }: { controller: BoardCon
           {view === 'workload' && <WorkloadView controller={controller}/>}
         </>}
     </div>
-    {mode === 'board' && openCard && s.draft && <CardPanel card={openCard} controller={controller} busy={busy}/>}
+    {mode === 'board' && openCard && s.draft && <CardPanel card={openCard} controller={controller} busy={busy} onOpenChat={onOpenChat}/>}
   </section>;
 }
 
@@ -231,7 +231,7 @@ function CardTile({ card, controller }: { card: Card; controller: BoardControlle
   </article>;
 }
 
-function CardPanel({ card, controller, busy }: { card: Card; controller: BoardController; busy: boolean }) {
+function CardPanel({ card, controller, busy, onOpenChat }: { card: Card; controller: BoardController; busy: boolean; onOpenChat?: (conversationId: string) => void }) {
   const s = controller.getSnapshot();
   const d = s.draft!;
   const [dep, setDep] = useState('');
@@ -244,6 +244,7 @@ function CardPanel({ card, controller, busy }: { card: Card; controller: BoardCo
       <span className="fine-print">In <strong>{column?.name}</strong></span>
       <button type="button" onClick={() => controller.closeCard()}>Close</button>
     </div>
+    {s.chat && <CardChat chat={s.chat} nameOf={controller.agentName} onOpenChat={onOpenChat} onRefresh={() => controller.refreshChat()}/>}
     <label>Title<input value={d.title} maxLength={200} disabled={busy} onChange={e => controller.editDraft({ title: e.target.value })}/></label>
     <label>Description<textarea rows={5} value={d.description} maxLength={5000} disabled={busy} placeholder="Details, links, acceptance…" onChange={e => controller.editDraft({ description: e.target.value })}/></label>
     <div className="board-panel-row">
@@ -332,5 +333,26 @@ function Checklist({ controller, busy }: { controller: BoardController; busy: bo
       <input aria-label="New checklist item" placeholder="Add an item" maxLength={300} value={text} onChange={e => setText(e.target.value)}/>
       <button type="submit" disabled={!text.trim()}>Add</button>
     </form>
+  </section>;
+}
+
+/** CHAT-PRO-02 I step 2: the chat this card came from and how far each agent on it is. */
+function CardChat({ chat, nameOf, onOpenChat, onRefresh }: { chat: NonNullable<ReturnType<BoardController['getSnapshot']>['chat']>; nameOf: (id: string) => string; onOpenChat?: (conversationId: string) => void; onRefresh: () => void }) {
+  const { conversation, progress } = chat;
+  if (!conversation && !progress.agents.length) return null;
+  return <section className="board-card-chat" aria-label="Work in the chat">
+    <div className="board-card-chat-head">
+      <strong>{conversation ? 'From the chat' : 'Agents on it'}</strong>
+      {conversation && <span className="fine-print" dir="auto">{conversation.title || 'Untitled chat'}</span>}
+      {progress.running && <span className="chat-card-badge live">Working now</span>}
+      <button type="button" className="ghost-action" onClick={onRefresh} aria-label="Read the progress again">Refresh</button>
+      {conversation && onOpenChat && <button type="button" className="ghost-action strong" onClick={() => onOpenChat(conversation.id)}>Open chat</button>}
+    </div>
+    {progress.agents.length > 0 && <ul className="chat-card-people">{progress.agents.map(a => <li key={a.agentId} data-running={a.running || undefined}>
+      <span className="avatar" aria-hidden="true">{nameOf(a.agentId).slice(0, 1).toUpperCase()}</span>
+      <span>{nameOf(a.agentId)}</span>
+      <small>{a.running ? (a.plan?.active ? `working: ${a.plan.active}` : 'working now') : a.plan ? `plan ${a.plan.done} of ${a.plan.total}${a.plan.active ? ` · next: ${a.plan.active}` : ''}` : a.replies ? `${a.replies} ${a.replies === 1 ? 'reply' : 'replies'} in the chat` : 'not started'}</small>
+      {a.plan && a.plan.total > 0 && <span className="plan-bar" aria-hidden="true"><i style={{ inlineSize: `${Math.round((a.plan.done / a.plan.total) * 100)}%` }}/></span>}
+    </li>)}</ul>}
   </section>;
 }

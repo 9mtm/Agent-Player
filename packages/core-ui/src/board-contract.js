@@ -146,6 +146,8 @@ function card(c) {
     type: cardTypes.includes(c.type) ? c.type : 'task', startDate: date(c.startDate) && c.startDate ? c.startDate : null, cover: boardColors.includes(c.cover) ? c.cover : null,
     labels: Array.isArray(c.labels) ? c.labels.filter(id).slice(0, 10) : [],
     checklist: record(c.checklist) && Number.isSafeInteger(c.checklist.done) && Number.isSafeInteger(c.checklist.total) && c.checklist.done >= 0 && c.checklist.done <= c.checklist.total ? { done: c.checklist.done, total: c.checklist.total } : { done: 0, total: 0 },
+
+    conversationId: typeof c.conversationId === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/.test(c.conversationId) ? c.conversationId : null,
   };
 }
 
