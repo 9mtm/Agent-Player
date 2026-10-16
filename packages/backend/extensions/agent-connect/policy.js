@@ -77,7 +77,10 @@ const EXTRA_PREFIXES = {
 // libraries, directories or credential files, or change interpreter/loader
 // behaviour.
 const DENIED_NAME_PART = /(^|_)(PATH|PATHS|DIR|DIRS|DIRECTORY|FILE|FILES|KEYFILE|BIN|BINARY|EXE|EXECUTABLE|CMD|COMMAND|COMMANDS|SCRIPT|SHELL|PRELOAD|LIBRARY|LIB|MODULE|MODULES|PLUGIN|PLUGINS|HOOK|HOOKS|CLI|CREDENTIAL|CREDENTIALS)(_|$)/;
-const DENIED_NAME_PREFIX = /^(LD_|DYLD_|PYTHON|NODE_|HERMES_|SSL_|REQUESTS_|CURL_|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|GOOGLE_APPLICATION_|GOOGLE_EXTERNAL_ACCOUNT|AWS_|AZURE_|GCLOUD_|CLOUDSDK_)/;
+const DENIED_NAME_PREFIX = /^(LD_|DYLD_|PYTHON|NODE_|SSL_|REQUESTS_|CURL_|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|GOOGLE_APPLICATION_|GOOGLE_EXTERNAL_ACCOUNT|AWS_|AZURE_|GCLOUD_|CLOUDSDK_)/;
+
+// Names ending in HOME point at a program's home directory (config, keys).
+const DENIED_NAME_SUFFIX = /HOME$/;
 
 const catalogById = new Map(CHANNEL_CATALOG.map(channel => [channel.id, channel]));
 
@@ -92,7 +95,7 @@ export function isAllowedEnvironmentKey(channelId, key) {
   if (typeof key !== 'string' || !/^[A-Z][A-Z0-9_]{0,127}$/.test(key)) return false;
   const channel = catalogById.get(channelId);
   if (!channel) return false;
-  if (DENIED_NAME_PREFIX.test(key) || DENIED_NAME_PART.test(key)) return false;
+  if (DENIED_NAME_PREFIX.test(key) || DENIED_NAME_PART.test(key) || DENIED_NAME_SUFFIX.test(key)) return false;
   if ((channel.requiredEnv || []).includes(key)) return true;
   return channelEnvPrefixes(channelId).some(prefix => key.startsWith(prefix) && key.length > prefix.length);
 }

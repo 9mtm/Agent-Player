@@ -45,7 +45,7 @@ test('environment names are limited to the channel provider allow-list', () => {
   assert.ok(isAllowedEnvironmentKey('ntfy', 'NTFY_TOKEN'));
   assert.ok(isAllowedEnvironmentKey('weixin', 'WEIXIN_HOME_CHANNEL'));
   const refused = [
-    'PATH', 'PYTHONPATH', 'PYTHONHOME', 'PYTHONSTARTUP', 'HERMES_HOME', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES',
+    'PATH', 'PYTHONPATH', 'PYTHONHOME', 'PYTHONSTARTUP', 'AGENT_HOME', 'NTFY_HOME', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES',
     'NODE_OPTIONS', 'SSL_CERT_FILE', 'HTTPS_PROXY', 'ENCRYPTION_KEY', 'JWT_SECRET', 'ANTHROPIC_API_KEY',
     'OPENAI_API_KEY', 'SLACK_BOT_TOKEN', 'NTFY_CLI_PATH', 'NTFY_STORE_DIR', 'NTFY_PLUGIN', 'NTFY_', 'ntfy_token',
   ];
