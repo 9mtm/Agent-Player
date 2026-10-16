@@ -21,6 +21,8 @@ import { ChatMemoryController, messageRef, proposalsByRun, rememberDraft, MAX_RE
 import type { ChatMemory, RememberDrawer, RememberType } from './chat-memory';
 import { drawerLabel } from './MemoryViews';
 import { exportConversation, exportNote } from './chat-export';
+import { secretLabel, splitSecrets } from './chat-secrets';
+import { SavedKeys } from './SavedKeys';
 import type { Part, ToolCall, ToolKind, Turn } from './turns';
 
 /** Pixels from the bottom within which the thread keeps following new text. */
@@ -152,6 +154,7 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
   const [maximized, setMaximized] = useState(false);
   useEffect(() => { if (!client) return; const p = new PanesController(client); setPanes(p); const t = { tabs: new TerminalTabs(client), prefs: new TerminalPrefsController(client) }; setTerminal(t); return () => { p.dispose(); t.tabs.dispose(); t.prefs.dispose(); }; }, [client]);
   const owner = client?.getSnapshot().user?.role === 'owner';
+  const [keysOpen, setKeysOpen] = useState<string | null>(null);
   // CHAT-PRO-02 I step 2: board cards made from this conversation.
   const [cardsCtl, setCardsCtl] = useState<ChatCardsController | null>(null);
   useEffect(() => { if (!client) return; const c = new ChatCardsController(client); setCardsCtl(c); return () => c.dispose(); }, [client]);
@@ -203,7 +206,7 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
           <button key={t} type="button" className="chat-suggestion" onClick={() => void controller.send(t)}>{t}</button>)}</div>
       </div> : <div className="chat-column" role="log" aria-live="polite" aria-relevant="additions">
         {s.turns.map((t, i) => t.role === 'user'
-          ? <UserMessage key={t.key} turn={t} highlight={flash === t.key} onRemember={canRemember && messageRef(t) ? () => openRemember(t, t.content) : undefined}/>
+          ? <UserMessage key={t.key} turn={t} highlight={flash === t.key} onKey={client ? setKeysOpen : undefined} onRemember={canRemember && messageRef(t) ? () => openRemember(t, t.content) : undefined}/>
           : <AssistantTurn key={t.key} turn={t} highlight={flash === t.key} writer={teamChat ? nameOf(t.agentId ?? convAgentId) : undefined} last={i === s.turns.length - 1} onRetry={lastUser ? () => void controller.send(lastUser.content) : undefined}
             onSuggest={owner && cardsCtl && s.activeId ? openCardForm : undefined} onRemember={canRemember && messageRef(t) ? text => openRemember(t, text) : undefined}
             proposals={t.runId && memCtl ? <MemoryProposals controller={memCtl} items={byRun.get(t.runId) ?? []}/> : null}/>)}
@@ -211,6 +214,7 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
         {s.starting && !s.turns.some(t => t.status === 'running') && <WorkingRow since={Date.now()} label="Starting"/>}
       </div>}
     </div>
+    {client && keysOpen !== null && <SavedKeys client={client} owner={owner} highlight={keysOpen || undefined} onClose={() => setKeysOpen(null)}/>}
     {below && !empty && <button type="button" className="chat-jump" onClick={jump} aria-label="Jump to the latest message"><UiIcon name="arrow-down" size={15}/></button>}
     <div className="chat-dock">
       {s.notice && <p className="chat-notice" role="status">{s.notice}</p>}
@@ -420,20 +424,30 @@ function ProjectBar({ name, folder, repoUrl, git }: { name: string; folder: stri
 }
 
 /** The user's message: right-aligned, pinned while its answer scrolls; long text folds. */
-function UserMessage({ turn, onRemember, highlight }: { turn: Turn; onRemember?: () => void; highlight?: boolean }) {
+function UserMessage({ turn, onRemember, onKey, highlight }: { turn: Turn; onRemember?: () => void; onKey?: (id: string) => void; highlight?: boolean }) {
   const [open, setOpen] = useState(false);
   // The pinned bubble stays short (3 lines) so the answer under it stays readable.
   const long = turn.content.length > 220 || turn.content.split('\n').length > 3;
   return <div className="chat-user" data-pending={turn.pending || undefined} data-message-id={turn.key} data-highlight={highlight || undefined}>
     <div className="user-bubble" data-folded={long && !open || undefined}>
       <p className="sr-only">You</p>
-      <div className="turn-text" dir="auto">{turn.content}</div>
+      <div className="turn-text" dir="auto">{splitSecrets(turn.content).map((p, i) => p.kind === 'text' ? p.text
+        : <SecretChip key={i} type={p.type} id={p.id} onOpen={onKey}/>)}</div>
     </div>
     <div className="user-actions">
       {long && <button type="button" className="chat-more" onClick={() => setOpen(v => !v)}>{open ? 'Show less' : 'Show all'}</button>}
       {onRemember && <RememberButton onClick={onRemember}/>}
     </div>
   </div>;
+}
+
+/** CHAT-SECRETS-01: a secret of the message, kept in the key store; the chip opens the saved keys. */
+function SecretChip({ type, id, onOpen }: { type: string; id: string; onOpen?: (id: string) => void }) {
+  const label = `${secretLabel(type)} saved securely`;
+  const body = <><UiIcon name="lock" size={11}/>{label}</>;
+  return onOpen
+    ? <button type="button" className="secret-chip" title="Stored encrypted in the key store. Open saved keys" onClick={() => onOpen(id)}>{body}</button>
+    : <span className="secret-chip" title="Stored encrypted in the key store">{body}</span>;
 }
 
 /** One assistant turn: live parts in order while running; work folded once finished. */

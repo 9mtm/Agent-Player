@@ -1323,6 +1323,22 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .chat-export-hint { margin:0; color:var(--text-3); line-height:1.4; }
 .app-shell .chat-export-note { margin:0; color:var(--text-2); overflow-wrap:anywhere; }
 .app-shell .chat-export-actions { display:flex; align-items:center; gap:10px; }
+/* CHAT-SECRETS-01: a secret of a message is a chip; the saved keys panel. */
+.app-shell .secret-chip { display:inline-flex; align-items:center; gap:4px; min-block-size:0; margin:0 2px; padding:1px 7px; border-radius:999px; border:1px solid color-mix(in srgb,#2da44e 45%,var(--stroke-3)); background:color-mix(in srgb,#2da44e 10%,var(--canvas)); color:var(--text); font-size:11.5px; font-weight:500; line-height:1.5; vertical-align:baseline; white-space:nowrap; cursor:default; }
+.app-shell button.secret-chip { cursor:pointer; inline-size:auto; }
+.app-shell button.secret-chip:hover { background:color-mix(in srgb,#2da44e 18%,var(--canvas)); }
+.app-shell .secret-chip svg { color:#2da44e; flex:none; }
+.app-shell .saved-keys { position:fixed; inset-block-start:64px; inset-inline-end:16px; z-index:40; display:grid; gap:8px; inline-size:min(360px, calc(100vw - 32px)); max-block-size:calc(100vh - 96px); overflow:auto; padding:12px; border-radius:8px; background:var(--surface); box-shadow:0 0 0 1px var(--stroke-3),0 8px 24px rgba(0,0,0,.16); font-size:12px; }
+.app-shell .saved-keys-head { display:flex; align-items:center; gap:6px; }
+.app-shell .saved-keys-head svg { color:#2da44e; }
+.app-shell .saved-keys-head .tool { margin-inline-start:auto; }
+.app-shell .saved-keys-list { list-style:none; margin:0; padding:0; display:grid; gap:4px; }
+.app-shell .saved-keys-list li { display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:8px; padding:6px 8px; border-radius:6px; border:1px solid var(--stroke-3); }
+.app-shell .saved-keys-list li[data-highlight] { border-color:#2da44e; background:color-mix(in srgb,#2da44e 8%,var(--canvas)); }
+.app-shell .saved-key-name { display:flex; gap:6px; align-items:baseline; min-inline-size:0; overflow:hidden; }
+.app-shell .saved-key-name code { color:var(--text-3); font-size:11px; }
+.app-shell .saved-key-when { color:var(--text-3); font-size:11px; white-space:nowrap; }
+.app-shell .saved-keys-cleanup { border-block-start:1px solid var(--stroke-3); padding-block-start:8px; display:grid; gap:6px; }
 .app-shell .chat-card-block { border:1px solid var(--stroke-3); border-inline-start:3px solid var(--accent); border-radius:10px; margin:6px 0 14px; padding:10px 12px; display:grid; gap:6px; background:color-mix(in srgb,var(--text) 2%,var(--canvas)); font-size:12.5px; }
 .app-shell .chat-card-block[data-status="done"] { border-inline-start-color:#2da44e; }
 .app-shell .chat-card-block[data-status="archived"] { opacity:.65; border-inline-start-color:var(--stroke-1, var(--text-3)); }

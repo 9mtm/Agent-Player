@@ -10,6 +10,7 @@ import { conversationRoute } from './conversation-contract.js';
 import { chatBoardRoute } from './chat-board-contract.js';
 import { chatSearchRoute } from './chat-search-contract.js';
 import { chatExportRoute } from './chat-export-contract.js';
+import { chatSecretsRoute, CLEANUP_PATH, SECRETS_PATH } from './chat-secrets-contract.js';
 import { allowedRequest } from './session';
 import { createMemoryMock } from './memory-mock';
 import { createChatMemoryMock } from './chat-memory-mock';
@@ -50,6 +51,12 @@ export function createLoginMock(agents = createAgentsMock(), setup: 'existing-ow
     if (request.path === '/api/boards' || request.path.startsWith('/api/boards/') || chatBoardRoute(request.path)) return board(request);
     if (chatMemory.handles(request.path)) return chatMemory.transport(request);
     if (conversationRoute(request.path) || chatSearchRoute(request.path) || chatExportRoute(request.path)) return conversations(request);
+    // CHAT-SECRETS-01: offline practice has no key store; nothing is saved.
+    if (chatSecretsRoute(request.path)) {
+      if (request.path === SECRETS_PATH) return { status: 200, body: { secrets: [] } };
+      if (request.path === CLEANUP_PATH) return { status: 200, body: { report: { conversations: 0, messages: 0, secrets: 0, applied: (request.body as { apply?: boolean })?.apply === true } } };
+      return { status: 404, body: { error: 'Not found', code: 'not_found' } };
+    }
     if (cardRoute(request.path)) return card(request);
     if (request.path === '/api/agents' || request.path.startsWith('/api/agents/') || request.path.startsWith('/api/onboarding/team-')) return agents.transport(request);
     if (request.path.startsWith('/api/memory/')) return memory.transport(request);

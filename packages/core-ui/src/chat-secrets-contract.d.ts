@@ -1,0 +1,11 @@
+export const SECRETS_PATH: string;
+export const CLEANUP_PATH: string;
+export const MAX_SECRETS: number;
+export const SECRET_REF: RegExp;
+export type ChatSecret = { id: string; type: string; ref: string; conversationId: string | null; createdAt: string; lastUsed: string | null };
+export type CleanupReport = { conversations: number; messages: number; secrets: number; applied: boolean };
+export function secretPath(id: string): string;
+export function secretDeletePath(path: string): string | null;
+export function chatSecretsRoute(path: string): boolean;
+export function allowedChatSecrets(method: string, path: string, body?: unknown): boolean;
+export function chatSecretsResponse(path: string, status: number, body: unknown): unknown;
