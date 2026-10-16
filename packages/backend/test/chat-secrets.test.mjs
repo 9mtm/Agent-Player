@@ -160,6 +160,16 @@ test('a tool gets the value through the reference only after the owner approves;
   const { result } = await approvals.approveAndRun(detail.id, 's-owner', detail.paramsHash);
   assert.deepEqual(received, [fakeToken], 'the tool got the real value');
   assert.equal(result.content[0].text, `called with ${ref}`, 'the value is put back as the reference');
+  // A failing tool that echoes the value: the error and the log show the reference.
+  tools.registerExtensionTool({ name: 'x_fail_api', description: 'fails', extensionId: 'x', requiresApproval: false,
+    input_schema: { type: 'object', properties: { token: { type: 'string' } } },
+    execute: async (p) => { throw new Error(`bad token ${p.token}`); } });
+  await grants.setAgentGrants('s-agent', { grants: ['x_call_api', 'x_fail_api'] }, 's-owner', tools.createToolsRegistry({ workspaceDir: dir }).listRegistered());
+  const failing = await (await tools.createAgentToolsRegistry({ workspaceDir: dir, userId: 's-owner', sessionId: conv.id, agentId: 's-agent' })).execute('x_fail_api', { token: ref });
+  const fd = await approvals.getApprovalDetail(failing.details.approvalId);
+  const { result: fr } = await approvals.approveAndRun(fd.id, 's-owner', fd.paramsHash);
+  assert.equal(fr.error, `bad token ${ref}`);
+  assert.ok(!logged.some((l) => l.includes(fakeToken)), 'the raw error is not logged');
   // Another user's run, a channel turn, an unknown reference: never resolved.
   const other = await tools.createAgentToolsRegistry({ workspaceDir: dir, userId: 's-other', agentId: 's-agent' });
   const r2 = await other.execute('x_call_api', { token: ref });

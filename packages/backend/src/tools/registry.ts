@@ -170,6 +170,7 @@ export class ToolsRegistry {
       }
     }
 
+    let secrets: Awaited<ReturnType<typeof resolveSecretRefs<Record<string, any>>>> = { value: params, used: [] };
     try {
       console.log(`[ToolsRegistry] 🔧 Executing tool: ${toolName}`);
       // Parameter names only: values may hold secrets (e.g. credentials_save).
@@ -177,21 +178,23 @@ export class ToolsRegistry {
 
       // B1-core: one actor per tool call, from the trusted run context only.
       // CHAT-SECRETS-01: references become the stored values only here, and go back into the result.
-      const secrets = usesSecret ? await resolveSecretRefs(this.context.userId!, params) : { value: params, used: [] };
+      secrets = usesSecret ? await resolveSecretRefs(this.context.userId!, params) : { value: params, used: [] };
       const result = scrubSecretValues(await tool.execute(secrets.value, { ...this.context, actor: await actorFromToolContextAsync(this.context) }), secrets.used);
 
       console.log(`[ToolsRegistry] ✅ Tool executed successfully`);
       return result;
     } catch (error: any) {
-      console.error(`[ToolsRegistry] ❌ Tool execution failed:`, error);
+      // A call that used a saved secret never logs or returns the raw error (it may echo the value).
+      const message = scrubSecretValues(String(error?.message ?? error), secrets.used);
+      console.error(`[ToolsRegistry] ❌ Tool execution failed:`, secrets.used.length ? message : error);
       return {
         content: [
           {
             type: 'text',
-            text: `Error executing tool "${toolName}": ${error.message}`,
+            text: `Error executing tool "${toolName}": ${message}`,
           },
         ],
-        error: error.message,
+        error: message,
       };
     }
   }
