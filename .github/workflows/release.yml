@@ -19,10 +19,10 @@
 
 name: Release Build & Publish
 
+# Manual only: version tags are built and published by build-installers.yml.
+# This older pipeline never installs the Tauri CLI, so it cannot build yet.
 on:
-  push:
-    tags:
-      - 'v*.*.*'  # Triggers on version tags like v1.3.0, v1.4.0, etc.
+  workflow_dispatch:
 
 jobs:
   # ==================== Job 1: Create Release ZIP ====================
