@@ -1,5 +1,6 @@
 import type { WireRequest, WireResponse } from './session';
 import { conversationPath } from './conversation-contract.js';
+import { searchPath } from './chat-search-contract.js';
 
 type Msg = { id: string; role: 'user' | 'assistant'; content: string; parts: unknown[] | null; status: 'complete' | 'stopped' | 'error'; runId: string | null; durationMs: number | null; createdAt: string; agentId?: string };
 type Proj = { id: string; name: string; slug: string; folder: string | null; repoUrl: string | null };
@@ -87,7 +88,30 @@ export function createConversationsMock(options: { stepMs?: number } = {}) {
     setTimeout(tick, stepMs);
   }
 
+  /** CHAT-PRO-02 D: a simple search over the fictional conversations (same answer shape as the backend). */
+  function search(query: string, projectId: string | null): WireResponse {
+    const lower = query.toLowerCase();
+    const snip = (text: string) => {
+      const flat = text.replace(/\s+/g, ' ').trim(); const i = flat.toLowerCase().indexOf(lower);
+      if (i < 0) return null;
+      const start = Math.max(0, i - 40); const snippet = `${start ? '…' : ''}${flat.slice(start, i + query.length + 80)}`;
+      const at = snippet.toLowerCase().indexOf(lower);
+      return { snippet, ranges: [[at, at + query.length]] };
+    };
+    const results = [...convs.values()].filter(c => !projectId || c.projectId === projectId).sort((a, b) => b.order - a.order).flatMap(c => {
+      const hits: unknown[] = [];
+      const t = c.title ? snip(c.title) : null;
+      if (t) hits.push({ kind: 'title', messageId: null, createdAt: c.updatedAt, ...t });
+      const found = [...c.messages].reverse().flatMap(m => { const s = snip(m.content); return s ? [{ kind: m.role, messageId: m.id, createdAt: m.createdAt, ...s }] : []; });
+      hits.push(...found.slice(0, 5));
+      return hits.length ? [{ conversationId: c.id, title: c.title, projectId: c.projectId, updatedAt: c.updatedAt, matchCount: found.length, hits }] : [];
+    });
+    return { status: 200, body: { query, results, truncated: false } };
+  }
+
   return function transport(request: WireRequest): WireResponse {
+    const sp = searchPath(request.path);
+    if (sp) return search(sp.query, sp.projectId);
     const p = conversationPath(request.path);
     const body = request.body as Record<string, any> | undefined;
     if (!p) return { status: 404, body: { code: 'not_found' } };

@@ -6,6 +6,7 @@ const { allowedConnector, connectorRoute, connectorResponse } = require('../src/
 const { allowedLocalImport, localImportRoute, localImportResponse } = require('../src/local-import-contract.js');
 const { allowedChatBoard, chatBoardRoute, chatBoardResponse } = require('../src/chat-board-contract.js');
 const { allowedChatMemory, chatMemoryRoute, chatMemoryResponse } = require('../src/chat-memory-contract.js');
+const { allowedChatSearch, chatSearchRoute, chatSearchResponse } = require('../src/chat-search-contract.js');
 const { allowedTerminal, terminalPath, terminalRoute, terminalResponse, TerminalEventParser, TERMINAL_STREAM_MS } = require('../src/terminal-contract.js');
 const { allowedConversation, conversationPath, conversationRoute, conversationResponse, RunEventParser, RUN_STREAM_MS, RUN_IDLE_MS } = require('../src/conversation-contract.js');
 const { validDeviceToken, validLoginBody } = require('../src/login-contract.js');
@@ -46,7 +47,7 @@ const agent = x => {
     : { id: x.id, version: x.version, nameUnavailable: true, ...profile(x) };
 };
 function allowed(method, target, body) {
-  if (allowedPersonality(method, target, body) || allowedHire(method, target, body) || allowedBoard(method, target, body) || allowedConversation(method, target, body) || allowedAgentCard(method, target, body) || allowedTerminal(method, target, body) || allowedConnector(method, target, body) || allowedLocalImport(method, target, body) || allowedChatBoard(method, target, body) || allowedChatMemory(method, target, body)) return true;
+  if (allowedPersonality(method, target, body) || allowedHire(method, target, body) || allowedBoard(method, target, body) || allowedConversation(method, target, body) || allowedAgentCard(method, target, body) || allowedTerminal(method, target, body) || allowedConnector(method, target, body) || allowedLocalImport(method, target, body) || allowedChatBoard(method, target, body) || allowedChatMemory(method, target, body) || allowedChatSearch(method, target, body)) return true;
   const id = /^\/api\/agents\/([^/?#]+)$/.exec(target)?.[1];
   if (method === 'PUT') return agentId(id) && record(body) && Object.keys(body).length === 2 && Object.keys(body).every(k => k === 'name' || k === 'expectedVersion') && name(body.name) && version(body.expectedVersion);
   if (method === 'GET' && body === undefined && (target === '/api/agents' || agentId(id))) return true;
@@ -99,6 +100,7 @@ function project(target, status, body) {
   if (localImportRoute(target)) return localImportResponse(target, status, body);
   if (chatBoardRoute(target)) return chatBoardResponse(target, status, body);
   if (chatMemoryRoute(target)) return chatMemoryResponse(target, status, body);
+  if (chatSearchRoute(target)) return chatSearchResponse(target, status, body);
   if (target === '/api/agents' || (target.startsWith('/api/agents/') && target !== '/api/agents/name-suggestion')) {
     if (status === 200 && target === '/api/agents') {
       if (!Array.isArray(body?.agents) || body.agents.length > 10000) throw Error();

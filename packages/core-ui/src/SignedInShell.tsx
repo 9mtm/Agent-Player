@@ -14,6 +14,7 @@ import { Icon } from './icons';
 import type { IconName } from './icons';
 import { UiIcon } from './ui-icons';
 import { CommandPalette } from './CommandPalette';
+import { ChatSearchController } from './chat-search';
 import type { Command } from './CommandPalette';
 
 type Page = 'chat' | 'agents' | 'board' | 'memory' | 'account';
@@ -38,6 +39,9 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
     typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   const [chat, setChat] = useState<ConversationsController>();
   useEffect(() => { const c = new ConversationsController(client); setChat(c); void c.load(); return () => c.dispose(); }, [client]);
+  // CHAT-PRO-02 D: search inside the chats (the sidebar box and the ⌘K box each keep their own).
+  const [search, setSearch] = useState<{ side: ChatSearchController; palette: ChatSearchController }>();
+  useEffect(() => { const s = { side: new ChatSearchController(client), palette: new ChatSearchController(client) }; setSearch(s); return () => { s.side.dispose(); s.palette.dispose(); }; }, [client]);
   const [board, setBoard] = useState<BoardController>();
   useEffect(() => { const b = new BoardController(client); setBoard(b); return () => b.dispose(); }, [client]);
   const chatState = useSyncExternalStore(
@@ -92,7 +96,7 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
       </nav>
       <p className="section-label"><span className="checker" aria-hidden="true"/>Conversations</p>
       <div className="session-list">
-        {chat && <ConversationList controller={chat} onOpen={() => setPage('chat')}/>}
+        {chat && <ConversationList controller={chat} search={user.role === 'guest' ? undefined : search?.side} onOpen={() => setPage('chat')}/>}
       </div>
       <div className="sidebar-footer">
         <button className="user-chip" onClick={() => setPage('account')} title="Account">
@@ -126,7 +130,8 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
         <span className="status-item">Dpro</span>
       </span>
     </footer>
-    <CommandPalette open={palette} commands={commands} onClose={() => setPalette(false)}/>
+    <CommandPalette open={palette} commands={commands} onClose={() => setPalette(false)}
+      search={chat && search && user.role !== 'guest' ? { controller: search.palette, onOpen: (id, messageId) => { void chat.openAt(id, messageId); setPage('chat'); } } : undefined}/>
   </div>;
 }
 

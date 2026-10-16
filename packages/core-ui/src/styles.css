@@ -1380,3 +1380,21 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .panel-memories li[data-status="pending"] .panel-memory-meta { color:var(--accent); }
 .app-shell .panel-memories li:is([data-status="removed"],[data-status="rejected"],[data-status="stale"],[data-status="cancelled"]) .panel-memory-text { color:var(--text-3); text-decoration:line-through; }
 .app-shell .memory-card[data-focus] { box-shadow:inset 0 0 0 2px var(--accent); }
+/* CHAT-PRO-02 D: search inside conversations (sidebar box, ⌘K hits, the opened message). */
+.app-shell .search-results { display:flex; flex-direction:column; gap:6px; }
+.app-shell .search-result { display:flex; flex-direction:column; gap:1px; }
+.app-shell .search-result-title { display:flex; align-items:baseline; gap:6px; justify-content:flex-start; min-block-size:24px; padding:2px 8px; background:transparent; color:var(--text); font-size:12.5px; font-weight:500; box-shadow:none; border-radius:2px; text-align:start; }
+.app-shell .search-result-title:hover, .app-shell .search-hit:hover { background:var(--row-hover); }
+.app-shell .search-result-project { margin-inline-start:auto; font-size:10.5px; font-weight:400; color:var(--text-4); white-space:nowrap; }
+.app-shell .search-hit { display:flex; flex-direction:column; align-items:stretch; gap:1px; min-block-size:0; padding:3px 8px 3px 14px; background:transparent; color:var(--text-3); font-size:11.5px; font-weight:400; line-height:1.4; box-shadow:none; border-radius:2px; text-align:start; }
+.app-shell .search-hit-kind { font-size:10px; color:var(--text-4); }
+.app-shell .hit-snippet { overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow-wrap:anywhere; unicode-bidi:plaintext; }
+.app-shell .hit-snippet mark { background:color-mix(in srgb,var(--accent) 22%,transparent); color:var(--text); border-radius:2px; padding:0 1px; }
+.app-shell .search-more { margin:0 8px 0 14px; font-size:10.5px; color:var(--text-4); }
+.cmdk .cmdk-item[data-detail] { align-items:flex-start; }
+.cmdk .cmdk-hit { display:flex; flex-direction:column; gap:2px; min-inline-size:0; }
+.cmdk .cmdk-hit .hit-snippet { color:var(--text-3); font-size:11.5px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow-wrap:anywhere; }
+.cmdk .cmdk-hit mark { background:color-mix(in srgb,var(--accent) 22%,transparent); color:var(--text); border-radius:2px; padding:0 1px; }
+.app-shell [data-message-id][data-highlight] { animation:hit-flash 2.4s ease-out; border-radius:6px; }
+@keyframes hit-flash { 0%, 35% { box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 55%,transparent); background:color-mix(in srgb,var(--accent) 8%,transparent); } 100% { box-shadow:0 0 0 2px transparent; background:transparent; } }
+@media (prefers-reduced-motion: reduce) { .app-shell [data-message-id][data-highlight] { animation:none; box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 55%,transparent); } }

@@ -1,5 +1,8 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { ConversationsController, Conversation } from './conversations';
+import type { ChatSearchController, ChatSearchState } from './chat-search';
+import { validQuery } from './chat-search-contract.js';
+import { SearchResults } from './ChatSearch';
 import { UiIcon } from './ui-icons';
 
 /** Today / Yesterday / Previous 7 days / Older, by last activity (newest first). */
@@ -16,18 +19,25 @@ export function dateGroups<T extends { updatedAt: string }>(items: readonly T[],
   return ['Today', 'Yesterday', 'Previous 7 days', 'Older'].filter(l => groups.has(l)).map(l => [l, groups.get(l)!]);
 }
 
-/** Rows shown before the list offers a filter box. */
-export const FILTER_AFTER = 8;
+const noSearch = () => () => {};
+const idleSearch = (): ChatSearchState => ({ query: '', phase: 'idle', results: [], truncated: false });
 
 /**
  * Saved conversations in the sidebar: pinned first, then recent. Each row
  * opens its conversation; hover shows pin and a small menu (rename,
  * delete with a confirm step). The running conversation carries a dot.
  */
-export function ConversationList({ controller, onOpen }: { controller: ConversationsController; onOpen: () => void }) {
+export function ConversationList({ controller, onOpen, search }: { controller: ConversationsController; onOpen: () => void; search?: ChatSearchController }) {
   const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const found = useSyncExternalStore(search ? search.subscribe : noSearch, search ? search.getSnapshot : idleSearch, search ? search.getSnapshot : idleSearch);
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
+  // CHAT-PRO-02 D: 2+ characters search inside the chats (titles, your messages, agent replies) on the server.
+  const searching = !!search && validQuery(query.trim());
+  const type = (text: string) => { setQuery(text); search?.setQuery(text, s.projectFilter || null); };
+  useEffect(() => { if (search && validQuery(query.trim())) search.setQuery(query, s.projectFilter || null); }, [s.projectFilter]);
+  const openHit = (id: string, messageId: string | null) => { void controller.openAt(id, messageId); onOpen(); };
+  const projectName = (id: string | null) => (id && !s.projectFilter ? s.projects.find(p => p.id === id)?.name ?? null : null);
   const inProject = s.projectFilter ? s.conversations.filter(c => c.projectId === s.projectFilter) : s.conversations;
   const rows = q ? inProject.filter(c => (c.title ?? '').toLowerCase().includes(q) || c.preview.toLowerCase().includes(q)) : inProject;
   const pinned = rows.filter(c => c.pinned), recent = rows.filter(c => !c.pinned);
@@ -39,10 +49,13 @@ export function ConversationList({ controller, onOpen }: { controller: Conversat
     onOpen={() => { void controller.open(c.id); onOpen(); }} controller={controller}/>;
   return <div className="conversations">
     {picker}
-    {s.conversations.length > FILTER_AFTER && <input className="conversation-filter" type="search" placeholder="Filter conversations" aria-label="Filter conversations" value={query} onChange={e => setQuery(e.target.value)}/>}
-    {pinned.length > 0 && <><p className="conversation-group">Pinned</p>{pinned.map(row)}</>}
-    {dateGroups(recent).map(([label, items]) => <div key={label}><p className="conversation-group">{label}</p>{items.map(row)}</div>)}
-    {rows.length === 0 && <p className="session-empty">{q ? 'No match.' : 'No conversations in this project yet.'}</p>}
+    <input className="conversation-filter" type="search" placeholder={search ? 'Search chats' : 'Filter conversations'} aria-label={search ? 'Search chats' : 'Filter conversations'} value={query}
+      maxLength={400} onChange={e => type(e.target.value)} onKeyDown={e => { if (e.key === 'Escape' && query) { e.preventDefault(); type(''); } }}/>
+    {searching ? <SearchResults state={found} projectName={projectName} onOpen={openHit}/> : <>
+      {pinned.length > 0 && <><p className="conversation-group">Pinned</p>{pinned.map(row)}</>}
+      {dateGroups(recent).map(([label, items]) => <div key={label}><p className="conversation-group">{label}</p>{items.map(row)}</div>)}
+      {rows.length === 0 && <p className="session-empty">{q ? 'No match.' : 'No conversations in this project yet.'}</p>}
+    </>}
   </div>;
 }
 

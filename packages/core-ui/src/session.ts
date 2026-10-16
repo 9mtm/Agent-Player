@@ -5,6 +5,7 @@ import { allowedConnector, connectorRoute, connectorResponse } from './connector
 import { allowedLocalImport, localImportRoute, localImportResponse } from './local-import-contract.js';
 import { allowedChatBoard, chatBoardRoute, chatBoardResponse } from './chat-board-contract.js';
 import { allowedChatMemory, chatMemoryRoute, chatMemoryResponse } from './chat-memory-contract.js';
+import { allowedChatSearch, chatSearchRoute, chatSearchResponse } from './chat-search-contract.js';
 import { allowedTerminal, terminalPath, terminalRoute, terminalResponse, TerminalEventParser, TERMINAL_STREAM_MS } from './terminal-contract.js';
 import type { TerminalFrame } from './terminal-contract.js';
 import { allowedConversation, conversationPath, conversationRoute, conversationResponse, RunEventParser, RUN_IDLE_MS, RUN_STREAM_MS } from './conversation-contract.js';
@@ -47,7 +48,7 @@ function user(value: unknown): User {
 }
 // Reject before URL normalization. No generic URL, header, key or mutation escape hatch.
 export function allowedRequest(method: string, path: string, body?: unknown): boolean {
-  if (allowedPersonality(method, path, body) || allowedHire(method, path, body) || allowedBoard(method, path, body) || allowedConversation(method, path, body) || allowedAgentCard(method, path, body) || allowedTerminal(method, path, body) || allowedConnector(method, path, body) || allowedLocalImport(method, path, body) || allowedChatBoard(method, path, body) || allowedChatMemory(method, path, body)) return true;
+  if (allowedPersonality(method, path, body) || allowedHire(method, path, body) || allowedBoard(method, path, body) || allowedConversation(method, path, body) || allowedAgentCard(method, path, body) || allowedTerminal(method, path, body) || allowedConnector(method, path, body) || allowedLocalImport(method, path, body) || allowedChatBoard(method, path, body) || allowedChatMemory(method, path, body) || allowedChatSearch(method, path, body)) return true;
   const agentId = /^\/api\/agents\/([^/?#]+)$/.exec(path)?.[1];
   if (method === 'PUT') return validAgentId(agentId) && record(body) && Object.keys(body).length === 2 && Object.keys(body).every(k => k === 'name' || k === 'expectedVersion') && typeof body.name === 'string' && validatedDisplayName(body.name) === body.name && validVersion(body.expectedVersion);
   if (method === 'GET' && body === undefined && (path === '/api/agents' || validAgentId(agentId))) return true;
@@ -104,6 +105,7 @@ function projectResponse(path: string, response: WireResponse): WireResponse {
   if (localImportRoute(path)) return { status: response.status, body: localImportResponse(path, response.status, response.body) };
   if (chatBoardRoute(path)) return { status: response.status, body: chatBoardResponse(path, response.status, response.body) };
   if (chatMemoryRoute(path)) return { status: response.status, body: chatMemoryResponse(path, response.status, response.body) };
+  if (chatSearchRoute(path)) return { status: response.status, body: chatSearchResponse(path, response.status, response.body) };
   if (path === '/api/agents' || (path.startsWith('/api/agents/') && path !== '/api/agents/name-suggestion')) return agentResponse(path, response);
   if (response.status === 200 && (path === '/api/auth/login' || path === '/api/auth/me')) {
     if (!record(response.body)) throw new SessionFailure('unavailable');
@@ -312,7 +314,7 @@ export class SessionClient {
     if (!this.#token || this.#state.phase !== 'authenticated') throw new SessionFailure('blocked');
     // The public adapter transport cannot call login/logout or add arbitrary request fields.
     if (request.path === '/api/setup/status' || request.path === '/api/chat' || request.path === '/api/auth/login' || request.path === '/api/auth/logout' || Object.keys(request).some(k => !['method', 'path', 'body'].includes(k))) throw new SessionFailure('blocked');
-    if (conversationRoute(request.path) && this.#state.user?.role === 'guest') throw new SessionFailure('blocked');
+    if ((conversationRoute(request.path) || chatSearchRoute(request.path)) && this.#state.user?.role === 'guest') throw new SessionFailure('blocked');
     if ((connectorRoute(request.path) || localImportRoute(request.path) || chatBoardRoute(request.path) || chatMemoryRoute(request.path)) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');
     if (terminalRoute(request.path) && (this.#state.user?.role !== 'owner' || terminalPath(request.path)?.kind === 'stream')) throw new SessionFailure('blocked');
     if (request.method === 'PUT' && !conversationRoute(request.path) && this.#state.user?.role !== 'owner') throw new SessionFailure('blocked');

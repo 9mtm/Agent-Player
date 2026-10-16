@@ -24,6 +24,8 @@ import type { Part, ToolCall, ToolKind, Turn } from './turns';
 
 /** Pixels from the bottom within which the thread keeps following new text. */
 export const FOLLOW_PX = 80;
+/** How long a message opened from search stays highlighted. */
+export const HIGHLIGHT_MS = 2400;
 /** A busy turn with no new output for this long shows the working row. */
 export const QUIET_MS = 1500;
 /** In a long live step only the newest tool rows stay open; older ones fold. */
@@ -67,6 +69,25 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
     setFollowing(near);
     if (near) setBelow(false);
   };
+  // CHAT-PRO-02 D: a search hit scrolls to its message and highlights it briefly.
+  const [flash, setFlash] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    const f = s.focus; const el = thread.current;
+    if (!f || !el || s.threadPhase !== 'ready') return;
+    controller.clearFocus();
+    const target = [...el.querySelectorAll<HTMLElement>('[data-message-id]')].find(n => n.dataset.messageId === f.messageId);
+    if (!target) return;
+    // Scroll only the thread (never the page around it). A user message is sticky,
+    // so its place in the thread is measured with the stickiness off.
+    const sticky = target.style.position;
+    target.style.position = 'static';
+    const top = target.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+    target.style.position = sticky;
+    el.scrollTop = Math.max(0, top - el.clientHeight / 3);
+    setFollowing(false);
+    setFlash(f.messageId);
+  }, [s.focus, s.threadPhase]);
+  useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), HIGHLIGHT_MS); return () => clearTimeout(t); }, [flash]);
   const jump = () => { const el = thread.current; if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }); setFollowing(true); setBelow(false); };
 
   // The composer grows with its text up to a cap.
@@ -180,8 +201,8 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
           <button key={t} type="button" className="chat-suggestion" onClick={() => void controller.send(t)}>{t}</button>)}</div>
       </div> : <div className="chat-column" role="log" aria-live="polite" aria-relevant="additions">
         {s.turns.map((t, i) => t.role === 'user'
-          ? <UserMessage key={t.key} turn={t} onRemember={canRemember && messageRef(t) ? () => openRemember(t, t.content) : undefined}/>
-          : <AssistantTurn key={t.key} turn={t} writer={teamChat ? nameOf(t.agentId ?? convAgentId) : undefined} last={i === s.turns.length - 1} onRetry={lastUser ? () => void controller.send(lastUser.content) : undefined}
+          ? <UserMessage key={t.key} turn={t} highlight={flash === t.key} onRemember={canRemember && messageRef(t) ? () => openRemember(t, t.content) : undefined}/>
+          : <AssistantTurn key={t.key} turn={t} highlight={flash === t.key} writer={teamChat ? nameOf(t.agentId ?? convAgentId) : undefined} last={i === s.turns.length - 1} onRetry={lastUser ? () => void controller.send(lastUser.content) : undefined}
             onSuggest={owner && cardsCtl && s.activeId ? openCardForm : undefined} onRemember={canRemember && messageRef(t) ? text => openRemember(t, text) : undefined}
             proposals={t.runId && memCtl ? <MemoryProposals controller={memCtl} items={byRun.get(t.runId) ?? []}/> : null}/>)}
         {cardsCtl && <ChatCards controller={cardsCtl} nameOf={id => s.agents.find(a => a.id === id)?.name ?? 'Former agent'} onOpen={onOpenCard}/>}
@@ -368,11 +389,11 @@ function ProjectBar({ name, folder, repoUrl, git }: { name: string; folder: stri
 }
 
 /** The user's message: right-aligned, pinned while its answer scrolls; long text folds. */
-function UserMessage({ turn, onRemember }: { turn: Turn; onRemember?: () => void }) {
+function UserMessage({ turn, onRemember, highlight }: { turn: Turn; onRemember?: () => void; highlight?: boolean }) {
   const [open, setOpen] = useState(false);
   // The pinned bubble stays short (3 lines) so the answer under it stays readable.
   const long = turn.content.length > 220 || turn.content.split('\n').length > 3;
-  return <div className="chat-user" data-pending={turn.pending || undefined}>
+  return <div className="chat-user" data-pending={turn.pending || undefined} data-message-id={turn.key} data-highlight={highlight || undefined}>
     <div className="user-bubble" data-folded={long && !open || undefined}>
       <p className="sr-only">You</p>
       <div className="turn-text" dir="auto">{turn.content}</div>
@@ -385,7 +406,7 @@ function UserMessage({ turn, onRemember }: { turn: Turn; onRemember?: () => void
 }
 
 /** One assistant turn: live parts in order while running; work folded once finished. */
-function AssistantTurn({ turn, last, onRetry, writer, onSuggest, onRemember, proposals }: { turn: Turn; last: boolean; onRetry?: () => void; writer?: string; onSuggest?: (s: CardSuggestion) => void; onRemember?: (text: string) => void; proposals?: ReactNode }) {
+function AssistantTurn({ turn, last, onRetry, writer, onSuggest, onRemember, proposals, highlight }: { turn: Turn; last: boolean; onRetry?: () => void; writer?: string; onSuggest?: (s: CardSuggestion) => void; onRemember?: (text: string) => void; proposals?: ReactNode; highlight?: boolean }) {
   const live = turn.status === 'running';
   const plan = turnPlan(turn.parts);
   const suggestions = turnSuggestions(turn.parts);
@@ -394,7 +415,7 @@ function AssistantTurn({ turn, last, onRetry, writer, onSuggest, onRemember, pro
   const tools = toolCount(parts);
   const answerText = answer.filter(p => p.kind === 'text').map(p => (p as { text: string }).text).join('');
   const [quiet, since] = useQuiet(turn, live);
-  return <article className="chat-assistant" aria-busy={live || undefined}>
+  return <article className="chat-assistant" aria-busy={live || undefined} data-message-id={turn.key} data-highlight={highlight || undefined}>
     {writer ? <p className="reply-writer"><span className="avatar" aria-hidden="true">{writer.slice(0, 1).toUpperCase()}</span>{writer}</p> : <p className="sr-only">Agent</p>}
     {plan && <PlanCard steps={plan} live={live} status={turn.status}/>}
     {live

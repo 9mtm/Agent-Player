@@ -42,6 +42,8 @@ export type ConversationsState = Readonly<{
   attachments: readonly { name: string; text: string }[];
   /** After Stop the queue waits for the owner (Send now) instead of going on its own. */
   queuePaused: boolean;
+  /** CHAT-PRO-02 D: a message to scroll to and highlight once (from search); `n` changes per request. */
+  focus: Readonly<{ messageId: string; n: number }> | null;
   notice?: string;
 }>;
 
@@ -60,7 +62,7 @@ export function withAttachments(message: string, files: readonly { name: string;
 export class ConversationsController {
   #state: ConversationsState = Object.freeze({
     access: 'ready', listPhase: 'idle', conversations: [], activeId: null, threadPhase: 'empty', turns: [], draft: '', agentId: '', replyAgent: '', agents: [], models: [], model: '', projects: [], projectFilter: '', git: null,
-    runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, attachments: [],
+    runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, attachments: [], focus: null,
   });
   #listeners = new Set<() => void>();
   #unsubscribe: () => void;
@@ -224,7 +226,7 @@ export class ConversationsController {
   /** A blank conversation (created on the first message). */
   newChat() {
     this.#follow?.abort(); this.#openSeq++;
-    this.publish({ activeId: null, turns: [], threadPhase: 'empty', runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, notice: undefined, agentId: '', replyAgent: '', git: null });
+    this.publish({ activeId: null, turns: [], threadPhase: 'empty', runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, notice: undefined, agentId: '', replyAgent: '', git: null, focus: null });
     void this.loadGit();
   }
 
@@ -233,7 +235,7 @@ export class ConversationsController {
     this.#follow?.abort();
     const seq = ++this.#openSeq;
     const known = this.#state.conversations.find(c => c.id === id);
-    this.publish({ activeId: id, turns: [], threadPhase: 'loading', runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, notice: undefined, agentId: known?.agentId ?? '', replyAgent: '' });
+    this.publish({ activeId: id, turns: [], threadPhase: 'loading', runId: null, starting: false, stopping: false, reconnecting: false, queue: [], queuePaused: false, notice: undefined, agentId: known?.agentId ?? '', replyAgent: '', focus: null });
     try {
       const r = await this.call('GET', `/api/chat/conversations/${id}/messages`);
       if (!this.live() || seq !== this.#openSeq) return;
@@ -249,6 +251,15 @@ export class ConversationsController {
       if (active) void this.follow(active, seq);
     } catch { if (this.live() && seq === this.#openSeq) this.publish({ threadPhase: 'error', notice: 'The conversation could not be loaded.' }); }
   }
+
+  /** Opens a conversation (if it is not open yet) and asks the view to show one message (search hit). */
+  async openAt(id: string, messageId: string | null) {
+    if (!this.live()) return;
+    if (this.#state.activeId !== id || this.#state.threadPhase === 'error') await this.open(id);
+    if (!this.live() || this.#state.activeId !== id || !messageId) return;
+    this.publish({ focus: { messageId, n: (this.#state.focus?.n ?? 0) + 1 } });
+  }
+  clearFocus() { if (this.#state.focus) this.publish({ focus: null }); }
 
   /** Sends the draft (or `text`); while the agent works, the message waits in the queue. */
   async send(text?: string) {

@@ -8,6 +8,7 @@ import { createCardMock } from './card-mock';
 import { cardRoute } from './agent-card-contract.js';
 import { conversationRoute } from './conversation-contract.js';
 import { chatBoardRoute } from './chat-board-contract.js';
+import { chatSearchRoute } from './chat-search-contract.js';
 import { allowedRequest } from './session';
 import { createMemoryMock } from './memory-mock';
 import { createChatMemoryMock } from './chat-memory-mock';
@@ -47,7 +48,7 @@ export function createLoginMock(agents = createAgentsMock(), setup: 'existing-ow
     if (personalityRoute(request.path)) return personality.transport(request);
     if (request.path === '/api/boards' || request.path.startsWith('/api/boards/') || chatBoardRoute(request.path)) return board(request);
     if (chatMemory.handles(request.path)) return chatMemory.transport(request);
-    if (conversationRoute(request.path)) return conversations(request);
+    if (conversationRoute(request.path) || chatSearchRoute(request.path)) return conversations(request);
     if (cardRoute(request.path)) return card(request);
     if (request.path === '/api/agents' || request.path.startsWith('/api/agents/') || request.path.startsWith('/api/onboarding/team-')) return agents.transport(request);
     if (request.path.startsWith('/api/memory/')) return memory.transport(request);
