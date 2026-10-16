@@ -5,6 +5,9 @@
  * <data dir>/secrets.env (0600; values set in .env win and are not copied;
  * existing values are kept) and records the install folder so `start` works
  * from any folder. Prints names only, never a secret value.
+ *
+ * INSTALLER-07: while no owner exists it also shows a one-time owner setup
+ * code on the terminal (never in a log; see utils/setup-token.ts).
  */
 
 import chalk from 'chalk';
@@ -12,9 +15,10 @@ import fs from 'fs';
 import path from 'path';
 import { findInstall, findRootAbove, pathsFor, recordInstallRoot, NOT_FOUND_MESSAGE, type InstallPaths } from '../utils/install-root.js';
 import { addMissingSecrets, inspectSecrets, readInstallDotenv } from '../utils/secrets-file.js';
+import { backendDataDir, offerSetupToken, type OfferDeps } from '../utils/setup-token.js';
 
 export function setupCommand(
-  deps: { paths?: InstallPaths | null; log?: (m: string) => void; env?: NodeJS.ProcessEnv; cwd?: string; configDir?: string } = {},
+  deps: { paths?: InstallPaths | null; log?: (m: string) => void; env?: NodeJS.ProcessEnv; cwd?: string; configDir?: string; terminal?: OfferDeps['terminal'] } = {},
 ): number {
   const log = deps.log ?? ((m: string) => console.log(m));
   let paths = deps.paths === undefined ? findInstall() : deps.paths;
@@ -44,6 +48,7 @@ export function setupCommand(
   else log(chalk.gray('All required secrets are already set.'));
   const record = recordInstallRoot(paths.root, deps.configDir);
   log(chalk.gray(`Install folder recorded in ${record}: ${paths.root}`));
+  offerSetupToken({ dataDir: backendDataDir(paths.dataDir, deps.env ?? process.env), log, terminal: deps.terminal });
   log('Next: agent-player start   (or: agent-player doctor)');
   return 0;
 }

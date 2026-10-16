@@ -18,6 +18,7 @@ const { default: Fastify } = await import('fastify');
 const { default: setupRoutes } = await import('../src/api/routes/setup.ts');
 const { authRoutes } = await import('../src/api/routes/auth.ts');
 const bcrypt = (await import('bcryptjs')).default;
+const { issueSetupToken } = await import('../src/auth/setup-token.ts');
 
 const db = getDatabase();
 await db.initialize();
@@ -48,15 +49,16 @@ test('setup cannot complete before an owner exists', async () => {
 });
 
 test('first owner: weak or published passwords are rejected, then only one owner can be created', async () => {
-  const weak = await post('/api/setup/admin', { name: 'Owner', email: 'owner@example.test', password: 'admin123' });
+  const setupToken = issueSetupToken(); // INSTALLER-07
+  const weak = await post('/api/setup/admin', { name: 'Owner', email: 'owner@example.test', password: 'admin123', setupToken });
   assert.equal(weak.statusCode, 400);
 
-  const ok = await post('/api/setup/admin', { name: 'Owner', email: 'owner@example.test', password: 'a-strong-passphrase-42' });
+  const ok = await post('/api/setup/admin', { name: 'Owner', email: 'owner@example.test', password: 'a-strong-passphrase-42', setupToken });
   assert.equal(ok.statusCode, 200, ok.body);
   const row = db.prepare('SELECT role FROM users WHERE email = ?').get('owner@example.test');
   assert.equal(row.role, 'owner');
 
-  const second = await post('/api/setup/admin', { name: 'Intruder', email: 'intruder@example.test', password: 'another-strong-pass-42' });
+  const second = await post('/api/setup/admin', { name: 'Intruder', email: 'intruder@example.test', password: 'another-strong-pass-42', setupToken: issueSetupToken() });
   assert.equal(second.statusCode, 403);
   assert.equal(db.prepare('SELECT 1 FROM users WHERE email = ?').get('intruder@example.test'), undefined);
 });

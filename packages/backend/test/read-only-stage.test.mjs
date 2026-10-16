@@ -122,7 +122,8 @@ test('setup before completion: only the exact routes; query, slash and case tric
     assertReadOnly(await req('POST', url, { payload: owner }), url);
   }
   assertReadOnly(await req('GET', '/api/setup/check'), 'GET /api/setup/check spawns host commands');
-  const created = await req('POST', '/api/setup/admin', { payload: owner });
+  const { issueSetupToken } = await import(join(backendDir, 'src/auth/setup-token.ts'));
+  const created = await req('POST', '/api/setup/admin', { payload: { ...owner, setupToken: issueSetupToken() } });
   assert.equal(created.statusCode, 200, created.body);
   // An owner now exists: admin is closed even before complete.
   assertReadOnly(await req('POST', '/api/setup/admin', { payload: { ...owner, email: 'second@example.test' } }), 'second admin');

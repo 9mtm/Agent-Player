@@ -19,6 +19,7 @@ const { default: Fastify } = await import('fastify');
 const { default: setupRoutes } = await import('../src/api/routes/setup.ts');
 const { authRoutes } = await import('../src/api/routes/auth.ts');
 const { credentialsRoutes } = await import('../src/api/routes/credentials.ts');
+const { issueSetupToken } = await import('../src/auth/setup-token.ts');
 
 // Fresh database: schema + migrations first (as `start()` and the setup wizard do).
 const db = getDatabase();
@@ -53,7 +54,8 @@ test('fresh install: setup is required and the wizard steps are open', async () 
 });
 
 test('setup -> owner -> complete', async () => {
-  const admin = await post('/api/setup/admin', OWNER);
+  // INSTALLER-07: `agent-player setup` issues the one-time token.
+  const admin = await post('/api/setup/admin', { ...OWNER, setupToken: issueSetupToken() });
   assert.equal(admin.statusCode, 200, admin.body);
 
   // An owner now exists: status says done (so the UI goes to login) and the

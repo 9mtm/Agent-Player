@@ -62,7 +62,8 @@ function call(target, method, url, { payload, headers = {}, auth = true } = {}) 
 }
 
 test('ISO-2: isolated mode refuses a remote provider at the settings layer (403 isolated_mode)', async () => {
-  assert.equal((await call(appIsolated, 'POST', '/api/setup/admin', { payload: owner })).statusCode, 200);
+  const { issueSetupToken } = await import(join(backendDir, 'src/auth/setup-token.ts'));
+  assert.equal((await call(appIsolated, 'POST', '/api/setup/admin', { payload: { ...owner, setupToken: issueSetupToken() } })).statusCode, 200);
   const login = await call(appIsolated, 'POST', '/api/auth/login', { payload: { email: owner.email, password: owner.password }, auth: false });
   assert.equal(login.statusCode, 200, login.body);
   token = login.json().token ?? login.json().accessToken;

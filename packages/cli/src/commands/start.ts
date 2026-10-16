@@ -15,6 +15,7 @@ import {
   AlreadyRunningError, LOOPBACK_HOST, FRONTEND_PORT, lockFilePath, lockIsLive, readLock, realProcessOps,
   startProblem, supervise, type ProcessOps, type StartMode,
 } from '../utils/runtime.js';
+import { backendDataDir, offerSetupToken, type OfferDeps } from '../utils/setup-token.js';
 
 export interface StartOptions {
   daemon?: boolean;
@@ -30,6 +31,8 @@ export interface StartDeps {
   execArgv?: string[];
   /** How long --daemon waits for the supervisor's lock file (ms). */
   waitMs?: number;
+  /** Interactive terminal for the one-time owner setup code (INSTALLER-07). */
+  terminal?: OfferDeps['terminal'];
 }
 
 export async function startCommand(options: StartOptions = {}, deps: StartDeps = {}): Promise<number> {
@@ -53,6 +56,9 @@ export async function startCommand(options: StartOptions = {}, deps: StartDeps =
     return 1;
   }
   try { recordInstallRoot(paths.root); } catch { /* recording is a convenience only */ }
+  // INSTALLER-07: first run shows a one-time owner setup code on this
+  // terminal only. The daemon child writes to a log file, so it gets no code.
+  offerSetupToken({ dataDir: backendDataDir(paths.dataDir), log, terminal: deps.terminal });
 
   const entry = deps.entry ?? process.argv[1];
   if (options.daemon) {

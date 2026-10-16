@@ -10,6 +10,7 @@ import bcrypt from 'bcryptjs';
 import { OWNER_EXISTS_SQL, isPublishedDefaultPassword } from '../../auth/default-accounts.js';
 import { sendInternalError } from '../error-handler.js';
 import { safeErrorFields } from '../../services/safe-error-log.js';
+import { checkSetupToken, consumeSetupToken, isLoopbackPeer } from '../../auth/setup-token.js';
 
 const execAsync = promisify(exec);
 
@@ -170,28 +171,31 @@ export default async function setupRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // Create admin account
+  // Create the first owner (INSTALLER-07): only from this machine and only
+  // with the one-time setup token from `agent-player setup` / `start`.
   fastify.post<{
     Body: {
       name: string;
       email: string;
       password: string;
+      setupToken?: string;
     };
   }>('/api/setup/admin', async (request: FastifyRequest<{
     Body: {
       name: string;
       email: string;
       password: string;
+      setupToken?: string;
     };
   }>, reply: FastifyReply) => {
     try {
-      const { name, email, password } = request.body;
-
-      // Validate input
-      if (!name || !email || !password) {
-        return reply.status(400).send({
-          error: 'Missing required fields',
-          message: 'Name, email, and password are required'
+      // The socket peer, never X-Forwarded-For: a reverse proxy on this
+      // machine would still count as loopback, so the token stays required.
+      if (!isLoopbackPeer(request.raw.socket?.remoteAddress)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          code: 'setup_not_local',
+          message: 'The owner can only be created on the installation computer'
         });
       }
 
@@ -199,13 +203,36 @@ export default async function setupRoutes(fastify: FastifyInstance) {
       if (await ownerExists()) {
         return reply.status(403).send({
           error: 'Setup already completed',
+          code: 'setup_complete',
           message: 'An owner account already exists'
+        });
+      }
+
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const token = checkSetupToken(body.setupToken);
+      if (token !== 'ok') {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          code: token === 'missing' ? 'setup_token_missing' : token === 'expired' ? 'setup_token_expired' : 'setup_token_invalid',
+          message: 'A valid setup code from `agent-player setup` on this computer is required'
+        });
+      }
+
+      const { name, email, password } = body;
+
+      // Validate input
+      if (typeof name !== 'string' || typeof email !== 'string' || typeof password !== 'string' || !name.trim() || !email || !password) {
+        return reply.status(400).send({
+          error: 'Missing required fields',
+          code: 'missing_fields',
+          message: 'Name, email, and password are required'
         });
       }
 
       if (password.length < 12 || isPublishedDefaultPassword(password)) {
         return reply.status(400).send({
           error: 'Invalid password',
+          code: 'weak_password',
           message: 'Password must be at least 12 characters long (include uppercase, lowercase, number, special character)'
         });
       }
@@ -215,6 +242,7 @@ export default async function setupRoutes(fastify: FastifyInstance) {
       if (!emailRegex.test(email)) {
         return reply.status(400).send({
           error: 'Invalid email',
+          code: 'invalid_email',
           message: 'Please provide a valid email address'
         });
       }
@@ -224,6 +252,7 @@ export default async function setupRoutes(fastify: FastifyInstance) {
       if (existingUser) {
         return reply.status(409).send({
           error: 'User exists',
+          code: 'user_exists',
           message: 'An account with this email already exists'
         });
       }
@@ -255,8 +284,16 @@ export default async function setupRoutes(fastify: FastifyInstance) {
       if (!created) {
         return reply.status(403).send({
           error: 'Setup already completed',
+          code: 'setup_complete',
           message: 'An owner account already exists'
         });
+      }
+
+      // One use only: the owner exists now, so the token is gone.
+      try {
+        consumeSetupToken();
+      } catch (error) {
+        console.error('[Setup] could not remove the used setup token', safeErrorFields(error));
       }
 
       return reply.send({
