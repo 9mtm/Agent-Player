@@ -107,6 +107,7 @@ import type { FastifyInstance, FastifyServerOptions } from 'fastify';
 import { registerAuthGate } from '../auth/auth-gate.js';
 import { isPublicStaticPath } from './static-access.js';
 import { registerGlobalErrorHandler } from './error-handler.js';
+import { registerLaunchToken } from './launch-token.js';
 
 export interface BuildServerOptions {
   logger?: FastifyServerOptions['logger'];
@@ -126,6 +127,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       }
     }
   });
+
+  // INSTALLER-05: inside the desktop app every request needs the per-launch
+  // token; registered first so no other hook or route runs without it.
+  registerLaunchToken(fastify);
 
   // RUN-ISO stage 1: with AGENT_PLAYER_READONLY=1 only reads, login/logout
   // and first-run setup pass. Registered first, before every other hook and

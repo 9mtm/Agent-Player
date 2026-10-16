@@ -20,6 +20,7 @@ import { config } from '../config/index.js';
 import { dataRoot, mainDatabasePath } from '../config/data-root.js';
 import { dbDriver } from '../db/pg/config.js';
 import { ISOLATED_ENV } from '../config/isolation.js';
+import { LAUNCH_TOKEN_ENV } from './launch-token.js';
 import { assertSafeIsolatedTree } from '../config/isolated-tree.js';
 import { flushAuditWritesWithin, SHUTDOWN_AUDIT_FLUSH_MS } from '../services/audit-logger.js';
 import { getOrchestrator } from '../multi-agent/orchestrator.js';
@@ -68,8 +69,9 @@ async function start() {
 
     await fastify.listen({ port: PORT, host: HOST });
 
-    // RUN-ISO: tell the isolated launcher (IPC only, no secrets) that we listen.
-    if (process.env[ISOLATED_ENV] === '1' && typeof process.send === 'function') {
+    // RUN-ISO / INSTALLER-05: tell the isolated launcher or the desktop app
+    // (IPC only, no secrets) that we listen, with the real port (PORT=0 = random).
+    if ((process.env[ISOLATED_ENV] === '1' || process.env[LAUNCH_TOKEN_ENV]) && typeof process.send === 'function') {
       const addr = fastify.server.address();
       process.send({ type: 'listening', host: HOST, port: typeof addr === 'object' && addr ? addr.port : PORT });
     }
@@ -111,29 +113,36 @@ ${storageLines()}
 }
 
 let shuttingDown = false;
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.once(signal, async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    const deadline = setTimeout(() => process.exit(1), 20000);
-    deadline.unref();
-    try {
-      // Closing Fastify runs channel transport shutdown hooks before process exit.
-      await fastify.close();
-      // B2.2b-2: audit rows still being written (PostgreSQL inserts are not
-      // awaited by the request) get a short, bounded chance to land.
-      if (!(await flushAuditWritesWithin(SHUTDOWN_AUDIT_FLUSH_MS))) {
-        console.warn(`[Server] Some audit writes did not finish within ${SHUTDOWN_AUDIT_FLUSH_MS} ms of shutdown`);
-      }
-      // B2.2d-15: orchestrator writes queued for PostgreSQL get the same bounded chance.
-      if (!(await flushAuditWritesWithin(SHUTDOWN_AUDIT_FLUSH_MS, () => getOrchestrator().flush()))) {
-        console.warn(`[Server] Some orchestrator writes did not finish within ${SHUTDOWN_AUDIT_FLUSH_MS} ms of shutdown`);
-      }
-      process.exit(0);
-    } catch {
-      process.exit(1);
+async function shutdown(): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const deadline = setTimeout(() => process.exit(1), 20000);
+  deadline.unref();
+  try {
+    // Closing Fastify runs channel transport shutdown hooks before process exit.
+    await fastify.close();
+    // B2.2b-2: audit rows still being written (PostgreSQL inserts are not
+    // awaited by the request) get a short, bounded chance to land.
+    if (!(await flushAuditWritesWithin(SHUTDOWN_AUDIT_FLUSH_MS))) {
+      console.warn(`[Server] Some audit writes did not finish within ${SHUTDOWN_AUDIT_FLUSH_MS} ms of shutdown`);
     }
+    // B2.2d-15: orchestrator writes queued for PostgreSQL get the same bounded chance.
+    if (!(await flushAuditWritesWithin(SHUTDOWN_AUDIT_FLUSH_MS, () => getOrchestrator().flush()))) {
+      console.warn(`[Server] Some orchestrator writes did not finish within ${SHUTDOWN_AUDIT_FLUSH_MS} ms of shutdown`);
+    }
+    process.exit(0);
+  } catch {
+    process.exit(1);
+  }
+}
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { void shutdown(); });
+// INSTALLER-05: the desktop app asks over IPC (Windows has no SIGTERM for a child).
+if (process.env[LAUNCH_TOKEN_ENV] && typeof process.send === 'function') {
+  process.on('message', (message: unknown) => {
+    if (message && typeof message === 'object' && (message as { type?: unknown }).type === 'shutdown') void shutdown();
   });
+  // The app is gone (crash, force quit): do not keep running without it.
+  process.once('disconnect', () => { void shutdown(); });
 }
 
 start();

@@ -1,0 +1,40 @@
+{
+  "name": "@agent-player/desktop",
+  "productName": "Dpro",
+  "version": "1.3.0",
+  "private": true,
+  "description": "Dpro desktop app",
+  "license": "MIT",
+  "author": "Mohamed Alarade",
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.cjs",
+    "stage": "node scripts/stage-payload.cjs",
+    "dist:mac": "electron-builder --mac dmg zip --publish never",
+    "dist:dir": "electron-builder --dir --publish never",
+    "dist:win": "electron-builder --win nsis --publish never",
+    "dist:linux": "electron-builder --linux AppImage --publish never"
+  },
+  "devDependencies": {},
+  "build": {
+    "appId": "app.dpro.desktop",
+    "productName": "Dpro",
+    "directories": { "output": "release", "buildResources": "build" },
+    "files": ["src/**/*", "package.json"],
+    "extraResources": [{ "from": "payload", "to": "payload", "filter": ["**/*"] }],
+    "asar": true,
+    "npmRebuild": false,
+    "publish": null,
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "hardenedRuntime": false,
+      "extendInfo": { "NSMicrophoneUsageDescription": "Dpro uses the microphone only when you press the microphone button to dictate a message." }
+    },
+    "win": { "target": ["nsis"] },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true },
+    "linux": { "target": ["AppImage"], "category": "Development" }
+  }
+}

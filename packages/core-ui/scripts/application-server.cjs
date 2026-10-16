@@ -145,9 +145,19 @@ function project(target, status, body) {
 const passiveHeaders = new Set(['host', 'origin', 'authorization', 'accept', 'content-type', 'content-length', 'connection', 'user-agent', 'accept-encoding', 'accept-language', 'cache-control', 'pragma', 'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'cookie']);
 // Internal factory accepts only numeric loopback ports for ephemeral mock tests.
 // The executable below exposes no destination, host, port or environment overrides.
-function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly = false, upstreamPort = 42521, timeoutMs = 10000, streamTimeoutMs = CHAT_DEADLINE_MS, streamIdleMs = CHAT_IDLE_MS, runStreamMs = RUN_STREAM_MS, runIdleMs = RUN_IDLE_MS } = {}) {
+const LAUNCH_HEADER = 'X-Agent-Player-Launch';
+const launchTokenShape = /^[A-Za-z0-9_-]{43}$/;
+/**
+ * upstreamPort is a fixed port, or (desktop app) a function that returns the
+ * backend's current port, or null while the backend is not up (503).
+ * launchToken (desktop app) is the per-launch secret the backend requires on
+ * every request; it is added here and never reaches the page.
+ */
+function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly = false, upstreamPort = 42521, launchToken = null, timeoutMs = 10000, streamTimeoutMs = CHAT_DEADLINE_MS, streamIdleMs = CHAT_IDLE_MS, runStreamMs = RUN_STREAM_MS, runIdleMs = RUN_IDLE_MS } = {}) {
   if (typeof stage1ReadOnly !== 'boolean') throw Error('Invalid stage1 configuration');
-  if (!['candidate', 'current'].includes(channel) || !Number.isInteger(upstreamPort) || upstreamPort < 1 || upstreamPort > 65535 || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10000) throw Error('Invalid launch configuration');
+  const validPort = x => Number.isInteger(x) && x >= 1 && x <= 65535;
+  if (launchToken !== null && !(typeof launchToken === 'string' && launchTokenShape.test(launchToken))) throw Error('Invalid launch configuration');
+  if (!['candidate', 'current'].includes(channel) || !(typeof upstreamPort === 'function' || validPort(upstreamPort)) || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10000) throw Error('Invalid launch configuration');
   if (!Number.isInteger(streamTimeoutMs) || streamTimeoutMs < 1 || streamTimeoutMs > CHAT_DEADLINE_MS || !Number.isInteger(streamIdleMs) || streamIdleMs < 1 || streamIdleMs > CHAT_IDLE_MS) throw Error('Invalid stream limits');
   if (!Number.isInteger(runStreamMs) || runStreamMs < 1 || runStreamMs > RUN_STREAM_MS || !Number.isInteger(runIdleMs) || runIdleMs < 1 || runIdleMs > RUN_IDLE_MS) throw Error('Invalid run stream limits');
   const assets = readCurrent(packageRoot, channel); // Pin validated bytes for this server lifetime.
@@ -211,7 +221,9 @@ function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly =
       if (!allowed(req.method, raw, body)) return send(400);
       if (res.destroyed || res.writableEnded) return;
       const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
-      const headers = { Host: `${HOST}:${upstreamPort}`, Accept: chat || runEvents || termStream ? 'text/event-stream' : 'application/json', ...(chat ? { 'Idempotency-Key': req.headers['idempotency-key'] } : {}), ...(auth ? { Authorization: auth } : {}), ...(req.headers.origin ? { Origin: origin } : {}), ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {}) };
+      const port = typeof upstreamPort === 'function' ? upstreamPort() : upstreamPort;
+      if (!validPort(port)) return send(503);
+      const headers = { ...(launchToken ? { [LAUNCH_HEADER]: launchToken } : {}), Host: `${HOST}:${port}`, Accept: chat || runEvents || termStream ? 'text/event-stream' : 'application/json', ...(chat ? { 'Idempotency-Key': req.headers['idempotency-key'] } : {}), ...(auth ? { Authorization: auth } : {}), ...(req.headers.origin ? { Origin: origin } : {}), ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {}) };
       // Request-body intake keeps its ordinary bound. Chat header wait and body
       // share one absolute stream deadline, including upstream model startup.
       if (chat) {
@@ -221,7 +233,7 @@ function createApplicationServer({ packageRoot = root, channel, stage1ReadOnly =
       // A run reader ends cleanly after RUN_STREAM_MS; the page re-attaches with after=<seq>.
       if (runEvents || termStream) clearTimeout(timer);
       if (audio) { clearTimeout(timer); timer = setTimeout(() => { send(504); upstream?.destroy(); }, AUDIO_TIMEOUT_MS); }
-      upstream = http.request({ hostname: HOST, port: upstreamPort, path: raw, method: req.method, headers, agent: false, maxHeaderSize: 16384 }, response => {
+      upstream = http.request({ hostname: HOST, port, path: raw, method: req.method, headers, agent: false, maxHeaderSize: 16384 }, response => {
         const fail = () => { response.destroy(); send(502); };
         const status = response.statusCode;
         if ((runEvents || termStream) && status === 200) {
@@ -338,4 +350,4 @@ if (require.main === module) {
     for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { server.close(); server.closeAllConnections(); });
   }).catch(error => { console.error(error.code === 'EADDRINUSE' ? 'Port 42522 occupied; no fallback or termination attempted.' : 'Application server unavailable.'); process.exitCode = 1; });
 }
-module.exports = { createApplicationServer, startApplication, allowed, stage1Route, parseLaunchArgs, LIMIT, RESPONSE_LIMIT };
+module.exports = { createApplicationServer, startApplication, allowed, stage1Route, parseLaunchArgs, LIMIT, RESPONSE_LIMIT, LAUNCH_HEADER };
