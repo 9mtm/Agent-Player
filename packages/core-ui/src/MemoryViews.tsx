@@ -28,8 +28,8 @@ function Importance({ value }: { value: number }) {
 }
 
 /** One memory, read-only or with actions. */
-export function MemoryCard({ item, actions, children }: { item: MemoryItem; actions?: ReactNode; children?: ReactNode }) {
-  return <article className="memory-card" data-type={item.type}>
+export function MemoryCard({ item, actions, children, focused }: { item: MemoryItem; actions?: ReactNode; children?: ReactNode; focused?: boolean }) {
+  return <article className="memory-card" data-type={item.type} id={`memory-${item.id}`} data-focus={focused || undefined}>
     <header className="memory-card-head">
       <span className="chip">{TYPE_LABEL[item.type] ?? item.type}</span>
       <Importance value={item.importance}/>
@@ -48,12 +48,18 @@ export function MemoryCard({ item, actions, children }: { item: MemoryItem; acti
  * add, edit, history and forget. The second tab keeps each agent's memory
  * file and the changes waiting for your review.
  */
-export function MemoryPage({ client, active = false }: { client: SessionClient; active?: boolean }) {
+export function MemoryPage({ client, active = false, focus }: { client: SessionClient; active?: boolean; focus?: MemoryFocus | null }) {
   const [tab, setTab] = useState<'items' | 'files' | 'import'>('items');
   const owner = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot).user?.role === 'owner';
   const [c, setC] = useState<MemoryItemsController>();
   useEffect(() => { const x = new MemoryItemsController(client); setC(x); return () => x.dispose(); }, [client]);
   useEffect(() => { if (active && c && c.getSnapshot().phase === 'idle') void c.load(); }, [active, c]);
+  // CHAT-PRO-02 E: "Open in Memory" from a chat opens the memory's drawer and marks it.
+  useEffect(() => {
+    if (!focus || !c) return;
+    setTab('items');
+    void (async () => { if (c.getSnapshot().phase !== 'ready') await c.load(); c.setQuery(''); c.openDrawer(focus.drawerId); })();
+  }, [focus?.n, c]);
   return <section className="memory-page" aria-label="Memory">
     <header className="memory-page-head">
       <div><h2>Memory</h2><p className="fine-print">What your agents remember, sorted into drawers. You own every memory; each agent reads only the drawers its permissions open.</p></div>
@@ -63,12 +69,16 @@ export function MemoryPage({ client, active = false }: { client: SessionClient; 
         {owner && <button type="button" role="tab" aria-selected={tab === 'import'} onClick={() => setTab('import')}>Import from other agents</button>}
       </div>
     </header>
-    {tab === 'items' ? (c ? <ItemsView c={c}/> : null) : tab === 'import' ? <LocalImport client={client} active={active} onReview={() => setTab('files')}/> : <MemoryPanel client={client} active={active && tab === 'files'}/>}
+    {tab === 'items' ? (c ? <ItemsView c={c} focused={focus?.memoryId}/> : null) : tab === 'import' ? <LocalImport client={client} active={active} onReview={() => setTab('files')}/> : <MemoryPanel client={client} active={active && tab === 'files'}/>}
   </section>;
 }
 
-function ItemsView({ c }: { c: MemoryItemsController }) {
+/** A memory to show when the page opens from elsewhere (n changes on every request). */
+export type MemoryFocus = { drawerId: string; memoryId: string; n: number };
+
+function ItemsView({ c, focused }: { c: MemoryItemsController; focused?: string }) {
   const s = useSyncExternalStore(c.subscribe, c.getSnapshot, c.getSnapshot);
+  useEffect(() => { if (focused && s.phase === 'ready') document.getElementById(`memory-${focused}`)?.scrollIntoView?.({ block: 'center' }); }, [focused, s.phase, s.open]);
   const [confirm, setConfirm] = useState<string | null>(null);
   if (s.phase === 'error') return <p className="empty-note">{s.notice} <button type="button" className="link-button" onClick={() => void c.load()}>Try again</button></p>;
   if (s.phase !== 'ready') return <p className="empty-note" role="status">Loading memory…</p>;
@@ -121,7 +131,7 @@ function ItemsView({ c }: { c: MemoryItemsController }) {
             <button type="button" className="ghost" onClick={() => c.cancelEdit()}>Cancel</button>
           </div>
         </MemoryCard>
-        : <MemoryCard key={m.id} item={m} actions={confirm === m.id
+        : <MemoryCard key={m.id} item={m} focused={m.id === focused} actions={confirm === m.id
           ? <span className="confirm-inline">Forget for good?<button type="button" className="link-button danger" onClick={() => { setConfirm(null); void c.forget(m.id); }}>Forget</button><button type="button" className="link-button" onClick={() => setConfirm(null)}>Keep</button></span>
           : <>
             <button type="button" className="ghost-action" onClick={() => c.startEdit(m.id)}>Edit</button>

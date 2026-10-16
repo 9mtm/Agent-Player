@@ -10,10 +10,11 @@ import { conversationRoute } from './conversation-contract.js';
 import { chatBoardRoute } from './chat-board-contract.js';
 import { allowedRequest } from './session';
 import { createMemoryMock } from './memory-mock';
+import { createChatMemoryMock } from './chat-memory-mock';
 import type { WireTransport } from './session';
 
 /** Explicit offline exercise only. Never wrap this around a failed live transport. */
-export function createLoginMock(agents = createAgentsMock(), setup: 'existing-owner' | 'first-run' | 'error' = 'existing-owner'): WireTransport {
+export function createLoginMock(agents = createAgentsMock(), setup: 'existing-owner' | 'first-run' | 'error' = 'existing-owner', chatMemory = createChatMemoryMock()): WireTransport {
   const memory = createMemoryMock();
   const personality = createPersonalityMock();
   const board = createBoardMock();
@@ -45,6 +46,7 @@ export function createLoginMock(agents = createAgentsMock(), setup: 'existing-ow
     if (request.path === '/api/auth/logout') { active = ''; return { status: 200, body: { success: true } }; }
     if (personalityRoute(request.path)) return personality.transport(request);
     if (request.path === '/api/boards' || request.path.startsWith('/api/boards/') || chatBoardRoute(request.path)) return board(request);
+    if (chatMemory.handles(request.path)) return chatMemory.transport(request);
     if (conversationRoute(request.path)) return conversations(request);
     if (cardRoute(request.path)) return card(request);
     if (request.path === '/api/agents' || request.path.startsWith('/api/agents/') || request.path.startsWith('/api/onboarding/team-')) return agents.transport(request);

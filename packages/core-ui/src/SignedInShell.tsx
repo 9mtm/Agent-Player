@@ -9,6 +9,7 @@ import { BoardController } from './board';
 import { TaskBoard } from './TaskBoard';
 import { AccountPanel } from './SessionPanels';
 import { MemoryPage } from './MemoryViews';
+import type { MemoryFocus } from './MemoryViews';
 import { Icon } from './icons';
 import type { IconName } from './icons';
 import { UiIcon } from './ui-icons';
@@ -48,6 +49,7 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
   const [rail, setRail] = useState(true);
   const [palette, setPalette] = useState(false);
   const [connectorsFocus, setConnectorsFocus] = useState(0);
+  const [memoryFocus, setMemoryFocus] = useState<MemoryFocus | null>(null);
   const boardState = useSyncExternalStore(board ? board.subscribe : noopSubscribe, board ? board.getSnapshot : nullSnapshot, board ? board.getSnapshot : nullSnapshot);
   // ⌘K / Ctrl+K opens the command box anywhere in the workspace.
   useEffect(() => {
@@ -103,11 +105,12 @@ export function SignedInShell({ client, notice }: { client: SessionClient; notic
       {notice && <p className="page-notice" role="status">{notice}</p>}
       <section className="page page-chat" aria-label="Chat" hidden={page !== 'chat'}>
         {chat ? <ChatView controller={chat} mode={mode} client={client} onAddConnector={() => { setConnectorsFocus(n => n + 1); setPage('agents'); }}
-          onOpenCard={(boardId, cardId) => { setPage('board'); void board?.reveal(boardId, cardId); }}/> : null}
+          onOpenCard={(boardId, cardId) => { setPage('board'); void board?.reveal(boardId, cardId); }}
+          onOpenMemory={(drawerId, memoryId) => { setMemoryFocus(f => ({ drawerId, memoryId, n: (f?.n ?? 0) + 1 })); setPage('memory'); }}/> : null}
       </section>
       <section className="page page-scroll" hidden={page !== 'agents'}><div className="page-column"><AgentsDestination key={`agents-${connectorsFocus}`} client={client} active={page === 'agents'} focusConnectors={connectorsFocus > 0} onOpenMemory={() => setPage('memory')}/></div></section>
       <section className="page page-scroll page-board page-ui" hidden={page !== 'board'}>{board && <TaskBoard controller={board} active={page === 'board'} onOpenChat={id => { void chat?.open(id); setPage('chat'); }}/>}</section>
-      <section className="page page-scroll page-wide page-ui" hidden={page !== 'memory'}><MemoryPage client={client} active={page === 'memory'}/></section>
+      <section className="page page-scroll page-wide page-ui" hidden={page !== 'memory'}><MemoryPage client={client} active={page === 'memory'} focus={memoryFocus}/></section>
       <section className="page page-scroll" hidden={page !== 'account'}><div className="page-column"><AccountPanel client={client}/></div></section>
     </main>
     <footer className="statusbar">

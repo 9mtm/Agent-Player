@@ -80,15 +80,20 @@ async function rememberDrawer(userId: string, projectId: string | null, choice: 
 }
 
 /**
- * "Remember this" on a chat message (owner). Body: { messageId, content,
+ * "Remember this" on a chat message (owner). Body: { messageId | runId, content,
  * drawer: 'project' | 'owner' | 'experience', type?, importance? }.
  */
 export async function rememberFromChat(actor: Actor, userId: string, conversationId: string, body: Record<string, unknown>): Promise<{ memory: ChatMemory; redacted: number; duplicate: boolean }> {
   const c = await ownConversation(userId, conversationId);
-  const keys = ['messageId', 'content', 'drawer', 'type', 'importance'];
+  const keys = ['messageId', 'runId', 'content', 'drawer', 'type', 'importance'];
   if (Object.keys(body).some((k) => !keys.includes(k))) throw bad('Unknown field');
-  if (typeof body.messageId !== 'string' || !body.messageId) throw bad('messageId is required');
-  const message = await q.one<{ id: string }>('SELECT id FROM chat_messages WHERE id = ? AND session_id = ?', body.messageId, c.id);
+  // The message by its id, or a reply by its run (a reply that just finished in the page has no id there yet).
+  const hasId = typeof body.messageId === 'string' && body.messageId.length > 0;
+  const hasRun = typeof body.runId === 'string' && body.runId.length > 0;
+  if (hasId === hasRun) throw bad('messageId or runId is required');
+  const message = hasId
+    ? await q.one<{ id: string }>('SELECT id FROM chat_messages WHERE id = ? AND session_id = ?', body.messageId, c.id)
+    : await q.one<{ id: string }>("SELECT id FROM chat_messages WHERE run_id = ? AND session_id = ? AND role = 'assistant'", body.runId as string, c.id);
   if (!message) throw bad('That message is not in this conversation');
   if (typeof body.content !== 'string' || !body.content.trim()) throw bad('content is required');
   if ([...body.content].length > MAX_REMEMBER) throw bad(`content must be at most ${MAX_REMEMBER} characters`);

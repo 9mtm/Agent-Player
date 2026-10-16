@@ -17,6 +17,9 @@ import type { CardSuggestion, PlanStep } from './turns';
 import { ChatCardsController, activityLine, cardDraftFrom } from './chat-board';
 import type { ChatCard, ChatProgress } from './chat-board';
 import type { Priority } from './board';
+import { ChatMemoryController, messageRef, proposalsByRun, rememberDraft, MAX_REMEMBER } from './chat-memory';
+import type { ChatMemory, RememberDrawer, RememberType } from './chat-memory';
+import { drawerLabel } from './MemoryViews';
 import type { Part, ToolCall, ToolKind, Turn } from './turns';
 
 /** Pixels from the bottom within which the thread keeps following new text. */
@@ -39,7 +42,7 @@ const SUGGESTIONS = [
  * finished turn folds its work into "Worked for …". Behaviour lives in
  * ConversationsController; this file is layout and local view state only.
  */
-export function ChatView({ controller, mode, productName = 'Dpro', client, onAddConnector, onOpenCard }: { controller: ConversationsController; mode: 'live' | 'mock'; productName?: string; client?: SessionClient; onAddConnector?: () => void; onOpenCard?: (boardId: string, cardId: string) => void }) {
+export function ChatView({ controller, mode, productName = 'Dpro', client, onAddConnector, onOpenCard, onOpenMemory }: { controller: ConversationsController; mode: 'live' | 'mock'; productName?: string; client?: SessionClient; onAddConnector?: () => void; onOpenCard?: (boardId: string, cardId: string) => void; onOpenMemory?: (drawerId: string, memoryId: string) => void }) {
   const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const thread = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -133,7 +136,16 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
   useEffect(() => { cardsCtl?.setConversation(s.activeId); }, [cardsCtl, s.activeId]);
   // A reply that ends may have moved the work on; read the cards again.
   const wasRunning = useRef(false);
-  useEffect(() => { if (wasRunning.current && !running) void cardsCtl?.refresh(); wasRunning.current = running; }, [running, cardsCtl]);
+  // CHAT-PRO-02 E: memories from this conversation ("Remember this", agent proposals).
+  const [memCtl, setMemCtl] = useState<ChatMemoryController | null>(null);
+  useEffect(() => { if (!client) return; const m = new ChatMemoryController(client); setMemCtl(m); return () => m.dispose(); }, [client]);
+  useEffect(() => { memCtl?.setConversation(s.activeId); setRemember(null); }, [memCtl, s.activeId]);
+  const mem = useSyncExternalStore(memCtl ? memCtl.subscribe : noopSubscribe, memCtl ? memCtl.getSnapshot : nullSnapshot, memCtl ? memCtl.getSnapshot : nullSnapshot);
+  const [remember, setRemember] = useState<RememberSeed | null>(null);
+  const canRemember = owner && !!memCtl && !!s.activeId;
+  const openRemember = (t: Turn, text: string) => { const ref = messageRef(t); if (ref) setRemember({ ref, text: rememberDraft(text), key: Date.now() }); };
+  const byRun = proposalsByRun(mem?.memories ?? [], s.turns);
+  useEffect(() => { if (wasRunning.current && !running) { void cardsCtl?.refresh(); void memCtl?.refresh(); } wasRunning.current = running; }, [running, cardsCtl, memCtl]);
   const [cardForm, setCardForm] = useState<CardFormSeed | null>(null);
   const openCardForm = (seed?: CardSuggestion) => {
     const draft = cardDraftFrom(s.turns, activeConv?.title ?? null);
@@ -168,9 +180,10 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
           <button key={t} type="button" className="chat-suggestion" onClick={() => void controller.send(t)}>{t}</button>)}</div>
       </div> : <div className="chat-column" role="log" aria-live="polite" aria-relevant="additions">
         {s.turns.map((t, i) => t.role === 'user'
-          ? <UserMessage key={t.key} turn={t}/>
+          ? <UserMessage key={t.key} turn={t} onRemember={canRemember && messageRef(t) ? () => openRemember(t, t.content) : undefined}/>
           : <AssistantTurn key={t.key} turn={t} writer={teamChat ? nameOf(t.agentId ?? convAgentId) : undefined} last={i === s.turns.length - 1} onRetry={lastUser ? () => void controller.send(lastUser.content) : undefined}
-            onSuggest={owner && cardsCtl && s.activeId ? openCardForm : undefined}/>)}
+            onSuggest={owner && cardsCtl && s.activeId ? openCardForm : undefined} onRemember={canRemember && messageRef(t) ? text => openRemember(t, text) : undefined}
+            proposals={t.runId && memCtl ? <MemoryProposals controller={memCtl} items={byRun.get(t.runId) ?? []}/> : null}/>)}
         {cardsCtl && <ChatCards controller={cardsCtl} nameOf={id => s.agents.find(a => a.id === id)?.name ?? 'Former agent'} onOpen={onOpenCard}/>}
         {s.starting && !s.turns.some(t => t.status === 'running') && <WorkingRow since={Date.now()} label="Starting"/>}
       </div>}
@@ -178,6 +191,8 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
     {below && !empty && <button type="button" className="chat-jump" onClick={jump} aria-label="Jump to the latest message"><UiIcon name="arrow-down" size={15}/></button>}
     <div className="chat-dock">
       {s.notice && <p className="chat-notice" role="status">{s.notice}</p>}
+      {mem?.notice && !remember && <p className="chat-notice" role="status">{mem.notice} <button type="button" className="link-button" onClick={() => memCtl?.clearNotice()}>OK</button></p>}
+      {remember && memCtl && <RememberForm key={remember.key} controller={memCtl} seed={remember} project={project?.name ?? null} agent={convAgentName} onClose={() => setRemember(null)}/>}
       {cardForm && cardsCtl && <ChatCardForm key={cardForm.key} controller={cardsCtl} seed={cardForm} agents={s.agents} onClose={() => setCardForm(null)}/>}
       {s.reconnecting && <p className="chat-notice" role="status">Reconnecting to the reply…</p>}
       {s.queuePaused && s.queue.length > 0 && <p className="chat-notice" role="status">Stopped. The waiting {s.queue.length === 1 ? 'message stays' : 'messages stay'} here until you send {s.queue.length === 1 ? 'it' : 'them'}.</p>}
@@ -236,7 +251,7 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
       </form>
     </div>
   </div>
-  {pane === 'details' && <ChatSidePanel controller={controller} client={client} onAddConnector={onAddConnector}/>}
+  {pane === 'details' && <ChatSidePanel controller={controller} client={client} onAddConnector={onAddConnector} memory={memCtl} onOpenMemory={onOpenMemory}/>}
   {panes && (pane === 'changes' || pane === 'files') && <aside className="chat-panel chat-pane" aria-label={pane === 'changes' ? 'Changes' : 'Files'}>
     {pane === 'changes' ? <ChangesPane panes={panes}/> : <FilesPane panes={panes}/>}
   </aside>}
@@ -245,7 +260,7 @@ export function ChatView({ controller, mode, productName = 'Dpro', client, onAdd
 }
 
 /** Details of the open conversation: where it works, how big it is, what it produced. */
-function ChatSidePanel({ controller, client, onAddConnector }: { controller: ConversationsController; client?: SessionClient; onAddConnector?: () => void }) {
+function ChatSidePanel({ controller, client, onAddConnector, memory, onOpenMemory }: { controller: ConversationsController; client?: SessionClient; onAddConnector?: () => void; memory?: ChatMemoryController | null; onOpenMemory?: (drawerId: string, memoryId: string) => void }) {
   const s = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const project = controller.activeProject();
   const conv = s.conversations.find(c => c.id === s.activeId);
@@ -288,6 +303,7 @@ function ChatSidePanel({ controller, client, onAddConnector }: { controller: Con
           : <p className="muted">No uncommitted changes.</p>)
         : <p className="muted">Not a git folder.</p>}
     </section>}
+    {memory && s.activeId && <ChatMemoryCard controller={memory} onOpen={onOpenMemory}/>}
     {project?.folder && s.git?.branch && <GitHubCard git={s.git} onRefresh={() => void controller.refreshGit()}/>}
     {client && <AgentPanel client={client} onAddConnector={onAddConnector} agentId={conv?.agentId || s.agentId || s.agents[0]?.id || ''}/>}
   </aside>;
@@ -352,7 +368,7 @@ function ProjectBar({ name, folder, repoUrl, git }: { name: string; folder: stri
 }
 
 /** The user's message: right-aligned, pinned while its answer scrolls; long text folds. */
-function UserMessage({ turn }: { turn: Turn }) {
+function UserMessage({ turn, onRemember }: { turn: Turn; onRemember?: () => void }) {
   const [open, setOpen] = useState(false);
   // The pinned bubble stays short (3 lines) so the answer under it stays readable.
   const long = turn.content.length > 220 || turn.content.split('\n').length > 3;
@@ -361,12 +377,15 @@ function UserMessage({ turn }: { turn: Turn }) {
       <p className="sr-only">You</p>
       <div className="turn-text" dir="auto">{turn.content}</div>
     </div>
-    {long && <button type="button" className="chat-more" onClick={() => setOpen(v => !v)}>{open ? 'Show less' : 'Show all'}</button>}
+    <div className="user-actions">
+      {long && <button type="button" className="chat-more" onClick={() => setOpen(v => !v)}>{open ? 'Show less' : 'Show all'}</button>}
+      {onRemember && <RememberButton onClick={onRemember}/>}
+    </div>
   </div>;
 }
 
 /** One assistant turn: live parts in order while running; work folded once finished. */
-function AssistantTurn({ turn, last, onRetry, writer, onSuggest }: { turn: Turn; last: boolean; onRetry?: () => void; writer?: string; onSuggest?: (s: CardSuggestion) => void }) {
+function AssistantTurn({ turn, last, onRetry, writer, onSuggest, onRemember, proposals }: { turn: Turn; last: boolean; onRetry?: () => void; writer?: string; onSuggest?: (s: CardSuggestion) => void; onRemember?: (text: string) => void; proposals?: ReactNode }) {
   const live = turn.status === 'running';
   const plan = turnPlan(turn.parts);
   const suggestions = turnSuggestions(turn.parts);
@@ -392,7 +411,8 @@ function AssistantTurn({ turn, last, onRetry, writer, onSuggest }: { turn: Turn;
           {last && onRetry && <button type="button" className="chat-error-action" onClick={onRetry}><UiIcon name="refresh" size={12}/>Try again</button>}
         </div>}
         {suggestions.map((g, i) => <CardSuggestionView key={i} suggestion={g} onCreate={onSuggest}/>)}
-        <TurnFooter text={answerText || turn.content} ms={turn.durationMs} stopped={turn.status === 'stopped'}/>
+        {proposals}
+        <TurnFooter text={answerText || turn.content} ms={turn.durationMs} stopped={turn.status === 'stopped'} onRemember={onRemember}/>
       </>}
   </article>;
 }
@@ -615,13 +635,100 @@ function Elapsed({ since }: { since: number }) {
   return <span className="elapsed">{s >= 1 ? duration(s * 1000) : ''}</span>;
 }
 
-function TurnFooter({ text, ms, stopped }: { text: string; ms: number | null; stopped: boolean }) {
+function TurnFooter({ text, ms, stopped, onRemember }: { text: string; ms: number | null; stopped: boolean; onRemember?: (text: string) => void }) {
   return <div className="turn-actions">
     {stopped && <span className="turn-chip">Stopped</span>}
     {ms !== null && <span className="turn-time" title={`This reply took ${duration(ms)}`}>{duration(ms)}</span>}
     {text && <Copy text={text} label="Copy reply"/>}
+    {text && onRemember && <RememberButton onClick={() => onRemember(text)}/>}
   </div>;
 }
+
+function RememberButton({ onClick }: { onClick: () => void }) {
+  return <button type="button" className="ghost-action" aria-label="Remember this" title="Remember this (save it to memory)" onClick={onClick}><UiIcon name="brain" size={13}/></button>;
+}
+
+type RememberSeed = { ref: { messageId: string } | { runId: string }; text: string; key: number };
+const TYPE_CHOICES: { value: RememberType; label: string }[] = [
+  { value: 'fact', label: 'Fact' }, { value: 'preference', label: 'Preference' }, { value: 'context', label: 'Context' }, { value: 'insight', label: 'Insight' },
+  { value: 'event', label: 'Event' }, { value: 'task', label: 'Task' }, { value: 'skill', label: 'Skill' }, { value: 'relationship', label: 'Relationship' },
+];
+
+/** "Remember this": the message text (editable) and the drawer it goes to. */
+export function RememberForm({ controller, seed, project, agent, onClose }: { controller: ChatMemoryController; seed: RememberSeed; project: string | null; agent: string; onClose: () => void }) {
+  const st = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const [text, setText] = useState(seed.text);
+  const [drawer, setDrawer] = useState<RememberDrawer>(project ? 'project' : 'owner');
+  const [type, setType] = useState<RememberType>('fact');
+  const [importance, setImportance] = useState(7);
+  const left = MAX_REMEMBER - [...text].length;
+  const save = async () => { if (await controller.remember({ ...seed.ref, content: text, drawer, type, importance })) onClose(); };
+  return <form className="chat-card-form remember-form" aria-label="Remember this" onSubmit={e => { e.preventDefault(); void save(); }}>
+    <div className="chat-card-form-head"><UiIcon name="brain" size={13}/><strong>Remember this</strong>
+      <button type="button" className="row-tool" aria-label="Close" onClick={onClose}><UiIcon name="close" size={11}/></button></div>
+    <label className="field"><span>What to remember <small className="muted">(edit it to keep only what matters)</small></span>
+      <textarea rows={Math.min(8, Math.max(3, text.split('\n').length + 1))} value={text} dir="auto" onChange={e => setText(e.target.value)} autoFocus/></label>
+    <div className="chat-card-form-row">
+      <label className="field"><span>Drawer</span>
+        <select value={drawer} onChange={e => setDrawer(e.target.value as RememberDrawer)}>
+          {project && <option value="project">Project: {project}</option>}
+          <option value="owner">About you</option>
+          <option value="experience">{agent}'s lessons</option>
+        </select></label>
+      <label className="field"><span>Type</span>
+        <select value={type} onChange={e => setType(e.target.value as RememberType)}>{TYPE_CHOICES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}</select></label>
+      <label className="field"><span>Importance {importance}</span><input type="range" min={1} max={10} value={importance} onChange={e => setImportance(Number(e.target.value))}/></label>
+    </div>
+    {st.notice && <p className="card-notice" role="alert">{st.notice}</p>}
+    <div className="remember-actions">
+      <span className={left < 0 ? 'attach-error' : 'muted'}>{left < 0 ? `${-left} characters too long` : `${left} characters left`} · secrets are left out</span>
+      <button type="submit" className="primary" disabled={st.saving || !text.trim() || left < 0}>{st.saving ? 'Saving…' : 'Save to memory'}</button>
+      <button type="button" className="ghost" onClick={onClose}>Cancel</button>
+    </div>
+  </form>;
+}
+
+const STATUS_LABEL: Record<ChatMemory['status'], string> = { saved: 'Saved', removed: 'Removed from memory', pending: 'Waiting for you', rejected: 'Not saved', stale: 'Out of date', cancelled: 'Withdrawn' };
+
+/** An agent's memory proposals under its reply: Accept or Reject (never saved by itself). */
+export function MemoryProposals({ controller, items }: { controller: ChatMemoryController; items: readonly ChatMemory[] }) {
+  const st = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  if (!items.length) return null;
+  return <>{items.map(m => {
+    const live = st.memories.find(x => x.id === m.id) ?? m;
+    const review = live.proposalId ? st.reviews[live.proposalId] : undefined;
+    return <section key={m.id} className="memory-proposal" data-status={live.status} aria-label="Memory suggested by the agent">
+      <UiIcon name="brain" size={13}/>
+      <span className="card-suggestion-text"><span className="card-suggestion-label">Remember this? · {drawerLabel(drawerRef(review?.drawerId ?? live.drawerId))}</span>
+        <span className="memory-proposal-text" dir="auto">{review?.text ?? live.text}</span></span>
+      {live.status === 'pending'
+        ? <span className="memory-proposal-actions">
+          <button type="button" className="ghost-action strong" disabled={!!st.deciding || !review} onClick={() => void controller.decide(live, 'approve')}>{st.deciding === live.proposalId ? '…' : 'Accept'}</button>
+          <button type="button" className="ghost-action" disabled={!!st.deciding || !review} onClick={() => void controller.decide(live, 'reject')}>Reject</button></span>
+        : <small className="turn-chip">{STATUS_LABEL[live.status]}</small>}
+    </section>;
+  })}</>;
+}
+
+/** The side panel list: what this conversation put into memory, each opening on the Memory page. */
+export function ChatMemoryCard({ controller, onOpen }: { controller: ChatMemoryController; onOpen?: (drawerId: string, memoryId: string) => void }) {
+  const st = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  if (!st.owner) return null;
+  const items = [...st.memories].reverse();
+  return <section className="panel-card" aria-label="Memory from this chat">
+    <h3>Memory from this chat</h3>
+    {items.length === 0 ? <p className="muted">Use the brain button on a message to remember it. Memories the agent suggests wait here for you.</p>
+      : <ul className="panel-memories">{items.slice(0, 30).map(m => <li key={m.id} data-status={m.status}>
+        <span className="panel-memory-text" dir="auto" title={m.text}>{m.text}</span>
+        <span className="panel-memory-meta">{drawerLabel(drawerRef(m.drawerId))} · {m.kind === 'proposed' ? 'suggested by the agent' : 'remembered'} · {STATUS_LABEL[m.status]}
+          {m.status === 'saved' && m.memoryId && onOpen && <> · <button type="button" className="link-button" onClick={() => onOpen(m.drawerId, m.memoryId!)}>Open in Memory</button></>}</span>
+      </li>)}</ul>}
+  </section>;
+}
+
+const drawerRef = (id: string) => { const i = id.indexOf(':'); return (i < 0 ? { kind: id } : { kind: id.slice(0, i), key: id.slice(i + 1) }) as { kind: 'owner' }; };
+const noopSubscribe = () => () => {};
+const nullSnapshot = () => undefined;
 
 function Copy({ text, label }: { text: string; label: string }): ReactNode {
   const [state, setState] = useState<'idle' | 'done' | 'failed'>('idle');

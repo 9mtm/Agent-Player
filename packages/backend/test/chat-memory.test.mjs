@@ -98,6 +98,11 @@ test('"Remember this" saves an edited message into the chosen drawer, secrets re
   assert.equal(again.duplicate, true);
   assert.equal(again.memory.id, out.memory.id);
   assert.equal(memories().length, 1);
+  // A reply can also be named by its run (the page knows a fresh reply only by its run).
+  const byRun = (await call('cm-owner', 'POST', url, { runId: 'run-cm-0001', content: 'Releases go out on Fridays.', drawer: 'owner' })).json();
+  assert.equal(byRun.memory.messageId, reply.id);
+  db.prepare('DELETE FROM chat_memory_links WHERE id = ?').run(byRun.memory.id);
+  db.prepare('DELETE FROM memories WHERE id = ?').run(byRun.memory.memoryId);
   const list = (await call('cm-owner', 'GET', url)).json().memories;
   assert.equal(list.length, 1);
 });
@@ -107,7 +112,7 @@ test('the project drawer only for a project conversation; bad requests are refus
   for (const [body, why] of [
     [{ drawer: 'project' }, 'no project'], [{ drawer: 'people' }, 'drawer not offered'], [{ content: '' }, 'empty'], [{ content: 'x'.repeat(4001) }, 'too long'],
     [{ messageId: 'nope' }, 'unknown message'], [{ type: 'secret' }, 'bad type'], [{ importance: 11 }, 'bad importance'], [{ userId: 'cm-user' }, 'extra field'],
-    [{ content: 'ghp_abcdefghijklmnopqrstuvwxyz0123456789' }, 'only a secret'],
+    [{ content: 'ghp_abcdefghijklmnopqrstuvwxyz0123456789' }, 'only a secret'], [{ runId: 'run-cm-0001' }, 'both ids'], [{ messageId: undefined }, 'no id'],
   ]) assert.equal((await owner(body)).statusCode, 400, why);
   assert.equal((await call('cm-owner', 'GET', '/api/chat/conversations/no-such-conversation/memories')).statusCode, 404);
   const other = (await call('cm-user', 'POST', '/api/chat/conversations', {})).json().conversation;
