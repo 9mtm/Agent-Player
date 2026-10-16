@@ -329,9 +329,8 @@ function walkStrings<T>(value: T, fn: (s: string) => string, depth = 0): T {
   if (typeof value === 'string') return fn(value) as unknown as T;
   if (depth > 20 || value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) return value.map((v) => walkStrings(v, fn, depth + 1)) as unknown as T;
-  // Plain objects only: class instances (Buffer, Date, …) are kept as they are.
-  const proto = Object.getPrototypeOf(value);
-  if (proto !== Object.prototype && proto !== null) return value;
+  // Binary and opaque values (Buffer, typed arrays, Date, RegExp) are kept as they are; any other object is walked.
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer || value instanceof Date || value instanceof RegExp) return value;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = walkStrings(v, fn, depth + 1);
   return out as T;

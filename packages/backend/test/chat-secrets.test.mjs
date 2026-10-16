@@ -313,6 +313,12 @@ test('outside an owner chat (no conversation, channel turn) a secret in a tool o
   assert.equal(channel.content[0].text, 'key=[REDACTED:openai_key]');
   const foreign = await vaultToolResult({ userId: 's-other', sessionId: c.id }, { content: [{ type: 'text', text: `key=${fakeKey}` }] });
   assert.equal(foreign.content[0].text, 'key=[REDACTED:openai_key]', "never stored in someone else's conversation");
+  class Extra { constructor() { this.note = `key=${fakeKey}`; } }
+  const inClass = await vaultToolResult({ userId: 's-owner' }, { content: [{ type: 'text', text: 'ok' }], details: { extra: new Extra(), bytes: Buffer.from('abc') } });
+  assert.ok(!JSON.stringify(inClass).includes(fakeKey), 'a secret inside a class instance is found too');
+  assert.ok(Buffer.isBuffer(inClass.details.bytes), 'binary data is kept as is');
+  const { scrubSecretValues } = await import(join(backendDir, 'src/services/chat-secrets.ts'));
+  assert.ok(!JSON.stringify(scrubSecretValues({ e: new Extra() }, [{ ref: '[SECRET:openai_key:abcdef12]', secret: fakeKey }])).includes(fakeKey));
   const clean = { content: [{ type: 'text', text: 'nothing secret here' }] };
   assert.equal(await vaultToolResult({ userId: 's-owner', sessionId: c.id }, clean), clean, 'a clean result is passed through as is');
   assert.equal(count(), n, 'no key was stored');
