@@ -10,6 +10,8 @@
  * Optional (owner setting): e-mail addresses and phone numbers.
  */
 
+import { randomInt } from 'node:crypto';
+
 export type RedactionType =
   | 'private_key' | 'jwt' | 'bearer_token' | 'basic_auth' | 'url_credentials'
   | 'aws_access_key' | 'aws_secret_key' | 'gcp_api_key' | 'gcp_oauth_token' | 'gcp_client_secret'
@@ -33,6 +35,12 @@ export const REDACTION_TYPES: readonly RedactionType[] = [
 export interface RedactOptions {
   emails?: boolean;
   phones?: boolean;
+  /**
+   * CHAT-SECRETS-01: called with each secret value found; its return value
+   * replaces the value instead of `[REDACTED:<type>]` (e.g. a key-store
+   * reference). The value is passed to this callback only, never kept here.
+   */
+  onSecret?: (type: RedactionType, value: string) => string;
 }
 
 export interface RedactResult {
@@ -43,6 +51,8 @@ export interface RedactResult {
 
 export const marker = (type: RedactionType): string => `[REDACTED:${type}]`;
 const isMarker = (s: string): boolean => /^\[REDACTED:[a-z_]+\]$/.test(s);
+/** A value that already is (the start of) a marker or a key-store reference. */
+const isMarkerStart = (s: string): boolean => s.startsWith('[REDACTED') || s.startsWith('[SECRET:');
 
 interface Rule {
   type: RedactionType;
@@ -70,7 +80,7 @@ function assignment(type: RedactionType, key: string): Rule {
     re: new RegExp(String.raw`((?:["'\x60]?)\b${key}["'\x60]?\s*(?::=|=>|[:=])\s*)(?:(["'\x60])([^"'\x60\n]{1,500})\2|([^\s"'\x60,;)}\]]{3,500}))`, 'gi'),
     replace: (m, prefix, quote, quoted, bare) => {
       const value = quoted ?? bare ?? '';
-      if (!value || isMarker(value) || value.startsWith('[REDACTED:')) return m;
+      if (!value || isMarker(value) || isMarkerStart(value)) return m;
       if (isPlaceholder(value, type === 'secret_assignment')) return m;
       return quote ? `${prefix}${quote}${marker(type)}${quote}` : `${prefix}${marker(type)}`;
     },
@@ -106,7 +116,7 @@ const RULES: Rule[] = [
   { type: 'telegram_bot_token', re: /\b\d{8,10}:AA[A-Za-z0-9_-]{30,}/g },
   { type: 'jwt', re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
   // Authorization values.
-  { type: 'bearer_token', re: /\b(Bearer)\s+([A-Za-z0-9._~+/=-]{12,})/gi, replace: (m, kind, value) => (value.startsWith('[REDACTED') ? m : `${kind} ${marker('bearer_token')}`) },
+  { type: 'bearer_token', re: /\b(Bearer)\s+([A-Za-z0-9._~+/=-]{12,})/gi, replace: (m, kind, value) => (isMarkerStart(value) ? m : `${kind} ${marker('bearer_token')}`) },
   { type: 'basic_auth', re: /\b(Basic)\s+([A-Za-z0-9+/]{12,}={0,2})/g, replace: (_m, kind) => `${kind} ${marker('basic_auth')}` },
   // URLs with embedded credentials: keep scheme + user, drop the password.
   { type: 'url_credentials', re: /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/:@]+):([^\s/@]+)@/gi, replace: (m, scheme, user, pass) => (isMarker(pass) ? m : `${scheme}${user}:${marker('url_credentials')}@`) },
@@ -117,12 +127,12 @@ const RULES: Rule[] = [
   {
     type: 'password',
     re: /\b((?:password|passwort|kennwort|passcode|pin)\s+(?:is|ist|=|:)\s+)([^\s,;]{3,200})/gi,
-    replace: (m, p, v) => (v.startsWith('[REDACTED') || isPlaceholder(v) ? m : `${p}${marker('password')}`),
+    replace: (m, p, v) => (isMarkerStart(v) || isPlaceholder(v) ? m : `${p}${marker('password')}`),
   },
   {
     type: 'password',
     re: /((?:كلمة (?:السر|المرور)|الباسورد|الرمز السري)\s*(?:[:=]|هي|هو)?\s*)([^\s،,;]{3,200})/g,
-    replace: (m, p, v) => (v.startsWith('[REDACTED') || isPlaceholder(v) ? m : `${p}${marker('password')}`),
+    replace: (m, p, v) => (isMarkerStart(v) || isPlaceholder(v) ? m : `${p}${marker('password')}`),
   },
   // Long opaque values after "key"/"token" words that the assignment rule missed.
   { type: 'generic_api_key', re: /(\b(?:api|access|secret|auth)[ _-]?(?:key|token)\s+)([A-Za-z0-9_\-]{24,})\b/gi, replace: (m, p, v) => (v.startsWith('REDACTED') ? m : `${p}${marker('generic_api_key')}`) },
@@ -143,6 +153,13 @@ export function redactImportText(input: string, options: RedactOptions = {}): Re
   const counts: Partial<Record<RedactionType, number>> = {};
   let total = 0;
   let text = typeof input === 'string' ? input : '';
+  // Key-store references ([SECRET:<type>:<id>], CHAT-SECRETS-01) are held as
+  // inert markers while the rules run, so no rule reads their parts as a
+  // `key: value` secret; they are put back unchanged at the end.
+  const held: string[] = [];
+  const nonce = letters(randomInt(26 ** 6));
+  const hold = (ref: string): string => `[REDACTED:zref_${nonce}_${letters(held.push(ref) - 1)}]`;
+  text = text.replace(SECRET_REF_RE, hold);
   for (const rule of RULES) {
     if (rule.optional && !options[rule.optional]) continue;
     text = text.replace(rule.re, (...args: any[]) => {
@@ -152,15 +169,28 @@ export function redactImportText(input: string, options: RedactOptions = {}): Re
       const groups = args.slice(1, args.length - 2 - tailNamed) as string[];
       if (isMarker(m)) return m;
       const out = rule.replace ? rule.replace(m, ...groups) : marker(rule.type);
-      if (out !== m) {
-        counts[rule.type] = (counts[rule.type] ?? 0) + 1;
-        total++;
-      }
-      return out;
+      if (out === m) return out;
+      counts[rule.type] = (counts[rule.type] ?? 0) + 1;
+      total++;
+      if (!options.onSecret) return out;
+      // The rule kept everything around the value and put the marker in its place.
+      const at = out.indexOf(marker(rule.type));
+      const before = out.slice(0, at);
+      const after = out.slice(at + marker(rule.type).length);
+      if (at < 0 || !m.startsWith(before) || !m.endsWith(after) || m.length < before.length + after.length) return out;
+      const value = m.slice(before.length, m.length - after.length);
+      return `${before}${hold(options.onSecret(rule.type, value))}${after}`;
     });
   }
+  if (held.length) text = text.replace(new RegExp(String.raw`\[REDACTED:zref_${nonce}_([a-z]+)\]`, 'g'), (_m, l: string) => held[fromLetters(l)] ?? '');
   return { text, counts, total };
 }
+
+/** A key-store reference left in a chat message instead of a secret (CHAT-SECRETS-01). */
+export const SECRET_REF_RE = /\[SECRET:[a-z_]+:[a-z0-9]{6,32}\]/g;
+
+const letters = (n: number): string => { let out = ''; do { out = String.fromCharCode(97 + (n % 26)) + out; n = Math.floor(n / 26); } while (n > 0); return out; };
+const fromLetters = (l: string): number => [...l].reduce((n, c) => n * 26 + (c.charCodeAt(0) - 97), 0);
 
 /** Add redaction counts into an accumulator. */
 export function addCounts(into: Partial<Record<RedactionType, number>>, from: Partial<Record<RedactionType, number>>): void {

@@ -12,6 +12,10 @@ import { channelToolCallRefusal, isToolAllowedInChannel } from './channel-policy
 import { defaultGrants, grantCallRefusal, isToolGranted, type AgentToolGrants } from './grants.js';
 import { approvalCategory, consumeApprovalTicket, isConfinedChannelReply, requestApproval } from './approvals.js';
 import { actorFromToolContextAsync } from '../repositories/actor.js';
+import { hasSecretRef, resolveSecretRefs, scrubSecretValues } from '../services/chat-secrets.js';
+
+/** Tools whose input is stored as text by Dpro: key-store references are never resolved for them (CHAT-SECRETS-01). */
+const KEEPS_TEXT = /^(?:memory_|board_|task_|plan_steps$|create_reminder$)/;
 
 /** Self-only tools need no grant; an extension or MCP tool can never claim it. */
 const SELF_ONLY_TOOLS = new Set(['plan_steps', 'board_suggest_card']);
@@ -143,6 +147,17 @@ export class ToolsRegistry {
     const modeCategory = permissionCategory(tool);
     let category = ownCategory ?? (mode === 'ask' ? modeCategory : null);
     if (mode === 'allow' && ownCategory && ownCategory === modeCategory) category = null;
+    // CHAT-SECRETS-01: a call that uses a key-store reference runs only for the
+    // owning user, never in a channel turn, and always after the owner's approval.
+    // Tools that keep text in Dpro's own stores (memory, board, tasks, plan) get the reference itself.
+    const usesSecret = !KEEPS_TEXT.test(toolName) && hasSecretRef(params);
+    if (usesSecret && (policy || !this.context.userId)) {
+      return {
+        content: [{ type: 'text', text: `Tool "${toolName}" was not run: saved secrets can only be used in the owner's own chat.` }],
+        error: 'Secret reference refused',
+      };
+    }
+    if (usesSecret && !category) category = modeCategory ?? 'other';
     if (category && !isConfinedChannelReply(policy, toolName) && !consumeApprovalTicket(options.approvalTicket, toolName)) {
       try {
         return await requestApproval(tool, params, this.context, category);
@@ -161,7 +176,9 @@ export class ToolsRegistry {
       console.log(`[ToolsRegistry]   Params:`, Object.keys(params || {}).join(', '));
 
       // B1-core: one actor per tool call, from the trusted run context only.
-      const result = await tool.execute(params, { ...this.context, actor: await actorFromToolContextAsync(this.context) });
+      // CHAT-SECRETS-01: references become the stored values only here, and go back into the result.
+      const secrets = usesSecret ? await resolveSecretRefs(this.context.userId!, params) : { value: params, used: [] };
+      const result = scrubSecretValues(await tool.execute(secrets.value, { ...this.context, actor: await actorFromToolContextAsync(this.context) }), secrets.used);
 
       console.log(`[ToolsRegistry] ✅ Tool executed successfully`);
       return result;

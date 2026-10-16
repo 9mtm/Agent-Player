@@ -9,6 +9,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { sessionsDb, messagesDb } from '../../db/index.js';
 import { authenticateActiveUser } from '../../auth/route-guards.js';
+import { vaultSecretsInText } from '../../services/chat-secrets.js';
 
 function callerId(request: FastifyRequest): string {
   return (request as any).sessionsUserId as string;
@@ -94,8 +95,10 @@ export async function sessionsRoutes(fastify: FastifyInstance) {
     if (!['user', 'assistant', 'system'].includes(body.role) || typeof body.content !== 'string') {
       return reply.status(400).send({ error: 'role (user|assistant|system) and content are required' });
     }
+    // CHAT-SECRETS-01: a user's secrets go to the key store; the message keeps references only.
+    const content = body.role === 'user' ? (await vaultSecretsInText(callerId(request), request.params.id, body.content)).text : body.content;
     const message = await messagesDb.create(request.params.id, {
-      role: body.role, content: body.content, model: body.model, tokens: body.tokens,
+      role: body.role, content, model: body.model, tokens: body.tokens,
     });
     return { message };
   });

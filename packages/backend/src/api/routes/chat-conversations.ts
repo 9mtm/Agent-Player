@@ -15,6 +15,9 @@
  *   POST   /api/chat/conversations/:id/cards       owner: { boardId, columnId?, title, description?, priority?, type?, agents? } → 201 { card }
  *   GET    /api/chat/conversations/:id/memories    owner: memories and agent proposals from it (CHAT-PRO-02 E)
  *   POST   /api/chat/conversations/:id/memories    owner: "Remember this" { messageId, content, drawer, type?, importance? } → 201 { memory }
+ *   GET    /api/chat/secrets                       the caller's keys saved from the chat (never values) (CHAT-SECRETS-01)
+ *   DELETE /api/chat/secrets/:id                   delete one of them
+ *   POST   /api/chat/secrets/cleanup               owner: { apply: boolean } move secrets of older saved messages into the key store
  *
  * SECURITY: an active signed-in user (auth gate 'user' tier + the handler's
  * own check). Conversations and runs of other users answer 404. The model
@@ -41,6 +44,8 @@ import { ChatMemoryError, conversationMemories, rememberFromChat } from '../../s
 import { actorOf } from '../../auth/auth-gate.js';
 import { ChatSearchError, parseSearch, searchConversations } from '../../services/chat-search.js';
 import { exportConversation } from '../../services/chat-export.js';
+import { cleanupChatSecrets, deleteChatSecret, listChatSecrets, vaultSecretsInText } from '../../services/chat-secrets.js';
+import { redactImportText, SECRET_REF_RE } from '../../memory/import/redact.js';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/;
 /** A model id the chat may pick (local model names like qwen3.8:27b, or claude-…). */
@@ -52,6 +57,9 @@ export const HISTORY_CHARS = 200_000;
 const TITLE_CHARS = 120;
 
 type Req = FastifyRequest<{ Params: { id?: string; runId?: string }; Querystring: { after?: string }; Body: any }>;
+
+/** CHAT-SECRETS-01: a title is never a place for a secret; one typed there is removed. */
+const cleanTitle = (t: unknown) => (typeof t === 'string' ? redactImportText(t).text : t as null | undefined);
 
 function caller(request: FastifyRequest): string { return (request as any).chatUserId as string; }
 
@@ -128,7 +136,7 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     if (b.title !== undefined && (typeof b.title !== 'string' || b.title.length > TITLE_CHARS)) return bad(reply, 'title must be text of at most 120 characters');
     if (b.agentId !== undefined && b.agentId !== null && (typeof b.agentId !== 'string' || !AGENT_ID.test(b.agentId))) return bad(reply, 'invalid agentId');
     if (b.projectId !== undefined && b.projectId !== null && (typeof b.projectId !== 'string' || !(await findProject(caller(request), b.projectId)))) return bad(reply, 'unknown project');
-    return reply.code(201).send({ conversation: await createConversation(caller(request), { title: b.title, agentId: b.agentId, projectId: b.projectId }) });
+    return reply.code(201).send({ conversation: await createConversation(caller(request), { title: cleanTitle(b.title), agentId: b.agentId, projectId: b.projectId }) });
   });
 
   fastify.put('/api/chat/conversations/:id', async (request: Req, reply) => {
@@ -136,7 +144,7 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     if (b.title !== undefined && b.title !== null && (typeof b.title !== 'string' || b.title.length > TITLE_CHARS)) return bad(reply, 'title must be text of at most 120 characters');
     if (b.pinned !== undefined && typeof b.pinned !== 'boolean') return bad(reply, 'pinned must be true or false');
     if (b.projectId !== undefined && b.projectId !== null && (typeof b.projectId !== 'string' || !(await findProject(caller(request), b.projectId)))) return bad(reply, 'unknown project');
-    const c = await patchConversation(caller(request), request.params.id!, { title: b.title, pinned: b.pinned, projectId: b.projectId });
+    const c = await patchConversation(caller(request), request.params.id!, { title: cleanTitle(b.title), pinned: b.pinned, projectId: b.projectId });
     return c ? { conversation: c } : notFound(reply);
   });
 
@@ -190,19 +198,21 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     const project = c.projectId ? await findProject(userId, c.projectId) : undefined;
     const prior = await listConversationMessages(c.id);
     if (prior.some((m) => m.runId === b.runId)) return reply.code(409).send({ error: 'runId already used', code: 'run_id_reused' });
-    const userMessage = await addUserMessage(c.id, b.message, b.runId);
+    // CHAT-SECRETS-01: secrets go encrypted into the key store; the message keeps references only.
+    const vaulted = await vaultSecretsInText(userId, c.id, b.message);
+    const userMessage = await addUserMessage(c.id, vaulted.text, b.runId);
     const messages = historyFor(namedReplies([...prior, userMessage], team, replyAgent, c.agentId));
     chatRuns.start({
       runId: b.runId, userId, sessionId: c.id, agentId: b.agentId ?? null,
       execute: (runReply) => executeChatTurn(runReply, {
         agentId: replyAgent, messages, stream: true, sessionId: c.id, userId, uiSet: 'chat',
         ...(project ? { memoryScope: { project: project.slug }, ...(project.folder ? { fileReadRoot: project.folder } : {}) } : {}),
-        systemPromptAppend: [project ? projectNote(project.name, project.folder, project.repoUrl) : '', PLAN_NOTE, prior.some((m) => m.role === 'assistant' && (m.agentId ?? c.agentId ?? null) !== (replyAgent ?? null)) ? TEAM_NOTE : ''].filter(Boolean).join('\n\n'),
+        systemPromptAppend: [project ? projectNote(project.name, project.folder, project.repoUrl) : '', PLAN_NOTE, [...prior, userMessage].some((m) => m.role === 'user' && new RegExp(SECRET_REF_RE.source).test(m.content)) ? SECRET_NOTE : '', prior.some((m) => m.role === 'assistant' && (m.agentId ?? c.agentId ?? null) !== (replyAgent ?? null)) ? TEAM_NOTE : ''].filter(Boolean).join('\n\n'),
         ...(b.model ? { model: b.model, provider: /^claude-/.test(b.model) ? 'claude' as const : 'ollama' as const } : {}),
       }),
     });
     console.log('[ChatRuns] Run started', { runId: b.runId, history: messages.length });
-    return reply.code(202).send({ runId: b.runId, userMessage });
+    return reply.code(202).send({ runId: b.runId, userMessage, secretsSaved: vaulted.saved.length });
   });
 
   // ---- board cards made from a conversation (CHAT-PRO-02 I step 2): owner only, like the board ----
@@ -244,6 +254,18 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
     try { return reply.code(201).send(await rememberFromChat(actor, caller(request), request.params.id!, b as Record<string, unknown>)); } catch (err) { return memoryError(reply, err); }
   });
 
+  // ---- keys saved from the chat (CHAT-SECRETS-01): the caller's own, values never returned ----
+  fastify.get('/api/chat/secrets', async (request) => ({ secrets: await listChatSecrets(caller(request)) }));
+  fastify.delete('/api/chat/secrets/:id', async (request: Req, reply) => {
+    if (!/^[a-z0-9]{6,32}$/.test(request.params.id ?? '')) return notFound(reply);
+    return (await deleteChatSecret(caller(request), request.params.id!)) ? { deleted: true } : notFound(reply);
+  });
+  fastify.post('/api/chat/secrets/cleanup', { config: { access: 'owner' } }, async (request: Req, reply) => {
+    const b = request.body;
+    if (b === null || typeof b !== 'object' || Array.isArray(b) || typeof (b as any).apply !== 'boolean' || Object.keys(b).some((k) => k !== 'apply')) return bad(reply, 'Body must be { apply: true | false }');
+    return { report: await cleanupChatSecrets(caller(request), (b as any).apply) };
+  });
+
   // ---- projects (CHAT-PRO-02 A): owner only (a project names a folder the agent may read) ----
   const projectError = (reply: FastifyReply, err: unknown) => {
     if (err instanceof ProjectInputError) return reply.code(400).send({ error: err.message, code: 'invalid_project' });
@@ -270,6 +292,7 @@ export async function chatConversationRoutes(fastify: FastifyInstance) {
   /** CHAT-PRO-02 I: more than one agent has answered in this conversation. */
   const TEAM_NOTE = 'Several agents of the team answer in this conversation. Earlier replies written by another agent start with that agent\'s name in brackets, like [Name]. Build on their work; do not repeat it, and do not write as them.';
   /** CHAT-PRO-02 H: how the agent shows its work in the chat. */
+  const SECRET_NOTE = 'Secrets the owner typed (keys, tokens, passwords) were moved to the encrypted key store; you see a reference like [SECRET:github_token:abc123] instead. Never ask for the value again and never try to reveal it. When a tool needs it, put the reference itself in the tool input; the tool gets the real value after the owner approves that call.';
   const PLAN_NOTE = 'When a request needs several steps (3 or more), first call plan_steps with the whole plan so the owner sees it, then work through it and call plan_steps again with the whole list as each step finishes. Keep steps short. Skip the plan for a quick question or a one-step answer. When the owner gives a larger task that other agents of the team should share, you may call board_suggest_card once; the owner decides whether it becomes a board card. When the owner shares a lasting fact, preference or decision worth keeping, you may call memory_save; in this chat it is shown to the owner, who accepts or rejects it.';
 
   // ---- microphone (CHAT-PRO-02 C): a recorded clip → text, on this computer only (owner) ----
