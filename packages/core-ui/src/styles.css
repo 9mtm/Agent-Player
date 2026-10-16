@@ -1352,6 +1352,7 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .chat-card-agents { border:0; margin:0; padding:0; display:flex; flex-wrap:wrap; gap:6px 12px; }
 .app-shell .chat-card-agents legend { color:var(--text-3); font-size:11.5px; margin-block-end:4px; }
 .app-shell .chat-card-form label.chat-card-agent { display:inline-flex; align-items:center; gap:6px; color:var(--text); font-size:12.5px; }
+.app-shell .chat-card-form label.chat-card-agent input { inline-size:14px; block-size:14px; margin:0; }
 .app-shell .chat-card-notice { margin:0; color:#cf222e; font-size:12px; }
 .app-shell .chat-card-form-actions { display:flex; align-items:center; gap:8px; }
 .app-shell .chat-card-form-actions .fine-print { flex:1; color:var(--text-3); font-size:11.5px; }

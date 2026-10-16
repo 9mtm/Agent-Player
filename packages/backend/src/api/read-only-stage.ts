@@ -110,6 +110,8 @@ export const STAGE3_ROUTES: ReadonlySet<string> = new Set([
   // CHAT-REBUILD-01: saved conversations and resumable runs (the turn itself runs on the local model only)
   'GET /api/chat/conversations', 'POST /api/chat/conversations', 'PUT /api/chat/conversations/:id', 'DELETE /api/chat/conversations/:id',
   'GET /api/chat/conversations/:id/messages', 'POST /api/chat/conversations/:id/runs', 'POST /api/chat/runs/:runId/stop',
+  // CHAT-PRO-02 I step 2: a chat task becomes a board card (owner only, like the board)
+  'GET /api/chat/conversations/:id/cards', 'POST /api/chat/conversations/:id/cards', 'GET /api/boards/:id/cards/:cardId/chat',
   // AGENT-CARD-01: the agent card edits role/department/description and the versioned persona (owner)
   'PUT /api/agents/:id', 'GET /api/agents/:id/personality/current', 'GET /api/agents/:id/personality/versions',
   'POST /api/agents/:id/personality/versions', 'POST /api/agents/:id/personality/lock', 'POST /api/agents/:id/personality/unlock',
