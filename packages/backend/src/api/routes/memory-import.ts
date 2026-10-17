@@ -35,7 +35,7 @@ import { MemoryFileError } from '../../memory/memory-files.js';
 import { listLocalSessions, findSession, readSession } from '../../memory/import/local-agents.js';
 import { automaticImportSettings, configureAutomaticImport, runDueAutomaticImports } from '../../memory/import/automatic-project-import.js';
 import { scanProjectDocuments, previewProjectDocument } from '../../memory/import/project-documents.js';
-import { MAX_SESSIONS_PER_IMPORT, getJob, importedSessions, latestImportJob, resumeImport, startImport } from '../../memory/import/local-import.js';
+import { MAX_SESSIONS_PER_IMPORT, getJob, importedSessions, latestImportJob, pauseImport, resumeImport, startImport } from '../../memory/import/local-import.js';
 import { isLoopbackPeer } from './terminal.js';
 import { redactImportText } from '../../memory/import/redact.js';
 
@@ -152,6 +152,11 @@ export async function memoryImportRoutes(fastify: FastifyInstance) {
     catch (err: any) { if (err.code === 'import_running') return reply.code(409).send({ error: 'An import is already running', code: 'import_running' }); throw err; }
     audit(request, owner, 'memory_import.local', job.id, { sessions: ids.length });
     return reply.code(202).send({ job });
+  });
+  fastify.post<{ Params: { id: string } }>('/api/memory/import/local/jobs/:id/pause', { config }, async (request, reply) => {
+    const owner = localOwner(request, reply); if (!owner) return reply;
+    const job = await pauseImport(owner.userId!, request.params.id);
+    return job ? reply.code(202).send({ job }) : reply.code(404).send({ code: 'not_found' });
   });
   fastify.post<{ Params: { id: string } }>('/api/memory/import/local/jobs/:id/resume', { config }, async (request, reply) => {
     const owner = localOwner(request, reply); if (!owner) return reply;

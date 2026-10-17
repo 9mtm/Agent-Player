@@ -13,16 +13,18 @@ const record = (x: unknown): x is Record<string, unknown> => typeof x === 'objec
 export class LocalImportController {
   #state: LocalImportState = Object.freeze({ phase: 'idle', sessions: [], selected: [], archive: '' });
   #listeners = new Set<() => void>(); #timer: ReturnType<typeof setTimeout> | undefined; #disposed = false;
+  #jobTicket = 0;
   #starting = false; #pollErrors = 0; #previewTicket = 0;
   constructor(private readonly client: SessionClient, private readonly pollMs = 1500) {}
   getSnapshot = () => this.#state;
   subscribe = (fn: () => void) => { this.#listeners.add(fn); return () => { this.#listeners.delete(fn); }; };
   private publish(p: Partial<LocalImportState>) { if (!this.#disposed) { this.#state = Object.freeze({ ...this.#state, ...p }); this.#listeners.forEach(fn => fn()); } }
-  private job(job: ImportJob) { this.publish({ job, busy: job.status === 'running', progress: { total: job.total, done: job.done, proposed: job.proposed } }); if (job.status === 'running') this.poll(job.id); }
+  private job(job: ImportJob) { this.publish({ job, busy: job.status === 'running', progress: { total: job.total, done: job.done, proposed: job.proposed } }); if (job.status === 'running') this.poll(job.id); else clearTimeout(this.#timer); }
   async load() {
-    if (this.#disposed) return; this.publish({ phase: 'loading', notice: undefined });
+    if (this.#disposed) return; const ticket = this.#jobTicket; this.publish({ phase: 'loading', notice: undefined });
     try {
       const r = await this.client.request({ method: 'GET', path: LOCAL_IMPORT_PATH } as never);
+      if (this.#disposed || ticket !== this.#jobTicket) return;
       if (r.status === 200 && record(r.body) && Array.isArray(r.body.sessions)) {
         this.publish({ phase: 'ready', sessions: r.body.sessions as LocalSession[], archive: String(r.body.archive ?? '') });
         if (record(r.body.job)) this.job(r.body.job as ImportJob);
@@ -43,6 +45,17 @@ export class LocalImportController {
   async start() { if (!this.#state.selected.length) return; await this.submit(LOCAL_IMPORT_PATH, { sessionIds: [...this.#state.selected] }); }
   async importDocuments(ids: string[]) { if (ids.length) await this.submit(LOCAL_IMPORT_PATH, { sessionIds: [...ids] }); }
   async resume() { if (this.#state.job) await this.submit(`${LOCAL_IMPORT_PATH}/jobs/${this.#state.job.id}/resume`); }
+  async pause() {
+    if (this.#disposed || this.#starting || this.#state.job?.status !== 'running') return;
+    this.#starting = true; this.#jobTicket++;
+    clearTimeout(this.#timer);
+    try {
+      const r = await this.client.request({ method: 'POST', path: `${LOCAL_IMPORT_PATH}/jobs/${this.#state.job.id}/pause` } as never);
+      if (r.status === 202 && record(r.body) && record(r.body.job)) this.job(r.body.job as ImportJob);
+      else { this.publish({ notice: 'Pause could not be confirmed. Check saved progress before trying again.' }); void this.load(); }
+    } catch { this.publish({ notice: 'Pause could not be confirmed (no connection). Check saved progress.' }); }
+    finally { this.#starting = false; }
+  }
   private async submit(path: string, body?: unknown) {
     if (this.#disposed || this.#starting || this.#state.busy) return; this.#starting = true; this.publish({ busy: true, notice: undefined });
     try {
@@ -65,11 +78,12 @@ export class LocalImportController {
   closePreview() { this.#previewTicket++; this.publish({ preview: undefined, previewLoading: undefined, previewError: undefined }); }
   private poll(id: string) {
     clearTimeout(this.#timer); if (this.#disposed) return;
+    const ticket = this.#jobTicket;
     this.#timer = setTimeout(async () => {
       try {
         const r = await this.client.request({ method: 'GET', path: `${LOCAL_IMPORT_PATH}/jobs/${id}` } as never);
         if (r.status === 200 && record(r.body) && record(r.body.job)) {
-          if (this.#disposed) return; this.#pollErrors = 0; const job = r.body.job as ImportJob; this.job(job);
+          if (this.#disposed || ticket !== this.#jobTicket) return; this.#pollErrors = 0; const job = r.body.job as ImportJob; this.job(job);
           if (job.status !== 'running') void this.load(); return;
         }
       } catch { /* The server job continues without this view. */ }

@@ -46,8 +46,9 @@ export function LocalImportView({ controller: c, active, onReview, client }: { c
     {s.job && <div className="local-import-job" role="status" data-status={s.job.status}>
       {running ? <>Reading {s.job.done} of {s.job.total}… <span className="local-import-bar" aria-hidden="true"><i style={{ inlineSize: `${s.job.total ? Math.round((s.job.done / s.job.total) * 100) : 0}%` }}/></span></>
         : <>{s.job.notice ?? (s.job.status === 'done' ? 'Done.' : 'The import stopped.')}{s.job.errors > 0 && ` ${s.job.errors} could not be read.`}
-          {s.job.status === 'error' && s.job.done < s.job.total && <button type="button" onClick={() => void c.resume()}>Resume import</button>}
+          {(s.job.status === 'error' || s.job.status === 'paused') && s.job.done < s.job.total && <button type="button" onClick={() => void c.resume()}>Resume import</button>}
           {s.job.proposed > 0 && <> <button type="button" className="link-button" onClick={onReview}>Review them now</button></>}</>}
+      {s.job.status === 'running' && <button type="button" onClick={() => void c.pause()}>Pause import</button>}
     </div>}
     {importKind==='conversations' && (s.preview || s.previewLoading || s.previewError) && <aside className="local-import-preview" aria-label="Conversation preview">
       <header><h4>Conversation preview</h4><button type="button" onClick={() => c.closePreview()}>Close preview</button></header>
@@ -71,7 +72,7 @@ export function LocalImportView({ controller: c, active, onReview, client }: { c
           <input type="search" placeholder="Find by words or folder" aria-label="Find conversations" value={query} onChange={e => setQuery(e.target.value)}/>
           <label className="term-check"><input type="checkbox" checked={onlyNew} onChange={e => setOnlyNew(e.target.checked)}/>Not imported yet</label>
           <button type="button" disabled={!shown.length || running} onClick={() => c.selectAll(shown.map(x => x.id))}>Select all matching ({shown.length})</button>
-          <p className="fine-print">{s.selected.length} selected. The import continues when you leave this page. If you close Dpro, it resumes when Dpro starts again.</p>
+          <p className="fine-print">{s.selected.length} selected. The import continues when you leave this page. If you close Dpro, it resumes when Dpro starts again unless you pause it.</p>
           <button type="button" className="primary" disabled={!s.selected.length || running} onClick={() => void c.start()}>{running ? 'Importing…' : `Import ${s.selected.length || ''} ${s.selected.length === 1 ? 'conversation' : 'conversations'}`.replace('  ', ' ')}</button>
           {s.selected.length > 0 && !running && <button type="button" className="link-button" onClick={() => c.clear()}>Clear</button>}
         </div>

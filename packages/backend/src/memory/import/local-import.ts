@@ -42,7 +42,7 @@ const MAX_MEMORIES_PER_SESSION = 12;
 
 export type Extracted = { title: string; content: string; scope: 'owner' | 'project'; evidence?: string; personal?: boolean };
 export type ExtractFn = (text: string, context: { source: ImportSource; cwd: string | null; known: string[]; signal?: AbortSignal }) => Promise<Extracted[]>;
-export type ImportJob = { id: string; userId: string; total: number; done: number; proposed: number; dropped: number; status: 'running' | 'done' | 'error'; notice?: string; startedAt: number; errors: number; automatic?: boolean };
+export type ImportJob = { id: string; userId: string; total: number; done: number; proposed: number; dropped: number; status: 'running' | 'done' | 'error' | 'paused'; notice?: string; startedAt: number; errors: number; automatic?: boolean };
 
 export function archiveDir(home = os.homedir()) { return path.join(home, '.dpro', 'imports'); }
 
@@ -174,7 +174,7 @@ export async function importedSessions(userId: string): Promise<Map<string, { im
 const jobs = new Map<string, SavedImport>();
 const workers = new Map<string, { promise: Promise<void>; abort: AbortController }>();
 let stopping = false;
-type Options = { extract?: ExtractFn; home?: string; automatic?: boolean };
+type Options = { extract?: ExtractFn; home?: string; automatic?: boolean; resume?: boolean };
 const publicJob = (j: SavedImport): ImportJob => ({ id: j.id, userId: j.userId, total: j.total, done: j.done, proposed: j.proposed, dropped: j.dropped, status: j.status, notice: j.notice, startedAt: j.startedAt, errors: j.errors, automatic: j.automatic === true });
 async function loadJobs() {
   const active = new Set(workers.keys());
@@ -187,7 +187,7 @@ async function kick(job: SavedImport, opts: Options, release: () => Promise<void
   job.status = 'running'; job.notice = undefined; await saveImport(job);
   const abort = new AbortController();
   const promise = runImport(job, opts.extract ?? ollamaExtract, opts.home, abort.signal).catch(async () => {
-    if (!stopping) { job.status = 'error'; job.notice = 'Import paused. Check the local model and review queue, then resume; saved progress is retained.'; await saveImport(job); }
+    if (!stopping && job.status !== 'paused') { job.status = 'error'; job.notice = 'Import paused. Check the local model and review queue, then resume; saved progress is retained.'; await saveImport(job); }
   }).finally(async () => { await release(); workers.delete(job.id); });
   workers.set(job.id, { promise, abort });
   void promise.catch(() => { console.warn('[Memory import] Progress could not be saved; recovery checkpoint retained.'); });
@@ -201,7 +201,7 @@ async function admitImport(userId: string, ids: string[], opts: Options = {}): P
   if (finishing) { await finishing[1].promise; await loadJobs(); }
   let existing = [...jobs.values()].find(j => j.userId === userId && j.cursor < j.ids.length);
   if (existing && !ids.every(id => existing!.ids.includes(id))) throw Object.assign(new Error('An import is already running'), { code: 'import_running' });
-  if (existing && workers.has(existing.id)) return publicJob(existing);
+  if (existing && (workers.has(existing.id) || (existing.status === 'paused' && !opts.resume))) return publicJob(existing);
   const release = await importLease(userId);
   if (!release) { const current = await runningJob(userId); if (current) return current; throw Object.assign(new Error('An import is already running'), { code: 'import_running' }); }
   try {
@@ -211,7 +211,7 @@ async function admitImport(userId: string, ids: string[], opts: Options = {}): P
     jobs.set(job.id, job); stopping = false; await kick(job, opts, release); return publicJob(job);
   } catch (error) { await release(); throw error; }
 }
-const admissions = new Map<string, Promise<ImportJob>>();
+const admissions = new Map<string, Promise<unknown>>();
 export function startImport(userId: string, ids: string[], opts: Options = {}): Promise<ImportJob> {
   const previous = admissions.get(userId) ?? Promise.resolve(undefined);
   const next = previous.catch(() => {}).then(() => admitImport(userId, ids, opts));
@@ -219,12 +219,31 @@ export function startImport(userId: string, ids: string[], opts: Options = {}): 
 }
 export async function resumeImport(userId: string, id: string, opts: Options = {}): Promise<ImportJob | undefined> {
   await loadJobs(); const job = jobs.get(id); if (!job || job.userId !== userId) return undefined;
-  return job.cursor === job.ids.length ? publicJob(job) : startImport(userId, job.ids, opts);
+  return job.cursor === job.ids.length ? publicJob(job) : startImport(userId, job.ids, { ...opts, resume: true });
+}
+/** Persist the hold before aborting, then drain the worker without discarding receipts. */
+export function pauseImport(userId: string, id: string): Promise<ImportJob | undefined> {
+  const previous = admissions.get(userId) ?? Promise.resolve();
+  const next = previous.catch(() => {}).then(async () => {
+    await loadJobs();
+    const job = jobs.get(id);
+    if (!job || job.userId !== userId) return undefined;
+    if (job.cursor === job.ids.length) return publicJob(job);
+    job.status = 'paused';
+    job.notice = 'Paused. Saved progress is retained until you choose Resume import.';
+    await saveImport(job);
+    const worker = workers.get(id);
+    worker?.abort.abort();
+    await worker?.promise;
+    return publicJob(job);
+  });
+  admissions.set(userId, next);
+  return next;
 }
 /** Run only after normal startup or explicit owner action; never on module import. */
 export async function resumePendingImports(opts: Options = {}) {
   await loadJobs(); stopping = false;
-  for (const job of jobs.values()) if (job.cursor < job.ids.length && !workers.has(job.id)) {
+  for (const job of jobs.values()) if (job.cursor < job.ids.length && job.status !== 'paused' && !workers.has(job.id)) {
     const owner = await q.one<{ role: string; status: string }>('SELECT role, status FROM users WHERE id = ?', job.userId);
     if (owner?.role === 'owner' && owner.status === 'active') await resumeImport(job.userId, job.id, opts);
   }
@@ -240,7 +259,8 @@ async function runImport(job: SavedImport, extract: ExtractFn, home: string | un
   const dir = archiveDir(home);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   await fs.chmod(dir, 0o700).catch(() => {});
-  while (job.cursor < job.ids.length && !stopping) {
+  const halted = () => stopping || signal.aborted || job.status === 'paused';
+  while (job.cursor < job.ids.length && !halted()) {
     const id = job.ids[job.cursor], startCursor = job.cursor;
     try {
       const existing = await q.one<{ proposed: number }>('SELECT proposed FROM local_agent_imports WHERE user_id = ? AND session_id = ?', job.userId, id);
@@ -266,6 +286,7 @@ async function runImport(job: SavedImport, extract: ExtractFn, home: string | un
       // 4-5 extract (condensed input), keep supported memories, merge repeats
       const { memories, dropped } = await extractMemories(extract, input, { source: found.source, cwd: s.cwd, signal }, ownerWords, await knownContents(job.userId));
 
+      if (halted()) return;
       // 6 propose: project facts go to that project's drawer when the folder is one of the owner's projects.
       const realCwd = s.cwd ? await fs.realpath(s.cwd).catch(() => s.cwd!) : null;
       const project = realCwd ? projects.find(p => realCwd === p.folder || realCwd.startsWith(`${p.folder}${path.sep}`)) : undefined;
@@ -282,11 +303,11 @@ async function runImport(job: SavedImport, extract: ExtractFn, home: string | un
       job.current = checkpoint;
       await saveImport(job); // Persist each commit's replay key before it may create proposals.
       }
-      if (stopping || signal.aborted) return;
+      if (halted()) return;
       const checkpoint = job.current!;
       for (const preview of checkpoint.previews) {
         if (!preview.include) continue;
-        if (stopping || signal.aborted) return;
+        if (halted()) return;
         if (preview.count === undefined) {
         const receipt = await commitPreview(job.userId, preview.id, { version: preview.version, contentHash: preview.hash, operationKey: preview.key, confirm: true });
         preview.count = receipt.proposals.length; preview.proposals = receipt.proposals.map(p => p.proposalId);
@@ -296,7 +317,7 @@ async function runImport(job: SavedImport, extract: ExtractFn, home: string | un
           const {automaticImportSettings}=await import('./automatic-project-import.js');
           const {getProposal,approveProposal}=await import('../memory-files.js');
           for (const id of preview.proposals) {
-            if (stopping || signal.aborted) return;
+            if (halted()) return;
             if (!(await automaticImportSettings(job.userId)).enabled) break;
             const owner=await q.one<{role:string;status:string}>('SELECT role,status FROM users WHERE id=?',job.userId);
             if(owner?.role!=='owner'||owner.status!=='active') break;
@@ -313,7 +334,7 @@ async function runImport(job: SavedImport, extract: ExtractFn, home: string | un
       job.proposed += proposed; job.dropped += checkpoint.dropped;
     } catch (err) {
       if (job.cursor !== startCursor) throw err;
-      if (stopping || signal.aborted) return;
+      if (halted()) return;
       // Rebuild expired uncommitted previews while retaining committed receipts.
       if (job.current && ['expired', 'not_preview'].includes((err as { code?: string })?.code ?? '')) {
         const expired = await q.one('SELECT id FROM memory_import_batches WHERE id = ? AND user_id = ? AND status = ?', job.current.previews.find(p => p.include && p.count === undefined)?.id ?? '', job.userId, 'expired');
@@ -326,7 +347,7 @@ async function runImport(job: SavedImport, extract: ExtractFn, home: string | un
     job.current = undefined; job.cursor++; job.done = job.cursor;
     await saveImport(job);
   }
-  if (stopping || signal.aborted) return;
+  if (halted()) return;
   job.status = 'done';
   job.notice = job.automatic ? `Automatic import processed ${job.proposed} memories. Open Memory for saved items or any remaining reviews.` : `${job.proposed} memories are waiting for your approval. ${job.skipped} already imported sources were skipped.${job.dropped ? ` ${job.dropped} unsure or repeated ones were left out.` : ''}`;
   await saveImport(job);

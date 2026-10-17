@@ -131,3 +131,32 @@ test('automatic import settings are narrow and never expose owner ids',()=>{
  const {AutomaticProjectImport}=require('../src/AutomaticProjectImport.tsx');const html=renderToStaticMarkup(React.createElement(AutomaticProjectImport,{client:{}}));
  assert.match(html,/Automatic import/);assert.match(html,/Every hour/);assert.match(html,/Every 15 minutes/);assert.match(html,/without an approval prompt/);
 });
+
+test('pause is owner-only wire action with stable paused projection and explicit resume',async()=>{
+ const path='/api/memory/import/local/jobs/'+JOB+'/pause';
+ assert.equal(allowedLocalImport('POST',path),true);assert.equal(allowed('POST',path),true);
+ for(const [method,body] of [['GET',undefined],['DELETE',undefined],['POST',{owner:'other'}]])assert.equal(allowedLocalImport(method,path,body),false);
+ const job={id:JOB,total:400,done:276,proposed:1493,errors:0,status:'paused',notice:'Paused.',userId:'private'};
+ const projected=localImportResponse(path,202,{job});assert.equal(projected.job.status,'paused');assert.equal(projected.job.done,276);assert.ok(!JSON.stringify(projected).includes('private'));
+ assert.deepEqual(localImportResponse(path,202,projected),projected);
+ let state='running',pauseCalls=0,resumeCalls=0;
+ const c=new LocalImportController({request:async r=>{
+  if(r.path.endsWith('/pause')){pauseCalls++;state='paused';return {status:202,body:{job:{...job,status:state}}};}
+  if(r.path.endsWith('/resume')){resumeCalls++;state='running';return {status:202,body:{job:{...job,status:state}}};}
+  return {status:200,body:{sessions:[],archive:'~/.dpro/imports',job:{...job,status:state}}};
+ }},10000);
+ await c.load();await c.pause();assert.equal(c.getSnapshot().job.status,'paused');assert.equal(c.getSnapshot().busy,false);assert.equal(pauseCalls,1);
+ await c.resume();assert.equal(c.getSnapshot().job.id,JOB);assert.equal(c.getSnapshot().job.done,276);assert.equal(c.getSnapshot().job.status,'running');assert.equal(resumeCalls,1);c.dispose();
+});
+
+test('a late progress poll cannot undo a confirmed pause',async()=>{
+ let release,polled;const entered=new Promise(r=>polled=r);
+ const running={id:JOB,total:3,done:1,proposed:0,errors:0,status:'running'};
+ const c=new LocalImportController({request:async r=>{
+  if(r.path.endsWith('/pause'))return {status:202,body:{job:{...running,status:'paused'}}};
+  if(r.path.endsWith('/'+JOB)){polled();return new Promise(resolve=>release=resolve);}
+  return {status:200,body:{sessions:[],archive:'',job:running}};
+ }},1);
+ await c.load();await entered;await c.pause();release({status:200,body:{job:running}});await new Promise(r=>setTimeout(r,10));
+ assert.equal(c.getSnapshot().job.status,'paused');assert.equal(c.getSnapshot().busy,false);c.dispose();
+});

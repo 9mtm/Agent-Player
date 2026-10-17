@@ -18,8 +18,8 @@ export function localImportPath(path) {
   if (document) return { kind: 'document', id: document[1] };
   const preview = /^\/api\/memory\/import\/local\/sessions\/([^/?#]+)$/.exec(path);
   if (preview) return ID.test(preview[1]) ? { kind: 'preview', id: preview[1] } : null;
-  const m = /^\/api\/memory\/import\/local\/jobs\/([^/?#]+)(\/resume)?$/.exec(path);
-  return m && UUID.test(m[1]) ? { kind: m[2] ? 'resume' : 'job', id: m[1] } : null;
+  const m = /^\/api\/memory\/import\/local\/jobs\/([^/?#]+)(\/(resume|pause))?$/.exec(path);
+  return m && UUID.test(m[1]) ? { kind: m[3] ?? 'job', id: m[1] } : null;
 }
 export function localImportRoute(path) { return localImportPath(path) !== null; }
 
@@ -29,15 +29,15 @@ export function allowedLocalImport(method, path, body) {
   if(p.kind==='automatic')return (method==='GET'&&body===undefined)||(method==='PUT'&&record(body)&&Object.keys(body).length===2&&typeof body.enabled==='boolean'&&[15,30,60].includes(body.intervalMinutes));
   if (p.kind === 'documents' && method === 'POST' && record(body) && Object.keys(body).every(k=>k==='auto'||k==='cursor') && body.auto === true && (body.cursor===undefined||(typeof body.cursor==='string'&&ID.test(body.cursor)))) return true;
   if (p.kind === 'documents') return method === 'POST' && record(body) && Object.keys(body).length === 1 && Array.isArray(body.roots) && body.roots.length > 0 && body.roots.length <= 8 && body.roots.every(r => typeof r === 'string' && r.startsWith('/') && r.length <= 2048 && !r.includes('\0'));
-  if (method === 'GET') return p.kind !== 'resume' && body === undefined;
-  if (p.kind === 'resume') return method === 'POST' && body === undefined;
+  if (method === 'GET') return !['resume', 'pause'].includes(p.kind) && body === undefined;
+  if (p.kind === 'resume' || p.kind === 'pause') return method === 'POST' && body === undefined;
   return p.kind === 'local' && method === 'POST' && record(body) && Object.keys(body).length === 1 && Array.isArray(body.sessionIds)
     && body.sessionIds.length >= 1 && body.sessionIds.length <= MAX_IMPORT_SESSIONS && body.sessionIds.every(x => typeof x === 'string' && ID.test(x)) && new Set(body.sessionIds).size === body.sessionIds.length;
 }
 
 function job(x) {
   if (!record(x) || typeof x.id !== 'string' || !UUID.test(x.id)) return null;
-  return { id: x.id, total: n(x.total), done: n(x.done), proposed: n(x.proposed), errors: n(x.errors), status: ['running', 'done', 'error'].includes(x.status) ? x.status : 'error', notice: str(x.notice, 300), ...(x.automatic === true ? { automatic: true } : {}) };
+  return { id: x.id, total: n(x.total), done: n(x.done), proposed: n(x.proposed), errors: n(x.errors), status: ['running', 'done', 'error', 'paused'].includes(x.status) ? x.status : 'error', notice: str(x.notice, 300), ...(x.automatic === true ? { automatic: true } : {}) };
 }
 const CODES = { 400: ['invalid_input'], 403: ['not_loopback', 'forbidden'], 404: ['not_found'], 409: ['import_running', 'document_changed'] };
 /** Reviewed fields only (stable when applied twice). */
@@ -68,7 +68,7 @@ export function localImportResponse(path, status, body) {
     if (messages.reduce((n,m) => n + m.text.length, 0) > 20000) throw Error('protocol');
     return { id: p.id, source: body.source, messages, truncated: body.truncated === true };
   }
-  if (p.kind === 'job' || p.kind === 'resume' || status === 202) { const j = job(body.job); if (!j) throw Error('protocol'); return { job: j }; }
+  if (p.kind === 'job' || p.kind === 'resume' || p.kind === 'pause' || status === 202) { const j = job(body.job); if (!j) throw Error('protocol'); return { job: j }; }
   if (!Array.isArray(body.sessions)) throw Error('protocol');
   const j = job(body.job);
   return { archive: str(body.archive, 200) ?? '', ...(j ? { job: j } : {}),
