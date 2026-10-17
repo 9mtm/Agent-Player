@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 const backendDir = process.cwd();
+const originalHome = process.env.HOME, originalProfile = process.env.USERPROFILE;
 const dir = mkdtempSync(join(tmpdir(), 'ap-local-import-'));
 mkdirSync(join(dir, '.data'), { recursive: true });
 process.chdir(dir);
@@ -62,7 +63,7 @@ const { generateToken } = await loadFile(join(backendDir, 'src/auth/jwt.ts'));
 const { default: Fastify } = await import('fastify');
 const server = Fastify(); registerAuthGate(server); await server.register(memoryImportRoutes); await server.ready();
 console.log = quiet.log; console.warn = quiet.warn;
-test.after(async () => { globalThis.fetch = realFetch; await server.close(); await L.stopLocalImports(); closeDatabase(); process.chdir(backendDir); rmSync(dir, { recursive: true, force: true }); });
+test.after(async () => { await server.close(); await L.stopLocalImports(); closeDatabase(); globalThis.fetch = realFetch; process.chdir(backendDir); if (originalHome === undefined) delete process.env.HOME; else process.env.HOME = originalHome; if (originalProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = originalProfile; const fs = await import('node:fs/promises'); await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
 const call = (method, url, payload, who = 'li-owner') => server.inject({ method, url, headers: { authorization: `Bearer ${generateToken(who, 1)}` }, payload });
 
 test('the reader keeps only human and agent text; tool output, thinking, injected and sub-agent text stay out', async () => {
