@@ -87,8 +87,8 @@ export function logText(value: unknown): string {
 }
 
 export const safeConsole = {
-  log: (...args: unknown[]) => console.log('%s', ...args.map(logText)),
-  info: (...args: unknown[]) => console.info('%s', ...args.map(logText)),
-  warn: (...args: unknown[]) => console.warn('%s', ...args.map(logText)),
-  error: (...args: unknown[]) => console.error('%s', ...args.map(logText)),
+  log: (...args: unknown[]) => console.log('%s', args.map(logText).join(' ').replace(/[\r\n\u001b\u2028\u2029]/g, ' ')),
+  info: (...args: unknown[]) => console.info('%s', args.map(logText).join(' ').replace(/[\r\n\u001b\u2028\u2029]/g, ' ')),
+  warn: (...args: unknown[]) => console.warn('%s', args.map(logText).join(' ').replace(/[\r\n\u001b\u2028\u2029]/g, ' ')),
+  error: (...args: unknown[]) => console.error('%s', args.map(logText).join(' ').replace(/[\r\n\u001b\u2028\u2029]/g, ' ')),
 };

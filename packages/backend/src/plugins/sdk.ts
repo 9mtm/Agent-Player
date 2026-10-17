@@ -1,4 +1,5 @@
 import { safeConsole } from '../services/safe-error-log.js';
+import { extensionResourcePath } from './resource-path.js';
 /**
  * Extension SDK
  * Provides ExtensionApi interface for extensions to register routes, tools, migrations, cron jobs, etc.
@@ -629,7 +630,7 @@ export function createExtensionApi(
 
     // i18n: Register translations from extension's i18n directory
     registerTranslations(localeDir = 'i18n') {
-      const i18nDir = resolve(extensionDir, localeDir);
+      const i18nDir = extensionResourcePath(extensionDir, localeDir);
 
       if (!existsSync(i18nDir)) {
         return; // No i18n directory — skip silently
@@ -639,7 +640,7 @@ export function createExtensionApi(
 
       for (const file of files) {
         const locale = file.replace('.json', '');
-        const filePath = join(i18nDir, file);
+        const filePath = extensionResourcePath(extensionDir, join(localeDir, file));
         try {
           const translations = JSON.parse(readFileSync(filePath, 'utf-8'));
           registerExtensionBackendTranslations(extensionId, locale, translations);
