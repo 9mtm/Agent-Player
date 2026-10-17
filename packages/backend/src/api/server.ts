@@ -36,7 +36,7 @@ const fastify = await buildServer();
 async function probePython(): Promise<string> {
   let pythonStatus = '❌ Not found';
   try {
-    const { execSync } = await import('child_process');
+    const { execFileSync } = await import('child_process');
     const pythonPaths = [
       `${process.env.LOCALAPPDATA}\\Programs\\Python\\Python312\\python.exe`,
       `${process.env.LOCALAPPDATA}\\Programs\\Python\\Python311\\python.exe`,
@@ -44,7 +44,7 @@ async function probePython(): Promise<string> {
     ];
     for (const p of pythonPaths) {
       try {
-        const ver = execSync(`"${p}" --version 2>&1`, { timeout: 2000 }).toString().trim();
+        const ver = execFileSync(p, ['--version'], { timeout: 2000 }).toString().trim();
         pythonStatus = `✅ ${ver}`;
         break;
       } catch { /* try next */ }

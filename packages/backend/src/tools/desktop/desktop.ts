@@ -14,7 +14,7 @@
 
 import * as path from 'node:path';
 import type { Tool, ToolResult } from '../types.js';
-import { spawnPython } from '../../services/python-env.js';
+import { spawnPython, PYTHON_SCRIPTS_DIR } from '../../services/python-env.js';
 import { desktopArgsFile } from './args-file.js';
 import {
   execToolRefusal,
@@ -26,8 +26,7 @@ import {
 // ─── Python script runner ─────────────────────────────────────────────────────
 
 const SCRIPT_PATH = path.join(
-  process.cwd(),
-  'python-scripts',
+  PYTHON_SCRIPTS_DIR,
   'tools',
   'desktop',
   'desktop.py',
