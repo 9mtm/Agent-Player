@@ -15,6 +15,7 @@
  * response.
  */
 import { createHash } from 'node:crypto';
+import { readRegularFile } from '../../services/read-regular-file.js';
 import { fileURLToPath } from 'node:url';
 import { createReadStream, type Dirent } from 'node:fs';
 import Database from 'better-sqlite3';
@@ -149,15 +150,14 @@ export function geminiLog(list: unknown): GeminiChat[] {
   }
   return [...by.values()];
 }
-async function readJson(file: string): Promise<unknown> {
-  const st = await fs.lstat(file);
-  if (!st.isFile() || st.size > MAX_SESSION_BYTES) throw new Error('too large');
-  return JSON.parse(await fs.readFile(file, 'utf8'));
+async function readJson(file: string, home?: string): Promise<unknown> {
+  const { data } = await readRegularFile(file, MAX_SESSION_BYTES, { root: sourceRoot('gemini-cli', home) });
+  return JSON.parse(data.toString('utf8'));
 }
 async function geminiProjectRoot(dir: string, home?: string): Promise<string | null> {
   const f = path.join(dir, '.project_root');
   if (!readable('gemini-cli', f, home)) return null;
-  try { const st = await fs.lstat(f); if (!st.isFile() || st.size > 4096) return null; const t = (await fs.readFile(f, 'utf8')).trim(); return path.isAbsolute(t) ? t : null; } catch { return null; }
+  try { const { data } = await readRegularFile(f, 4096, { root: sourceRoot('gemini-cli', home) }); const t = data.toString('utf8').trim(); return path.isAbsolute(t) ? t : null; } catch { return null; }
 }
 
 /** Every conversation of one source, with the file it lives in. */
@@ -187,13 +187,13 @@ async function enumerate(source: LocalSource, home?: string): Promise<Found[]> {
         const file = path.join(dir, 'chats', f.name);
         if (!f.isFile() || !readable(source, file, home)) continue;
         const st = await statOf(file); if (!st) continue;
-        try { const c = geminiChat(await readJson(file)); if (c?.key) seen.add(c.key); } catch { /* skipped */ }
+        try { const c = geminiChat(await readJson(file, home)); if (c?.key) seen.add(c.key); } catch { /* skipped */ }
         out.push({ source, file, ...st });
       }
       const log = path.join(dir, 'logs.json');
       const st = await statOf(log);
       if (st && readable(source, log, home)) {
-        try { for (const c of geminiLog(await readJson(log))) if (!seen.has(c.key)) out.push({ source, file: log, key: c.key, mtime: st.mtime, size: c.turns.reduce((n, t) => n + t.text.length, 0) }); } catch { /* skipped */ }
+        try { for (const c of geminiLog(await readJson(log, home))) if (!seen.has(c.key)) out.push({ source, file: log, key: c.key, mtime: st.mtime, size: c.turns.reduce((n, t) => n + t.text.length, 0) }); } catch { /* skipped */ }
       }
     }
   }
@@ -245,7 +245,7 @@ export async function readSession(ref: SessionRef, home?: string): Promise<Sessi
     return { turns: c.turns, cwd: c.cwd, startedAt: c.updatedAt, title: c.title };
   }
   if (source === 'gemini-cli') {
-    const data = await readJson(file);
+    const data = await readJson(file, home);
     const c = ref.key ? geminiLog(data).find(x => x.key === ref.key) : geminiChat(data);
     if (!c) throw new Error('gone');
     return { turns: c.turns, cwd: await geminiProjectRoot(path.dirname(ref.key ? file : path.dirname(file)), home), startedAt: c.startedAt };
