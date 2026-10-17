@@ -12,11 +12,10 @@
  *   # Windows also needs: pip install pywin32
  */
 
-import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import type { Tool, ToolResult } from '../types.js';
 import { spawnPython } from '../../services/python-env.js';
+import { desktopArgsFile } from './args-file.js';
 import {
   execToolRefusal,
   isExecToolsEnabled,
@@ -36,19 +35,22 @@ const SCRIPT_PATH = path.join(
 
 function runDesktopScript(args: Record<string, unknown>): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    const argsFile = path.join(os.tmpdir(), `desktop_${Date.now()}_${process.pid}.json`);
-
+    let ipc: ReturnType<typeof desktopArgsFile> | undefined;
+    const cleanup = () => {
+      try { ipc?.cleanup(); } catch { console.warn('[Desktop] Could not remove private helper arguments'); }
+    };
+    let child: ReturnType<typeof spawnPython>;
     try {
-      fs.writeFileSync(argsFile, JSON.stringify(args), 'utf8');
-    } catch (writeErr: any) {
-      return reject(new Error(`Failed to write args file: ${writeErr.message}`));
+      const cwd = safeChildCwd();
+      ipc = desktopArgsFile(args);
+      child = spawnPython(SCRIPT_PATH, ['--args-file', ipc.file], {
+        baseEnv: minimalChildEnv(),
+        cwd,
+      });
+    } catch {
+      cleanup();
+      return reject(new Error('Could not start the desktop helper'));
     }
-
-    // SECURITY: minimal env (no server secrets), cwd outside the data dir (S0-Q.5)
-    const child = spawnPython(SCRIPT_PATH, ['--args-file', argsFile], {
-      baseEnv: minimalChildEnv(),
-      cwd: safeChildCwd(),
-    });
 
     let stdout = '';
     let stderr = '';
@@ -57,7 +59,7 @@ function runDesktopScript(args: Record<string, unknown>): Promise<Record<string,
     child.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
 
     child.on('close', (code) => {
-      try { fs.unlinkSync(argsFile); } catch { /* ignore */ }
+      cleanup();
 
       if (code !== 0) {
         return reject(new Error(stderr.trim() || `Process exited with code ${code}`));
@@ -75,7 +77,7 @@ function runDesktopScript(args: Record<string, unknown>): Promise<Record<string,
     });
 
     child.on('error', (err) => {
-      try { fs.unlinkSync(argsFile); } catch { /* ignore */ }
+      cleanup();
       reject(err);
     });
   });
