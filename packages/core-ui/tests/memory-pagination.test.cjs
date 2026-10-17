@@ -60,3 +60,25 @@ test('background refresh cannot overlap or replace an edit started during a requ
  c.startEdit(item(1).id);c.editDraft('keep this');release({status:200,body:{memories:[item(1),item(2)],nextCursor:null,total:2}});await pending;
  assert.equal(c.getSnapshot().items.length,1);assert.equal(c.getSnapshot().draft,'keep this');c.dispose();
 });
+
+test('5003 memories render in bounded windows; every item and a late search result remain reachable',async()=>{
+ const React=require('../node_modules/react');const {renderToStaticMarkup}=require('../node_modules/react-dom/server');const {ItemsView}=require('../src/MemoryViews.tsx');
+ const rows=Array.from({length:5003},(_,i)=>({...item(i),importance:5}));
+ const c=new MemoryItemsController({request:async r=>r.path==='/api/memory/drawers'?{status:200,body:{drawers:[]}}:r.path==='/api/agents'?{status:200,body:{agents:[]}}:{status:200,body:{memories:rows,nextCursor:null,total:rows.length}}});
+ await c.load();const seen=new Set();
+ for(let page=0;page<101;page++){
+  const html=renderToStaticMarkup(React.createElement(ItemsView,{c}));const ids=[...html.matchAll(/id="memory-([^"]+)"/g)].map(m=>m[1]);
+  assert.ok(ids.length<=50);ids.forEach(id=>seen.add(id));assert.match(html,/Showing/);c.movePage(1);
+ }
+ assert.equal(seen.size,5003);c.setQuery('Fictional memory 5002');assert.equal(c.getSnapshot().offset,0);
+ assert.match(renderToStaticMarkup(React.createElement(ItemsView,{c})),/Fictional memory 5002/);
+ c.setQuery('');c.reveal(item(4999).id);assert.equal(c.getSnapshot().offset,4950);c.startEdit(item(4999).id);c.editDraft('Keep my draft');c.movePage(-1);assert.equal(c.getSnapshot().offset,4950);assert.equal(c.getSnapshot().draft,'Keep my draft');c.dispose();
+});
+
+test('background insertion keeps the first memory of a later window anchored',async()=>{
+ let rows=Array.from({length:151},(_,i)=>({...item(i),importance:5}));
+ const c=new MemoryItemsController({request:async r=>r.path==='/api/memory/drawers'?{status:200,body:{drawers:[]}}:r.path==='/api/agents'?{status:200,body:{agents:[]}}:{status:200,body:{memories:rows,nextCursor:null,total:rows.length}}});
+ await c.load();c.movePage(1);const anchor=c.visible()[c.getSnapshot().offset].id;
+ rows=[{...item(999),importance:10},...rows];await c.load(true);
+ assert.equal(c.getSnapshot().offset,51);assert.equal(c.visible()[51].id,anchor);assert.equal(c.getSnapshot().items.length,152);c.dispose();
+});

@@ -6,6 +6,7 @@ import { drawerKinds, memoryTypes } from './agent-card-contract.js';
 import type { Drawer, MemoryItem, MemoryType } from './agent-card-contract.js';
 import { MemoryPanel } from './SessionPanels';
 import { UiIcon } from './ui-icons';
+import { ViewTabs } from './ViewTabs';
 import { LocalImport } from './LocalImport';
 
 const KIND_LABEL: Record<string, string> = { owner: 'About you', experience: 'Lessons', project: 'Project', task: 'Task', people: 'Person' };
@@ -67,26 +68,28 @@ export function MemoryPage({ client, active = false, focus }: { client: SessionC
   useEffect(() => {
     if (!focus || !c) return;
     setTab('items');
-    void (async () => { if (c.getSnapshot().phase !== 'ready') await c.load(); c.setQuery(''); c.openDrawer(focus.drawerId); })();
+    void (async () => { if (c.getSnapshot().phase !== 'ready') await c.load(); c.setQuery(''); c.openDrawer(focus.drawerId); c.reveal(focus.memoryId); })();
   }, [focus?.n, c]);
   return <section className="memory-page" aria-label="Memory">
     <header className="memory-page-head">
       <div><h2>Memory</h2><p className="fine-print">What your agents remember, sorted into drawers. You own every memory; each agent reads only the drawers its permissions open.</p></div>
-      <div className="seg" role="tablist" aria-label="Memory views">
-        <button type="button" role="tab" aria-selected={tab === 'items'} onClick={() => setTab('items')}>Memories</button>
-        <button type="button" role="tab" aria-selected={tab === 'files'} onClick={() => setTab('files')}>Agent files and reviews</button>
-        {owner && <button type="button" role="tab" aria-selected={tab === 'import'} onClick={() => setTab('import')}>Import from other agents</button>}
-      </div>
+      <ViewTabs id="memory-view" label="Memory views" value={tab} onChange={setTab} tabs={[
+        { value: 'items', label: 'Memories' }, { value: 'files', label: 'Agent files & reviews' },
+        ...(owner ? [{ value: 'import' as const, label: 'Import' }] : []),
+      ]}/>
+
     </header>
     {owner && tab === 'items' && <p className="empty-note">Manual imports wait for your approval. Automatic imports save directly when enabled. New memories appear automatically while this view is open. <button type="button" className="link-button" onClick={() => setTab('files')}>Review imported memories</button> Choose Main Agent in Agent files and reviews.</p>}
+    <div id="memory-view-panel" role="tabpanel" aria-labelledby={`memory-view-${tab}`}>
     {tab === 'items' ? (c ? <ItemsView c={c} focused={focus?.memoryId}/> : null) : tab === 'import' ? <LocalImport client={client} active={active} onReview={() => setTab('files')}/> : <MemoryPanel client={client} active={active && tab === 'files'}/>}
+    </div>
   </section>;
 }
 
 /** A memory to show when the page opens from elsewhere (n changes on every request). */
 export type MemoryFocus = { drawerId: string; memoryId: string; n: number };
 
-function ItemsView({ c, focused }: { c: MemoryItemsController; focused?: string }) {
+export function ItemsView({ c, focused }: { c: MemoryItemsController; focused?: string }) {
   const s = useSyncExternalStore(c.subscribe, c.getSnapshot, c.getSnapshot);
   useEffect(() => { if (focused && s.phase === 'ready') document.getElementById(`memory-${focused}`)?.scrollIntoView?.({ block: 'center' }); }, [focused, s.phase, s.open]);
   const [confirm, setConfirm] = useState<string | null>(null);
@@ -94,7 +97,8 @@ function ItemsView({ c, focused }: { c: MemoryItemsController; focused?: string 
   if (s.phase !== 'ready') return <p className="empty-note" role="status">Loading memory…{s.loaded !== undefined && ` ${s.loaded} of ${s.total ?? '…'}`}</p>;
   const total = s.items.length;
   const kinds = drawerKinds.map(k => ({ kind: k, drawers: s.drawers.filter(d => d.kind === k) }));
-  const items = c.visible();
+  const matches = c.visible();
+  const items = matches.slice(s.offset, s.offset + 50);
   const openDrawer = s.open === 'all' ? null : s.drawers.find(d => drawerId(d) === s.open) ?? null;
   const openKind = openDrawer?.kind ?? (s.open === 'all' ? null : s.open.split(':')[0]);
   const readers = openKind ? s.readers[openKind] ?? [] : [];
@@ -128,8 +132,13 @@ function ItemsView({ c, focused }: { c: MemoryItemsController; focused?: string 
         <button type="button" className="primary" onClick={() => c.startAdd()} disabled={!!s.adding}><UiIcon name="plus" size={12}/>Add memory</button>
       </div>
       {s.notice && <p className="card-notice" role="alert">{s.notice}</p>}
-      {s.found && <p className="fine-print">{items.length} found by meaning. <button type="button" className="link-button" onClick={() => c.setQuery(s.query)}>Show word matches</button></p>}
+      {s.found && <p className="fine-print">{matches.length} found by meaning. <button type="button" className="link-button" onClick={() => c.setQuery(s.query)}>Show word matches</button></p>}
       {s.adding && <AddForm c={c}/>}
+      {matches.length > 0 && <nav className="memory-pagination" aria-label="Memory pages">
+        <span className="fine-print" role="status">Showing {s.offset + 1}–{Math.min(s.offset + 50, matches.length)} of {matches.length} memories</span>
+        <button type="button" className="ghost" disabled={s.offset === 0 || s.busy || !!s.editing || !!s.adding} onClick={() => c.movePage(-1)}>Previous</button>
+        <button type="button" className="ghost" disabled={s.offset + 50 >= matches.length || s.busy || !!s.editing || !!s.adding} onClick={() => c.movePage(1)}>Next</button>
+      </nav>}
       {items.length === 0 && !s.adding ? <div className="empty-note">
         <p>{s.query ? 'No memory matches.' : 'This drawer is empty.'}</p>
         {!s.query && <p className="fine-print">Agents add memories while they work (if their permissions allow it), or add one yourself.</p>}

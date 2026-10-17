@@ -1,4 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
+import { ViewTabs } from './ViewTabs';
 import { LocalImportController } from './local-import';
 import { AutomaticProjectImport } from './AutomaticProjectImport';
 import { ProjectFilesImport } from './ProjectFilesImport';
@@ -37,10 +38,9 @@ export function LocalImportView({ controller: c, active, onReview, client }: { c
       <div><h3>Import from other agents</h3>
         <p className="fine-print">Choose conversations or project documents from this computer using the tabs below. Secrets are removed first, a private copy is kept in <code>{s.archive || '~/.dpro/imports'}</code>, and the local model suggests lasting memories. Manual imports wait for your approval. Automatic import saves directly when enabled. The original files are never changed.</p></div>
     </div>
-    <div className="import-source-tabs" role="tablist" aria-label="Import source type">
-      <button type="button" role="tab" aria-selected={importKind==='conversations'} onClick={()=>setImportKind('conversations')}><strong>Import conversations</strong><small>Claude Code, Codex and other agents</small></button>
-      <button type="button" role="tab" aria-selected={importKind==='files'} onClick={()=>setImportKind('files')}><strong>Import project files</strong><small>CLAUDE.md, AGENTS.md and handoff notes</small></button>
-    </div>
+    <ViewTabs id="import-source" label="Import source type" value={importKind} onChange={setImportKind} tabs={[{value:'conversations',label:'Conversations'},{value:'files',label:'Project files'}]}/>
+    <div id="import-source-panel" role="tabpanel" aria-labelledby={`import-source-${importKind}`}>
+    <p className="fine-print">{importKind === 'conversations' ? 'Saved conversations from Claude Code, Codex and other agents.' : 'Project notes: CLAUDE.md, AGENTS.md and handoff files.'}</p>
     {client && importKind==='files' && <><AutomaticProjectImport client={client}/><ProjectFilesImport client={client} controller={c} busy={!!running}/></>}
     {s.progress && <p role="status">Processed {s.progress.done} of {s.progress.total} selected sources · {s.progress.proposed} {s.job?.automatic?'memories processed automatically.':'memories proposed for review.'}</p>}
     {s.job && <div className="local-import-job" role="status" data-status={s.job.status}>
@@ -91,5 +91,6 @@ export function LocalImportView({ controller: c, active, onReview, client }: { c
           </div>)}
         {shown.length > 200 && <p className="fine-print">Showing the newest 200; search to find older ones.</p>}
       </>)}
+    </div>
   </section>;
 }

@@ -1456,9 +1456,10 @@ button.status-item:hover { background:var(--row-hover); color:var(--text); }
 .app-shell .local-import-messages article[data-role="user"] { background:rgba(80,130,200,.08); }
 .app-shell .local-import-messages p { white-space:pre-wrap; overflow-wrap:anywhere; }
 
-.import-source-tabs { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-block:16px; }
-.import-source-tabs button { display:flex; flex-direction:column; align-items:flex-start; gap:6px; padding:16px 18px; min-block-size:78px; text-align:start; color:var(--text); background:var(--surface); border:1px solid var(--border); border-radius:8px; }
-.import-source-tabs button strong { font-size:15px; }
-.import-source-tabs button small { font-size:12px; color:var(--muted); }
-.import-source-tabs button[aria-selected="true"] { background:var(--subtle); border-color:var(--accent); box-shadow:inset 0 -3px var(--accent); }
-@media(max-width:600px) { .import-source-tabs { grid-template-columns:1fr; } }
+/* Shared compact pane tabs follow the desktop design tokens. */
+.app-shell .pane-tabs { display:flex; gap:16px; border-block-end:1px solid var(--stroke-3); overflow-x:auto; }
+.app-shell .pane-tabs [role="tab"] { flex-shrink:0; min-block-size:28px; padding:0 4px; border:0; border-radius:0; background:transparent; box-shadow:none; color:var(--text-2); font-size:11px; font-weight:500; border-block-end:2px solid transparent; }
+.app-shell .pane-tabs [role="tab"][aria-selected="true"] { color:var(--text); border-block-end-color:var(--accent); }
+.memory-pagination { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-block:8px; }
+.memory-pagination .fine-print { margin-inline-end:auto; }
+@media(max-width:768px) { .app-shell .pane-tabs [role="tab"] { min-block-size:44px; } }

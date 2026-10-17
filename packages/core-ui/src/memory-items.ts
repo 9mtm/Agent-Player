@@ -15,7 +15,7 @@ export type MemoryState = Readonly<{
   history: Readonly<Record<string, readonly MemoryVersion[]>>;
   readers: Readonly<Record<string, readonly string[]>>;
   notice?: string;
-  loaded?: number; total?: number;
+  loaded?: number; total?: number; offset: number;
 }>;
 
 const record = (x: unknown): x is Record<string, any> => !!x && typeof x === 'object' && !Array.isArray(x);
@@ -23,7 +23,7 @@ const record = (x: unknown): x is Record<string, any> => !!x && typeof x === 'ob
 export const drawerId = (d: Drawer) => (d.key ? `${d.kind}:${d.key}` : d.kind);
 
 export class MemoryItemsController {
-  #state: MemoryState = Object.freeze({ phase: 'idle', busy: false, items: [], drawers: [], open: 'all', query: '', found: null, editing: null, draft: '', draftImportance: 5, adding: null, history: {}, readers: {} });
+  #state: MemoryState = Object.freeze({ phase: 'idle', busy: false, offset: 0, items: [], drawers: [], open: 'all', query: '', found: null, editing: null, draft: '', draftImportance: 5, adding: null, history: {}, readers: {} });
   #listeners = new Set<() => void>();
   #disposed = false;
   #loading = false;
@@ -35,9 +35,9 @@ export class MemoryItemsController {
   private req(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown) { return this.client.request((body === undefined ? { method, path } : { method, path, body }) as never); }
 
   /** The items shown: the open drawer, narrowed by the search. */
-  visible(): MemoryItem[] {
+  visible(source: readonly MemoryItem[] = this.#state.items): MemoryItem[] {
     const s = this.#state;
-    let items = s.open === 'all' ? [...s.items] : s.items.filter(m => drawerId(m.drawer) === s.open);
+    let items = s.open === 'all' ? [...source] : source.filter(m => drawerId(m.drawer) === s.open);
     if (s.found) items = items.filter(m => s.found!.includes(m.id));
     else if (s.query.trim()) { const q = s.query.trim().toLowerCase(); items = items.filter(m => m.content.toLowerCase().includes(q) || m.type.includes(q)); }
     return items.sort((a, b) => b.importance - a.importance || b.createdAt.localeCompare(a.createdAt));
@@ -66,7 +66,12 @@ export class MemoryItemsController {
       const d = await this.req('GET', '/api/memory/drawers');
       if (this.#disposed) return;
       if (quiet && (this.#state.busy || this.#state.editing || this.#state.adding)) return;
-      this.publish({ phase: 'ready', items: [...items.values()], drawers: d.status === 200 && record(d.body) ? d.body.drawers as DrawerCount[] : [] });
+      const anchor = quiet && this.#state.offset > 0 ? this.visible()[this.#state.offset]?.id : undefined;
+      const nextItems = [...items.values()];
+      const matches = this.visible(nextItems);
+      const anchored = anchor ? matches.findIndex(m => m.id === anchor) : -1;
+      const offset = anchored >= 0 ? anchored : Math.min(this.#state.offset, Math.max(0, Math.floor((matches.length - 1) / 50) * 50));
+      this.publish({ phase: 'ready', offset, items: nextItems, drawers: d.status === 200 && record(d.body) ? d.body.drawers as DrawerCount[] : [] });
       if (!quiet) void this.loadReaders();
     } catch { if (!quiet) this.publish({ phase: 'error', notice: 'Memory could not be loaded.' }); }
     finally { this.#loading = false; }
@@ -90,8 +95,17 @@ export class MemoryItemsController {
     } catch { /* readers stay unknown */ }
   }
 
-  openDrawer(id: string) { this.publish({ open: id, editing: null }); }
-  setQuery(query: string) { this.publish({ query, found: null }); }
+  movePage(direction: -1 | 1) {
+    if (this.#state.busy || this.#state.editing || this.#state.adding) return;
+    const last = Math.max(0, Math.floor((this.visible().length - 1) / 50) * 50);
+    this.publish({ offset: Math.max(0, Math.min(last, this.#state.offset + direction * 50)) });
+  }
+  reveal(id: string) {
+    const index = this.visible().findIndex(m => m.id === id);
+    if (index >= 0) this.publish({ offset: Math.floor(index / 50) * 50 });
+  }
+  openDrawer(id: string) { this.publish({ open: id, editing: null, offset: 0 }); }
+  setQuery(query: string) { this.publish({ query, found: null, offset: 0 }); }
   /** Searches by meaning on the server (the box filters by words as you type). */
   async searchServer() {
     const q = this.#state.query.trim();
@@ -99,7 +113,7 @@ export class MemoryItemsController {
     this.publish({ busy: true });
     try {
       const r = await this.req('POST', '/api/memory/search', { query: q.slice(0, 500), limit: 50 });
-      this.publish({ busy: false, found: r.status === 200 && record(r.body) ? (r.body.memories as MemoryItem[]).map(m => m.id) : null });
+      this.publish({ busy: false, offset: 0, found: r.status === 200 && record(r.body) ? (r.body.memories as MemoryItem[]).map(m => m.id) : null });
     } catch { this.publish({ busy: false }); }
   }
 
