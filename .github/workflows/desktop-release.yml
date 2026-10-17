@@ -63,7 +63,7 @@ jobs:
         timeout-minutes: 5
         shell: bash
         run: |
-          node --test --test-timeout=90000 packages/core-ui/tests/*.test.cjs
+          node --test --test-concurrency=2 --test-timeout=90000 packages/core-ui/tests/*.test.cjs
           node --test --test-timeout=90000 packages/desktop/test/*.test.cjs
       - name: Test import persistence and duplicate prevention
         working-directory: packages/backend

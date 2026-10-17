@@ -284,7 +284,7 @@ test('HTTP decision timeout remains unknown and is never retried', async t => {
     if (req.method === 'POST') return;
     const reply = await mock.transport({ method: 'GET', path: req.url, signal: new AbortController().signal, headers: {} });
     res.end(JSON.stringify(reply.body));
-  }, { timeoutMs: 100 });
+  }, { timeoutMs: 1000 });
   const { createMemoryAdapter, MemoryController } = require('../src/memory.ts');
   const transport = async r => { const reply = await s.request(r.path, r); return { status: reply.status, body: JSON.parse(reply.text) }; };
   const ctrl = new MemoryController(createMemoryAdapter(transport, () => true), mock.context);
