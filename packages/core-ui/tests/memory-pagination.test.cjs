@@ -28,3 +28,35 @@ test('disposal stops pagination and malformed cursor requests stay blocked at bo
  for(const path of ['/api/memory/page?cursor=','/api/memory/page?cursor=abc&owner=other','/api/memory/page?cursor=%2F','/api/memory/page?limit=9999','/api/memory/page?cursor='+ 'a'.repeat(1025)]){assert.equal(allowedRequest('GET',path),false);assert.equal(allowed('GET',path),false)}
  assert.equal(allowedRequest('POST','/api/memory/page',{}),false);
 });
+
+test('background refresh adds unique memories without loading flicker or losing drawer/search/draft', async()=>{
+ let rows=[{...item(1),importance:5}], fail=false;
+ const c=new MemoryItemsController({request:async r=>{
+  if(r.path==='/api/memory/drawers')return {status:200,body:{drawers:[]}};
+  if(r.path==='/api/agents')return {status:200,body:{agents:[]}};
+  if(fail)throw Error('offline');
+  return {status:200,body:{memories:rows,nextCursor:null,total:rows.length}};
+ }});
+ await c.load();c.openDrawer('owner');c.setQuery('Fictional');
+ const phases=[];c.subscribe(()=>phases.push(c.getSnapshot().phase));
+ rows=[...rows,item(2),item(2)];await c.load(true);
+ assert.equal(c.getSnapshot().items.length,2);assert.ok(phases.every(x=>x==='ready'));
+ assert.equal(c.getSnapshot().query,'Fictional');assert.equal(c.getSnapshot().open,'owner');
+ c.startEdit(item(1).id);c.editDraft('unsaved text');rows=[...rows,item(3)];await c.load(true);
+ assert.equal(c.getSnapshot().items.length,2);assert.equal(c.getSnapshot().draft,'unsaved text');
+ c.cancelEdit();fail=true;await c.load(true);assert.equal(c.getSnapshot().phase,'ready');assert.equal(c.getSnapshot().items.length,2);
+ fail=false;await c.load(true);assert.equal(c.getSnapshot().items.length,3);c.dispose();
+});
+
+test('background refresh cannot overlap or replace an edit started during a request',async()=>{
+ let release,hold=false,calls=0;
+ const c=new MemoryItemsController({request:async r=>{
+  if(r.path==='/api/memory/drawers')return {status:200,body:{drawers:[]}};
+  if(r.path==='/api/agents')return {status:200,body:{agents:[]}};
+  calls++;if(hold)return new Promise(resolve=>release=resolve);
+  return {status:200,body:{memories:[item(1)],nextCursor:null,total:1}};
+ }});
+ await c.load();hold=true;const pending=c.load(true);await c.load(true);assert.equal(calls,2);
+ c.startEdit(item(1).id);c.editDraft('keep this');release({status:200,body:{memories:[item(1),item(2)],nextCursor:null,total:2}});await pending;
+ assert.equal(c.getSnapshot().items.length,1);assert.equal(c.getSnapshot().draft,'keep this');c.dispose();
+});

@@ -26,6 +26,7 @@ export class MemoryItemsController {
   #state: MemoryState = Object.freeze({ phase: 'idle', busy: false, items: [], drawers: [], open: 'all', query: '', found: null, editing: null, draft: '', draftImportance: 5, adding: null, history: {}, readers: {} });
   #listeners = new Set<() => void>();
   #disposed = false;
+  #loading = false;
   constructor(private readonly client: SessionClient) {}
   getSnapshot = () => this.#state;
   subscribe = (fn: () => void) => { this.#listeners.add(fn); return () => { this.#listeners.delete(fn); }; };
@@ -42,9 +43,12 @@ export class MemoryItemsController {
     return items.sort((a, b) => b.importance - a.importance || b.createdAt.localeCompare(a.createdAt));
   }
 
-  async load() {
-    if (this.#state.phase === 'loading') return;
-    this.publish({ phase: 'loading', notice: undefined, loaded: 0, total: undefined });
+  async load(background = false) {
+    if (this.#disposed || this.#loading) return;
+    if (background && (this.#state.busy || this.#state.editing || this.#state.adding)) return;
+    const quiet = background && this.#state.phase === 'ready';
+    this.#loading = true;
+    if (!quiet) this.publish({ phase: 'loading', notice: undefined, loaded: 0, total: undefined });
     try {
       const items = new Map<string, MemoryItem>();
       const cursors = new Set<string>();
@@ -53,17 +57,19 @@ export class MemoryItemsController {
         if (this.#disposed) return;
         const m = await this.req('GET', '/api/memory/page' + (cursor ? `?cursor=${cursor}` : ''));
         if (this.#disposed) return;
-        if (m.status !== 200 || !record(m.body) || !Array.isArray(m.body.memories)) { this.publish({ phase: 'error', notice: m.status === 401 || m.status === 403 ? 'Only the owner can open the memory here.' : 'Memory could not be loaded.' }); return; }
+        if (m.status !== 200 || !record(m.body) || !Array.isArray(m.body.memories)) { if (!quiet) this.publish({ phase: 'error', notice: m.status === 401 || m.status === 403 ? 'Only the owner can open the memory here.' : 'Memory could not be loaded.' }); return; }
         for (const item of m.body.memories as MemoryItem[]) items.set(item.id, item);
         cursor = m.body.nextCursor;
-        this.publish({ loaded: items.size, total: m.body.total });
+        if (!quiet) this.publish({ loaded: items.size, total: m.body.total });
         if (cursor) { if (cursors.has(cursor)) throw Error('Repeated memory cursor'); cursors.add(cursor); }
       } while (cursor);
       const d = await this.req('GET', '/api/memory/drawers');
       if (this.#disposed) return;
+      if (quiet && (this.#state.busy || this.#state.editing || this.#state.adding)) return;
       this.publish({ phase: 'ready', items: [...items.values()], drawers: d.status === 200 && record(d.body) ? d.body.drawers as DrawerCount[] : [] });
-      void this.loadReaders();
-    } catch { this.publish({ phase: 'error', notice: 'Memory could not be loaded.' }); }
+      if (!quiet) void this.loadReaders();
+    } catch { if (!quiet) this.publish({ phase: 'error', notice: 'Memory could not be loaded.' }); }
+    finally { this.#loading = false; }
   }
 
   /** Which agents may read each drawer kind (owner view of the team's permissions). */

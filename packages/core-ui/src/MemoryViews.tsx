@@ -54,7 +54,15 @@ export function MemoryPage({ client, active = false, focus }: { client: SessionC
   const [c, setC] = useState<MemoryItemsController>();
   useEffect(() => { const x = new MemoryItemsController(client); setC(x); return () => x.dispose(); }, [client]);
   // Returning from reviews must read the newly approved memories.
-  useEffect(() => { if (active && tab === 'items' && c) void c.load(); }, [active, c, tab]);
+  useEffect(() => {
+    if (!active || tab !== 'items' || !c) return;
+    void c.load();
+    if (!owner) return;
+    const refresh = () => { if (document.visibilityState !== 'hidden') void c.load(true); };
+    const timer = window.setInterval(refresh, 15000);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', refresh); };
+  }, [active, c, tab, owner]);
   // CHAT-PRO-02 E: "Open in Memory" from a chat opens the memory's drawer and marks it.
   useEffect(() => {
     if (!focus || !c) return;
@@ -70,7 +78,7 @@ export function MemoryPage({ client, active = false, focus }: { client: SessionC
         {owner && <button type="button" role="tab" aria-selected={tab === 'import'} onClick={() => setTab('import')}>Import from other agents</button>}
       </div>
     </header>
-    {owner && tab === 'items' && <p className="empty-note">Manual imports wait for your approval. Automatic imports save directly when enabled. Refresh to include memories saved since this view loaded. <button type="button" className="link-button" onClick={() => setTab('files')}>Review imported memories</button> Choose Main Agent in Agent files and reviews.</p>}
+    {owner && tab === 'items' && <p className="empty-note">Manual imports wait for your approval. Automatic imports save directly when enabled. New memories appear automatically while this view is open. <button type="button" className="link-button" onClick={() => setTab('files')}>Review imported memories</button> Choose Main Agent in Agent files and reviews.</p>}
     {tab === 'items' ? (c ? <ItemsView c={c} focused={focus?.memoryId}/> : null) : tab === 'import' ? <LocalImport client={client} active={active} onReview={() => setTab('files')}/> : <MemoryPanel client={client} active={active && tab === 'files'}/>}
   </section>;
 }
