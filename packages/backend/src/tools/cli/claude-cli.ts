@@ -1,3 +1,4 @@
+import { safeConsole } from '../../services/safe-error-log.js';
 /**
  * Claude Code CLI Tool
  *
@@ -142,9 +143,9 @@ export const claudeCliTool: Tool = {
       };
     }
 
-    console.log(`[ClaudeCLI] 🚀 Sending prompt (${prompt.length} chars)`);
+    safeConsole.log(`[ClaudeCLI] 🚀 Sending prompt (${prompt.length} chars)`);
     if (workdir) console.log(`[ClaudeCLI]   Workdir: ${workdir}`);
-    if (model) console.log(`[ClaudeCLI]   Model: ${model}`);
+    if (model) safeConsole.log(`[ClaudeCLI]   Model: ${model}`);
 
     // SECURITY (S1.1): key from the credential authority only: the server env
     // key, then the calling agent's OWN key, then the caller's own credentials.

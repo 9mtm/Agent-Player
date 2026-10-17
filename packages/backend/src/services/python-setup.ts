@@ -1,3 +1,4 @@
+import { safeConsole } from './safe-error-log.js';
 /**
  * Python Environment Setup
  *
@@ -320,7 +321,7 @@ export async function setupPythonEnvironment(): Promise<void> {
     console.log('  You can now run: npm run dev');
     console.log('');
   } catch (err: any) {
-    console.error(`\n[Setup] FAILED: ${err.message}`);
+    safeConsole.error(`\n[Setup] FAILED: ${err.message}`);
     throw err;
   }
 }

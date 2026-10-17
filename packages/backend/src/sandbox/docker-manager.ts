@@ -1,3 +1,4 @@
+import { safeConsole } from '../services/safe-error-log.js';
 /**
  * Docker Manager
  * Manages Docker containers for sandboxed execution
@@ -47,12 +48,12 @@ export class DockerManager {
       }
 
       // Pull image
-      console.log(`[Sandbox] Pulling image: ${image}`);
+      safeConsole.log(`[Sandbox] Pulling image: ${image}`);
       await execAsync(`docker pull ${image}`, { timeout: 300000 }); // 5 min timeout
-      console.log(`[Sandbox] Image pulled: ${image}`);
+      safeConsole.log(`[Sandbox] Image pulled: ${image}`);
       return true;
     } catch (error) {
-      console.error(`[Sandbox] Failed to pull image ${image}:`, error);
+      safeConsole.error(`[Sandbox] Failed to pull image ${image}:`, error);
       return false;
     }
   }
@@ -276,7 +277,7 @@ export class DockerManager {
 
     session.status = 'stopped';
     this.sessions.delete(sessionId);
-    console.log(`[Sandbox] Destroyed session: ${sessionId}`);
+    safeConsole.log(`[Sandbox] Destroyed session: ${sessionId}`);
   }
 
   /**

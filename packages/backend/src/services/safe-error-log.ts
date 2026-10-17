@@ -7,6 +7,8 @@
  * never reaches the log.
  */
 
+import { redactImportText } from '../memory/import/redact.js';
+
 export interface SafeErrorFields {
   name: string;
   code?: string | number;
@@ -70,3 +72,23 @@ export function cliFailureText(label: string, err: unknown, timeoutMs?: number):
 export function cliNoOutputText(label: string): string {
   return `${label} CLI returned no output.`;
 }
+
+/** Untrusted log fields cannot introduce records, terminal controls, or format directives. */
+export function logText(value: unknown): string {
+  let text: string;
+  try {
+    text = typeof value === 'string' ? value
+      : value instanceof Error ? JSON.stringify(safeErrorFields(value))
+      : JSON.stringify(value) ?? String(value);
+  } catch {
+    text = '[unavailable log field]';
+  }
+  return redactImportText(text).text.replace(/[\r\n\u001b\u2028\u2029]/g, ' ').slice(0, 4096);
+}
+
+export const safeConsole = {
+  log: (...args: unknown[]) => console.log('%s', ...args.map(logText)),
+  info: (...args: unknown[]) => console.info('%s', ...args.map(logText)),
+  warn: (...args: unknown[]) => console.warn('%s', ...args.map(logText)),
+  error: (...args: unknown[]) => console.error('%s', ...args.map(logText)),
+};

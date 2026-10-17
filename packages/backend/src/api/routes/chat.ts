@@ -1,3 +1,4 @@
+import { safeConsole } from '../../services/safe-error-log.js';
 /**
  * Chat API Routes
  * Handles chat completions with streaming support
@@ -410,7 +411,7 @@ export async function executeChatTurn(reply: FastifyReply, input: ChatTurnInput)
     // CHAT-PRO-02 G: an LM Studio turn needs an LM Studio model id (`lmstudio:<name>`).
     if (resolvedProvider === 'lmstudio' && !lmStudioModelName(resolvedModel)) return reply.status(400).send({ error: 'Pick an LM Studio model', code: 'invalid_model' });
 
-    console.log('[Chat] Agent:', agentConfig?.name || 'none (fallback)', '| Provider:', resolvedProvider, '| Model:', resolvedModel);
+    safeConsole.log('[Chat] Agent:', agentConfig?.name || 'none (fallback)', '| Provider:', resolvedProvider, '| Model:', resolvedModel);
     if (memoryContext) console.log('[Chat] Memory context injected', { chars: String(memoryContext).length });
 
     // CLI bridge providers run a separate local agent with its own tools; never for channel turns.
@@ -494,10 +495,10 @@ async function streamChat(
   uiSet: 'full' | 'chat' = 'full'
 ) {
   console.log('[Chat] 🚀 Starting stream chat');
-  console.log('[Chat]   📦 Model:', model);
+  safeConsole.log('[Chat]   📦 Model:', model);
   console.log('[Chat]   🏭 Provider:', provider, `(type: ${typeof provider})`);
-  console.log('[Chat]   🆔 Session:', sessionId);
-  console.log('[Chat]   💬 Messages:', messages.length);
+  safeConsole.log('[Chat]   🆔 Session:', sessionId);
+  safeConsole.log('[Chat]   💬 Messages:', messages.length);
 
   // Extract user message and history
   const userMessage = messages[messages.length - 1]?.content || '';
@@ -509,7 +510,7 @@ async function streamChat(
     content: messageText(m.content),
   }));
 
-  console.log('[Chat]   Last message length:', typeof userMessage === 'string' ? userMessage.length : 'multimodal');
+  safeConsole.log('[Chat]   Last message length:', typeof userMessage === 'string' ? userMessage.length : 'multimodal');
 
   // 🧠 Use Agent System to build smart prompt
   let agentResponse;
@@ -711,7 +712,7 @@ You: [Present results with \`\`\`spec blocks showing temperature, conditions, et
       }, { workspaceDir: process.cwd(), userId, sessionId, agentId });
       const text = result.content?.[0]?.text || '(no response)';
       const claudeModel = (result.details as any)?.model || model || 'claude-sonnet-4-5-20250929';
-      console.log(`[Chat] ✅ Claude CLI responded | model: ${claudeModel} | length: ${text.length}`);
+      safeConsole.log(`[Chat] ✅ Claude CLI responded | model: ${claudeModel} | length: ${text.length}`);
       for (const part of chunkText(text, ANSWER_FRAME_BYTES)) {
         reply.raw.write(`data: ${JSON.stringify({ content: part, done: false, model: claudeModel, provider: 'claude-cli' })}\n\n`);
       }
@@ -813,10 +814,10 @@ async function nonStreamChat(
   memoryDrawers?: DrawerRef[]
 ) {
   console.log('[Chat] 🚀 Starting non-stream chat');
-  console.log('[Chat]   📦 Model:', model);
+  safeConsole.log('[Chat]   📦 Model:', model);
   console.log('[Chat]   🏭 Provider:', provider, `(type: ${typeof provider})`);
-  console.log('[Chat]   🆔 Session:', sessionId);
-  console.log('[Chat]   💬 Messages:', messages.length);
+  safeConsole.log('[Chat]   🆔 Session:', sessionId);
+  safeConsole.log('[Chat]   💬 Messages:', messages.length);
 
   // Extract user message and history
   const userMessage = messages[messages.length - 1]?.content || '';
@@ -828,7 +829,7 @@ async function nonStreamChat(
     content: messageText(m.content),
   }));
 
-  console.log('[Chat]   Last message length:', typeof userMessage === 'string' ? userMessage.length : 'multimodal');
+  safeConsole.log('[Chat]   Last message length:', typeof userMessage === 'string' ? userMessage.length : 'multimodal');
 
   // 🧠 Use Agent System to build smart prompt
   let agentResponse;

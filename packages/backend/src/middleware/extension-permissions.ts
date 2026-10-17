@@ -1,3 +1,4 @@
+import { safeConsole } from '../services/safe-error-log.js';
 /**
  * Extension Permissions Middleware
  * Validates extension capabilities before allowing API access
@@ -46,7 +47,7 @@ export function getExtensionPermissions(extensionId: string): PermissionType[] {
   }
 
   if (!existsSync(manifestPath)) {
-    console.warn(`[Permissions] ⚠️  Manifest not found for extension: ${extensionId}`);
+    safeConsole.warn(`[Permissions] ⚠️  Manifest not found for extension: ${extensionId}`);
     return [];
   }
 
@@ -69,7 +70,7 @@ export function getExtensionPermissions(extensionId: string): PermissionType[] {
 
     return permissions;
   } catch (error) {
-    console.error(`[Permissions] ❌ Failed to read manifest for ${extensionId}:`, error);
+    safeConsole.error(`[Permissions] ❌ Failed to read manifest for ${extensionId}:`, error);
     return [];
   }
 }

@@ -1,3 +1,4 @@
+import { safeConsole } from '../services/safe-error-log.js';
 /**
  * Browser Controller
  * Manages browser instances and sessions
@@ -218,7 +219,7 @@ export class BrowserController {
     this.sessions.delete(sessionId);
     this.stats.activeSessions--;
 
-    console.log(`[Browser] Closed session: ${sessionId}`);
+    safeConsole.log(`[Browser] Closed session: ${sessionId}`);
     return true;
   }
 
