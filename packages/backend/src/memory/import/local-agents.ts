@@ -15,6 +15,7 @@
  * response.
  */
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { createReadStream, type Dirent } from 'node:fs';
 import Database from 'better-sqlite3';
 import fs from 'node:fs/promises';
@@ -107,7 +108,7 @@ async function readAntigravity(file: string): Promise<Map<string, { turns: Turn[
       if (!c) {
         const m = meta.get(r.conversation_id);
         const uri = m?.workspace_uris?.match(/file:\/\/[^\s"',\]]+/)?.[0];
-        let cwd: string | null = null; try { cwd = uri ? decodeURIComponent(new URL(uri).pathname) : null; } catch { /* not a path */ }
+        let cwd: string | null = null; try { cwd = uri ? fileURLToPath(uri) : null; } catch { /* not a path */ }
         const when = m?.last_modified_time ? new Date(m.last_modified_time.replace(' ', 'T').replace(/\.(\d{3})\d*/, '.$1')) : null;
         c = { turns: [], cwd, startedAt: null, updatedAt: when && Number.isFinite(when.getTime()) ? when.toISOString() : null, title: m?.title ?? '' };
         out.set(r.conversation_id, c);

@@ -239,7 +239,7 @@ async function runImport(job: SavedImport, extract: ExtractFn, home: string | un
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   await fs.chmod(dir, 0o700).catch(() => {});
   while (job.cursor < job.ids.length && !stopping) {
-    const id = job.ids[job.cursor];
+    const id = job.ids[job.cursor], startCursor = job.cursor;
     try {
       const existing = await q.one<{ proposed: number }>('SELECT proposed FROM local_agent_imports WHERE user_id = ? AND session_id = ?', job.userId, id);
       if (existing) { if (job.current) { job.proposed += Number(existing.proposed); job.dropped += job.current.dropped; } else job.skipped++; job.current = undefined; job.cursor++; job.done = job.cursor; await saveImport(job); continue; }
@@ -310,6 +310,7 @@ async function runImport(job: SavedImport, extract: ExtractFn, home: string | un
         job.userId, id, checkpoint.source, batchId, proposed, checkpoint.archive);
       job.proposed += proposed; job.dropped += checkpoint.dropped;
     } catch (err) {
+      if (job.cursor !== startCursor) throw err;
       if (stopping || signal.aborted) return;
       // Rebuild expired uncommitted previews while retaining committed receipts.
       if (job.current && ['expired', 'not_preview'].includes((err as { code?: string })?.code ?? '')) {

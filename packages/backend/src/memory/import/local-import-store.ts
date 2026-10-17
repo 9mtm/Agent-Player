@@ -11,13 +11,24 @@ const UUID = /^[0-9a-f-]{36}$/;
 const writes = new Map<string, Promise<void>>();
 const folder = () => dataPath('local-import-jobs');
 async function directory() { const dir = folder(); await fs.mkdir(dir, { recursive: true, mode: 0o700 }); return dir; }
+/** Retry only Windows sharing violations; each attempt remains an atomic rename. */
+export async function replaceJournal(temp: string, file: string, options: { platform?: string; rename?: typeof fs.rename; delay?: (ms: number) => Promise<void> } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try { await (options.rename ?? fs.rename)(temp, file); return; }
+    catch (error: any) {
+      if ((options.platform ?? process.platform) !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || attempt >= 4) throw error;
+      await (options.delay ?? (ms => new Promise(resolve => setTimeout(resolve, ms))))(25 * (attempt + 1));
+    }
+  }
+}
 export async function saveImport(job: SavedImport): Promise<void> {
+  const snapshot = JSON.stringify(job);
   const previous = writes.get(job.id) ?? Promise.resolve();
   const next = previous.catch(() => {}).then(async () => {
     const dir = await directory(), file = path.join(dir, `${job.id}.json`), temp = `${file}.${randomUUID()}.tmp`;
     const fd = await fs.open(temp, 'wx', 0o600);
-    try { await fd.writeFile(JSON.stringify(job)); await fd.sync(); } finally { await fd.close(); }
-    await fs.rename(temp, file);
+    try { await fd.writeFile(snapshot); await fd.sync(); } finally { await fd.close(); }
+    await replaceJournal(temp, file);
     if (process.platform !== 'win32') { const parent = await fs.open(dir, 'r'); try { await parent.sync(); } finally { await parent.close(); } }
   });
   writes.set(job.id, next); await next;

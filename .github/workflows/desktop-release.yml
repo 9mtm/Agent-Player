@@ -60,7 +60,7 @@ jobs:
           node --test --test-timeout=90000 packages/desktop/test/*.test.cjs
       - name: Test import persistence and duplicate prevention
         working-directory: packages/backend
-        run: node --import tsx --test test/local-agent-import.test.mjs test/local-import-durable.test.mjs
+        run: node --import tsx --test test/local-agent-import.test.mjs test/local-import-durable.test.mjs test/local-import-store.test.mjs
       - name: Stage production runtime
         shell: bash
         run: |

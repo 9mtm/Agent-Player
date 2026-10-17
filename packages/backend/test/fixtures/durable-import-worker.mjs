@@ -41,7 +41,7 @@ try {
   if(db.prepare("SELECT COUNT(*) AS n FROM memories WHERE user_id='durable-owner'").get().n!==1)throw Error('Automatic checkpoint did not save its own approved memory');
   if(await L.getJob('another-owner',replay.id))throw Error('Another owner saw private progress');
   const files=fs.readdirSync(path.join(root,'.data/local-import-jobs')).filter(f=>f.endsWith('.json'));
-  if(files.some(f=>(fs.statSync(path.join(root,'.data/local-import-jobs',f)).mode&0o777)!==0o600))throw Error('Journal is not private');
+  if(process.platform !== 'win32' && files.some(f=>(fs.statSync(path.join(root,'.data/local-import-jobs',f)).mode&0o777)!==0o600))throw Error('Journal is not private');
   await L.stopLocalImports();
   // An uncommitted preview can expire while the application is closed.
   const fact='The Nimbus service uses a dedicated SQLite database.';

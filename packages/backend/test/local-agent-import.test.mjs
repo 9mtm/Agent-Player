@@ -62,7 +62,7 @@ const { generateToken } = await loadFile(join(backendDir, 'src/auth/jwt.ts'));
 const { default: Fastify } = await import('fastify');
 const server = Fastify(); registerAuthGate(server); await server.register(memoryImportRoutes); await server.ready();
 console.log = quiet.log; console.warn = quiet.warn;
-test.after(async () => { globalThis.fetch = realFetch; await server.close(); closeDatabase(); rmSync(dir, { recursive: true, force: true }); });
+test.after(async () => { globalThis.fetch = realFetch; await server.close(); await L.stopLocalImports(); closeDatabase(); process.chdir(backendDir); rmSync(dir, { recursive: true, force: true }); });
 const call = (method, url, payload, who = 'li-owner') => server.inject({ method, url, headers: { authorization: `Bearer ${generateToken(who, 1)}` }, payload });
 
 test('the reader keeps only human and agent text; tool output, thinking, injected and sub-agent text stay out', async () => {
@@ -184,7 +184,7 @@ test('Gemini CLI and Antigravity: read their plain-text logs; credential and set
   const db = new Database(join(gem, 'antigravity', 'conversation_summaries.db'));
   db.exec(`CREATE TABLE conversation_summaries (conversation_id text PRIMARY KEY, title text, last_modified_time datetime, workspace_uris text);
     CREATE VIRTUAL TABLE conversations_fts USING fts5(conversation_id UNINDEXED, chunk_index UNINDEXED, title, user_body, agent_body);`);
-  db.prepare('INSERT INTO conversation_summaries VALUES (?, ?, ?, ?)').run('c-1', 'Board work', '2026-10-15 23:34:14.371508+00:00', JSON.stringify([`file://${app}`]));
+  db.prepare('INSERT INTO conversation_summaries VALUES (?, ?, ?, ?)').run('c-1', 'Board work', '2026-10-15 23:34:14.371508+00:00', JSON.stringify([pathToFileURL(app).href]));
   db.prepare('INSERT INTO conversations_fts VALUES (?, ?, ?, ?, ?)').run('c-1', -1, 'Board work', '', '');
   db.prepare('INSERT INTO conversations_fts VALUES (?, ?, ?, ?, ?)').run('c-1', 0, '', 'Cards need a due date.', 'Added due dates.');
   db.close();
@@ -304,4 +304,21 @@ test('automatic import persists an opt-in schedule, catches up due work and save
  assert.equal((await call('GET','/api/memory/import/local/automatic',undefined,'li-user')).statusCode,403);
  assert.equal((await call('PUT','/api/memory/import/local/automatic',{enabled:true,intervalMinutes:1})).statusCode,400);
  await A.stopAutomaticProjectImports();
+});
+
+
+test('a failed checkpoint after skipping an imported source cannot advance its cursor twice', async t => {
+ await L.stopLocalImports();
+ const id = db.prepare("SELECT session_id FROM local_agent_imports WHERE user_id='li-owner' LIMIT 1").get().session_id;
+ const fs = await import('node:fs/promises'); const real = fs.default.rename; let writes = 0;
+ t.mock.method(fs.default, 'rename', async (from, to) => {
+  if (String(to).includes('local-import-jobs') && String(to).endsWith('.json') && ++writes === 2) throw Object.assign(new Error('fixture write failure'), { code: 'EIO' });
+  return real(from, to);
+ });
+ let job = await L.startImport('li-owner', [id], { home: dir, extract: async () => { throw Error('Already imported source extracted again'); } });
+ for (let i=0; i<100 && job.status==='running'; i++) { await new Promise(r=>setTimeout(r,10)); job=await L.getJob('li-owner',job.id); }
+ assert.equal(job.status, 'error'); assert.equal(job.done, 1); assert.equal(job.total, 1);
+ await L.stopLocalImports();
+ const { savedImports } = await loadFile(join(backendDir,'src/memory/import/local-import-store.ts'));
+ const saved = (await savedImports()).find(j=>j.id===job.id); assert.equal(saved.cursor, 1); assert.equal(saved.ids.length, 1);
 });
