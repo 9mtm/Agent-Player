@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: security-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   dependency-scan:

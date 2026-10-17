@@ -80,5 +80,8 @@
       "category": "Development"
     },
     "executableName": "Dpro"
+  },
+  "overrides": {
+    "@electron/get": "5.1.0"
   }
 }

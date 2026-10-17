@@ -85,14 +85,14 @@ export class BrowserController {
     const fullConfig: BrowserConfig = { ...DEFAULT_BROWSER_CONFIG, ...config };
 
     const launchOptions: any = {
-      headless: fullConfig.headless ? 'new' : false,
+      headless: fullConfig.headless,
       args: [
         // SECURITY: Removed --no-sandbox and --disable-setuid-sandbox for better security
         // Only disable /dev/shm usage for stability in containerized environments
         '--disable-dev-shm-usage',
         `--window-size=${fullConfig.viewportWidth},${fullConfig.viewportHeight}`,
       ],
-      ignoreHTTPSErrors: fullConfig.ignoreHttpsErrors,
+      acceptInsecureCerts: fullConfig.ignoreHttpsErrors,
     };
 
     // SECURITY: Validate proxy configuration to prevent SSRF (H-10)
