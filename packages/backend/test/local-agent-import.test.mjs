@@ -1,3 +1,5 @@
+import { pathToFileURL } from 'node:url';
+const loadFile = file => import(pathToFileURL(file).href);
 // MEM-IMPORT-01: conversations Claude Code and Codex saved on this computer ->
 // secrets removed -> private archive -> a (fake) memory agent -> pending proposals.
 // Run: node --import tsx --test test/local-agent-import.test.mjs
@@ -23,7 +25,7 @@ globalThis.fetch = async (url) => { throw new Error(`unexpected network call in 
 const quiet = { log: console.log, warn: console.warn };
 console.log = () => {}; console.warn = () => {};
 
-const { getDatabase, closeDatabase } = await import(join(backendDir, 'src/db/database.ts'));
+const { getDatabase, closeDatabase } = await loadFile(join(backendDir, 'src/db/database.ts'));
 const db = getDatabase();
 await db.initialize();
 db.prepare(`INSERT INTO users (id, email, username, password_hash, role, status) VALUES ('li-owner', 'li@example.test', 'li', 'x', 'owner', 'active')`).run();
@@ -51,12 +53,12 @@ writeFileSync(join(codexDir, 'rollout-2026-10-16-x.jsonl'), [
   line({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Noted.' }] } }),
 ].join('\n'));
 
-const { listLocalSessions } = await import(join(backendDir, 'src/memory/import/local-agents.ts'));
-const L = await import(join(backendDir, 'src/memory/import/local-import.ts'));
-const { createProject } = await import(join(backendDir, 'src/repositories/chat-conversations.ts'));
-const { registerAuthGate } = await import(join(backendDir, 'src/auth/auth-gate.ts'));
-const { memoryImportRoutes } = await import(join(backendDir, 'src/api/routes/memory-import.ts'));
-const { generateToken } = await import(join(backendDir, 'src/auth/jwt.ts'));
+const { listLocalSessions } = await loadFile(join(backendDir, 'src/memory/import/local-agents.ts'));
+const L = await loadFile(join(backendDir, 'src/memory/import/local-import.ts'));
+const { createProject } = await loadFile(join(backendDir, 'src/repositories/chat-conversations.ts'));
+const { registerAuthGate } = await loadFile(join(backendDir, 'src/auth/auth-gate.ts'));
+const { memoryImportRoutes } = await loadFile(join(backendDir, 'src/api/routes/memory-import.ts'));
+const { generateToken } = await loadFile(join(backendDir, 'src/auth/jwt.ts'));
 const { default: Fastify } = await import('fastify');
 const server = Fastify(); registerAuthGate(server); await server.register(memoryImportRoutes); await server.ready();
 console.log = quiet.log; console.warn = quiet.warn;
@@ -109,7 +111,7 @@ test('routes: owner only; at most 400 opaque ids; one import at a time', async (
 });
 
 test('wrappers and interruption notes are not human text', async () => {
-  const { humanText } = await import(join(backendDir, 'src/memory/import/local-agents.ts'));
+  const { humanText } = await loadFile(join(backendDir, 'src/memory/import/local-agents.ts'));
   assert.equal(humanText('<external_codex_apps_x>{"a":1}</external_codex_apps_x>'), null);
   assert.equal(humanText('[Request interrupted by user for tool use]'), null);
   assert.equal(humanText('<command-name>/clear</command-name>\n<command-args></command-args>'), null);
@@ -165,7 +167,7 @@ test('accuracy: a memory must rest on words in the conversation; personal detail
 });
 
 test('Gemini CLI and Antigravity: read their plain-text logs; credential and settings files are never readable', async () => {
-  const { listLocalSessions: list, readable, findSession, readSession } = await import(join(backendDir, 'src/memory/import/local-agents.ts'));
+  const { listLocalSessions: list, readable, findSession, readSession } = await loadFile(join(backendDir, 'src/memory/import/local-agents.ts'));
   const { default: Database } = await import('better-sqlite3');
   const home = join(dir, 'home2');
   const gem = join(home, '.gemini'); const proj = join(gem, 'tmp', 'abc123');
@@ -238,7 +240,7 @@ test('model disconnection retains the unfinished cursor for explicit resume', as
 });
 
 test('one project file: selected-folder discovery, redacted preview, durable import, approval and content/fact dedupe', async () => {
- const {scanProjectDocuments,previewProjectDocument,readProjectDocument}=await import(join(backendDir,'src/memory/import/project-documents.ts'));
+ const {scanProjectDocuments,previewProjectDocument,readProjectDocument}=await loadFile(join(backendDir,'src/memory/import/project-documents.ts'));
  const folder=join(dir,'project-docs'),docs=join(folder,'docs');mkdirSync(docs,{recursive:true});mkdirSync(join(folder,'node_modules'),{recursive:true});
  const fact='The Aurora release requires two maintainers to approve deployment.';
  const original='# Project handoff\n\n'+fact+'\n\nTest API key: '+SECRET;
@@ -262,7 +264,7 @@ test('one project file: selected-folder discovery, redacted preview, durable imp
  const wait=async j=>{for(let i=0;i<100&&j.status==='running';i++){await new Promise(r=>setTimeout(r,10));j=await L.getJob('li-owner',j.id)}return j;};
  let job=await wait(await L.startImport('li-owner',[id],{home:dir,extract}));assert.equal(job.status,'done');assert.equal(job.proposed,1);
  const prop=db.prepare("SELECT id FROM memory_file_proposals WHERE changes LIKE '%Aurora%' AND status='pending'").get();assert.ok(prop);
- const {getProposal,approveProposal}=await import(join(backendDir,'src/memory/memory-files.ts'));
+ const {getProposal,approveProposal}=await loadFile(join(backendDir,'src/memory/memory-files.ts'));
  const detail=await getProposal('li-owner',prop.id);await approveProposal('li-owner',prop.id,'li-owner',detail.reviewHash);
  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memories WHERE user_id=? AND content LIKE ?').get('li-owner','%'+fact+'%').n,1,'approved imported fact appears in memory');
  job=await wait(await L.startImport('li-owner',[id],{home:dir,extract}));assert.equal(job.proposed,0);assert.equal(extracted,1,'same file skipped');
@@ -277,11 +279,11 @@ test('one project file: selected-folder discovery, redacted preview, durable imp
 });
 
 test('automatic import persists an opt-in schedule, catches up due work and saves memories only for enabled automatic imports', async () => {
- const A=await import(join(backendDir,'src/memory/import/automatic-project-import.ts'));
+ const A=await loadFile(join(backendDir,'src/memory/import/automatic-project-import.ts'));
  db.prepare("INSERT INTO users (id,email,username,password_hash,role,status) VALUES ('auto-owner','automatic@example.invalid','automatic','x','owner','active')").run();
  assert.equal((await A.automaticImportSettings('auto-owner')).enabled,false);
  await assert.rejects(()=>A.configureAutomaticImport('auto-owner',{enabled:true,intervalMinutes:1}));
- const {scanProjectDocuments}=await import(join(backendDir,'src/memory/import/project-documents.ts'));
+ const {scanProjectDocuments}=await loadFile(join(backendDir,'src/memory/import/project-documents.ts'));
  const folder=join(dir,'automatic-project');mkdirSync(folder);const fact='The Borealis project stores deployment evidence in signed release manifests.';
  writeFileSync(join(folder,'AGENTS.md'),fact);
  const docs=await scanProjectDocuments('auto-owner',[folder]),id=docs.documents[0].id;

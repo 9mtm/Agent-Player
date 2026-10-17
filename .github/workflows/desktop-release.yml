@@ -3,6 +3,11 @@ name: Current Desktop Release
 on:
   workflow_dispatch:
     inputs:
+      platform:
+        description: Platform to verify (all required for draft publication)
+        type: choice
+        default: all
+        options: [all, mac-arm64, mac-x64, win-x64, linux-x64]
       publish_draft:
         description: Create a draft release after all platforms pass
         type: boolean
@@ -12,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: desktop-release-${{ github.ref }}
+  group: desktop-release-${{ github.ref }}-${{ inputs.platform || 'all' }}
   cancel-in-progress: false
 
 jobs:
@@ -20,19 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-14
-            platform: mac-arm64
-            target: dist:mac
-          - os: macos-15-intel
-            platform: mac-x64
-            target: dist:mac
-          - os: windows-latest
-            platform: win-x64
-            target: dist:win
-          - os: ubuntu-22.04
-            platform: linux-x64
-            target: dist:linux
+        include: ${{ fromJSON(inputs.platform == 'mac-arm64' && '[{"os":"macos-14","platform":"mac-arm64","target":"dist:mac"}]' || inputs.platform == 'mac-x64' && '[{"os":"macos-15-intel","platform":"mac-x64","target":"dist:mac"}]' || inputs.platform == 'win-x64' && '[{"os":"windows-latest","platform":"win-x64","target":"dist:win"}]' || inputs.platform == 'linux-x64' && '[{"os":"ubuntu-22.04","platform":"linux-x64","target":"dist:linux"}]' || '[{"os":"macos-14","platform":"mac-arm64","target":"dist:mac"},{"os":"macos-15-intel","platform":"mac-x64","target":"dist:mac"},{"os":"windows-latest","platform":"win-x64","target":"dist:win"},{"os":"ubuntu-22.04","platform":"linux-x64","target":"dist:linux"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     env:
@@ -89,7 +82,7 @@ jobs:
 
   draft:
     needs: build
-    if: ${{ inputs.publish_draft }}
+    if: ${{ inputs.publish_draft && (inputs.platform == 'all' || inputs.platform == '') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

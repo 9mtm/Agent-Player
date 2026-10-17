@@ -1,14 +1,16 @@
+import { pathToFileURL } from 'node:url';
+const loadFile = file => import(pathToFileURL(file).href);
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 const backend=process.argv[2], root=process.env.HOME, mode=process.argv[3];
 console.log=()=>{};console.warn=()=>{};
 process.chdir(root);
-const {getDatabase,closeDatabase}=await import(path.join(backend,'src/db/database.ts'));
+const {getDatabase,closeDatabase}=await loadFile(path.join(backend,'src/db/database.ts'));
 const db=getDatabase();await db.initialize();
-const L=await import(path.join(backend,'src/memory/import/local-import.ts'));
-const S=await import(path.join(backend,'src/memory/import/local-import-store.ts'));
-const {listLocalSessions}=await import(path.join(backend,'src/memory/import/local-agents.ts'));
+const L=await loadFile(path.join(backend,'src/memory/import/local-import.ts'));
+const S=await loadFile(path.join(backend,'src/memory/import/local-import-store.ts'));
+const {listLocalSessions}=await loadFile(path.join(backend,'src/memory/import/local-agents.ts'));
 let calls=0;const extract=async text=>{
  calls++;process.send?.({phase:'extract',calls});
  if(mode==='crash'&&calls===2)await new Promise(()=>{});
@@ -32,7 +34,7 @@ try {
   const imported=db.prepare('SELECT * FROM local_agent_imports LIMIT 1').get();
   const batch=db.prepare('SELECT * FROM memory_import_batches WHERE id=?').get(imported.batch_id);
   const replay={...before,automatic:true,id:randomUUID(),ids:[imported.session_id],cursor:0,total:1,done:0,proposed:0,dropped:0,skipped:0,status:'running',current:{id:imported.session_id,source:imported.source,archive:imported.archive_name,dropped:0,previews:[{id:batch.id,version:batch.committed_version,hash:batch.committed_hash,key:batch.operation_key,include:true}]}};
-  const {configureAutomaticImport}=await import(path.join(backend,'src/memory/import/automatic-project-import.ts'));await configureAutomaticImport('durable-owner',{enabled:true,intervalMinutes:60});
+  const {configureAutomaticImport}=await loadFile(path.join(backend,'src/memory/import/automatic-project-import.ts'));await configureAutomaticImport('durable-owner',{enabled:true,intervalMinutes:60});
   db.prepare('DELETE FROM local_agent_imports WHERE session_id=?').run(imported.session_id);await S.saveImport(replay);
   await L.resumePendingImports({home:root,extract:async()=>{throw Error('Prepared checkpoint re-extracted')}});const recovered=await wait(replay.id);
   if(recovered.status!=='done'||recovered.proposed!==1||db.prepare('SELECT COUNT(*) AS n FROM memory_file_proposals').get().n!==n)throw Error('Committed preview replay duplicated proposals');
@@ -45,7 +47,7 @@ try {
   const fact='The Nimbus service uses a dedicated SQLite database.';
   fs.writeFileSync(path.join(root,'.claude/projects/fixture/expired.jsonl'),JSON.stringify({type:'user',message:{content:fact}}));
   const session=(await listLocalSessions(root)).find(s=>s.title.includes('Nimbus'));
-  const {createPreview}=await import(path.join(backend,'src/memory/import/pipeline.ts'));
+  const {createPreview}=await loadFile(path.join(backend,'src/memory/import/pipeline.ts'));
   const preview=await createPreview('durable-owner',{files:[{name:'Fixture.md',content:'### Nimbus database\n\n'+fact}],source:'text'});
   db.prepare("UPDATE memory_import_batches SET expires_at='2000-01-01' WHERE id=?").run(preview.batchId);
   const expired={...replay,id:randomUUID(),ids:[session.id],current:{id:session.id,source:session.source,archive:'fixture.md',dropped:0,previews:[{id:preview.batchId,version:preview.version,hash:preview.contentHash,key:randomUUID(),include:true}]}};

@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
@@ -11,7 +12,7 @@ test('process death resumes after the last completed conversation; duplicate req
  const facts=['Always answer in Arabic.','The Helios project deploys every Friday.','Invoice reports must use EUR.'];
  facts.forEach((content,i)=>writeFileSync(path.join(src,`${i}.jsonl`),JSON.stringify({type:'user',message:{content}})+'\n'));
  const env={...process.env,HOME:root,USERPROFILE:root,DATABASE_PATH:path.join(root,'.data/agent-player.db'),AGENT_PLAYER_DATA_DIR:path.join(root,'.data'),JWT_SECRET:randomBytes(64).toString('hex'),ENCRYPTION_KEY:randomBytes(32).toString('hex'),AGENT_PLAYER_BACKGROUND:'off'};
- const worker=mode=>spawn(process.execPath,['--import',path.join(backend,'node_modules/tsx/dist/loader.mjs'),path.join(backend,'test/fixtures/durable-import-worker.mjs'),backend,mode],{env,stdio:['ignore','ignore','pipe','ipc']});
+ const worker=mode=>spawn(process.execPath,['--import',pathToFileURL(path.join(backend,'node_modules/tsx/dist/loader.mjs')).href,path.join(backend,'test/fixtures/durable-import-worker.mjs'),backend,mode],{env,stdio:['ignore','ignore','pipe','ipc']});
  let first,second;
  try {
   first=worker('crash');let err='';first.stderr.on('data',x=>err+=x);
