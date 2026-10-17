@@ -83,12 +83,12 @@ export function logText(value: unknown): string {
   } catch {
     text = '[unavailable log field]';
   }
-  return redactImportText(text).text.replace(/[\r\n\u001b\u2028\u2029]/g, ' ').slice(0, 4096);
+  return redactImportText(text).text.replace(/[\u0000-\u001f\u007f-\u009f\u2028-\u202e\u2066-\u2069]/g, ' ').slice(0, 4096);
 }
 
 export const safeConsole = {
-  log: (...args: unknown[]) => console.log('%s', args.map(logText).join(' ').replace(/[\r\n\u001b\u2028\u2029]/g, ' ')),
-  info: (...args: unknown[]) => console.info('%s', args.map(logText).join(' ').replace(/[\r\n\u001b\u2028\u2029]/g, ' ')),
-  warn: (...args: unknown[]) => console.warn('%s', args.map(logText).join(' ').replace(/[\r\n\u001b\u2028\u2029]/g, ' ')),
-  error: (...args: unknown[]) => console.error('%s', args.map(logText).join(' ').replace(/[\r\n\u001b\u2028\u2029]/g, ' ')),
+  log: (...args: unknown[]) => console.log('%s', JSON.stringify({ message: args.map(logText).join(' ') })),
+  info: (...args: unknown[]) => console.info('%s', JSON.stringify({ message: args.map(logText).join(' ') })),
+  warn: (...args: unknown[]) => console.warn('%s', JSON.stringify({ message: args.map(logText).join(' ') })),
+  error: (...args: unknown[]) => console.error('%s', JSON.stringify({ message: args.map(logText).join(' ') })),
 };

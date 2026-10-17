@@ -5,8 +5,8 @@ import { format } from 'node:util';
 import { logText, safeConsole } from '../src/services/safe-error-log.ts';
 
 test('untrusted log fields cannot forge records or terminal control sequences', () => {
-  const result = logText('job\r\nforged\u001b[31m\u2028next\u2029record');
-  assert.doesNotMatch(result, /[\r\n\u001b\u2028\u2029]/);
+  const result = logText('job\r\nforged\u001b[31m\b\u009b\u2028next\u2029record\u202e');
+  assert.doesNotMatch(result, /[\u0000-\u001f\u007f-\u009f\u2028-\u202e\u2066-\u2069]/);
   assert.match(result, /job/);
   assert.match(result, /forged/);
   assert.equal(logText('x'.repeat(10000)).length, 4096);
@@ -36,7 +36,21 @@ test('console format is constant and original log levels are retained', () => {
     assert.equal(captured[0].args[0], '%s');
     assert.match(captured[0].rendered, /job %s %o/);
     assert.doesNotMatch(captured[0].rendered, /[\r\n]/);
+    assert.match(JSON.parse(captured[0].rendered).message, /job %s %o/);
   }
+});
+
+test('a forged JSON record remains one encoded diagnostic entry', () => {
+  const original = console.log;
+  let output;
+  try {
+    console.log = (...args) => { output = format(...args); };
+    safeConsole.log('job"}\n{"message":"forged"}\r\n');
+  } finally { console.log = original; }
+  const parsed = JSON.parse(output);
+  assert.deepEqual(Object.keys(parsed), ['message']);
+  assert.ok(parsed.message.includes('forged'));
+  assert.doesNotMatch(output, /[\r\n]/);
 });
 
 test('circular diagnostic objects cannot break the caller', () => {
