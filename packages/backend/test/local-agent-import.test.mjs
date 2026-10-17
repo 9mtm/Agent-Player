@@ -14,6 +14,7 @@ const dir = mkdtempSync(join(tmpdir(), 'ap-local-import-'));
 mkdirSync(join(dir, '.data'), { recursive: true });
 process.chdir(dir);
 process.env.HOME = dir;
+process.env.USERPROFILE = dir;
 process.env.DATABASE_PATH = join(dir, '.data', 'agent-player.db');
 process.env.JWT_SECRET = randomBytes(64).toString('hex');
 process.env.ENCRYPTION_KEY = randomBytes(32).toString('hex');

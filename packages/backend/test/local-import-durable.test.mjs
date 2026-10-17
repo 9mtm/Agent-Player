@@ -10,7 +10,7 @@ test('process death resumes after the last completed conversation; duplicate req
  const root=mkdtempSync(path.join(tmpdir(),'dpro-durable-'));const src=path.join(root,'.claude/projects/fixture');mkdirSync(src,{recursive:true});mkdirSync(path.join(root,'.data'));
  const facts=['Always answer in Arabic.','The Helios project deploys every Friday.','Invoice reports must use EUR.'];
  facts.forEach((content,i)=>writeFileSync(path.join(src,`${i}.jsonl`),JSON.stringify({type:'user',message:{content}})+'\n'));
- const env={...process.env,HOME:root,DATABASE_PATH:path.join(root,'.data/agent-player.db'),AGENT_PLAYER_DATA_DIR:path.join(root,'.data'),JWT_SECRET:randomBytes(64).toString('hex'),ENCRYPTION_KEY:randomBytes(32).toString('hex'),AGENT_PLAYER_BACKGROUND:'off'};
+ const env={...process.env,HOME:root,USERPROFILE:root,DATABASE_PATH:path.join(root,'.data/agent-player.db'),AGENT_PLAYER_DATA_DIR:path.join(root,'.data'),JWT_SECRET:randomBytes(64).toString('hex'),ENCRYPTION_KEY:randomBytes(32).toString('hex'),AGENT_PLAYER_BACKGROUND:'off'};
  const worker=mode=>spawn(process.execPath,['--import',path.join(backend,'node_modules/tsx/dist/loader.mjs'),path.join(backend,'test/fixtures/durable-import-worker.mjs'),backend,mode],{env,stdio:['ignore','ignore','pipe','ipc']});
  let first,second;
  try {
