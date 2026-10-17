@@ -12,6 +12,9 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 const backendDir = process.cwd();
+// Start tsx's persistent transformer before entering the disposable cwd.
+// Its esbuild child otherwise holds that directory open on Windows.
+await loadFile(join(backendDir, 'src/services/safe-error-log.ts'));
 const originalHome = process.env.HOME, originalProfile = process.env.USERPROFILE;
 const dir = mkdtempSync(join(tmpdir(), 'ap-local-import-'));
 mkdirSync(join(dir, '.data'), { recursive: true });
