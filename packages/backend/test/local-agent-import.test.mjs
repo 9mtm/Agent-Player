@@ -85,9 +85,9 @@ test('import: secrets removed before the archive and the model; archive is priva
   assert.ok(seen.every((t) => !t.includes(SECRET)) && seen.some((t) => t.includes('[REDACTED:')), 'the model never sees the secret');
   assert.ok(seen.every((t) => !t.includes('TOOL OUTPUT') && !t.includes('private') && !t.includes('subagent text')));
   const arch = join(dir, '.dpro', 'imports');
-  assert.equal(statSync(arch).mode & 0o777, 0o700);
+  if (process.platform !== 'win32') assert.equal(statSync(arch).mode & 0o777, 0o700);
   const files = readdirSync(join(arch, 'claude-code'));
-  assert.equal(statSync(join(arch, 'claude-code', files[0])).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(statSync(join(arch, 'claude-code', files[0])).mode & 0o777, 0o600);
   assert.ok(!readFileSync(join(arch, 'claude-code', files[0]), 'utf8').includes(SECRET), 'the archive holds the redacted text only');
   const props = db.prepare("SELECT drawer_kind, drawer_key FROM memory_file_proposals WHERE status = 'pending'").all().map((r) => (r.drawer_key ? `${r.drawer_kind}:${r.drawer_key}` : r.drawer_kind)).sort();
   assert.deepEqual(props, ['owner', 'owner', 'project:app'], 'project facts go to the matching project drawer');

@@ -30,5 +30,5 @@ test('fail closed on ambiguity, unreadable database or stale selection', () => {
 });
 test('explicit test data prevents discovery escaping into personal paths', () => {
   const rows=candidates({defaultDir:'/personal',home:'/home/user',cwd:'/repo',backendDir:'/repo/packages/backend',explicitDir:'/test'});
-  assert.deepEqual(rows,['/test']);
+  assert.deepEqual(rows,[path.resolve('/test')]);
 });
