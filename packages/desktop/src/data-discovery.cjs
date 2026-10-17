@@ -29,6 +29,16 @@ function probeOnce(node, backendDir, dir) {
       catch { resolve({ dir, state: 'unreadable', reason: error?.killed ? 'probe_timeout' : error?.code || 'invalid_probe_response' }); }
     }));
 }
+/** A verified saved owner wins selection; unrelated legacy probes must not delay startup. */
+async function discover(node, backendDir, dirs, savedDir, probeCandidate = probe) {
+  let saved;
+  if (savedDir && dirs.includes(savedDir)) {
+    saved = await probeCandidate(node, backendDir, savedDir);
+    if (saved.state === 'existing') return [saved];
+  }
+  return Promise.all(dirs.map(dir => saved && dir === savedDir ? saved : probeCandidate(node, backendDir, dir)));
+}
+
 function decide(rows, savedDir) {
   const saved = savedDir && rows.find(r => r.dir === savedDir);
   if (saved?.state === 'existing') return { kind: 'existing', dir: saved.dir };
@@ -37,4 +47,4 @@ function decide(rows, savedDir) {
   const owners = rows.filter(r => r.state === 'existing');
   return owners.length === 1 ? { kind: 'existing', dir: owners[0].dir } : { kind: 'choose' };
 }
-module.exports = { candidates, probe, decide };
+module.exports = { candidates, probe, decide, discover };

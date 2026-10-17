@@ -32,3 +32,24 @@ test('explicit test data prevents discovery escaping into personal paths', () =>
   const rows=candidates({defaultDir:'/personal',home:'/home/user',cwd:'/repo',backendDir:'/repo/packages/backend',explicitDir:'/test'});
   assert.deepEqual(rows,[path.resolve('/test')]);
 });
+
+test('a verified saved workspace opens without waiting for unrelated legacy probes',async()=>{
+ const {discover}=require('../src/data-discovery.cjs');const calls=[];
+ const rows=await discover('node','backend',['/slow-old','/saved','/other'],'/saved',async(_,__,dir)=>{
+  calls.push(dir);assert.equal(dir,'/saved','unrelated paths must not be opened');return {dir,state:'existing'};
+ });
+ assert.deepEqual(calls,['/saved']);assert.deepEqual(decide(rows,'/saved'),{kind:'existing',dir:'/saved'});
+});
+test('an unavailable saved workspace is probed once and never silently switches account',async()=>{
+ const {discover}=require('../src/data-discovery.cjs');
+ for(const state of ['missing','unreadable','unconfigured']){
+  const calls=[];const rows=await discover('node','backend',['/other','/saved'],'/saved',async(_,__,dir)=>{calls.push(dir);return {dir,state:dir==='/saved'?state:'existing'};});
+  assert.deepEqual(calls,['/saved','/other']);assert.equal(rows.length,2);assert.equal(decide(rows,'/saved').kind,'choose');
+ }
+});
+test('fresh installs and explicit folder-picker scans retain full ambiguity checks',async()=>{
+ const {discover}=require('../src/data-discovery.cjs');const calls=[];
+ const rows=await discover('node','backend',['/a','/b'],null,async(_,__,dir)=>{calls.push(dir);return {dir,state:'existing'};});
+ assert.deepEqual(calls,['/a','/b']);assert.equal(decide(rows).kind,'choose');
+ const explicit=await discover('node','backend',['/test'],'/saved',async(_,__,dir)=>({dir,state:'existing'}));assert.deepEqual(explicit,[{dir:'/test',state:'existing'}]);
+});

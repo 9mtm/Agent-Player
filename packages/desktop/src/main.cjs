@@ -161,7 +161,7 @@ async function scanData(extra) {
   const payload = resolvePayload({ packaged: app.isPackaged, resourcesPath: process.resourcesPath });
   const dirs = discovery.candidates({ defaultDir: path.join(settingsDir(), 'data'), home: app.getPath('home'), cwd: process.cwd(), backendDir: payload.backendDir, savedDir: readSelection(), explicitDir: process.env.DPRO_DESKTOP_DATA_DIR });
   if (extra && !dirs.includes(extra)) dirs.push(extra);
-  discovered = await Promise.all(dirs.map(dir => discovery.probe(payload.node, payload.backendDir, dir)));
+  discovered = await discovery.discover(payload.node, payload.backendDir, dirs, extra ? null : readSelection());
   fs.writeFileSync(path.join(settingsDir(), 'workspace-discovery.json'), JSON.stringify(discovered), { mode: 0o600 });
   return discovered;
 }
