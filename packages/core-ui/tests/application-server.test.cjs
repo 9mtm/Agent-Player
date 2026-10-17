@@ -334,3 +334,11 @@ test('device HTTP rate limit and Retry-After never schedule a second request', a
   client.selectMode('live'); await client.login('a', 'b'); await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(client.getSnapshot().notice, 'rate_limited'); assert.equal(client.getSnapshot().phase, 'signed-out'); assert.equal(s.calls.length, 1);
 });
+test('auth responses keep the setup name (trimmed, bounded) and nothing else extra', async t => {
+  for (const [fullName, kept] of [['  Fiction Owner ', 'Fiction Owner'], ['x'.repeat(201), undefined], [7, undefined], ['', undefined]]) {
+    const s = await setup(t, (req, res) => res.end(JSON.stringify(req.url === '/api/auth/login' ? { user: { ...user, full_name: fullName }, token, deviceToken: 'd'.repeat(43) } : { user: { ...user, full_name: fullName } })));
+    const me = JSON.parse((await s.request('/api/auth/me')).text);
+    assert.equal(me.user.full_name, kept);
+    assert.deepEqual(Object.keys(me.user).sort(), ['email', 'id', 'role', 'username', ...(kept ? ['full_name'] : [])].sort());
+  }
+});

@@ -79,7 +79,9 @@
     "uuid": "^13.0.0",
     "vm2": "^3.10.5",
     "ws": "^8.19.0",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "tsx": "^4.21.0",
+    "@modelcontextprotocol/sdk": "1.32.1"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -91,7 +93,6 @@
     "@types/nodemailer": "^7.0.11",
     "@types/pg": "8.23.1",
     "@types/uuid": "^10.0.0",
-    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }

@@ -23,6 +23,8 @@ import { ISOLATED_ENV } from '../config/isolation.js';
 import { LAUNCH_TOKEN_ENV } from './launch-token.js';
 import { assertSafeIsolatedTree } from '../config/isolated-tree.js';
 import { flushAuditWritesWithin, SHUTDOWN_AUDIT_FLUSH_MS } from '../services/audit-logger.js';
+import { startAutomaticProjectImports, stopAutomaticProjectImports } from '../memory/import/automatic-project-import.js';
+import { resumePendingImports, stopLocalImports } from '../memory/import/local-import.js';
 import { getOrchestrator } from '../multi-agent/orchestrator.js';
 
 const PORT = config.port;
@@ -76,6 +78,10 @@ async function start() {
       process.send({ type: 'listening', host: HOST, port: typeof addr === 'object' && addr ? addr.port : PORT });
     }
 
+    if (summary.background) {
+      void resumePendingImports().catch(() => console.warn('[Memory import] Saved progress unavailable; no new import started.')).finally(() => startAutomaticProjectImports());
+    }
+
     const pythonStatus = summary.background ? await probePython() : '— (background off)';
 
     console.log(`
@@ -120,6 +126,8 @@ async function shutdown(): Promise<void> {
   deadline.unref();
   try {
     // Closing Fastify runs channel transport shutdown hooks before process exit.
+    await stopAutomaticProjectImports();
+    await stopLocalImports();
     await fastify.close();
     // B2.2b-2: audit rows still being written (PostgreSQL inserts are not
     // awaited by the request) get a short, bounded chance to land.

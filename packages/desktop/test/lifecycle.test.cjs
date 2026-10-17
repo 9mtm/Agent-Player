@@ -201,3 +201,32 @@ test('log file is 0600 and cut when too large', () => {
   assert.ok(!text.includes('xxx') && text.includes('hello'));
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
 });
+
+test('silent native startup timeout reaps first child before one successful retry', async () => {
+  const dir=tmp(), pids=[];
+  const spawn=(node,args,opts)=>{
+    if(pids.length) assert.equal(alive(pids[0]),false);
+    const child=require('node:child_process').spawn(node,pids.length ? args : ['-e','setInterval(()=>{},1000)'],opts);
+    pids.push(child.pid);return child;
+  };
+  const runtime=createLocalRuntime({node:process.execPath,args:[FAKE],cwd:dir,dataDir:dir,createBridge:fakeBridge,spawn,readyTimeoutMs:250});
+  try {await runtime.start();assert.equal(pids.length,2);assert.equal(runtime.state,'running');}
+  finally {await runtime.stop();}
+  assert.ok(pids.every(pid=>!alive(pid)));
+});
+
+test('silent startup retry is bounded and leaves no child alive', async () => {
+  const dir=tmp(),pids=[];
+  const spawn=(node,args,opts)=>{const c=require('node:child_process').spawn(node,['-e','setInterval(()=>{},1000)'],opts);pids.push(c.pid);return c;};
+  const runtime=createLocalRuntime({node:process.execPath,args:[FAKE],cwd:dir,dataDir:dir,createBridge:fakeBridge,spawn,readyTimeoutMs:150});
+  await assert.rejects(runtime.start(),/did not start in time/);assert.equal(pids.length,2);assert.ok(pids.every(pid=>!alive(pid)));
+});
+
+test('stop during silent startup cancels without launching a retry', async () => {
+  const dir=tmp(),pids=[];
+  let launched;const launch=new Promise(r=>launched=r);
+  const spawn=(node,args,opts)=>{const c=require('node:child_process').spawn(node,['-e','setInterval(()=>{},1000)'],opts);pids.push(c.pid);launched();return c;};
+  const runtime=createLocalRuntime({node:process.execPath,args:[FAKE],cwd:dir,dataDir:dir,createBridge:fakeBridge,spawn,readyTimeoutMs:5000});
+  const pending=assert.rejects(runtime.start(),/cancelled/);await launch;await runtime.stop();assert.ok(pids.every(pid=>!alive(pid)));await pending;
+  assert.equal(pids.length,1);assert.ok(pids.every(pid=>!alive(pid)));
+});

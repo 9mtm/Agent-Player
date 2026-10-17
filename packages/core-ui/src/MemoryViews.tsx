@@ -53,7 +53,8 @@ export function MemoryPage({ client, active = false, focus }: { client: SessionC
   const owner = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot).user?.role === 'owner';
   const [c, setC] = useState<MemoryItemsController>();
   useEffect(() => { const x = new MemoryItemsController(client); setC(x); return () => x.dispose(); }, [client]);
-  useEffect(() => { if (active && c && c.getSnapshot().phase === 'idle') void c.load(); }, [active, c]);
+  // Returning from reviews must read the newly approved memories.
+  useEffect(() => { if (active && tab === 'items' && c) void c.load(); }, [active, c, tab]);
   // CHAT-PRO-02 E: "Open in Memory" from a chat opens the memory's drawer and marks it.
   useEffect(() => {
     if (!focus || !c) return;
@@ -69,6 +70,7 @@ export function MemoryPage({ client, active = false, focus }: { client: SessionC
         {owner && <button type="button" role="tab" aria-selected={tab === 'import'} onClick={() => setTab('import')}>Import from other agents</button>}
       </div>
     </header>
+    {owner && tab === 'items' && <p className="empty-note">Imported memories wait for your approval before appearing here. <button type="button" className="link-button" onClick={() => setTab('files')}>Review imported memories</button> Choose Main Agent in Agent files and reviews.</p>}
     {tab === 'items' ? (c ? <ItemsView c={c} focused={focus?.memoryId}/> : null) : tab === 'import' ? <LocalImport client={client} active={active} onReview={() => setTab('files')}/> : <MemoryPanel client={client} active={active && tab === 'files'}/>}
   </section>;
 }

@@ -14,7 +14,7 @@ const complete = { setupComplete: true, setupRequired: false, message: 'Setup al
 const required = { setupComplete: false, setupRequired: true, message: 'Setup required' };
 const ok = body => ({ status: 200, body });
 const deferred = () => { let resolve; const promise = new Promise(r => resolve = r); return { resolve, promise }; };
-const render = client => renderToStaticMarkup(React.createElement(AuthBoundary, { client }, 'fictional workspace'));
+const render = client => renderToStaticMarkup(React.createElement(AuthBoundary, { client, initialPage: 'account' }, 'fictional workspace'));
 function clientFor(transport, mode = 'mock') {
   const calls = [];
   const client = new SessionClient({ [mode]: async r => { calls.push(r); return transport(r); } });
