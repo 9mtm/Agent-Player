@@ -140,10 +140,12 @@ export function dedupe<T extends { title: string; content: string }>(list: T[], 
   for (const m of list) if (!kept.some(k => sameIdea(k.content, m.content)) && !known.some(k => sameIdea(k, m.content))) kept.push(m);
   return kept;
 }
+class ImportDedupeUnavailable extends Error {}
 /** Memory text the owner already has or is about to review (to not propose it again). */
 async function knownContents(userId: string): Promise<string[]> {
-  const stored = await q.all<{ content: string }>("SELECT content FROM memories WHERE user_id = ? AND (status IS NULL OR status = 'active') ORDER BY created_at DESC LIMIT 2000", userId).catch(() => []);
-  const pending = await q.all<{ changes: string }>("SELECT changes FROM memory_file_proposals WHERE user_id = ? AND status = 'pending' AND source = 'import'", userId).catch(() => []);
+  const unavailable = () => { throw new ImportDedupeUnavailable('Existing memory could not be checked'); };
+  const stored = await q.all<{ content: string }>("SELECT content FROM memories WHERE user_id = ? AND (status IS NULL OR status = 'active') ORDER BY created_at DESC", userId).catch(unavailable);
+  const pending = await q.all<{ changes: string }>("SELECT changes FROM memory_file_proposals WHERE user_id = ? AND status = 'pending' AND source = 'import'", userId).catch(unavailable);
   const fromPending = pending.flatMap(r => { try { return (JSON.parse(r.changes) as any[]).map(c => c?.after?.content).filter((c): c is string => typeof c === 'string'); } catch { return []; } });
   return [...stored.map(r => r.content), ...fromPending];
 }
@@ -318,7 +320,7 @@ async function runImport(job: SavedImport, extract: ExtractFn, home: string | un
         if (expired) { job.current.rebuild = true; await saveImport(job); continue; }
       }
       // Never discard a prepared commit checkpoint. Resume it with the same receipts.
-      if (job.current || (err instanceof Error && err.message.startsWith('model'))) throw err;
+      if (job.current || err instanceof ImportDedupeUnavailable || (err instanceof Error && err.message.startsWith('model'))) throw err;
       job.errors++;
     }
     job.current = undefined; job.cursor++; job.done = job.cursor;

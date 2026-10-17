@@ -70,7 +70,7 @@ export function MemoryPage({ client, active = false, focus }: { client: SessionC
         {owner && <button type="button" role="tab" aria-selected={tab === 'import'} onClick={() => setTab('import')}>Import from other agents</button>}
       </div>
     </header>
-    {owner && tab === 'items' && <p className="empty-note">Imported memories wait for your approval before appearing here. <button type="button" className="link-button" onClick={() => setTab('files')}>Review imported memories</button> Choose Main Agent in Agent files and reviews.</p>}
+    {owner && tab === 'items' && <p className="empty-note">Manual imports wait for your approval. Automatic imports save directly when enabled. Refresh to include memories saved since this view loaded. <button type="button" className="link-button" onClick={() => setTab('files')}>Review imported memories</button> Choose Main Agent in Agent files and reviews.</p>}
     {tab === 'items' ? (c ? <ItemsView c={c} focused={focus?.memoryId}/> : null) : tab === 'import' ? <LocalImport client={client} active={active} onReview={() => setTab('files')}/> : <MemoryPanel client={client} active={active && tab === 'files'}/>}
   </section>;
 }
@@ -83,7 +83,7 @@ function ItemsView({ c, focused }: { c: MemoryItemsController; focused?: string 
   useEffect(() => { if (focused && s.phase === 'ready') document.getElementById(`memory-${focused}`)?.scrollIntoView?.({ block: 'center' }); }, [focused, s.phase, s.open]);
   const [confirm, setConfirm] = useState<string | null>(null);
   if (s.phase === 'error') return <p className="empty-note">{s.notice} <button type="button" className="link-button" onClick={() => void c.load()}>Try again</button></p>;
-  if (s.phase !== 'ready') return <p className="empty-note" role="status">Loading memory…</p>;
+  if (s.phase !== 'ready') return <p className="empty-note" role="status">Loading memory…{s.loaded !== undefined && ` ${s.loaded} of ${s.total ?? '…'}`}</p>;
   const total = s.items.length;
   const kinds = drawerKinds.map(k => ({ kind: k, drawers: s.drawers.filter(d => d.kind === k) }));
   const items = c.visible();
@@ -116,6 +116,7 @@ function ItemsView({ c, focused }: { c: MemoryItemsController; focused?: string 
           <UiIcon name="search" size={13}/>
           <input type="search" placeholder="Search memories (Enter searches by meaning)" aria-label="Search memories" value={s.query} onChange={e => c.setQuery(e.target.value)}/>
         </form>
+        <button type="button" className="ghost" onClick={() => void c.load()} disabled={s.busy}>Refresh</button>
         <button type="button" className="primary" onClick={() => c.startAdd()} disabled={!!s.adding}><UiIcon name="plus" size={12}/>Add memory</button>
       </div>
       {s.notice && <p className="card-notice" role="alert">{s.notice}</p>}

@@ -15,6 +15,7 @@ export type MemoryState = Readonly<{
   history: Readonly<Record<string, readonly MemoryVersion[]>>;
   readers: Readonly<Record<string, readonly string[]>>;
   notice?: string;
+  loaded?: number; total?: number;
 }>;
 
 const record = (x: unknown): x is Record<string, any> => !!x && typeof x === 'object' && !Array.isArray(x);
@@ -43,11 +44,24 @@ export class MemoryItemsController {
 
   async load() {
     if (this.#state.phase === 'loading') return;
-    this.publish({ phase: 'loading', notice: undefined });
+    this.publish({ phase: 'loading', notice: undefined, loaded: 0, total: undefined });
     try {
-      const [m, d] = await Promise.all([this.req('GET', '/api/memory'), this.req('GET', '/api/memory/drawers')]);
-      if (m.status !== 200 || !record(m.body)) { this.publish({ phase: 'error', notice: m.status === 401 || m.status === 403 ? 'Only the owner can open the memory here.' : 'Memory could not be loaded.' }); return; }
-      this.publish({ phase: 'ready', items: m.body.memories as MemoryItem[], drawers: d.status === 200 && record(d.body) ? d.body.drawers as DrawerCount[] : [] });
+      const items = new Map<string, MemoryItem>();
+      const cursors = new Set<string>();
+      let cursor: string | null = null;
+      do {
+        if (this.#disposed) return;
+        const m = await this.req('GET', '/api/memory/page' + (cursor ? `?cursor=${cursor}` : ''));
+        if (this.#disposed) return;
+        if (m.status !== 200 || !record(m.body) || !Array.isArray(m.body.memories)) { this.publish({ phase: 'error', notice: m.status === 401 || m.status === 403 ? 'Only the owner can open the memory here.' : 'Memory could not be loaded.' }); return; }
+        for (const item of m.body.memories as MemoryItem[]) items.set(item.id, item);
+        cursor = m.body.nextCursor;
+        this.publish({ loaded: items.size, total: m.body.total });
+        if (cursor) { if (cursors.has(cursor)) throw Error('Repeated memory cursor'); cursors.add(cursor); }
+      } while (cursor);
+      const d = await this.req('GET', '/api/memory/drawers');
+      if (this.#disposed) return;
+      this.publish({ phase: 'ready', items: [...items.values()], drawers: d.status === 200 && record(d.body) ? d.body.drawers as DrawerCount[] : [] });
       void this.loadReaders();
     } catch { this.publish({ phase: 'error', notice: 'Memory could not be loaded.' }); }
   }
