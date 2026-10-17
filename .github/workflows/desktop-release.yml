@@ -60,10 +60,11 @@ jobs:
           node packages/core-ui/scripts/build.cjs
           node packages/core-ui/scripts/build.cjs --candidate --live-entry
       - name: Test UI and desktop retention
+        timeout-minutes: 5
         shell: bash
         run: |
-          node --test packages/core-ui/tests/*.test.cjs
-          node --test packages/desktop/test/*.test.cjs
+          node --test --test-timeout=90000 packages/core-ui/tests/*.test.cjs
+          node --test --test-timeout=90000 packages/desktop/test/*.test.cjs
       - name: Test import persistence and duplicate prevention
         working-directory: packages/backend
         run: node --import tsx --test test/local-agent-import.test.mjs test/local-import-durable.test.mjs
